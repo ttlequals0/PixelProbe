@@ -1,0 +1,1360 @@
+import os
+import logging
+from datetime import datetime, timezone
+import pytz
+from flask import Flask, request, jsonify, send_file, render_template
+from flask_sqlalchemy import SQLAlchemy
+from flask_cors import CORS
+from dotenv import load_dotenv
+import threading
+import time
+import signal
+from contextlib import contextmanager
+from pathlib import Path
+import csv
+import io
+
+from media_checker import PixelProbe
+from models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration
+
+load_dotenv()
+
+# Timeout context manager for system info
+class TimeoutException(Exception):
+    pass
+
+@contextmanager
+def timeout(duration):
+    def timeout_handler(signum, frame):
+        raise TimeoutException(f"Operation timed out after {duration} seconds")
+    
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(duration)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+# Get timezone from environment variable, default to UTC
+APP_TIMEZONE = os.environ.get('TZ', 'UTC')
+try:
+    tz = pytz.timezone(APP_TIMEZONE)
+    logger = logging.getLogger(__name__)
+    logger.info(f"Using timezone: {APP_TIMEZONE}")
+except pytz.exceptions.UnknownTimeZoneError:
+    tz = pytz.UTC
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
+CORS(app, resources={
+    r"/api/*": {"origins": "*"},
+    r"/": {"origins": "*"}
+})
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('media_checker.log')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+@app.before_request
+def log_request_info():
+    logger.info(f"Request: {request.method} {request.url} - Remote: {request.remote_addr}")
+    if request.is_json and request.json:
+        logger.info(f"Request body: {request.json}")
+
+@app.after_request
+def log_response_info(response):
+    logger.info(f"Response: {response.status_code} - {request.method} {request.url}")
+    return response
+
+# Configuration loaded at module level (no heavy operations)
+scan_paths = os.environ.get('SCAN_PATHS', '/media').split(',')
+max_files_to_scan = int(os.environ.get('MAX_FILES_TO_SCAN', 0)) or None
+max_workers = int(os.environ.get('MAX_SCAN_WORKERS', 4))
+system_info_timeout = int(os.environ.get('SYSTEM_INFO_TIMEOUT', '30'))  # 30 seconds default
+
+# Lazy initialization - only done when needed
+media_checker = None
+paths_validated = False
+
+def initialize_media_checker():
+    """Initialize and validate paths only when needed (lazy initialization)"""
+    global media_checker, paths_validated
+    
+    if media_checker is None:
+        logger.info(f"=== PIXELPROBE STARTUP ===")
+        logger.info(f"Scan paths configured: {scan_paths}")
+        logger.info(f"Max files to scan: {max_files_to_scan}")
+        
+        media_checker = PixelProbe(max_workers=max_workers)
+        logger.info(f"PixelProbe initialized with {max_workers} max workers")
+        
+        # Clean up any files stuck in scanning status
+        cleanup_stuck_scans()
+    
+    if not paths_validated:
+        logger.info("Validating scan paths...")
+        
+        for path in scan_paths:
+            if os.path.exists(path):
+                file_count = sum(len(files) for _, _, files in os.walk(path))
+                logger.info(f"Scan path {path} exists with {file_count} total files")
+                if file_count == 0:
+                    logger.warning(f"Scan path {path} contains no files - verify the path contains media files")
+            else:
+                logger.error(f"Scan path {path} does not exist - check your SCAN_PATHS configuration")
+        
+        paths_validated = True
+        logger.info("=== STARTUP COMPLETE ===")
+    
+    return media_checker
+
+# Global scan state tracking
+scan_state = {
+    'is_scanning': False,
+    'start_time': None,
+    'files_processed': 0,
+    'estimated_total': 0,
+    'current_file': None,
+    'current_file_start_time': None,
+    'average_scan_time': 0,
+    'scan_times': [],
+    'phase': 'idle'  # idle, discovering, scanning
+}
+
+# Check if templates directory exists
+templates_dir = os.path.join(os.path.dirname(__file__), 'templates')
+if os.path.exists(templates_dir):
+    logger.info(f"Templates directory found: {templates_dir}")
+    template_files = os.listdir(templates_dir)
+    logger.info(f"Template files: {template_files}")
+else:
+    logger.error(f"Templates directory not found: {templates_dir}")
+
+def cleanup_stuck_scans():
+    """Reset any files stuck in 'scanning' status back to 'pending' on startup"""
+    with app.app_context():
+        try:
+            stuck_files = ScanResult.query.filter_by(scan_status='scanning').all()
+            if stuck_files:
+                logger.info(f"Found {len(stuck_files)} files stuck in 'scanning' status, resetting to 'pending'")
+                for file in stuck_files:
+                    file.scan_status = 'pending'
+                    file.scan_date = None
+                    file.corruption_details = None
+                db.session.commit()
+                logger.info("Successfully reset stuck scanning files")
+            else:
+                logger.info("No files stuck in 'scanning' status")
+        except Exception as e:
+            logger.error(f"Error cleaning up stuck scans: {str(e)}")
+            db.session.rollback()
+
+# Cleanup and startup completion will be handled in initialize_media_checker()
+
+@app.route('/')
+def index():
+    logger.info("Main page requested")
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        logger.error(f"Error rendering index template: {str(e)}")
+        return f"Error loading page: {str(e)}", 500
+
+@app.route('/favicon.ico')
+def favicon():
+    # Return a simple 1x1 transparent PNG favicon
+    import base64
+    # 1x1 transparent PNG as base64
+    favicon_data = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
+    response = app.make_response(favicon_data)
+    response.headers.set('Content-Type', 'image/png')
+    response.headers.set('Cache-Control', 'public, max-age=86400')  # Cache for 1 day
+    return response
+
+@app.route('/favicon-16x16.png')
+@app.route('/favicon-32x32.png')
+def favicon_png():
+    # Return a simple PixelProbe icon - 16x16 or 32x32 blue square with "PP"
+    import base64
+    from io import BytesIO
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        
+        # Create a simple icon
+        size = 32 if 'favicon-32x32' in request.path else 16
+        img = Image.new('RGBA', (size, size), (52, 152, 219, 255))  # Blue background
+        draw = ImageDraw.Draw(img)
+        
+        # Add "PP" text
+        try:
+            # Try to use a built-in font
+            font_size = size // 3
+            font = ImageFont.load_default()
+        except:
+            font = None
+        
+        text = "PP"
+        if font:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+        else:
+            text_width = size // 2
+            text_height = size // 3
+            
+        x = (size - text_width) // 2
+        y = (size - text_height) // 2
+        draw.text((x, y), text, fill=(255, 255, 255, 255), font=font)
+        
+        # Save to bytes
+        output = BytesIO()
+        img.save(output, format='PNG')
+        icon_data = output.getvalue()
+        
+    except ImportError:
+        # Fallback to a simple colored PNG if PIL is not available
+        icon_data = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
+    
+    response = app.make_response(icon_data)
+    response.headers.set('Content-Type', 'image/png')
+    response.headers.set('Cache-Control', 'public, max-age=86400')  # Cache for 1 day
+    return response
+
+@app.route('/health')
+def health_check():
+    logger.info("Health check requested")
+    return jsonify({
+        'status': 'healthy',
+        'scan_paths': scan_paths,
+        'max_files': max_files_to_scan,
+        'database_ready': True
+    })
+
+@app.route('/api/version')
+def version_check():
+    logger.info("Version check requested")
+    return jsonify({
+        'version': '1.0',
+        'timestamp': datetime.now().isoformat(),
+        'scan_paths': scan_paths,
+        'max_files': max_files_to_scan
+    })
+
+@app.route('/api/scan-results')
+def get_scan_results():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    search = request.args.get('search', '', type=str)
+    sort_field = request.args.get('sort_field', 'scan_date', type=str)
+    sort_order = request.args.get('sort_order', 'desc', type=str)
+    filter_type = request.args.get('filter', 'all', type=str)
+    
+    logger.info(f"Fetching scan results - page: {page}, per_page: {per_page}, search: '{search}', sort: {sort_field} {sort_order}, filter: {filter_type}")
+    
+    # Build query with optional search filter
+    query = ScanResult.query
+    if search:
+        query = query.filter(ScanResult.file_path.contains(search))
+    
+    # Add corruption filter
+    if filter_type == 'corrupted':
+        query = query.filter(ScanResult.is_corrupted == True)
+    elif filter_type == 'healthy':
+        query = query.filter(ScanResult.is_corrupted == False)
+    # 'all' filter - no additional filtering needed
+    
+    # Add sorting
+    sort_column = getattr(ScanResult, sort_field, ScanResult.scan_date)
+    if sort_order.lower() == 'asc':
+        query = query.order_by(sort_column.asc())
+    else:
+        query = query.order_by(sort_column.desc())
+    
+    results = query.paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    
+    logger.info(f"Retrieved {len(results.items)} results (total: {results.total})")
+    
+    return jsonify({
+        'results': [result.to_dict() for result in results.items],
+        'total': results.total,
+        'pages': results.pages,
+        'current_page': page,
+        'sort_field': sort_field,
+        'sort_order': sort_order,
+        'filter': filter_type
+    })
+
+@app.route('/api/scan-results/<int:result_id>')
+def get_scan_result(result_id):
+    result = ScanResult.query.get_or_404(result_id)
+    return jsonify(result.to_dict())
+
+
+
+@app.route('/api/scan-file', methods=['POST'])
+def scan_single_file():
+    logger.info("=== SINGLE FILE SCAN ENDPOINT HIT ===")
+    data = request.get_json()
+    file_path = data.get('file_path')
+    deep_scan = data.get('deep_scan', False)
+    
+    logger.info(f"Single file scan requested: {file_path} (deep_scan: {deep_scan})")
+    logger.info(f"Request data: {data}")
+    logger.info(f"Request method: {request.method}")
+    logger.info(f"Request headers: {dict(request.headers)}")
+    
+    if not file_path or not os.path.exists(file_path):
+        logger.warning(f"File not found for scan: {file_path}")
+        return jsonify({'error': 'File not found'}), 400
+    
+    scan_type = "deep scan" if deep_scan else "basic scan"
+    logger.info(f"Starting {scan_type} of file: {file_path}")
+    checker = initialize_media_checker()
+    result = checker.scan_file(file_path, deep_scan)
+    
+    logger.info(f"Scan completed for {file_path} - Corrupted: {result['is_corrupted']}")
+    if result['is_corrupted']:
+        logger.warning(f"Corruption detected in {file_path}: {result['corruption_details']}")
+    
+    # Check if record already exists
+    existing_record = ScanResult.query.filter_by(file_path=file_path).first()
+    
+    if existing_record:
+        # Update existing record
+        logger.info(f"Updating existing scan record for {file_path}")
+        existing_record.file_size = result['file_size']
+        existing_record.file_type = result['file_type']
+        existing_record.creation_date = result['creation_date']
+        existing_record.last_modified = result.get('last_modified')
+        existing_record.is_corrupted = result['is_corrupted']
+        existing_record.corruption_details = result['corruption_details']
+        existing_record.scan_date = datetime.now(timezone.utc)
+        existing_record.scan_status = 'completed'
+        existing_record.file_hash = result.get('file_hash')
+        existing_record.scan_tool = result.get('scan_tool')
+        existing_record.scan_duration = result.get('scan_duration')
+        existing_record.scan_output = result.get('scan_output')
+        scan_result = existing_record
+    else:
+        # Create new record
+        logger.info(f"Creating new scan record for {file_path}")
+        scan_result = ScanResult(
+            file_path=result['file_path'],
+            file_size=result['file_size'],
+            file_type=result['file_type'],
+            creation_date=result['creation_date'],
+            last_modified=result.get('last_modified'),
+            is_corrupted=result['is_corrupted'],
+            corruption_details=result['corruption_details'],
+            scan_date=datetime.now(timezone.utc),
+            scan_status='completed',
+            file_hash=result.get('file_hash'),
+            scan_tool=result.get('scan_tool'),
+            scan_duration=result.get('scan_duration'),
+            scan_output=result.get('scan_output')
+        )
+        db.session.add(scan_result)
+    
+    db.session.commit()
+    
+    logger.info(f"Scan result saved to database for {file_path}")
+    
+    return jsonify(scan_result.to_dict())
+
+@app.route('/api/scan-all', methods=['POST', 'OPTIONS'])
+def scan_all_files():
+    logger.info("=== SCAN-ALL ENDPOINT HIT ===")
+    logger.info("Full scan request received - starting background scan")
+    logger.info(f"Request content type: {request.content_type}")
+    logger.info(f"Request data: {request.get_data()}")
+    logger.info(f"Request method: {request.method}")
+    logger.info(f"Request headers: {dict(request.headers)}")
+    
+    # Handle OPTIONS request for CORS
+    if request.method == 'OPTIONS':
+        logger.info("Handling OPTIONS request for CORS")
+        return '', 200
+    
+    # Check if a scan is already in progress
+    if scan_state['is_scanning']:
+        logger.warning("Scan already in progress, rejecting new scan request")
+        return jsonify({'error': 'Scan already in progress'}), 409
+    
+    # Validate JSON content type
+    if not request.is_json:
+        logger.error(f"Invalid content type: {request.content_type}")
+        return jsonify({'error': 'Content-Type must be application/json'}), 400
+    
+    # Try to get JSON data
+    try:
+        data = request.get_json(force=True)
+        logger.info(f"JSON data received: {data}")
+    except Exception as e:
+        logger.error(f"Failed to parse JSON: {str(e)}")
+        return jsonify({'error': 'Invalid JSON data'}), 400
+    
+    def run_scan():
+        with app.app_context():
+            try:
+                # Set scan state to in progress
+                scan_state['is_scanning'] = True
+                scan_state['start_time'] = datetime.now()
+                scan_state['files_processed'] = 0
+                
+                logger.info(f"=== FULL SCAN STARTED ===")
+                logger.info(f"Scan paths: {scan_paths}")
+                logger.info(f"Max files limit: {max_files_to_scan}")
+                
+                # Phase 1: Discover files (excluding files already in database)
+                scan_state['phase'] = 'discovering'
+                logger.info("Phase 1: Discovering files...")
+                existing_files = set(result.file_path for result in ScanResult.query.all())
+                logger.info(f"Found {len(existing_files)} files already in database")
+                checker = initialize_media_checker()
+                discovered_files = checker.discover_files(scan_paths, max_files_to_scan, existing_files)
+                logger.info(f"Discovered {len(discovered_files)} new files")
+                
+                if len(discovered_files) == 0:
+                    logger.info("No supported files found to scan")
+                    return
+                
+                # Phase 2: Add discovered files to database as pending
+                logger.info("Phase 2: Adding discovered files to database...")
+                files_added = 0
+                for file_path in discovered_files:
+                    existing = ScanResult.query.filter_by(file_path=file_path).first()
+                    if not existing:
+                        # Get basic file info
+                        file_info = checker.get_file_info(file_path)
+                        
+                        scan_result = ScanResult(
+                            file_path=file_path,
+                            file_size=file_info['file_size'],
+                            file_type=file_info['file_type'],
+                            creation_date=file_info['creation_date'],
+                            scan_status='pending'
+                        )
+                        db.session.add(scan_result)
+                        files_added += 1
+                        
+                        # Commit every 100 files to avoid memory issues
+                        if files_added % 100 == 0:
+                            db.session.commit()
+                            logger.info(f"Added {files_added} files to database")
+                
+                db.session.commit()
+                logger.info(f"Phase 2 complete: Added {files_added} new files to database")
+                
+                # Phase 3: Scan pending files using parallel scanning
+                scan_state['phase'] = 'scanning'
+                logger.info("Phase 3: Scanning pending files using parallel workers...")
+                pending_files = ScanResult.query.filter_by(scan_status='pending').all()
+                logger.info(f"Found {len(pending_files)} pending files to scan")
+                
+                scan_state['estimated_total'] = len(pending_files)
+                scan_state['scan_times'] = []
+                
+                if len(pending_files) == 0:
+                    logger.info("No pending files found to scan")
+                    return
+                
+                scan_start_time = datetime.now()
+                
+                files_processed = 0
+                files_scanned = 0
+                corrupted_found = 0
+                
+                # Filter out files that don't exist
+                valid_files = []
+                for pending_record in pending_files:
+                    if not os.path.exists(pending_record.file_path):
+                        logger.warning(f"File no longer exists: {pending_record.file_path}")
+                        pending_record.scan_status = 'error'
+                        pending_record.corruption_details = 'File not found'
+                        db.session.commit()
+                        continue
+                    valid_files.append(pending_record.file_path)
+                
+                if not valid_files:
+                    logger.info("No valid files to scan")
+                    return
+                
+                # Mark all valid files as scanning
+                for file_path in valid_files:
+                    pending_record = ScanResult.query.filter_by(file_path=file_path).first()
+                    if pending_record:
+                        pending_record.scan_status = 'scanning'
+                db.session.commit()
+                
+                # Progress callback for parallel scanning
+                def progress_callback(completed, total, current_file):
+                    scan_state['files_processed'] = completed
+                    scan_state['current_file'] = current_file
+                    scan_state['current_file_start_time'] = datetime.now()
+                    
+                    # Update progress message
+                    if total > 0:
+                        percentage = (completed / total) * 100
+                        scan_state['current_file_progress'] = f"Scanning {current_file.split('/')[-1]} ({completed}/{total} - {percentage:.1f}%)"
+                    
+                    logger.info(f"Scan progress: {completed}/{total} - {current_file}")
+                
+                # Use parallel scanning with path optimization
+                logger.info(f"Starting parallel scan of {len(valid_files)} files across {len(scan_paths)} paths")
+                scan_results = checker.scan_files_parallel(
+                    valid_files, 
+                    progress_callback=progress_callback, 
+                    scan_paths=scan_paths
+                )
+                
+                # Update database with all results
+                for result in scan_results:
+                    pending_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
+                    if pending_record:
+                        # Update the record with scan results
+                        pending_record.is_corrupted = result['is_corrupted']
+                        pending_record.corruption_details = result['corruption_details']
+                        pending_record.scan_date = datetime.now(timezone.utc)
+                        pending_record.scan_status = 'completed'
+                        
+                        # Update file metadata if available
+                        if 'file_size' in result:
+                            pending_record.file_size = result['file_size']
+                        if 'file_type' in result:
+                            pending_record.file_type = result['file_type']
+                        if 'scan_duration' in result:
+                            pending_record.scan_duration = result['scan_duration']
+                        if 'scan_output' in result:
+                            pending_record.scan_output = result['scan_output']
+                        if 'scan_tool' in result:
+                            pending_record.scan_tool = result['scan_tool']
+                        
+                        files_scanned += 1
+                        
+                        if result['is_corrupted']:
+                            corrupted_found += 1
+                            logger.warning(f"CORRUPTED FILE: {pending_record.file_path} - {result['corruption_details']}")
+                        else:
+                            logger.info(f"HEALTHY FILE: {pending_record.file_path}")
+                
+                # Commit all results
+                try:
+                    db.session.commit()
+                    logger.info(f"Committed scan results for {files_scanned} files")
+                except Exception as e:
+                    logger.error(f"Failed to commit scan results: {str(e)}")
+                    db.session.rollback()
+                    
+                    # Mark all files as error if commit fails
+                    for file_path in valid_files:
+                        pending_record = ScanResult.query.filter_by(file_path=file_path).first()
+                        if pending_record and pending_record.scan_status == 'scanning':
+                            pending_record.scan_status = 'error'
+                            pending_record.corruption_details = f"Database error: {str(e)}"
+                    db.session.commit()
+                
+                files_processed = files_scanned
+                
+                scan_end_time = datetime.now()
+                scan_duration = scan_end_time - scan_start_time
+                logger.info(f"=== FULL SCAN COMPLETED ===")
+                logger.info(f"Duration: {scan_duration}")
+                logger.info(f"Files processed: {files_processed}")
+                logger.info(f"Files scanned: {files_scanned}")
+                logger.info(f"Files added to database: {files_added}")
+                logger.info(f"Corrupted files found: {corrupted_found}")
+                logger.info(f"=== SCAN SUMMARY END ===")
+                
+            finally:
+                # Reset scan state
+                scan_state['is_scanning'] = False
+                scan_state['start_time'] = None
+                scan_state['files_processed'] = 0
+                scan_state['estimated_total'] = 0
+                scan_state['current_file'] = None
+                scan_state['current_file_start_time'] = None
+                scan_state['average_scan_time'] = 0
+                scan_state['scan_times'] = []
+                scan_state['phase'] = 'idle'
+    
+    try:
+        thread = threading.Thread(target=run_scan)
+        thread.daemon = True
+        thread.start()
+        logger.info("Background scan thread started successfully")
+        return jsonify({'message': 'Scan started'}), 202
+    except Exception as e:
+        # Reset scan state on error
+        scan_state['is_scanning'] = False
+        scan_state['start_time'] = None
+        scan_state['files_processed'] = 0
+        scan_state['estimated_total'] = 0
+        
+        logger.error(f"Failed to start scan thread: {str(e)}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return jsonify({'error': f'Failed to start scan: {str(e)}'}), 500
+
+@app.errorhandler(400)
+def bad_request_handler(error):
+    logger.error(f"400 Bad Request: {error}")
+    logger.error(f"Request URL: {request.url}")
+    logger.error(f"Request method: {request.method}")
+    logger.error(f"Request headers: {dict(request.headers)}")
+    logger.error(f"Request data: {request.get_data()}")
+    return jsonify({'error': 'Bad Request', 'message': str(error)}), 400
+
+@app.errorhandler(500)
+def internal_error_handler(error):
+    logger.error(f"500 Internal Server Error: {error}")
+    return jsonify({'error': 'Internal Server Error', 'message': str(error)}), 500
+
+@app.route('/api/view/<int:result_id>')
+def view_file(result_id):
+    result = ScanResult.query.get_or_404(result_id)
+    
+    logger.info(f"View requested for file: {result.file_path} (ID: {result_id})")
+    
+    if not os.path.exists(result.file_path):
+        logger.error(f"View failed - file not found: {result.file_path}")
+        return jsonify({'error': 'File not found'}), 404
+    
+    logger.info(f"Serving file for viewing: {result.file_path}")
+    return send_file(result.file_path, as_attachment=False)
+
+@app.route('/api/download/<int:result_id>')
+def download_file(result_id):
+    result = ScanResult.query.get_or_404(result_id)
+    
+    logger.info(f"Download requested for file: {result.file_path} (ID: {result_id})")
+    
+    if not os.path.exists(result.file_path):
+        logger.error(f"Download failed - file not found: {result.file_path}")
+        return jsonify({'error': 'File not found'}), 404
+    
+    logger.info(f"Starting download of file: {result.file_path}")
+    return send_file(result.file_path, as_attachment=True)
+
+@app.route('/api/mark-as-good', methods=['POST'])
+def mark_as_good():
+    data = request.get_json()
+    file_ids = data.get('file_ids', [])
+    
+    if not file_ids:
+        return jsonify({'error': 'No file IDs provided'}), 400
+    
+    try:
+        for file_id in file_ids:
+            result = ScanResult.query.get(file_id)
+            if result:
+                result.marked_as_good = True
+                logger.info(f"Marked file as good: {result.file_path}")
+            
+        db.session.commit()
+        logger.info(f"Successfully marked {len(file_ids)} files as good")
+        
+        return jsonify({
+            'message': f'Successfully marked {len(file_ids)} files as good',
+            'marked_files': len(file_ids)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error marking files as good: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/stats')
+def get_stats():
+    total_files = ScanResult.query.count()
+    completed_files = ScanResult.query.filter_by(scan_status='completed').count()
+    pending_files = ScanResult.query.filter_by(scan_status='pending').count()
+    scanning_files = ScanResult.query.filter_by(scan_status='scanning').count()
+    error_files = ScanResult.query.filter_by(scan_status='error').count()
+    
+    corrupted_files = ScanResult.query.filter_by(is_corrupted=True).count()
+    healthy_files = ScanResult.query.filter_by(is_corrupted=False).count()
+    marked_as_good = ScanResult.query.filter_by(marked_as_good=True).count()
+    
+    # Files marked as good should be considered healthy
+    healthy_files = ScanResult.query.filter(
+        (ScanResult.is_corrupted == False) | (ScanResult.marked_as_good == True)
+    ).count()
+    
+    logger.info(f"Stats requested - Total: {total_files}, Completed: {completed_files}, Pending: {pending_files}, Scanning: {scanning_files}, Corrupted: {corrupted_files}, Healthy: {healthy_files}, Marked Good: {marked_as_good}")
+    
+    return jsonify({
+        'total_files': total_files,
+        'completed_files': completed_files,
+        'pending_files': pending_files,
+        'scanning_files': scanning_files,
+        'error_files': error_files,
+        'corrupted_files': corrupted_files,
+        'healthy_files': healthy_files,
+        'marked_as_good': marked_as_good
+    })
+
+@app.route('/api/system-info')
+def get_system_info():
+    """Get comprehensive system information - optimized to read from database"""
+    try:
+        logger.info("System info requested")
+        
+        # Database statistics (fast queries)
+        db_total_files = ScanResult.query.count()
+        db_completed_files = ScanResult.query.filter_by(scan_status='completed').count()
+        db_pending_files = ScanResult.query.filter_by(scan_status='pending').count()
+        db_scanning_files = ScanResult.query.filter_by(scan_status='scanning').count()
+        db_error_files = ScanResult.query.filter_by(scan_status='error').count()
+        db_corrupted_files = ScanResult.query.filter_by(is_corrupted=True).count()
+        db_healthy_files = ScanResult.query.filter_by(is_corrupted=False).count()
+        db_marked_as_good = ScanResult.query.filter_by(marked_as_good=True).count()
+        
+        # Files marked as good should be considered healthy
+        db_healthy_files = ScanResult.query.filter(
+            (ScanResult.is_corrupted == False) | (ScanResult.marked_as_good == True)
+        ).count()
+        
+        # Get monitored paths info from database (much faster)
+        monitored_paths = []
+        total_filesystem_files = 0
+        
+        # Get file counts per path from database ONLY
+        for path in scan_paths:
+            path_info = {
+                'path': path,
+                'exists': os.path.exists(path),
+                'is_directory': os.path.isdir(path) if os.path.exists(path) else False,
+                'last_checked': datetime.now(timezone.utc).isoformat(),
+                'file_count': 0,
+                'error': None
+            }
+            
+            if path_info['exists'] and path_info['is_directory']:
+                try:
+                    # Count ALL files in this path from database (regardless of scan status)
+                    files_in_path = ScanResult.query.filter(ScanResult.file_path.like(f'{path}%')).count()
+                    path_info['file_count'] = files_in_path
+                    total_filesystem_files += files_in_path
+                    
+                except Exception as e:
+                    path_info['error'] = f"Error querying database for path: {str(e)}"
+                    logger.error(f"Error querying database for path {path}: {str(e)}")
+                    
+            elif path_info['exists'] and not path_info['is_directory']:
+                path_info['error'] = "Path exists but is not a directory"
+            elif not path_info['exists']:
+                path_info['error'] = "Path does not exist"
+                
+            monitored_paths.append(path_info)
+        
+        # Get most recent scan information
+        latest_scan = ScanResult.query.order_by(ScanResult.scan_date.desc()).first()
+        latest_scan_date = latest_scan.scan_date.isoformat() if latest_scan and latest_scan.scan_date else None
+        
+        # Get oldest scan information
+        oldest_scan = ScanResult.query.order_by(ScanResult.scan_date.asc()).first()
+        oldest_scan_date = oldest_scan.scan_date.isoformat() if oldest_scan and oldest_scan.scan_date else None
+        
+        # Calculate scanning performance metrics
+        completed_scans = ScanResult.query.filter(ScanResult.scan_duration.isnot(None)).all()
+        avg_scan_time = 0
+        if completed_scans:
+            total_duration = sum(scan.scan_duration for scan in completed_scans if scan.scan_duration)
+            avg_scan_time = total_duration / len(completed_scans) if completed_scans else 0
+        
+        # Get scan configuration
+        scan_config = {
+            'scan_paths': scan_paths,
+            'max_files_to_scan': max_files_to_scan,
+            'max_workers': max_workers,
+            'app_timezone': APP_TIMEZONE
+        }
+        
+        # Current scan status
+        current_scan_status = {
+            'is_scanning': scan_state.get('is_scanning', False),
+            'phase': scan_state.get('phase', 'idle'),
+            'files_processed': scan_state.get('files_processed', 0),
+            'estimated_total': scan_state.get('estimated_total', 0),
+            'current_file': scan_state.get('current_file'),
+            'start_time': scan_state.get('start_time').isoformat() if scan_state.get('start_time') else None
+        }
+        
+        response = {
+            'total_files_found': total_filesystem_files,
+            'monitored_paths': monitored_paths,
+            'database_stats': {
+                'total_files': db_total_files,
+                'completed_files': db_completed_files,
+                'pending_files': db_pending_files,
+                'scanning_files': db_scanning_files,
+                'error_files': db_error_files,
+                'corrupted_files': db_corrupted_files,
+                'healthy_files': db_healthy_files,
+                'marked_as_good': db_marked_as_good
+            },
+            'scan_performance': {
+                'latest_scan_date': latest_scan_date,
+                'oldest_scan_date': oldest_scan_date,
+                'average_scan_time_seconds': round(avg_scan_time, 2),
+                'total_scans_with_duration': len(completed_scans)
+            },
+            'scan_configuration': scan_config,
+            'current_scan_status': current_scan_status,
+            'system_info': {
+                'version': '1.0',
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'uptime_check': datetime.now(timezone.utc).isoformat()
+            }
+        }
+        
+        logger.info(f"System info response: Total filesystem files: {total_filesystem_files}, DB files: {db_total_files}, Paths: {len(monitored_paths)}")
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Error getting system info: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/scan-status')
+def get_scan_status():
+    """Get current scan status based on database state"""
+    try:
+        # Check if any files are currently being scanned
+        scanning_files = ScanResult.query.filter_by(scan_status='scanning').count()
+        pending_files = ScanResult.query.filter_by(scan_status='pending').count()
+        
+        # Consider scanning if there are files with 'scanning' status
+        is_scanning = scanning_files > 0
+        
+        logger.info(f"Scan status requested - Is scanning: {is_scanning} (scanning: {scanning_files}, pending: {pending_files})")
+        
+        # Calculate ETA if we have scan time data
+        eta_seconds = 0
+        current_file_progress = ""
+        
+        if scan_state['is_scanning'] and scan_state['average_scan_time'] > 0:
+            remaining_files = scan_state['estimated_total'] - scan_state['files_processed']
+            eta_seconds = remaining_files * scan_state['average_scan_time']
+            
+            # Current file progress
+            if scan_state['current_file'] and scan_state['current_file_start_time']:
+                current_duration = (datetime.now() - scan_state['current_file_start_time']).total_seconds()
+                file_name = scan_state['current_file'].split('/')[-1]
+                current_file_progress = f"Scanning: {file_name} ({current_duration:.0f}s)"
+
+        response = {
+            'is_scanning': is_scanning,
+            'files_processed': scan_state['files_processed'] if scan_state['is_scanning'] else 0,
+            'estimated_total': scan_state['estimated_total'] if scan_state['is_scanning'] else pending_files + scanning_files,
+            'scanning_files': scanning_files,
+            'pending_files': pending_files,
+            'phase': scan_state.get('phase', 'idle'),
+            'current_file': scan_state.get('current_file'),
+            'current_file_progress': current_file_progress,
+            'average_scan_time': scan_state.get('average_scan_time', 0),
+            'eta_seconds': eta_seconds
+        }
+        
+        if scan_state['start_time'] and scan_state['is_scanning']:
+            response['duration'] = (datetime.now() - scan_state['start_time']).total_seconds()
+            response['start_time'] = scan_state['start_time'].isoformat()
+        
+        return jsonify(response)
+    except Exception as e:
+        logger.error(f"Error getting scan status: {str(e)}")
+        return jsonify({
+            'is_scanning': False,
+            'files_processed': 0,
+            'estimated_total': 0,
+            'error': str(e)
+        })
+
+@app.route('/api/export-csv', methods=['GET', 'POST'])
+def export_csv():
+    try:
+        # Determine export type and get appropriate results
+        if request.method == 'POST':
+            data = request.get_json() or {}
+            file_ids = data.get('file_ids', [])
+            
+            if file_ids:
+                # Export selected files
+                results = ScanResult.query.filter(ScanResult.id.in_(file_ids)).all()
+                export_type = "selected"
+                logger.info(f"Exporting {len(results)} selected scan results to CSV")
+            else:
+                # Export all files (POST with empty file_ids)
+                results = ScanResult.query.all()
+                export_type = "all"
+                logger.info(f"Exporting {len(results)} scan results to CSV (all results via POST)")
+        else:
+            # GET request - export all files
+            results = ScanResult.query.all()
+            export_type = "all"
+            logger.info(f"Exporting {len(results)} scan results to CSV (all results via GET)")
+        
+        # Create CSV in memory
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write CSV header
+        writer.writerow([
+            'ID',
+            'File Path',
+            'File Size (bytes)',
+            'File Type',
+            'Creation Date',
+            'Is Corrupted',
+            'Corruption Details',
+            'Scan Date',
+            'Scan Status',
+            'Discovered Date',
+            'Marked as Good'
+        ])
+        
+        # Write data rows
+        for result in results:
+            writer.writerow([
+                result.id,
+                result.file_path,
+                result.file_size or 0,
+                result.file_type or 'Unknown',
+                result.creation_date.isoformat() if result.creation_date else '',
+                'Yes' if result.is_corrupted else 'No',
+                result.corruption_details or '',
+                result.scan_date.isoformat() if result.scan_date else '',
+                getattr(result, 'scan_status', 'completed'),  # Default to completed for old records
+                getattr(result, 'discovered_date', result.scan_date).isoformat() if getattr(result, 'discovered_date', result.scan_date) else '',
+                'Yes' if result.marked_as_good else 'No'
+            ])
+        
+        # Prepare response
+        output.seek(0)
+        csv_content = output.getvalue()
+        output.close()
+        
+        # Create filename with timestamp and export type
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"pixelprobe_{export_type}_{timestamp}.csv"
+        
+        logger.info(f"CSV export completed - {len(results)} records exported to {filename}")
+        
+        # Return CSV file
+        return send_file(
+            io.BytesIO(csv_content.encode('utf-8')),
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=filename
+        )
+        
+    except Exception as e:
+        logger.error(f"Error exporting CSV: {str(e)}")
+        return jsonify({'error': f'Export failed: {str(e)}'}), 500
+
+def create_tables():
+    """Initialize database tables with migration support"""
+    with app.app_context():
+        try:
+            # First, create all tables if they don't exist
+            db.create_all()
+            logger.info("Database tables created/verified successfully")
+            
+            # Perform migrations
+            migrate_database()
+            
+        except Exception as e:
+            logger.error(f"Error in database initialization: {str(e)}")
+
+def migrate_database():
+    """Handle database migrations"""
+    try:
+        # Check if table exists by trying a simple query
+        result = db.session.execute(db.text("SELECT name FROM sqlite_master WHERE type='table' AND name='scan_results'"))
+        if not result.fetchone():
+            logger.info("scan_results table does not exist, skipping migration")
+            return
+        
+        # Get existing columns
+        result = db.session.execute(db.text("PRAGMA table_info(scan_results)"))
+        existing_columns = {row[1] for row in result.fetchall()}
+        logger.info(f"Existing columns: {existing_columns}")
+        
+        # Define migrations
+        migrations = [
+            {
+                'column': 'marked_as_good',
+                'type': 'BOOLEAN DEFAULT 0',
+                'post_update': None
+            },
+            {
+                'column': 'scan_status',
+                'type': 'VARCHAR(20) DEFAULT \'completed\'',
+                'post_update': "UPDATE scan_results SET scan_status = 'completed' WHERE scan_status IS NULL"
+            },
+            {
+                'column': 'discovered_date',
+                'type': 'DATETIME',
+                'post_update': "UPDATE scan_results SET discovered_date = scan_date WHERE discovered_date IS NULL"
+            }
+        ]
+        
+        # Apply migrations
+        for migration in migrations:
+            if migration['column'] not in existing_columns:
+                logger.info(f"Adding column: {migration['column']}")
+                try:
+                    db.session.execute(db.text(
+                        f"ALTER TABLE scan_results ADD COLUMN {migration['column']} {migration['type']}"
+                    ))
+                    db.session.commit()
+                    logger.info(f"Successfully added {migration['column']} column")
+                    
+                    # Run post-update if defined
+                    if migration['post_update']:
+                        db.session.execute(db.text(migration['post_update']))
+                        db.session.commit()
+                        logger.info(f"Updated data for {migration['column']}")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to add {migration['column']}: {str(e)}")
+                    db.session.rollback()
+        
+        # Count existing records
+        try:
+            count = db.session.execute(db.text("SELECT COUNT(*) FROM scan_results")).scalar()
+            logger.info(f"Database migration complete. Found {count} existing records.")
+        except Exception as e:
+            logger.error(f"Failed to count records: {str(e)}")
+            
+    except Exception as e:
+        logger.error(f"Migration error: {str(e)}")
+        db.session.rollback()
+
+@app.route('/api/file-changes')
+def check_file_changes():
+    """Check for file changes by comparing hashes"""
+    try:
+        all_results = ScanResult.query.filter(ScanResult.file_hash.isnot(None)).all()
+        checker = initialize_media_checker()
+        changed_files = checker.check_file_changes(all_results)
+        
+        logger.info(f"File change check found {len(changed_files)} changed files")
+        return jsonify({
+            'changed_files': changed_files,
+            'total_checked': len(all_results)
+        })
+    except Exception as e:
+        logger.error(f"Error checking file changes: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cleanup-orphaned', methods=['POST'])
+def cleanup_orphaned_records():
+    """Remove database records for files that no longer exist"""
+    try:
+        all_results = ScanResult.query.all()
+        checker = initialize_media_checker()
+        orphaned_records = checker.find_orphaned_records(all_results)
+        
+        # Delete orphaned records
+        for record in orphaned_records:
+            db.session.delete(record)
+        
+        db.session.commit()
+        
+        logger.info(f"Cleaned up {len(orphaned_records)} orphaned records")
+        return jsonify({
+            'deleted_count': len(orphaned_records),
+            'message': f'Removed {len(orphaned_records)} orphaned records'
+        })
+    except Exception as e:
+        logger.error(f"Error cleaning up orphaned records: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/scan-parallel', methods=['POST'])
+def scan_files_parallel():
+    """Scan multiple files in parallel"""
+    data = request.get_json()
+    file_paths = data.get('file_paths', [])
+    deep_scan = data.get('deep_scan', False)
+    
+    if not file_paths:
+        return jsonify({'error': 'No file paths provided'}), 400
+    
+    try:
+        # Get scan paths for parallel optimization
+        scan_paths = os.environ.get('SCAN_PATHS', '').split(',')
+        scan_paths = [path.strip() for path in scan_paths if path.strip()]
+        
+        # Scan files in parallel
+        checker = initialize_media_checker()
+        results = checker.scan_files_parallel(file_paths, deep_scan=deep_scan, scan_paths=scan_paths)
+        
+        # Update database with results
+        for result in results:
+            existing_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
+            
+            if existing_record:
+                # Update existing record
+                for key, value in result.items():
+                    if hasattr(existing_record, key):
+                        setattr(existing_record, key, value)
+                existing_record.scan_date = datetime.now(timezone.utc)
+                existing_record.scan_status = 'completed'
+            else:
+                # Create new record
+                scan_result = ScanResult(**result)
+                scan_result.scan_date = datetime.now(timezone.utc)
+                scan_result.scan_status = 'completed'
+                db.session.add(scan_result)
+        
+        db.session.commit()
+        
+        logger.info(f"Parallel scan completed for {len(file_paths)} files")
+        return jsonify({
+            'results': [r for r in results],
+            'scanned_count': len(results)
+        })
+    except Exception as e:
+        logger.error(f"Error in parallel scan: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ignored-patterns')
+def get_ignored_patterns():
+    """Get all ignored error patterns"""
+    try:
+        patterns = IgnoredErrorPattern.query.filter_by(is_active=True).all()
+        return jsonify({
+            'patterns': [pattern.to_dict() for pattern in patterns]
+        })
+    except Exception as e:
+        logger.error(f"Error getting ignored patterns: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ignored-patterns', methods=['POST'])
+def add_ignored_pattern():
+    """Add a new ignored error pattern"""
+    data = request.get_json()
+    pattern = data.get('pattern')
+    description = data.get('description', '')
+    
+    if not pattern:
+        return jsonify({'error': 'Pattern is required'}), 400
+    
+    try:
+        # Check if pattern already exists
+        existing = IgnoredErrorPattern.query.filter_by(pattern=pattern).first()
+        if existing:
+            return jsonify({'error': 'Pattern already exists'}), 409
+        
+        new_pattern = IgnoredErrorPattern(
+            pattern=pattern,
+            description=description
+        )
+        db.session.add(new_pattern)
+        db.session.commit()
+        
+        logger.info(f"Added new ignored pattern: {pattern}")
+        return jsonify(new_pattern.to_dict()), 201
+    except Exception as e:
+        logger.error(f"Error adding ignored pattern: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ignored-patterns/<int:pattern_id>', methods=['DELETE'])
+def delete_ignored_pattern(pattern_id):
+    """Delete an ignored error pattern"""
+    try:
+        pattern = IgnoredErrorPattern.query.get_or_404(pattern_id)
+        db.session.delete(pattern)
+        db.session.commit()
+        
+        logger.info(f"Deleted ignored pattern: {pattern.pattern}")
+        return jsonify({'message': 'Pattern deleted successfully'})
+    except Exception as e:
+        logger.error(f"Error deleting ignored pattern: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/scan-output/<int:result_id>')
+def get_scan_output(result_id):
+    """Get full scan output for a specific result"""
+    try:
+        result = ScanResult.query.get_or_404(result_id)
+        return jsonify({
+            'file_path': result.file_path,
+            'scan_tool': getattr(result, 'scan_tool', None),
+            'scan_duration': getattr(result, 'scan_duration', None),
+            'scan_output': getattr(result, 'scan_output', None),
+            'corruption_details': result.corruption_details
+        })
+    except Exception as e:
+        logger.error(f"Error getting scan output: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/configurations')
+def get_configurations():
+    """Get all configuration settings"""
+    try:
+        configs = ScanConfiguration.query.all()
+        return jsonify({
+            'configurations': [config.to_dict() for config in configs]
+        })
+    except Exception as e:
+        logger.error(f"Error getting configurations: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/configurations', methods=['POST'])
+def update_configuration():
+    """Update or create a configuration setting"""
+    data = request.get_json()
+    key = data.get('key')
+    value = data.get('value')
+    description = data.get('description', '')
+    
+    if not key or not value:
+        return jsonify({'error': 'Key and value are required'}), 400
+    
+    try:
+        existing = ScanConfiguration.query.filter_by(key=key).first()
+        if existing:
+            existing.value = value
+            existing.description = description
+            existing.updated_date = datetime.now(timezone.utc)
+            config = existing
+        else:
+            config = ScanConfiguration(
+                key=key,
+                value=value,
+                description=description
+            )
+            db.session.add(config)
+        
+        db.session.commit()
+        
+        logger.info(f"Updated configuration: {key} = {value}")
+        return jsonify(config.to_dict())
+    except Exception as e:
+        logger.error(f"Error updating configuration: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# Add new migrations for the enhanced features
+def migrate_database():
+    """Handle database migrations"""
+    try:
+        # Check if table exists by trying a simple query
+        result = db.session.execute(db.text("SELECT name FROM sqlite_master WHERE type='table' AND name='scan_results'"))
+        if not result.fetchone():
+            logger.info("scan_results table does not exist, skipping migration")
+            return
+        
+        # Get existing columns
+        result = db.session.execute(db.text("PRAGMA table_info(scan_results)"))
+        existing_columns = {row[1] for row in result.fetchall()}
+        logger.info(f"Existing columns: {existing_columns}")
+        
+        # Define migrations including new fields
+        migrations = [
+            {
+                'column': 'marked_as_good',
+                'type': 'BOOLEAN DEFAULT 0',
+                'post_update': None
+            },
+            {
+                'column': 'scan_status',
+                'type': 'VARCHAR(20) DEFAULT \'completed\'',
+                'post_update': "UPDATE scan_results SET scan_status = 'completed' WHERE scan_status IS NULL"
+            },
+            {
+                'column': 'discovered_date',
+                'type': 'DATETIME',
+                'post_update': "UPDATE scan_results SET discovered_date = scan_date WHERE discovered_date IS NULL"
+            },
+            {
+                'column': 'file_hash',
+                'type': 'VARCHAR(64)',
+                'post_update': None
+            },
+            {
+                'column': 'last_modified',
+                'type': 'DATETIME',
+                'post_update': None
+            },
+            {
+                'column': 'scan_tool',
+                'type': 'VARCHAR(50)',
+                'post_update': None
+            },
+            {
+                'column': 'scan_duration',
+                'type': 'REAL',
+                'post_update': None
+            },
+            {
+                'column': 'scan_output',
+                'type': 'TEXT',
+                'post_update': None
+            },
+            {
+                'column': 'ignored_error_types',
+                'type': 'TEXT',
+                'post_update': None
+            }
+        ]
+        
+        # Apply migrations
+        for migration in migrations:
+            if migration['column'] not in existing_columns:
+                logger.info(f"Adding column: {migration['column']}")
+                try:
+                    db.session.execute(db.text(
+                        f"ALTER TABLE scan_results ADD COLUMN {migration['column']} {migration['type']}"
+                    ))
+                    db.session.commit()
+                    logger.info(f"Successfully added {migration['column']} column")
+                    
+                    # Run post-update if defined
+                    if migration['post_update']:
+                        db.session.execute(db.text(migration['post_update']))
+                        db.session.commit()
+                        logger.info(f"Updated data for {migration['column']}")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to add {migration['column']}: {str(e)}")
+                    db.session.rollback()
+        
+        # Count existing records
+        try:
+            count = db.session.execute(db.text("SELECT COUNT(*) FROM scan_results")).scalar()
+            logger.info(f"Database migration complete. Found {count} existing records.")
+        except Exception as e:
+            logger.error(f"Failed to count records: {str(e)}")
+            
+    except Exception as e:
+        logger.error(f"Migration error: {str(e)}")
+        db.session.rollback()
+
+# Initialize database when module is imported
+create_tables()
+
+if __name__ == '__main__':
+    logger.info("Starting Flask development server")
+    app.run(debug=True, host='0.0.0.0', port=5000)

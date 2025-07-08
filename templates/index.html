@@ -1,0 +1,2771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PixelProbe - Media Integrity Scanner</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+            transition: all 0.3s ease;
+        }
+        
+        /* Dark mode styles */
+        body.dark-mode {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: #ecf0f1;
+        }
+        
+        .dark-mode .stat-card,
+        .dark-mode .controls,
+        .dark-mode .results {
+            background: #34495e;
+            color: #ecf0f1;
+        }
+        
+        .dark-mode .stat-label {
+            color: #bdc3c7;
+        }
+        
+        .dark-mode .results-header {
+            background: #2c3e50;
+            border-bottom-color: #555;
+        }
+        
+        .dark-mode .results-table th {
+            background: #2c3e50;
+            color: #ecf0f1;
+        }
+        
+        .dark-mode .results-table td {
+            color: #ecf0f1;
+            border-bottom-color: #555;
+        }
+        
+        .dark-mode .results-table tr:hover {
+            background: #3a5168;
+        }
+        
+        .dark-mode .file-path {
+            color: #3498db;
+        }
+        
+        .dark-mode .file-path:hover {
+            background: #2c3e50;
+            color: #5dade2;
+        }
+        
+        .dark-mode .corruption-details {
+            color: #bdc3c7;
+        }
+        
+        .dark-mode .corruption-details:hover {
+            background: #2c3e50;
+            color: #ecf0f1;
+        }
+        
+        .dark-mode .filter-btn {
+            background: #2c3e50;
+            color: #ecf0f1;
+            border-color: #555;
+        }
+        
+        .dark-mode .filter-btn:hover {
+            background: #34495e;
+        }
+        
+        .dark-mode .filter-btn.active {
+            background: #3498db;
+            color: white;
+        }
+        
+        .container {
+            max-width: 90vw;  /* Responsive to viewport width */
+            margin: 0 auto;
+            padding: 1rem;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+            color: white;
+            position: relative;
+        }
+        
+        .header-content {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+        
+        .stats-button {
+            position: absolute;
+            top: 0;
+            left: 0;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+        
+        .stats-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        .dark-mode-toggle {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+        
+        .dark-mode-toggle:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        .dark-mode .dark-mode-toggle {
+            background: rgba(0, 0, 0, 0.3);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+        
+        .dark-mode .dark-mode-toggle:hover {
+            background: rgba(0, 0, 0, 0.5);
+        }
+        
+        .header h1 {
+            font-size: clamp(1.5rem, 5vw, 2.5rem);
+            margin-bottom: 0.5rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .header p {
+            font-size: clamp(1rem, 2vw, 1.2rem);
+            opacity: 0.9;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: clamp(1.8rem, 4vw, 2.5rem);
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-label {
+            font-size: clamp(0.9rem, 1.5vw, 1.1rem);
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .total { color: #3498db; }
+        .corrupted { color: #e74c3c; }
+        .healthy { color: #27ae60; }
+        .pending { color: #f39c12; }
+        
+        .controls {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            overflow-x: auto;
+        }
+        
+        .control-group {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 1rem;
+        }
+        
+        @media (max-width: 768px) {
+            .action-buttons {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .action-buttons button {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+        
+        button {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            font-size: clamp(0.75rem, 1.5vw, 0.875rem);
+            transition: background 0.3s;
+            white-space: nowrap;
+        }
+        
+        button:hover {
+            background: #2980b9;
+        }
+        
+        button.danger {
+            background: #e74c3c;
+        }
+        
+        button.danger:hover {
+            background: #c0392b;
+        }
+        
+        button.success {
+            background: #27ae60;
+        }
+        
+        button.success:hover {
+            background: #219a52;
+        }
+        
+        button.info {
+            background: #17a2b8;
+        }
+        
+        button.info:hover {
+            background: #138496;
+        }
+        
+        button:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }
+        
+        .scan-status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            display: none;
+        }
+        
+        .scan-status.info {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .scan-status.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        
+        .progress-container {
+            margin-bottom: 15px;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3498db, #2980b9);
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 10px;
+        }
+        
+        .progress-text {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9em;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .results {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .table-container {
+            overflow-x: auto;
+            padding: 1rem;
+            margin: 0;
+            width: 100%;
+            -webkit-overflow-scrolling: touch;
+        }
+        
+        .results-header {
+            background: #f8f9fa;
+            padding: 20px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .results-header h2 {
+            margin-bottom: 10px;
+        }
+        
+        .filters {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .filter-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .filter-btn {
+            padding: 5px 15px;
+            border: 1px solid #ddd;
+            background: white;
+            color: #333;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .filter-btn.active {
+            background: #3498db;
+            color: white;
+            border-color: #3498db;
+        }
+        
+        .filter-btn:hover {
+            background: #f8f9fa;
+            border-color: #3498db;
+        }
+        
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+        
+        /* Responsive column widths */
+        .col-checkbox { width: 3%; }
+        .col-status { width: 8%; }
+        .col-path { width: 20%; }
+        .col-size { width: 7%; }
+        .col-type { width: 7%; }
+        .col-scan-status { width: 8%; }
+        .col-corruption { width: 15%; }
+        .col-date { width: 10%; }
+        .col-tool { width: 7%; }
+        .col-actions { width: 15%; }
+        
+        .results-table th,
+        .results-table td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .results-table td.file-actions {
+            overflow: visible;
+        }
+        
+        .results-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        .results-table th.sortable {
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .results-table th.sortable:hover {
+            background: #e9ecef;
+        }
+        
+        .sort-indicator {
+            font-size: 0.8em;
+            color: #007bff;
+            font-weight: bold;
+        }
+        
+        .results-table tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: 500;
+        }
+        
+        .status-corrupted {
+            background: #ffebee;
+            color: #c62828;
+        }
+        
+        .status-healthy {
+            background: #e8f5e8;
+            color: #2e7d32;
+        }
+        
+        .status-marked-good {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        /* Removed row highlighting for marked good files - now shown in corruption details instead */
+        
+        .file-checkbox {
+            margin-right: 10px;
+        }
+        
+        .file-actions {
+            display: flex;
+            gap: 0.2rem;
+            flex-wrap: wrap;
+            justify-content: flex-start;
+        }
+        
+        .action-btn {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.7rem;
+            border-radius: 0.2rem;
+            white-space: nowrap;
+            text-align: center;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+            min-width: 50px;
+        }
+        
+        .action-btn:hover {
+            opacity: 0.8;
+            transform: translateY(-1px);
+        }
+        
+        .pagination-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            gap: 10px;
+            border-top: 1px solid #dee2e6;
+            background: #f8f9fa;
+            margin-top: 1rem;
+        }
+        
+        .dark-mode .pagination-container {
+            background: #2c3e50;
+            border-top-color: #555;
+        }
+        
+        .results-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .results-count {
+            color: #666;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+        
+        .dark-mode .results-count {
+            color: #bdc3c7;
+        }
+        
+        .per-page-selector {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .per-page-selector label {
+            font-size: 0.9em;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .dark-mode .per-page-selector label {
+            color: #bdc3c7;
+        }
+        
+        .per-page-selector select {
+            padding: 0.25rem 0.5rem;
+            border: 1px solid #dee2e6;
+            border-radius: 0.25rem;
+            background: white;
+            font-size: 0.9em;
+        }
+        
+        .dark-mode .per-page-selector select {
+            background: #34495e;
+            border-color: #555;
+            color: #ecf0f1;
+        }
+        
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .pagination button {
+            padding: 8px 12px;
+            font-size: 0.9em;
+        }
+        
+        .page-info {
+            color: #666;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+        
+        .dark-mode .page-info {
+            color: #bdc3c7;
+        }
+        
+        @media (max-width: 768px) {
+            .pagination-container {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .results-info {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Responsive design for smaller screens */
+        @media (max-width: 1200px) {
+            .col-path { width: 18%; }
+            .col-corruption { width: 12%; }
+            .col-actions { width: 18%; }
+            
+            .action-btn {
+                font-size: 0.65rem;
+                padding: 0.2rem 0.4rem;
+                min-width: 45px;
+            }
+        }
+        
+        @media (max-width: 992px) {
+            .col-path { width: 16%; }
+            .col-corruption { width: 10%; }
+            .col-date { width: 8%; }
+            .col-actions { width: 20%; }
+            
+            .action-btn {
+                font-size: 0.6rem;
+                padding: 0.15rem 0.3rem;
+                min-width: 40px;
+            }
+        }
+        
+        .file-path {
+            word-wrap: break-word;
+            white-space: normal;
+            cursor: pointer;
+            line-height: 1.3;
+            font-size: 0.875rem;
+            max-width: 25vw;
+        }
+        
+        .file-path:hover {
+            background: #f0f8ff;
+            color: #0066cc;
+        }
+        
+        .file-path-full {
+            position: fixed;
+            background: #333;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 1000;
+            max-width: 500px;
+            word-wrap: break-word;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        
+        .file-size {
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+        
+        .corruption-details {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 0.8rem;
+            color: #666;
+            cursor: pointer;
+            padding: 0.25rem;
+            max-width: 20vw;
+        }
+        
+        .corruption-details:hover {
+            background: #f0f8ff;
+            overflow: visible;
+            white-space: normal;
+            word-wrap: break-word;
+            max-width: none;
+            position: relative;
+            z-index: 10;
+        }
+        
+        /* Mobile first approach */
+        @media (max-width: 768px) {
+            .container {
+                max-width: 100%;
+                padding: 0.5rem;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+                gap: 0.5rem;
+            }
+            
+            .stat-card {
+                padding: 1rem;
+            }
+            
+            /* Hide less important columns on mobile */
+            .col-type, .col-scan-status {
+                display: none;
+            }
+            
+            /* Adjust column widths for mobile */
+            .col-checkbox { width: 10%; }
+            .col-status { width: 20%; }
+            .col-path { width: 40%; }
+            .col-size { width: 0; display: none; }
+            .col-corruption { width: 0; display: none; }
+            .col-date { width: 0; display: none; }
+            .col-actions { width: 30%; }
+            
+            .action-btn {
+                padding: 0.25rem 0.5rem;
+                font-size: 0.7rem;
+            }
+        }
+        
+        @media (min-width: 769px) and (max-width: 1200px) {
+            /* Tablet adjustments */
+            .col-checkbox { width: 5%; }
+            .col-status { width: 10%; }
+            .col-path { width: 20%; }
+            .col-size { width: 8%; }
+            .col-type { width: 0; display: none; }
+            .col-scan-status { width: 10%; }
+            .col-corruption { width: 22%; }
+            .col-date { width: 10%; }
+            .col-actions { width: 15%; }
+        }
+        
+        @media (min-width: 1800px) {
+            /* Large screens */
+            .container {
+                max-width: 1600px;
+            }
+        }
+        
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.8);
+        }
+        
+        .modal-content {
+            background-color: #fefefe;
+            margin: 2% auto;
+            padding: 20px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 1200px;
+            max-height: 90vh;
+            overflow-y: auto;
+            position: relative;
+        }
+        
+        .dark-mode .modal-content {
+            background-color: #34495e;
+            color: #ecf0f1;
+        }
+        
+        .modal-close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            position: absolute;
+            top: 10px;
+            right: 20px;
+        }
+        
+        .modal-close:hover {
+            color: #000;
+        }
+        
+        .dark-mode .modal-close:hover {
+            color: #fff;
+        }
+        
+        /* Stats Modal Styles */
+        .stats-section {
+            margin-bottom: 2rem;
+        }
+        
+        .stats-section h4 {
+            margin-bottom: 1rem;
+            color: #333;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 0.5rem;
+        }
+        
+        .dark-mode .stats-section h4 {
+            color: #ecf0f1;
+            border-bottom-color: #3498db;
+        }
+        
+        .stats-grid-modal {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem;
+            background: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #3498db;
+        }
+        
+        .dark-mode .stat-item {
+            background: #2c3e50;
+            color: #ecf0f1;
+        }
+        
+        .stat-item .stat-label {
+            font-weight: 500;
+            color: #555;
+        }
+        
+        .dark-mode .stat-item .stat-label {
+            color: #bdc3c7;
+        }
+        
+        .stat-item .stat-value {
+            font-weight: bold;
+            color: #3498db;
+        }
+        
+        .monitored-path {
+            background: #f8f9fa;
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 5px;
+            border-left: 4px solid #27ae60;
+        }
+        
+        .dark-mode .monitored-path {
+            background: #2c3e50;
+            color: #ecf0f1;
+        }
+        
+        .path-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        
+        .path-name {
+            font-weight: bold;
+            color: #2c3e50;
+            font-family: monospace;
+        }
+        
+        .dark-mode .path-name {
+            color: #ecf0f1;
+        }
+        
+        .path-count {
+            color: #27ae60;
+            font-weight: bold;
+        }
+        
+        .path-details {
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .dark-mode .path-details {
+            color: #bdc3c7;
+        }
+        
+        @media (max-width: 768px) {
+            .stats-grid-modal {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        /* Video player styles */
+        .video-player {
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+            display: block;
+        }
+        
+        .video-controls {
+            margin-top: 10px;
+            text-align: center;
+        }
+        
+        .speed-control {
+            margin: 0 10px;
+        }
+        
+        /* Scan output styles */
+        .scan-output {
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 0.9em;
+        }
+        
+        .dark-mode .scan-output {
+            background: #2c3e50;
+            border-color: #555;
+            color: #ecf0f1;
+        }
+        
+        /* Enhanced action buttons */
+        .bulk-actions {
+            margin-bottom: 1rem;
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .search-field {
+            padding: 0.375rem 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 0.25rem;
+            background: white;
+            font-size: 0.875rem;
+            min-width: 200px;
+        }
+        
+        .dark-mode .search-field {
+            background: #2c3e50;
+            border-color: #555;
+            color: #ecf0f1;
+        }
+        
+        .search-controls {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        
+        .results-controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            margin-bottom: 1rem;
+        }
+        
+        .results-actions {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        
+        @media (max-width: 768px) {
+            .results-controls {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+            
+            .search-field {
+                min-width: 100%;
+            }
+        }
+        
+        .dark-mode .page-info {
+            color: #bdc3c7;
+        }
+        
+        .dark-mode .loading {
+            color: #bdc3c7;
+        }
+        
+        .dark-mode .status-badge {
+            border: 1px solid #555;
+        }
+        
+        .dark-mode .status-corrupted {
+            background: #c0392b;
+            color: #ecf0f1;
+        }
+        
+        .dark-mode .status-healthy {
+            background: #27ae60;
+            color: #ecf0f1;
+        }
+        
+        .dark-mode .status-marked-good {
+            background: #3498db;
+            color: #ecf0f1;
+        }
+        
+        .dark-mode .file-size {
+            color: #95a5a6;
+        }
+        
+        .dark-mode .scan-status.info {
+            background: #2c3e50;
+            color: #3498db;
+            border-color: #34495e;
+        }
+        
+        .dark-mode .scan-status.warning {
+            background: #2c3e50;
+            color: #f39c12;
+            border-color: #34495e;
+        }
+        
+        .dark-mode .progress-text {
+            color: #bdc3c7;
+        }
+        
+        .dark-mode .progress-bar {
+            background: #2c3e50;
+        }
+        
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .dropdown-button {
+            background: #6c757d;
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+        
+        .dropdown-button:hover {
+            background: #5a6268;
+        }
+        
+        .dropdown-button:disabled {
+            background: #6c757d;
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            background: white;
+            min-width: 200px;
+            box-shadow: 0px 8px 16px rgba(0,0,0,0.2);
+            z-index: 1000;
+            border-radius: 0.5rem;
+            overflow: hidden;
+            top: 100%;
+            left: 0;
+            margin-top: 0.25rem;
+        }
+        
+        .dropdown-content.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 0.75rem 1rem;
+            text-decoration: none;
+            color: #333;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-item:disabled {
+            color: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        .dropdown-item:disabled:hover {
+            background: none;
+        }
+        
+        .dropdown-item.success {
+            color: #28a745;
+        }
+        
+        .dropdown-item.danger {
+            color: #dc3545;
+        }
+        
+        .dark-mode .dropdown-content {
+            background: #2c3e50;
+            box-shadow: 0px 8px 16px rgba(0,0,0,0.4);
+        }
+        
+        .dark-mode .dropdown-item {
+            color: #ecf0f1;
+        }
+        
+        .dark-mode .dropdown-item:hover {
+            background: #34495e;
+        }
+        
+        .dark-mode .dropdown-item:disabled {
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <button onclick="showStatsModal()" id="statsBtn" class="stats-button">📊 System Stats</button>
+            <button onclick="toggleTheme()" id="themeBtn" class="dark-mode-toggle">🌙 Dark Mode</button>
+            <div class="header-content">
+                <h1>PixelProbe</h1>
+                <p>Advanced media integrity scanning and corruption detection</p>
+            </div>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-number total" id="totalFiles">-</div>
+                <div class="stat-label">Total Files</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number corrupted" id="corruptedFiles">-</div>
+                <div class="stat-label">Corrupted Files</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number healthy" id="healthyFiles">-</div>
+                <div class="stat-label">Healthy Files</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number pending" id="pendingFiles">-</div>
+                <div class="stat-label">Pending Scan</div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <div class="action-buttons">
+                <button onclick="startFullScan()" id="scanAllBtn">Scan All</button>
+                <button onclick="refreshResults()" id="refreshBtn">Refresh</button>
+                <button onclick="cleanupOrphaned()" id="cleanupBtn" class="danger">Cleanup Orphaned</button>
+                <button onclick="checkFileChanges()" id="changesBtn">Check File Changes</button>
+            </div>
+            <div class="scan-status" id="scanStatus"></div>
+            <div class="progress-container" id="progressContainer" style="display: none;">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-text">
+                    <span id="progressText">Preparing scan...</span>
+                    <span id="progressFiles">0/0 files</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="results">
+            <div class="results-header">
+                <h2>Scan Results</h2>
+                <div class="results-controls">
+                    <div class="search-controls">
+                        <label for="searchField">Search:</label>
+                        <input type="text" id="searchField" class="search-field" placeholder="Filter by file path..." oninput="filterBySearch()">
+                    </div>
+                    <div class="filters">
+                        <div class="filter-buttons">
+                            <button class="filter-btn active" onclick="filterResults('all')">All Files</button>
+                            <button class="filter-btn" onclick="filterResults('corrupted')">Corrupted Only</button>
+                            <button class="filter-btn" onclick="filterResults('healthy')">Healthy Only</button>
+                        </div>
+                    </div>
+                    <div class="results-actions">
+                        <button onclick="selectAll()" id="selectAllBtn">Select All</button>
+                        <div class="dropdown">
+                            <button onclick="toggleActionsDropdown()" id="actionsBtn" class="dropdown-button" disabled>
+                                Actions <span id="actionsArrow">▼</span>
+                            </button>
+                            <div id="actionsDropdown" class="dropdown-content">
+                                <button class="dropdown-item success" onclick="markSelectedAsGood()" id="markGoodDropdown" disabled>
+                                    ✓ Mark Selected as Good
+                                </button>
+                                <button class="dropdown-item danger" onclick="deepScanSelected()" id="deepScanDropdown" disabled>
+                                    🔍 Deep Scan Selected
+                                </button>
+                                <button class="dropdown-item" onclick="rescanSelected()" id="rescanDropdown" disabled>
+                                    🔄 Rescan Selected
+                                </button>
+                            </div>
+                        </div>
+                        <button onclick="exportToCsv()" id="exportBtn" class="success">Export CSV</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="resultsContent">
+                <div class="loading">Loading scan results...</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Media Viewer Modal -->
+    <div id="mediaModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeModal('mediaModal')">&times;</span>
+            <div id="mediaViewer"></div>
+        </div>
+    </div>
+    
+    <!-- Scan Output Modal -->
+    <div id="scanOutputModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeModal('scanOutputModal')">&times;</span>
+            <h3>Scan Output Details</h3>
+            <div id="scanOutputContent"></div>
+        </div>
+    </div>
+    
+    <!-- File Changes Modal -->
+    <div id="fileChangesModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeModal('fileChangesModal')">&times;</span>
+            <h3>File Changes Report</h3>
+            <div id="fileChangesContent"></div>
+        </div>
+    </div>
+    
+    <!-- System Stats Modal -->
+    <div id="statsModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeModal('statsModal')">&times;</span>
+            <h3>System Statistics</h3>
+            <div id="statsContent">
+                <div class="stats-section">
+                    <h4>Database Statistics</h4>
+                    <div class="stats-grid-modal">
+                        <div class="stat-item">
+                            <span class="stat-label">Total Files in Database:</span>
+                            <span class="stat-value" id="modal-totalFiles">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Healthy Files:</span>
+                            <span class="stat-value" id="modal-healthyFiles">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Corrupted Files:</span>
+                            <span class="stat-value" id="modal-corruptedFiles">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Pending Scans:</span>
+                            <span class="stat-value" id="modal-pendingFiles">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Files Currently Scanning:</span>
+                            <span class="stat-value" id="modal-scanningFiles">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Files Marked as Good:</span>
+                            <span class="stat-value" id="modal-markedGoodFiles">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="stats-section">
+                    <h4>Monitored Paths</h4>
+                    <div id="monitoredPaths">Loading...</div>
+                </div>
+                
+                <div class="stats-section">
+                    <h4>File System Statistics</h4>
+                    <div class="stats-grid-modal">
+                        <div class="stat-item">
+                            <span class="stat-label">Total Files Found:</span>
+                            <span class="stat-value" id="modal-totalFoundFiles">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Percentage Tracked:</span>
+                            <span class="stat-value" id="modal-percentageTracked">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Percentage Checked:</span>
+                            <span class="stat-value" id="modal-percentageChecked">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentPage = 1;
+        let currentFilter = 'all';
+        let searchQuery = '';
+        let scanStatusInterval = null;
+        let currentPerPage = 20; // Default items per page
+        
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const stats = await response.json();
+                
+                document.getElementById('totalFiles').textContent = stats.total_files;
+                document.getElementById('corruptedFiles').textContent = stats.corrupted_files;
+                document.getElementById('healthyFiles').textContent = stats.healthy_files;
+                document.getElementById('pendingFiles').textContent = stats.pending_files || 0;
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+        
+        async function loadResults(page = 1) {
+            try {
+                const perPageParam = currentPerPage === 'all' ? '999999' : currentPerPage;
+                let url = `/api/scan-results?page=${page}&per_page=${perPageParam}`;
+                if (searchQuery) {
+                    url += `&search=${encodeURIComponent(searchQuery)}`;
+                }
+                url += `&sort_field=${sortField}&sort_order=${sortOrder}`;
+                url += `&filter=${currentFilter}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                renderResults(data);
+                renderPagination(data);
+            } catch (error) {
+                console.error('Error loading results:', error);
+                document.getElementById('resultsContent').innerHTML = '<div class="loading">Error loading results</div>';
+            }
+        }
+        
+        function renderResults(data) {
+            const resultsContent = document.getElementById('resultsContent');
+            
+            if (data.results.length === 0) {
+                resultsContent.innerHTML = '<div class="loading">No files found. Start a scan to see results.</div>';
+                return;
+            }
+            
+            const filteredResults = data.results;
+            
+            const tableHTML = `
+                <div class="table-container">
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th class="col-checkbox"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll()"></th>
+                                <th class="col-status sortable" onclick="sortByColumn('is_corrupted')">Status <span class="sort-indicator" id="sort-is_corrupted"></span></th>
+                                <th class="col-path sortable" onclick="sortByColumn('file_path')">File Path <span class="sort-indicator" id="sort-file_path"></span></th>
+                                <th class="col-size sortable" onclick="sortByColumn('file_size')">Size <span class="sort-indicator" id="sort-file_size"></span></th>
+                                <th class="col-type sortable" onclick="sortByColumn('file_type')">Type <span class="sort-indicator" id="sort-file_type"></span></th>
+                                <th class="col-scan-status sortable" onclick="sortByColumn('scan_status')">Scan Status <span class="sort-indicator" id="sort-scan_status"></span></th>
+                                <th class="col-corruption">Corruption Details</th>
+                                <th class="col-date sortable" onclick="sortByColumn('scan_date')">Scan Date <span class="sort-indicator" id="sort-scan_date"></span></th>
+                                <th class="col-tool sortable" onclick="sortByColumn('scan_tool')">Tool <span class="sort-indicator" id="sort-scan_tool"></span></th>
+                                <th class="col-actions">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        ${filteredResults.map(result => `
+                            <tr>
+                                <td>
+                                    <input type="checkbox" class="file-checkbox" value="${result.id}" onchange="updateMarkGoodButton()">
+                                </td>
+                                <td>
+                                    ${result.marked_as_good ? 
+                                        '<span class="status-badge status-healthy">Healthy</span>' :
+                                        result.scan_status === 'pending' ? '<span class="status-badge" style="background: #fff3cd; color: #856404;">Pending</span>' :
+                                        result.scan_status === 'scanning' ? '<span class="status-badge" style="background: #cce5ff; color: #0066cc;">Scanning</span>' :
+                                        result.scan_status === 'error' ? '<span class="status-badge status-corrupted">Error</span>' :
+                                        `<span class="status-badge ${result.is_corrupted ? 'status-corrupted' : 'status-healthy'}">${result.is_corrupted ? 'Corrupted' : 'Healthy'}</span>`
+                                    }
+                                </td>
+                                <td class="file-path" onclick="showFullPath(event, '${result.file_path.replace(/'/g, "\\'")}', ${result.id})" title="Click to view full path">${result.file_path}</td>
+                                <td class="file-size">${result.file_size ? formatFileSize(result.file_size) : 'Unknown'}</td>
+                                <td>${result.file_type || 'Unknown'}</td>
+                                <td><span class="status-badge" style="background: ${result.scan_status === 'completed' ? '#e8f5e8' : result.scan_status === 'pending' ? '#fff3cd' : result.scan_status === 'scanning' ? '#cce5ff' : '#ffebee'}; color: ${result.scan_status === 'completed' ? '#2e7d32' : result.scan_status === 'pending' ? '#856404' : result.scan_status === 'scanning' ? '#0066cc' : '#c62828'};">${result.scan_status}</span></td>
+                                <td class="corruption-details" title="${result.marked_as_good ? 'Marked as Good by User' : (result.corruption_details || 'None')}">
+                                    ${result.marked_as_good ? 
+                                        '<span style="color: #27ae60; font-weight: 500;">\u2713 Marked as Good</span>' : 
+                                        (result.corruption_details || 'None')
+                                    }
+                                </td>
+                                <td>${result.scan_date ? new Date(result.scan_date).toLocaleString() : 'Not scanned'}</td>
+                                <td>${result.scan_tool || 'N/A'}</td>
+                                <td class="file-actions">
+                                    ${result.scan_date ? `<button class="action-btn" style="background: #3498db; color: white;" onclick="viewFileInModal(${result.id}, '${result.file_type || ''}')">View</button>` : ''}
+                                    ${result.scan_date ? `<button class="action-btn" style="background: #f39c12; color: white;" onclick="rescanFile(${result.id})">Rescan</button>` : ''}
+                                    ${result.scan_date ? `<button class="action-btn" style="background: #9b59b6; color: white;" onclick="rescanFile(${result.id}, true)">Deep Scan</button>` : ''}
+                                    ${result.scan_date && !result.marked_as_good ? 
+                                        `<button class="action-btn" style="background: #27ae60; color: white;" onclick="markSingleAsGood(${result.id})">Mark Good</button>` : 
+                                        ''
+                                    }
+                                    ${result.scan_output ? `<button class="action-btn" style="background: #17a2b8; color: white;" onclick="showScanOutput(${result.id})">Output</button>` : ''}
+                                    ${result.file_size ? `<button class="action-btn" style="background: #e67e22; color: white;" onclick="downloadFile(${result.id})">Download</button>` : ''}
+                                </td>
+                            </tr>
+                        `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            
+            resultsContent.innerHTML = tableHTML;
+            updateSortIndicators();
+        }
+        
+        function renderPagination(data) {
+            const startItem = ((data.current_page - 1) * data.per_page) + 1;
+            const endItem = Math.min(data.current_page * data.per_page, data.total_items);
+            
+            const paginationHTML = `
+                <div class="pagination-container">
+                    <div class="results-info">
+                        <span class="results-count">Showing ${startItem}-${endItem} of ${data.total_items} results</span>
+                        <div class="per-page-selector">
+                            <label for="perPageSelect">Items per page:</label>
+                            <select id="perPageSelect" onchange="changePerPage(this.value)">
+                                <option value="20" ${currentPerPage == 20 ? 'selected' : ''}>20</option>
+                                <option value="50" ${currentPerPage == 50 ? 'selected' : ''}>50</option>
+                                <option value="100" ${currentPerPage == 100 ? 'selected' : ''}>100</option>
+                                <option value="500" ${currentPerPage == 500 ? 'selected' : ''}>500</option>
+                                <option value="all" ${currentPerPage == 'all' ? 'selected' : ''}>All</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="pagination">
+                        <button onclick="loadResults(${data.current_page - 1})" ${data.current_page <= 1 || currentPerPage === 'all' ? 'disabled' : ''}>Previous</button>
+                        <span class="page-info">${currentPerPage === 'all' ? 'All results' : `Page ${data.current_page} of ${data.pages}`}</span>
+                        <button onclick="loadResults(${data.current_page + 1})" ${data.current_page >= data.pages || currentPerPage === 'all' ? 'disabled' : ''}>Next</button>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('resultsContent').innerHTML += paginationHTML;
+        }
+        
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        function formatETA(seconds) {
+            if (seconds < 60) {
+                return `${Math.round(seconds)}s`;
+            } else if (seconds < 3600) {
+                const minutes = Math.floor(seconds / 60);
+                const remainingSeconds = Math.round(seconds % 60);
+                return `${minutes}m ${remainingSeconds}s`;
+            } else {
+                const hours = Math.floor(seconds / 3600);
+                const minutes = Math.floor((seconds % 3600) / 60);
+                return `${hours}h ${minutes}m`;
+            }
+        }
+        
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('scanStatus');
+            statusDiv.textContent = message;
+            statusDiv.className = `scan-status ${type}`;
+            statusDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        async function checkScanStatus() {
+            try {
+                const response = await fetch('/api/scan-status');
+                const status = await response.json();
+                
+                if (status.is_scanning) {
+                    const scanBtn = document.getElementById('scanAllBtn');
+                    scanBtn.disabled = true;
+                    scanBtn.textContent = 'Scanning...';
+                    
+                    // Calculate completed files based on total minus pending/scanning
+                    const totalFiles = status.estimated_total || (status.scanning_files + status.pending_files);
+                    const completedFiles = Math.max(0, totalFiles - status.pending_files - status.scanning_files);
+                    
+                    let progressMessage = '';
+                    
+                    if (status.phase === 'discovering') {
+                        progressMessage = 'Discovering files...';
+                    } else if (status.phase === 'scanning' && status.current_file_progress) {
+                        // Show current file being scanned
+                        progressMessage = status.current_file_progress;
+                        
+                        // Add ETA if available
+                        if (status.eta_seconds > 0) {
+                            const eta = formatETA(status.eta_seconds);
+                            progressMessage += ` | ETA: ${eta}`;
+                        }
+                        
+                        // Add average scan time
+                        if (status.average_scan_time > 0) {
+                            progressMessage += ` | Avg: ${status.average_scan_time.toFixed(1)}s/file`;
+                        }
+                    } else if (totalFiles > 0) {
+                        progressMessage = `Scanning files... ${completedFiles}/${totalFiles} completed`;
+                        if (status.eta_seconds > 0) {
+                            const eta = formatETA(status.eta_seconds);
+                            progressMessage += ` | ETA: ${eta}`;
+                        }
+                    } else {
+                        progressMessage = 'Initializing scan...';
+                    }
+                    
+                    updateProgress(completedFiles, totalFiles, progressMessage);
+                    
+                    // Start monitoring scan progress
+                    startScanMonitoring();
+                    return true;
+                } else {
+                    const scanBtn = document.getElementById('scanAllBtn');
+                    scanBtn.disabled = false;
+                    scanBtn.textContent = 'Scan All';
+                    hideProgress();
+                    return false;
+                }
+            } catch (error) {
+                console.error('Error checking scan status:', error);
+                return false;
+            }
+        }
+        
+        function startScanMonitoring() {
+            if (scanStatusInterval) {
+                clearInterval(scanStatusInterval);
+            }
+            
+            scanStatusInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/api/scan-status');
+                    const status = await response.json();
+                    
+                    if (status.is_scanning) {
+                        // Calculate completed files based on total minus pending/scanning
+                        const totalFiles = status.estimated_total || (status.scanning_files + status.pending_files);
+                        const completedFiles = Math.max(0, totalFiles - status.pending_files - status.scanning_files);
+                        
+                        let progressMessage = '';
+                        
+                        if (status.phase === 'discovering') {
+                            progressMessage = 'Discovering files...';
+                        } else if (status.phase === 'scanning' && status.current_file_progress) {
+                            progressMessage = status.current_file_progress;
+                            if (status.eta_seconds > 0) {
+                                const eta = formatETA(status.eta_seconds);
+                                progressMessage += ` | ETA: ${eta}`;
+                            }
+                            if (status.average_scan_time > 0) {
+                                progressMessage += ` | Avg: ${status.average_scan_time.toFixed(1)}s/file`;
+                            }
+                        } else if (totalFiles > 0) {
+                            progressMessage = `Scanning files... ${completedFiles}/${totalFiles} completed`;
+                            if (status.eta_seconds > 0) {
+                                const eta = formatETA(status.eta_seconds);
+                                progressMessage += ` | ETA: ${eta}`;
+                            }
+                        } else {
+                            progressMessage = 'Initializing scan...';
+                        }
+                        
+                        updateProgress(completedFiles, totalFiles, progressMessage);
+                        await loadStats();
+                        await loadResults(currentPage);
+                    } else {
+                        // Scan completed
+                        clearInterval(scanStatusInterval);
+                        scanStatusInterval = null;
+                        
+                        const scanBtn = document.getElementById('scanAllBtn');
+                        scanBtn.disabled = false;
+                        scanBtn.textContent = 'Scan All';
+                        hideProgress();
+                        
+                        showStatus('Scan completed!', 'info');
+                        await loadStats();
+                        await loadResults(currentPage);
+                    }
+                } catch (error) {
+                    console.error('Error monitoring scan:', error);
+                    clearInterval(scanStatusInterval);
+                    scanStatusInterval = null;
+                }
+            }, 3000); // Check every 3 seconds
+        }
+
+        async function startFullScan() {
+            const scanBtn = document.getElementById('scanAllBtn');
+            
+            // Check if already scanning
+            if (await checkScanStatus()) {
+                showStatus('Scan already in progress', 'warning');
+                return;
+            }
+            
+            scanBtn.disabled = true;
+            scanBtn.textContent = 'Starting...';
+            
+            console.log('Starting scan request...');
+            updateProgress(0, 0, 'Initializing scan...');
+            
+            try {
+                const response = await fetch('/api/scan-all', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({})
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showStatus('Scan started successfully', 'info');
+                    scanBtn.textContent = 'Scanning...';
+                    startScanMonitoring();
+                } else {
+                    hideProgress();
+                    if (response.status === 409) {
+                        showStatus('Scan already in progress', 'warning');
+                    } else {
+                        showStatus(`Error starting scan: ${data.error || 'Unknown error'}`, 'warning');
+                    }
+                    scanBtn.disabled = false;
+                    scanBtn.textContent = 'Scan All';
+                }
+            } catch (error) {
+                hideProgress();
+                showStatus(`Error starting scan: ${error.message}`, 'warning');
+                console.error('Scan error:', error);
+                scanBtn.disabled = false;
+                scanBtn.textContent = 'Scan All';
+            }
+        }
+        
+        async function rescanFile(resultId, deepScan = false) {
+            console.log('=== RESCAN FUNCTION CALLED ===');
+            console.log('Result ID:', resultId, 'Deep scan:', deepScan);
+            
+            try {
+                // Show loading state
+                const buttonText = deepScan ? 'Deep Scan' : 'Rescan';
+                const rescanBtn = deepScan ? 
+                    document.querySelector(`button[onclick="rescanFile(${resultId}, true)"]`) :
+                    document.querySelector(`button[onclick="rescanFile(${resultId})"]`);
+                console.log('Rescan button found:', !!rescanBtn);
+                
+                if (!rescanBtn) {
+                    console.error('Rescan button not found!');
+                    return;
+                }
+                
+                const originalText = rescanBtn.textContent;
+                rescanBtn.disabled = true;
+                rescanBtn.textContent = deepScan ? 'Deep Scanning...' : 'Rescanning...';
+                rescanBtn.style.backgroundColor = deepScan ? '#9b59b6' : '#f39c12';
+                
+                showStatus(`Starting ${deepScan ? 'deep scan' : 'rescan'}...`, 'info');
+                console.log('Fetching scan result for ID:', resultId);
+                
+                const response = await fetch(`/api/scan-results/${resultId}`);
+                const result = await response.json();
+                
+                const scanResponse = await fetch('/api/scan-file', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        file_path: result.file_path,
+                        deep_scan: deepScan
+                    })
+                });
+                
+                if (scanResponse.ok) {
+                    const scanResult = await scanResponse.json();
+                    const fileName = result.file_path.split('/').pop();
+                    const status = scanResult.is_corrupted ? 'corrupted' : 'healthy';
+                    showStatus(`${deepScan ? 'Deep scan' : 'Rescan'} completed: ${fileName} is ${status}`, 'info');
+                    await loadResults(currentPage);
+                    await loadStats();
+                } else {
+                    const errorData = await scanResponse.json();
+                    showStatus(`Error ${deepScan ? 'deep scanning' : 'rescanning'} file: ${errorData.error || 'Unknown error'}`, 'warning');
+                }
+            } catch (error) {
+                showStatus(`Error ${deepScan ? 'deep scanning' : 'rescanning'} file: ${error.message}`, 'warning');
+                console.error('Rescan error:', error);
+            } finally {
+                // Reset button state
+                const rescanBtn = deepScan ? 
+                    document.querySelector(`button[onclick="rescanFile(${resultId}, true)"]`) :
+                    document.querySelector(`button[onclick="rescanFile(${resultId})"]`);
+                if (rescanBtn) {
+                    rescanBtn.disabled = false;
+                    rescanBtn.textContent = deepScan ? 'Deep Scan' : 'Rescan';
+                    rescanBtn.style.backgroundColor = '';
+                }
+            }
+        }
+        
+        function downloadFile(resultId) {
+            try {
+                // Find the download button and show feedback
+                const downloadBtn = document.querySelector(`button[onclick="downloadFile(${resultId})"]`);
+                if (downloadBtn) {
+                    const originalText = downloadBtn.textContent;
+                    downloadBtn.disabled = true;
+                    downloadBtn.textContent = 'Downloading...';
+                    
+                    setTimeout(() => {
+                        downloadBtn.disabled = false;
+                        downloadBtn.textContent = originalText;
+                    }, 2000);
+                }
+                
+                showStatus('Starting download...', 'info');
+                window.open(`/api/download/${resultId}`, '_blank');
+                
+                // Show completion message after a short delay
+                setTimeout(() => {
+                    showStatus('Download initiated successfully', 'info');
+                }, 1000);
+            } catch (error) {
+                showStatus(`Download error: ${error.message}`, 'warning');
+                console.error('Download error:', error);
+            }
+        }
+        
+        function filterResults(filter) {
+            try {
+                currentFilter = filter;
+                
+                document.querySelectorAll('.filter-btn').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                
+                event.target.classList.add('active');
+                
+                // Show feedback based on filter type
+                const filterNames = {
+                    'all': 'all files',
+                    'corrupted': 'corrupted files only',
+                    'healthy': 'healthy files only'
+                };
+                
+                showStatus(`Filtering to show ${filterNames[filter] || filter}`, 'info');
+                loadResults(currentPage);
+            } catch (error) {
+                showStatus(`Filter error: ${error.message}`, 'warning');
+                console.error('Filter error:', error);
+            }
+        }
+        
+        function filterBySearch() {
+            try {
+                searchQuery = document.getElementById('searchField').value.trim();
+                currentPage = 1; // Reset to first page when searching
+                
+                if (searchQuery) {
+                    showStatus(`Searching for: "${searchQuery}"`, 'info');
+                } else {
+                    showStatus('Showing all results', 'info');
+                }
+                
+                loadResults(currentPage);
+            } catch (error) {
+                showStatus(`Search error: ${error.message}`, 'warning');
+                console.error('Search error:', error);
+            }
+        }
+        
+        function refreshResults() {
+            try {
+                // Find the refresh button and show feedback
+                const refreshBtn = document.getElementById('refreshBtn');
+                if (refreshBtn) {
+                    const originalText = refreshBtn.textContent;
+                    refreshBtn.disabled = true;
+                    refreshBtn.textContent = 'Refreshing...';
+                    
+                    setTimeout(() => {
+                        refreshBtn.disabled = false;
+                        refreshBtn.textContent = originalText;
+                    }, 2000);
+                }
+                
+                showStatus('Refreshing results...', 'info');
+                loadStats();
+                loadResults(currentPage);
+                
+                setTimeout(() => {
+                    showStatus('Results refreshed', 'info');
+                }, 1000);
+            } catch (error) {
+                showStatus(`Refresh error: ${error.message}`, 'warning');
+                console.error('Refresh error:', error);
+            }
+        }
+        
+        function showFullPath(event, filePath, fileId) {
+            // Remove any existing tooltip
+            const existingTooltip = document.querySelector('.file-path-full');
+            if (existingTooltip) {
+                existingTooltip.remove();
+            }
+            
+            // Create tooltip
+            const tooltip = document.createElement('div');
+            tooltip.className = 'file-path-full';
+            tooltip.textContent = filePath;
+            
+            // Position tooltip
+            const rect = event.target.getBoundingClientRect();
+            tooltip.style.left = rect.left + 'px';
+            tooltip.style.top = (rect.bottom + 5) + 'px';
+            
+            document.body.appendChild(tooltip);
+            
+            // Remove tooltip after 3 seconds or on click
+            setTimeout(() => {
+                if (tooltip.parentNode) {
+                    tooltip.remove();
+                }
+            }, 3000);
+            
+            tooltip.addEventListener('click', () => {
+                tooltip.remove();
+            });
+        }
+        
+        function viewFile(resultId, fileType) {
+            // Open file in new window/tab for viewing
+            if (fileType.startsWith('image/')) {
+                // For images, we can show them directly
+                window.open(`/api/view/${resultId}`, '_blank');
+            } else if (fileType.startsWith('video/')) {
+                // For videos, show in a player
+                window.open(`/api/view/${resultId}`, '_blank');
+            } else {
+                // For other files, just download
+                downloadFile(resultId);
+            }
+        }
+        
+        function updateProgress(current, total, message) {
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            const progressFiles = document.getElementById('progressFiles');
+            
+            if (total > 0) {
+                const percentage = (current / total) * 100;
+                progressFill.style.width = percentage + '%';
+                progressFiles.textContent = `${current}/${total} files`;
+            }
+            
+            progressText.textContent = message;
+            progressContainer.style.display = 'block';
+        }
+        
+        function hideProgress() {
+            document.getElementById('progressContainer').style.display = 'none';
+        }
+        
+        
+        function toggleSelectAll() {
+            const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+            const fileCheckboxes = document.querySelectorAll('.file-checkbox');
+            
+            fileCheckboxes.forEach(checkbox => {
+                checkbox.checked = selectAllCheckbox.checked;
+            });
+            
+            updateMarkGoodButton();
+        }
+        
+        function selectAll() {
+            const fileCheckboxes = document.querySelectorAll('.file-checkbox');
+            const allChecked = Array.from(fileCheckboxes).every(checkbox => checkbox.checked);
+            
+            fileCheckboxes.forEach(checkbox => {
+                checkbox.checked = !allChecked;
+            });
+            
+            document.getElementById('selectAllCheckbox').checked = !allChecked;
+            updateMarkGoodButton();
+        }
+        
+        async function markSelectedAsGood() {
+            const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+            const fileIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+            
+            if (fileIds.length === 0) {
+                showStatus('No files selected to mark as good', 'warning');
+                return;
+            }
+            
+            const markGoodBtn = document.getElementById('markGoodDropdown');
+            
+            try {
+                // Show loading state
+                if (markGoodBtn) {
+                    const originalText = markGoodBtn.textContent;
+                    markGoodBtn.disabled = true;
+                    markGoodBtn.textContent = 'Marking...';
+                    markGoodBtn.style.opacity = '0.7';
+                }
+                
+                showStatus(`Marking ${fileIds.length} files as good...`, 'info');
+                
+                const response = await fetch('/api/mark-as-good', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ file_ids: fileIds })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showStatus(`Successfully marked ${fileIds.length} files as good`, 'info');
+                    await loadStats();
+                    await loadResults(currentPage);
+                    
+                    // Clear selections
+                    document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = false);
+                    document.getElementById('selectAllCheckbox').checked = false;
+                    updateMarkGoodButton();
+                    
+                    // Close dropdown
+                    document.getElementById('actionsDropdown').classList.remove('show');
+                } else {
+                    showStatus(`Error marking files as good: ${data.error}`, 'warning');
+                }
+            } catch (error) {
+                showStatus(`Error marking files as good: ${error.message}`, 'warning');
+                console.error('Mark as good error:', error);
+            } finally {
+                // Reset button state
+                if (markGoodBtn) {
+                    markGoodBtn.disabled = false;
+                    markGoodBtn.textContent = '✓ Mark Selected as Good';
+                    markGoodBtn.style.opacity = '1';
+                }
+            }
+        }
+        
+        async function markSingleAsGood(fileId) {
+            const markBtn = document.querySelector(`button[onclick="markSingleAsGood(${fileId})"]`);
+            
+            try {
+                // Show loading state
+                if (markBtn) {
+                    const originalText = markBtn.textContent;
+                    markBtn.disabled = true;
+                    markBtn.textContent = 'Marking...';
+                    markBtn.style.opacity = '0.7';
+                }
+                
+                showStatus('Marking file as good...', 'info');
+                
+                const response = await fetch('/api/mark-as-good', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ file_ids: [fileId] })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showStatus('File marked as good successfully', 'info');
+                    await loadStats();
+                    await loadResults(currentPage);
+                } else {
+                    showStatus(`Error marking file as good: ${data.error}`, 'warning');
+                }
+            } catch (error) {
+                showStatus(`Error marking file as good: ${error.message}`, 'warning');
+                console.error('Mark as good error:', error);
+            } finally {
+                // Reset button state
+                if (markBtn) {
+                    markBtn.disabled = false;
+                    markBtn.textContent = 'Mark Good';
+                    markBtn.style.opacity = '1';
+                }
+            }
+        }
+        
+        async function exportToCsv() {
+            try {
+                const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+                const selectedIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+                
+                let exportType = 'all';
+                let requestBody = {};
+                
+                if (selectedIds.length > 0) {
+                    exportType = 'selected';
+                    requestBody = { file_ids: selectedIds };
+                }
+                
+                showStatus(`Preparing CSV export (${exportType === 'selected' ? selectedIds.length + ' selected files' : 'all results'})...`, 'info');
+                
+                const response = await fetch('/api/export-csv', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (response.ok) {
+                    // Get the blob from response
+                    const blob = await response.blob();
+                    
+                    // Create download link
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+                    a.href = url;
+                    a.download = `pixelprobe_${exportType}_${timestamp}.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    
+                    showStatus(`CSV export completed successfully (${exportType === 'selected' ? selectedIds.length + ' files' : 'all results'})`, 'info');
+                } else {
+                    const errorData = await response.json();
+                    showStatus(`Export failed: ${errorData.error}`, 'warning');
+                }
+            } catch (error) {
+                showStatus(`Export error: ${error.message}`, 'warning');
+                console.error('CSV export error:', error);
+            }
+        }
+        
+        // Theme management
+        function toggleTheme() {
+            const body = document.body;
+            const themeBtn = document.getElementById('themeBtn');
+            
+            if (body.classList.contains('dark-mode')) {
+                body.classList.remove('dark-mode');
+                themeBtn.textContent = '🌙 Dark Mode';
+                localStorage.setItem('theme', 'light');
+            } else {
+                body.classList.add('dark-mode');
+                themeBtn.textContent = '☀️ Light Mode';
+                localStorage.setItem('theme', 'dark');
+            }
+        }
+        
+        // Load saved theme
+        function loadTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            const themeBtn = document.getElementById('themeBtn');
+            
+            if (savedTheme === 'dark') {
+                document.body.classList.add('dark-mode');
+                themeBtn.textContent = '☀️ Light Mode';
+            }
+        }
+        
+        // Modal management
+        function openModal(modalId) {
+            document.getElementById(modalId).style.display = 'block';
+        }
+        
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+        
+        // Show system stats modal
+        async function showStatsModal() {
+            const statsBtn = document.getElementById('statsBtn');
+            
+            try {
+                // Show loading state
+                if (statsBtn) {
+                    const originalText = statsBtn.textContent;
+                    statsBtn.disabled = true;
+                    statsBtn.textContent = 'Loading...';
+                    
+                    setTimeout(() => {
+                        statsBtn.disabled = false;
+                        statsBtn.textContent = originalText;
+                    }, 3000);
+                }
+                
+                showStatus('Loading system statistics...', 'info');
+                
+                // Load database stats
+                const statsResponse = await fetch('/api/stats');
+                const stats = await statsResponse.json();
+                
+                // Load system info (with fallback)
+                let systemInfo = {
+                    total_files_found: 0,
+                    monitored_paths: []
+                };
+                
+                try {
+                    const systemInfoResponse = await fetch('/api/system-info');
+                    if (systemInfoResponse.ok) {
+                        systemInfo = await systemInfoResponse.json();
+                    } else {
+                        console.log('System info endpoint returned error, using fallback');
+                    }
+                } catch (error) {
+                    console.log('System info endpoint not available or timed out, using fallback');
+                }
+                
+                // Update modal content
+                document.getElementById('modal-totalFiles').textContent = stats.total_files;
+                document.getElementById('modal-healthyFiles').textContent = stats.healthy_files;
+                document.getElementById('modal-corruptedFiles').textContent = stats.corrupted_files;
+                document.getElementById('modal-pendingFiles').textContent = stats.pending_files || 0;
+                document.getElementById('modal-scanningFiles').textContent = stats.scanning_files || 0;
+                document.getElementById('modal-markedGoodFiles').textContent = stats.marked_good_files || 0;
+                
+                // Update file system stats
+                const totalFoundFiles = systemInfo.total_files_found || 0;
+                const trackedFiles = stats.total_files;
+                const checkedFiles = stats.healthy_files + stats.corrupted_files + (stats.marked_good_files || 0);
+                
+                document.getElementById('modal-totalFoundFiles').textContent = totalFoundFiles.toLocaleString();
+                
+                const percentageTracked = totalFoundFiles > 0 ? ((trackedFiles / totalFoundFiles) * 100).toFixed(1) : '0.0';
+                document.getElementById('modal-percentageTracked').textContent = percentageTracked + '%';
+                
+                const percentageChecked = trackedFiles > 0 ? ((checkedFiles / trackedFiles) * 100).toFixed(1) : '0.0';
+                document.getElementById('modal-percentageChecked').textContent = percentageChecked + '%';
+                
+                // Update monitored paths
+                const pathsContainer = document.getElementById('monitoredPaths');
+                if (systemInfo.monitored_paths && systemInfo.monitored_paths.length > 0) {
+                    pathsContainer.innerHTML = systemInfo.monitored_paths.map(path => `
+                        <div class="monitored-path">
+                            <div class="path-info">
+                                <span class="path-name">${path.path}</span>
+                                <span class="path-count">${path.file_count.toLocaleString()} files</span>
+                            </div>
+                            <div class="path-details">
+                                Status: ${path.exists ? 'Accessible' : 'Not accessible'} | 
+                                Last checked: ${new Date(path.last_checked).toLocaleString()}
+                                ${path.error ? ' | Error: ' + path.error : ''}
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    pathsContainer.innerHTML = '<p>No monitored paths configured</p>';
+                }
+                
+                openModal('statsModal');
+            } catch (error) {
+                console.error('Error loading system stats:', error);
+                showStatus('Error loading system stats', 'warning');
+            }
+        }
+        
+        // Enhanced file viewer with inline video player
+        async function viewFileInModal(resultId, fileType) {
+            const viewBtn = document.querySelector(`button[onclick="viewFileInModal(${resultId}, '${fileType || ''}')"]`);
+            
+            try {
+                // Show loading state
+                if (viewBtn) {
+                    const originalText = viewBtn.textContent;
+                    viewBtn.disabled = true;
+                    viewBtn.textContent = 'Loading...';
+                    viewBtn.style.opacity = '0.7';
+                    
+                    // Reset button after modal opens
+                    setTimeout(() => {
+                        viewBtn.disabled = false;
+                        viewBtn.textContent = originalText;
+                        viewBtn.style.opacity = '1';
+                    }, 2000);
+                }
+                
+                showStatus('Loading file viewer...', 'info');
+                
+                const response = await fetch(`/api/scan-results/${resultId}`);
+                const result = await response.json();
+                
+                const mediaViewer = document.getElementById('mediaViewer');
+                
+                if (fileType && fileType.startsWith('video/')) {
+                    mediaViewer.innerHTML = `
+                        <h3>Video: ${result.file_path.split('/').pop()}</h3>
+                        <video class="video-player" controls preload="metadata" onloadedmetadata="onVideoLoaded()" onerror="onVideoError()">
+                            <source src="/api/view/${resultId}" type="${fileType}">
+                            <source src="/api/view/${resultId}" type="video/mp4">
+                            <source src="/api/view/${resultId}" type="video/webm">
+                            <source src="/api/view/${resultId}" type="video/ogg">
+                            Your browser does not support the video tag.
+                        </video>
+                        <div class="video-controls">
+                            <label class="speed-control">
+                                Speed: 
+                                <select onchange="changePlaybackSpeed(this.value)">
+                                    <option value="0.25">0.25x</option>
+                                    <option value="0.5">0.5x</option>
+                                    <option value="0.75">0.75x</option>
+                                    <option value="1" selected>1x</option>
+                                    <option value="1.25">1.25x</option>
+                                    <option value="1.5">1.5x</option>
+                                    <option value="2">2x</option>
+                                    <option value="4">4x</option>
+                                </select>
+                            </label>
+                            <button onclick="skipVideo(-10)" style="margin-left: 10px;">-10s</button>
+                            <button onclick="skipVideo(10)">+10s</button>
+                        </div>
+                        <div id="videoStatus" style="margin-top: 10px; padding: 10px; background: #f0f0f0; border-radius: 5px; display: none;"></div>
+                    `;
+                } else if (fileType && fileType.startsWith('image/')) {
+                    mediaViewer.innerHTML = `
+                        <h3>Image: ${result.file_path.split('/').pop()}</h3>
+                        <img src="/api/view/${resultId}" style="max-width: 100%; height: auto;" alt="Media file" onerror="onImageError()">
+                    `;
+                } else {
+                    // Try to determine if it's a video file by extension
+                    const filePath = result.file_path.toLowerCase();
+                    const videoExtensions = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv', '.m4v', '.3gp', '.ogv'];
+                    const isVideo = videoExtensions.some(ext => filePath.endsWith(ext));
+                    
+                    if (isVideo) {
+                        mediaViewer.innerHTML = `
+                            <h3>Video: ${result.file_path.split('/').pop()}</h3>
+                            <video class="video-player" controls preload="metadata" onloadedmetadata="onVideoLoaded()" onerror="onVideoError()">
+                                <source src="/api/view/${resultId}" type="video/mp4">
+                                <source src="/api/view/${resultId}" type="video/webm">
+                                <source src="/api/view/${resultId}" type="video/ogg">
+                                Your browser does not support the video tag.
+                            </video>
+                            <div class="video-controls">
+                                <label class="speed-control">
+                                    Speed: 
+                                    <select onchange="changePlaybackSpeed(this.value)">
+                                        <option value="0.25">0.25x</option>
+                                        <option value="0.5">0.5x</option>
+                                        <option value="0.75">0.75x</option>
+                                        <option value="1" selected>1x</option>
+                                        <option value="1.25">1.25x</option>
+                                        <option value="1.5">1.5x</option>
+                                        <option value="2">2x</option>
+                                        <option value="4">4x</option>
+                                    </select>
+                                </label>
+                                <button onclick="skipVideo(-10)" style="margin-left: 10px;">-10s</button>
+                                <button onclick="skipVideo(10)">+10s</button>
+                            </div>
+                            <div id="videoStatus" style="margin-top: 10px; padding: 10px; background: #f0f0f0; border-radius: 5px; display: none;"></div>
+                        `;
+                    } else {
+                        mediaViewer.innerHTML = `
+                            <h3>File: ${result.file_path.split('/').pop()}</h3>
+                            <p>File type: ${fileType || 'Unknown'}</p>
+                            <p>This file type cannot be previewed. <a href="/api/download/${resultId}" target="_blank">Download</a> to view.</p>
+                        `;
+                    }
+                }
+                
+                openModal('mediaModal');
+            } catch (error) {
+                console.error('Error loading file for viewing:', error);
+                showStatus('Error loading file for viewing', 'warning');
+            }
+        }
+        
+        function changePlaybackSpeed(speed) {
+            const video = document.querySelector('.video-player');
+            if (video) {
+                video.playbackRate = parseFloat(speed);
+            }
+        }
+        
+        function skipVideo(seconds) {
+            const video = document.querySelector('.video-player');
+            if (video) {
+                video.currentTime += seconds;
+            }
+        }
+        
+        function onVideoLoaded() {
+            const status = document.getElementById('videoStatus');
+            if (status) {
+                status.style.display = 'block';
+                status.innerHTML = '<span style="color: green;">✓ Video loaded successfully</span>';
+                setTimeout(() => {
+                    status.style.display = 'none';
+                }, 3000);
+            }
+        }
+        
+        function onVideoError() {
+            const status = document.getElementById('videoStatus');
+            if (status) {
+                status.style.display = 'block';
+                status.innerHTML = '<span style="color: red;">⚠ Video failed to load. This may be due to an unsupported format or corrupted file.</span>';
+            }
+        }
+        
+        function onImageError() {
+            const img = event.target;
+            img.style.display = 'none';
+            img.insertAdjacentHTML('afterend', '<div style="padding: 20px; text-align: center; color: red;">⚠ Image failed to load. This may be due to an unsupported format or corrupted file.</div>');
+        }
+        
+        // Show scan output in modal
+        async function showScanOutput(resultId) {
+            try {
+                const response = await fetch(`/api/scan-output/${resultId}`);
+                const data = await response.json();
+                
+                const content = document.getElementById('scanOutputContent');
+                content.innerHTML = `
+                    <h4>File: ${data.file_path}</h4>
+                    <p><strong>Scan Tool:</strong> ${data.scan_tool || 'N/A'}</p>
+                    <p><strong>Scan Duration:</strong> ${data.scan_duration ? data.scan_duration.toFixed(2) + 's' : 'N/A'}</p>
+                    <p><strong>Corruption Details:</strong> ${data.corruption_details || 'None'}</p>
+                    <h5>Full Scan Output:</h5>
+                    <div class="scan-output">${data.scan_output || 'No detailed output available'}</div>
+                `;
+                
+                openModal('scanOutputModal');
+            } catch (error) {
+                console.error('Error loading scan output:', error);
+                showStatus('Error loading scan output', 'warning');
+            }
+        }
+        
+        // Deep scan selected files
+        async function deepScanSelected() {
+            const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+            const fileIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+            
+            if (fileIds.length === 0) {
+                showStatus('No files selected for deep scan', 'warning');
+                return;
+            }
+            
+            const deepScanBtn = document.getElementById('deepScanDropdown');
+            
+            try {
+                // Show loading state
+                if (deepScanBtn) {
+                    const originalText = deepScanBtn.textContent;
+                    deepScanBtn.disabled = true;
+                    deepScanBtn.textContent = 'Deep Scanning...';
+                    deepScanBtn.style.opacity = '0.7';
+                }
+                
+                showStatus(`Starting deep scan of ${fileIds.length} files...`, 'info');
+                
+                // Get file paths from selected IDs
+                const filePaths = [];
+                for (const fileId of fileIds) {
+                    const response = await fetch(`/api/scan-results/${fileId}`);
+                    const result = await response.json();
+                    filePaths.push(result.file_path);
+                }
+                
+                const response = await fetch('/api/scan-parallel', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        file_paths: filePaths,
+                        deep_scan: true
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    showStatus(`Deep scan completed successfully for ${data.scanned_count || fileIds.length} files`, 'info');
+                    await loadResults(currentPage);
+                    await loadStats();
+                    
+                    // Clear selections
+                    document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = false);
+                    document.getElementById('selectAllCheckbox').checked = false;
+                    updateMarkGoodButton();
+                    
+                    // Close dropdown
+                    document.getElementById('actionsDropdown').classList.remove('show');
+                } else {
+                    const errorData = await response.json();
+                    showStatus(`Deep scan failed: ${errorData.error}`, 'warning');
+                }
+            } catch (error) {
+                showStatus(`Deep scan error: ${error.message}`, 'warning');
+                console.error('Deep scan error:', error);
+            } finally {
+                // Reset button state
+                if (deepScanBtn) {
+                    deepScanBtn.disabled = false;
+                    deepScanBtn.textContent = '🔍 Deep Scan Selected';
+                    deepScanBtn.style.opacity = '1';
+                }
+            }
+        }
+        
+        // Cleanup orphaned records
+        async function cleanupOrphaned() {
+            if (!confirm('Are you sure you want to remove database records for files that no longer exist?')) {
+                return;
+            }
+            
+            const cleanupBtn = document.getElementById('cleanupBtn');
+            
+            try {
+                // Show loading state
+                if (cleanupBtn) {
+                    const originalText = cleanupBtn.textContent;
+                    cleanupBtn.disabled = true;
+                    cleanupBtn.textContent = 'Cleaning...';
+                    cleanupBtn.style.opacity = '0.7';
+                    
+                    setTimeout(() => {
+                        cleanupBtn.disabled = false;
+                        cleanupBtn.textContent = originalText;
+                        cleanupBtn.style.opacity = '1';
+                    }, 5000);
+                }
+                
+                showStatus('Cleaning up orphaned records...', 'info');
+                
+                const response = await fetch('/api/cleanup-orphaned', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({})
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    showStatus(`Cleanup completed: ${data.message}`, 'info');
+                    await loadResults(currentPage);
+                    await loadStats();
+                } else {
+                    const errorData = await response.json();
+                    showStatus(`Cleanup failed: ${errorData.error}`, 'warning');
+                }
+            } catch (error) {
+                showStatus(`Cleanup error: ${error.message}`, 'warning');
+                console.error('Cleanup error:', error);
+            } finally {
+                // Reset button state
+                if (cleanupBtn) {
+                    cleanupBtn.disabled = false;
+                    cleanupBtn.textContent = 'Cleanup Orphaned';
+                    cleanupBtn.style.opacity = '1';
+                }
+            }
+        }
+        
+        // Check for file changes
+        async function checkFileChanges() {
+            const changesBtn = document.getElementById('changesBtn');
+            
+            try {
+                // Show loading state
+                if (changesBtn) {
+                    const originalText = changesBtn.textContent;
+                    changesBtn.disabled = true;
+                    changesBtn.textContent = 'Checking...';
+                    changesBtn.style.opacity = '0.7';
+                    
+                    setTimeout(() => {
+                        changesBtn.disabled = false;
+                        changesBtn.textContent = originalText;
+                        changesBtn.style.opacity = '1';
+                    }, 5000);
+                }
+                
+                showStatus('Checking for file changes...', 'info');
+                
+                const response = await fetch('/api/file-changes');
+                const data = await response.json();
+                
+                const content = document.getElementById('fileChangesContent');
+                
+                if (data.changed_files.length === 0) {
+                    content.innerHTML = `
+                        <p>No file changes detected.</p>
+                        <p>Checked ${data.total_checked} files with stored hashes.</p>
+                    `;
+                } else {
+                    const changesHtml = data.changed_files.map(change => `
+                        <div style="margin-bottom: 15px; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                            <h5>${change.file_path}</h5>
+                            <p><strong>Change Type:</strong> ${change.change_type}</p>
+                            ${change.change_type === 'modified' ? `
+                                <p><strong>Old Hash:</strong> ${change.stored_hash}</p>
+                                <p><strong>New Hash:</strong> ${change.current_hash}</p>
+                                <p><strong>Modified:</strong> ${change.current_modified}</p>
+                            ` : ''}
+                        </div>
+                    `).join('');
+                    
+                    content.innerHTML = `
+                        <p>Found ${data.changed_files.length} changed files out of ${data.total_checked} checked:</p>
+                        ${changesHtml}
+                    `;
+                }
+                
+                openModal('fileChangesModal');
+                showStatus(`File change check complete: ${data.changed_files.length} changes found`, 'info');
+            } catch (error) {
+                showStatus(`File change check error: ${error.message}`, 'warning');
+                console.error('File change check error:', error);
+            }
+        }
+        
+        // Sorting functionality
+        let sortField = 'scan_date';
+        let sortOrder = 'desc';
+        
+        
+        function sortByColumn(field) {
+            if (sortField === field) {
+                // If clicking the same column, toggle order
+                sortOrder = sortOrder === 'desc' ? 'asc' : 'desc';
+            } else {
+                // If clicking different column, default to descending
+                sortField = field;
+                sortOrder = 'desc';
+            }
+            
+            updateSortIndicators();
+            loadResults(currentPage);
+        }
+        
+        function updateSortIndicators() {
+            // Clear all sort indicators
+            document.querySelectorAll('.sort-indicator').forEach(indicator => {
+                indicator.innerHTML = '';
+            });
+            
+            // Set indicator for current sort field
+            const currentIndicator = document.getElementById('sort-' + sortField);
+            if (currentIndicator) {
+                currentIndicator.innerHTML = sortOrder === 'desc' ? ' ↓' : ' ↑';
+            }
+        }
+        
+        // Update checkbox handling for bulk actions
+        function updateMarkGoodButton() {
+            const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+            const hasSelection = checkboxes.length > 0;
+            
+            // Update dropdown button and items
+            const actionsBtn = document.getElementById('actionsBtn');
+            const markGoodDropdown = document.getElementById('markGoodDropdown');
+            const deepScanDropdown = document.getElementById('deepScanDropdown');
+            const rescanDropdown = document.getElementById('rescanDropdown');
+            
+            if (actionsBtn) {
+                actionsBtn.disabled = !hasSelection;
+                const isDropdownOpen = document.getElementById('actionsDropdown')?.classList.contains('show');
+                const arrowSymbol = isDropdownOpen ? '▲' : '▼';
+                actionsBtn.innerHTML = hasSelection ? 
+                    `Actions (${checkboxes.length}) <span id="actionsArrow">${arrowSymbol}</span>` : 
+                    `Actions <span id="actionsArrow">${arrowSymbol}</span>`;
+            }
+            
+            if (markGoodDropdown) markGoodDropdown.disabled = !hasSelection;
+            if (deepScanDropdown) deepScanDropdown.disabled = !hasSelection;
+            if (rescanDropdown) rescanDropdown.disabled = !hasSelection;
+        }
+        
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modals = document.getElementsByClassName('modal');
+            for (let modal of modals) {
+                if (event.target === modal) {
+                    modal.style.display = 'none';
+                }
+            }
+        }
+
+        // Dropdown functionality
+        function toggleActionsDropdown() {
+            const dropdown = document.getElementById('actionsDropdown');
+            const actionsBtn = document.getElementById('actionsBtn');
+            const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+            
+            if (dropdown.classList.contains('show')) {
+                dropdown.classList.remove('show');
+                actionsBtn.innerHTML = checkboxes.length > 0 ? 
+                    `Actions (${checkboxes.length}) <span id="actionsArrow">▼</span>` : 
+                    'Actions <span id="actionsArrow">▼</span>';
+            } else {
+                dropdown.classList.add('show');
+                actionsBtn.innerHTML = checkboxes.length > 0 ? 
+                    `Actions (${checkboxes.length}) <span id="actionsArrow">▲</span>` : 
+                    'Actions <span id="actionsArrow">▲</span>';
+            }
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('actionsDropdown');
+            const actionsBtn = document.getElementById('actionsBtn');
+            
+            if (!actionsBtn.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('show');
+                const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+                actionsBtn.innerHTML = checkboxes.length > 0 ? 
+                    `Actions (${checkboxes.length}) <span id="actionsArrow">▼</span>` : 
+                    'Actions <span id="actionsArrow">▼</span>';
+            }
+        });
+
+        // Debounce tracking for rescan functionality
+        let rescanInProgress = false;
+        
+        // Change items per page
+        function changePerPage(value) {
+            currentPerPage = value === 'all' ? 'all' : parseInt(value);
+            currentPage = 1; // Reset to first page when changing per page
+            loadResults(currentPage);
+        }
+        
+        // Rescan selected files function with debouncing
+        async function rescanSelected() {
+            // Prevent multiple simultaneous rescans
+            if (rescanInProgress) {
+                showStatus('Rescan already in progress, please wait...', 'warning');
+                return;
+            }
+            
+            const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+            
+            if (checkboxes.length === 0) {
+                showStatus('Please select files to rescan', 'warning');
+                return;
+            }
+
+            const fileIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+            
+            try {
+                rescanInProgress = true;
+                
+                // Disable the rescan dropdown button
+                const rescanDropdown = document.getElementById('rescanDropdown');
+                if (rescanDropdown) {
+                    rescanDropdown.disabled = true;
+                    rescanDropdown.textContent = 'Rescanning...';
+                }
+                
+                showStatus(`Starting rescan of ${fileIds.length} files...`, 'info');
+                
+                // Get file paths for selected files
+                const filePaths = [];
+                for (const fileId of fileIds) {
+                    const response = await fetch(`/api/scan-results/${fileId}`);
+                    const result = await response.json();
+                    filePaths.push(result.file_path);
+                }
+
+                // Rescan files (without deep scan)
+                const response = await fetch('/api/scan-parallel', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        file_paths: filePaths,
+                        deep_scan: false
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    showStatus(`Rescan completed for ${data.scanned_count || fileIds.length} files`, 'info');
+                    await loadStats();
+                    await loadResults(currentPage);
+                    
+                    // Clear selections
+                    document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = false);
+                    document.getElementById('selectAllCheckbox').checked = false;
+                    updateMarkGoodButton();
+                    
+                    // Close dropdown
+                    document.getElementById('actionsDropdown').classList.remove('show');
+                } else {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to rescan files');
+                }
+            } catch (error) {
+                console.error('Error rescanning files:', error);
+                showStatus(`Error rescanning files: ${error.message}`, 'warning');
+            } finally {
+                rescanInProgress = false;
+                
+                // Re-enable the rescan dropdown button
+                const rescanDropdown = document.getElementById('rescanDropdown');
+                if (rescanDropdown) {
+                    rescanDropdown.disabled = false;
+                    rescanDropdown.textContent = '🔄 Rescan Selected';
+                }
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', async function() {
+            loadTheme();
+            loadStats();
+            loadResults();
+            // Check if a scan is in progress when page loads
+            await checkScanStatus();
+        });
+    </script>
+</body>
+</html>

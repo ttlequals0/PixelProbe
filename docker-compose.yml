@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  pixelprobe:
+    image: ttlequals0/pixelprobe:1.0
+    ports:
+      - "5001:5000"
+    environment:
+      - SCAN_PATHS=/media
+      - MAX_FILES_TO_SCAN=100
+      - MAX_SCAN_WORKERS=4  # New: Configure parallel scanning threads
+      - TZ=America/New_York  # Set your desired timezone here
+    volumes:
+      - ./data:/app/instance
+      - ${MEDIA_PATH}:/media
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/stats"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  data:
