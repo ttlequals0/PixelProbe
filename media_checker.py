@@ -16,6 +16,25 @@ import threading
 
 logger = logging.getLogger(__name__)
 
+def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
+    """Truncate scan output to prevent memory issues"""
+    if not output_lines:
+        return []
+    
+    # Join output lines into single string
+    full_output = '\n'.join(output_lines)
+    
+    # Truncate by character count first
+    if len(full_output) > max_chars:
+        full_output = full_output[:max_chars] + '\n... [Output truncated due to length]'
+    
+    # Split back into lines and limit line count
+    lines = full_output.split('\n')
+    if len(lines) > max_lines:
+        lines = lines[:max_lines] + ['... [Output truncated due to line count]']
+    
+    return lines
+
 class PixelProbe:
     def __init__(self, max_workers=None):
         self.supported_video_formats = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v']
@@ -597,7 +616,7 @@ class PixelProbe:
             scan_output.append(f"FFmpeg image validation error: {str(e)}")
             logger.debug(f"FFmpeg image validation error: {str(e)}")
         
-        return is_corrupted, corruption_details, scan_tool, scan_output
+        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output)
     
     def _check_video_corruption(self, file_path, deep_scan=False):
         corruption_details = []
@@ -614,7 +633,7 @@ class PixelProbe:
                 is_corrupted = True
                 scan_output.append("FFmpeg probe: No streams found")
                 logger.warning(f"No streams found in {file_path}")
-                return is_corrupted, corruption_details, scan_tool, scan_output
+                return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output)
             
             video_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
             if not video_stream:
@@ -733,7 +752,7 @@ class PixelProbe:
                 corruption_details.extend(enhanced_details)
                 scan_output.extend(enhanced_output)
         
-        return is_corrupted, corruption_details, scan_tool, scan_output
+        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output)
     
     def _enhanced_corruption_check(self, file_path, file_size_gb):
         """Enhanced multi-stage corruption detection for files that fail basic checks"""

@@ -7,20 +7,20 @@ class ScanResult(db.Model):
     __tablename__ = 'scan_results'
     
     id = db.Column(db.Integer, primary_key=True)
-    file_path = db.Column(db.String(500), nullable=False, unique=True)
+    file_path = db.Column(db.String(500), nullable=False, unique=True, index=True)
     file_size = db.Column(db.BigInteger, nullable=True)  # Allow NULL during discovery
     file_type = db.Column(db.String(50), nullable=True)  # Allow NULL during discovery
     creation_date = db.Column(db.DateTime, nullable=True)  # Allow NULL during discovery
-    is_corrupted = db.Column(db.Boolean, nullable=True, default=None)  # NULL = not scanned yet
+    is_corrupted = db.Column(db.Boolean, nullable=True, default=None, index=True)  # NULL = not scanned yet
     corruption_details = db.Column(db.Text)
-    scan_date = db.Column(db.DateTime, nullable=True)  # NULL = not scanned yet
-    marked_as_good = db.Column(db.Boolean, nullable=False, default=False)
-    scan_status = db.Column(db.String(20), nullable=True, default='pending')  # pending, scanning, completed, error
-    discovered_date = db.Column(db.DateTime, nullable=True, default=None)  # When file was discovered
+    scan_date = db.Column(db.DateTime, nullable=True, index=True)  # NULL = not scanned yet
+    marked_as_good = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    scan_status = db.Column(db.String(20), nullable=True, default='pending', index=True)  # pending, scanning, completed, error
+    discovered_date = db.Column(db.DateTime, nullable=True, default=None, index=True)  # When file was discovered
     
     # New fields for enhanced features
-    file_hash = db.Column(db.String(64), nullable=True)  # SHA-256 hash for change detection
-    last_modified = db.Column(db.DateTime, nullable=True)  # File system modification time
+    file_hash = db.Column(db.String(64), nullable=True, index=True)  # SHA-256 hash for change detection
+    last_modified = db.Column(db.DateTime, nullable=True, index=True)  # File system modification time
     scan_tool = db.Column(db.String(50), nullable=True)  # Tool used for detection (ffmpeg, imagemagick, pil)
     scan_duration = db.Column(db.Float, nullable=True)  # Time taken to scan in seconds
     scan_output = db.Column(db.Text)  # Full tool output for debugging

@@ -67,6 +67,40 @@ CORS(app, resources={
     r"/": {"origins": "*"}
 })
 
+def create_performance_indexes():
+    """Create performance indexes on application startup"""
+    try:
+        from sqlalchemy import text
+        
+        # List of indexes to create
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_scan_status ON scan_results(scan_status)",
+            "CREATE INDEX IF NOT EXISTS idx_scan_date ON scan_results(scan_date)",
+            "CREATE INDEX IF NOT EXISTS idx_is_corrupted ON scan_results(is_corrupted)",
+            "CREATE INDEX IF NOT EXISTS idx_marked_as_good ON scan_results(marked_as_good)",
+            "CREATE INDEX IF NOT EXISTS idx_discovered_date ON scan_results(discovered_date)",
+            "CREATE INDEX IF NOT EXISTS idx_file_hash ON scan_results(file_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_last_modified ON scan_results(last_modified)",
+            "CREATE INDEX IF NOT EXISTS idx_file_path ON scan_results(file_path)",
+            "CREATE INDEX IF NOT EXISTS idx_status_date ON scan_results(scan_status, scan_date)",
+            "CREATE INDEX IF NOT EXISTS idx_corrupted_good ON scan_results(is_corrupted, marked_as_good)"
+        ]
+        
+        logger.info("Creating performance indexes...")
+        for index_sql in indexes:
+            db.session.execute(text(index_sql))
+        
+        db.session.commit()
+        logger.info("Performance indexes created successfully!")
+        
+    except Exception as e:
+        logger.warning(f"Error creating performance indexes (may already exist): {str(e)}")
+        db.session.rollback()
+
+# Create indexes on startup
+with app.app_context():
+    create_performance_indexes()
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -93,6 +127,8 @@ scan_paths = os.environ.get('SCAN_PATHS', '/media').split(',')
 max_files_to_scan = int(os.environ.get('MAX_FILES_TO_SCAN', 0)) or None
 max_workers = int(os.environ.get('MAX_SCAN_WORKERS', 4))
 system_info_timeout = int(os.environ.get('SYSTEM_INFO_TIMEOUT', '30'))  # 30 seconds default
+batch_commit_size = int(os.environ.get('BATCH_COMMIT_SIZE', '50'))  # Commit after N scans
+reset_batch_size = int(os.environ.get('RESET_BATCH_SIZE', '500'))  # Reset batch size
 
 # Lazy initialization - only done when needed
 media_checker = None
@@ -766,21 +802,20 @@ def mark_as_good():
 def reset_stuck_scans():
     """Reset files stuck in 'scanning' status back to 'pending'"""
     try:
-        stuck_files = ScanResult.query.filter_by(scan_status='scanning').all()
-        reset_count = len(stuck_files)
+        # Get count first for reporting
+        reset_count = ScanResult.query.filter_by(scan_status='scanning').count()
         
         if reset_count > 0:
             logger.info(f"Resetting {reset_count} files stuck in 'scanning' status")
-            batch_size = 1000
-            for i in range(0, reset_count, batch_size):
-                batch = stuck_files[i:i+batch_size]
-                for file in batch:
-                    file.scan_status = 'pending'
-                    file.scan_date = None
-                    file.corruption_details = None
-                    file.is_corrupted = None
-                db.session.commit()
-                logger.info(f"Reset batch {i//batch_size + 1} ({min(i+batch_size, reset_count)}/{reset_count})")
+            
+            # Use bulk update for better performance
+            ScanResult.query.filter_by(scan_status='scanning').update({
+                'scan_status': 'pending',
+                'scan_date': None,
+                'corruption_details': None,
+                'is_corrupted': None
+            })
+            db.session.commit()
             
             logger.info(f"Successfully reset {reset_count} stuck files")
             
@@ -808,41 +843,57 @@ def reset_for_rescan():
         
         if reset_type == 'all':
             # Reset ALL files to pending for complete rescan
-            files_to_reset = ScanResult.query.all()
+            files_query = ScanResult.query
             logger.info("Resetting ALL files for complete rescan")
         elif reset_type == 'unscanned':
             # Reset only files that were never actually scanned (no scan_date)
-            files_to_reset = ScanResult.query.filter(
+            files_query = ScanResult.query.filter(
                 (ScanResult.scan_date == None) | 
                 (ScanResult.scan_status == 'scanning')
-            ).all()
+            )
             logger.info("Resetting unscanned files and stuck files")
         elif reset_type == 'errors':
             # Reset files with errors
-            files_to_reset = ScanResult.query.filter_by(scan_status='error').all()
+            files_query = ScanResult.query.filter_by(scan_status='error')
             logger.info("Resetting files with errors")
         else:
             return jsonify({'error': 'Invalid reset_type'}), 400
         
-        reset_count = len(files_to_reset)
+        # Get count first, then process in batches to avoid memory issues
+        reset_count = files_query.count()
+        logger.info(f"Found {reset_count} files to reset")
         
         if reset_count > 0:
             logger.info(f"Resetting {reset_count} files to pending status")
-            batch_size = 1000
             
-            for i in range(0, reset_count, batch_size):
-                batch = files_to_reset[i:i+batch_size]
-                for file in batch:
-                    file.scan_status = 'pending'
-                    file.scan_date = None
-                    file.corruption_details = None
-                    file.is_corrupted = None
-                    file.scan_tool = None
-                    file.scan_duration = None
-                    file.scan_output = None
+            # Use bulk update for better performance with large datasets
+            # Process in batches to avoid memory issues and provide progress feedback
+            batch_size = reset_batch_size  # Use the configured batch size directly
+            total_batches = (reset_count + batch_size - 1) // batch_size
+            
+            for batch_num in range(total_batches):
+                offset = batch_num * batch_size
                 
-                db.session.commit()
-                logger.info(f"Reset batch {i//batch_size + 1} ({min(i+batch_size, reset_count)}/{reset_count})")
+                # Get IDs for this batch to avoid loading all data into memory
+                batch_query = files_query.offset(offset).limit(batch_size)
+                batch_ids = [file.id for file in batch_query]
+                
+                if batch_ids:
+                    # Use bulk update for better performance
+                    updated_count = db.session.query(ScanResult).filter(ScanResult.id.in_(batch_ids)).update({
+                        'scan_status': 'pending',
+                        'scan_date': None,
+                        'corruption_details': None,
+                        'is_corrupted': None,
+                        'scan_tool': None,
+                        'scan_duration': None,
+                        'scan_output': None
+                    }, synchronize_session=False)
+                    
+                    db.session.commit()
+                    
+                    batch_end = min(offset + batch_size, reset_count)
+                    logger.info(f"Reset batch {batch_num + 1} ({batch_end}/{reset_count}) - updated {updated_count} records")
             
             logger.info(f"Successfully reset {reset_count} files for rescanning")
             

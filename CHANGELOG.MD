@@ -8,12 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+## [1.03] - 2025-07-09
+
+### Fixed
+- **🔧 RESET FUNCTION REPAIR**: Fixed reset-for-rescan endpoint not working with bulk operations
+  - Fixed batch size calculation that was trying to process all 1M+ records in a single batch
+  - Replaced inefficient record loading with proper bulk SQL updates using `synchronize_session=False`
+  - Added proper batch processing that processes records in configurable batches (default 500)
+  - Fixed memory issues by using query offsets instead of loading all records into memory
+  - Added detailed logging showing batch progress and number of records updated per batch
+  - Reset operations now properly show progress logs like "Reset batch 1 (500/1042632) - updated 500 records"
+
+## [1.02] - 2025-07-09
+
+### Added
 - **🎨 PIXELPROBE LOGO INTEGRATION**: Added new PixelProbe logo and favicon
   - Created favicon files (16x16, 32x32, ICO format) from the PixelProbe logo
   - Updated Flask routes to serve the new favicon files
   - Added logo image to main header section of web interface
   - Maintained fallback to dynamically generated favicons if files are missing
   - Logo positioned above the main title with responsive design and drop shadow effects
+
+- **⚡ PERFORMANCE OPTIMIZATIONS**: Major performance improvements for large datasets
+  - Added automatic database indexing on startup for optimal query performance
+  - Implemented scan output truncation to prevent memory issues (max 100 lines, 5000 chars)
+  - Added configurable performance settings via environment variables:
+    - `BATCH_COMMIT_SIZE` - Control commit frequency (default: 50)
+    - `RESET_BATCH_SIZE` - Control reset batch size (default: 500)
+  - Created performance tuning documentation (`PERFORMANCE_TUNING.md`)
+  - Added database migration script (`create_indexes.py`) for existing installations
 
 ### Fixed
 - **🔧 DATABASE LOCKING AND SCAN STATE ISSUES**: Fixed SQLite database locking and scan state management
@@ -28,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Removed upfront marking of all files as "scanning" to prevent mass stuck states
   - Implemented batch processing (50 files per commit during scan, 1000 files per batch for resets)
   - Added proper error handling and rollback for database operations
+
+- **⚡ PERFORMANCE IMPROVEMENTS**: Optimized database operations and memory usage
+  - Replaced individual record updates with bulk database operations for reset functions
+  - Reduced batch sizes from 1000 to 500 for better memory management
+  - Implemented automatic database indexing on frequently queried columns
+  - Fixed memory issues causing worker process kills during large resets
   - Fixed UI showing incorrect statistics (0 pending files when 1M+ were stuck)
 
 ## [1.0] - 2025-07-08

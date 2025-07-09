@@ -1,5 +1,9 @@
 # PixelProbe
 
+<div align="center">
+  <img src="static/images/pixelprobe-logo.png" alt="PixelProbe Logo" width="200" height="200">
+</div>
+
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video and image files across your media libraries.
 
 ## ✨ Features
@@ -83,6 +87,7 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Doc
 
 **Current stable versions:**
 - **`ttlequals0/pixelprobe:latest`** - Latest stable release
+- **`ttlequals0/pixelprobe:1.03`** - Version 1.03 with performance optimizations and reset fixes
 - **`ttlequals0/pixelprobe:1.0`** - Version 1.0 with all features
 - **`ttlequals0/pixelprobe:0.45`** - Previous stable release
 
@@ -90,7 +95,7 @@ You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:1.0  # or :latest for newest
+    image: ttlequals0/pixelprobe:1.03  # or :latest for newest
 ```
 
 ### Development Setup
@@ -156,7 +161,7 @@ For Docker deployment, you can also configure paths in `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:1.0  # Specify version
+    image: ttlequals0/pixelprobe:1.03  # Specify version
     environment:
       - SCAN_PATHS=/media
       - DATABASE_URL=sqlite:///media_checker.db
