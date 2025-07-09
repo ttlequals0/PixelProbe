@@ -14,4 +14,5 @@
 - docker always check what the next version should be before tagging, you can get this info from docker hub
 - docker hub user and org are ttlequals0
 - docker if you test locally cleanup afterwards
+- python testing should use venv
 - Always follow claude.md

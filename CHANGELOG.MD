@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **🎨 PIXELPROBE LOGO INTEGRATION**: Added new PixelProbe logo and favicon
+  - Created favicon files (16x16, 32x32, ICO format) from the PixelProbe logo
+  - Updated Flask routes to serve the new favicon files
+  - Added logo image to main header section of web interface
+  - Maintained fallback to dynamically generated favicons if files are missing
+  - Logo positioned above the main title with responsive design and drop shadow effects
+
+### Fixed
+- **🔧 DATABASE LOCKING AND SCAN STATE ISSUES**: Fixed SQLite database locking and scan state management
+  - Added SQLAlchemy engine options for better SQLite handling (timeout, connection pooling)
+  - Fixed issue where 1M+ files were stuck in "scanning" state after database lock error
+  - Added `/api/reset-stuck-scans` endpoint to reset files stuck in scanning status
+  - Added `/api/reset-for-rescan` endpoint with options to reset files for rescanning:
+    - `reset_type: "unscanned"` - Reset files that were never actually scanned
+    - `reset_type: "errors"` - Reset files with errors
+    - `reset_type: "all"` - Reset all files for complete rescan
+  - Optimized `/api/stats` endpoint with single SQL query to reduce database load
+  - Removed upfront marking of all files as "scanning" to prevent mass stuck states
+  - Implemented batch processing (50 files per commit during scan, 1000 files per batch for resets)
+  - Added proper error handling and rollback for database operations
+  - Fixed UI showing incorrect statistics (0 pending files when 1M+ were stuck)
+
 ## [1.0] - 2025-07-08
 
 ### MAJOR RELEASE - PUBLIC REPOSITORY PREPARATION

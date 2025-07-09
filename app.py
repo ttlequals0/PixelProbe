@@ -51,6 +51,15 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Configure SQLAlchemy for better SQLite handling
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+    'connect_args': {
+        'timeout': 15,
+        'check_same_thread': False,
+    }
+}
 
 db.init_app(app)
 CORS(app, resources={
@@ -175,63 +184,125 @@ def index():
 
 @app.route('/favicon.ico')
 def favicon():
-    # Return a simple 1x1 transparent PNG favicon
-    import base64
-    # 1x1 transparent PNG as base64
-    favicon_data = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
-    response = app.make_response(favicon_data)
-    response.headers.set('Content-Type', 'image/png')
-    response.headers.set('Cache-Control', 'public, max-age=86400')  # Cache for 1 day
-    return response
+    # Serve the PixelProbe favicon
+    try:
+        return send_file('static/images/favicon.ico', mimetype='image/x-icon')
+    except FileNotFoundError:
+        # Fallback to a simple 1x1 transparent PNG favicon
+        import base64
+        favicon_data = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
+        response = app.make_response(favicon_data)
+        response.headers.set('Content-Type', 'image/png')
+        response.headers.set('Cache-Control', 'public, max-age=86400')  # Cache for 1 day
+        return response
 
 @app.route('/favicon-16x16.png')
-@app.route('/favicon-32x32.png')
-def favicon_png():
-    # Return a simple PixelProbe icon - 16x16 or 32x32 blue square with "PP"
-    import base64
-    from io import BytesIO
+def favicon_16x16():
+    # Serve the PixelProbe 16x16 favicon
     try:
-        from PIL import Image, ImageDraw, ImageFont
-        
-        # Create a simple icon
-        size = 32 if 'favicon-32x32' in request.path else 16
-        img = Image.new('RGBA', (size, size), (52, 152, 219, 255))  # Blue background
-        draw = ImageDraw.Draw(img)
-        
-        # Add "PP" text
+        return send_file('static/images/favicon-16x16.png', mimetype='image/png')
+    except FileNotFoundError:
+        # Fallback to dynamic generation
+        import base64
+        from io import BytesIO
         try:
-            # Try to use a built-in font
-            font_size = size // 3
-            font = ImageFont.load_default()
-        except:
-            font = None
-        
-        text = "PP"
-        if font:
-            bbox = draw.textbbox((0, 0), text, font=font)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-        else:
-            text_width = size // 2
-            text_height = size // 3
+            from PIL import Image, ImageDraw, ImageFont
             
-        x = (size - text_width) // 2
-        y = (size - text_height) // 2
-        draw.text((x, y), text, fill=(255, 255, 255, 255), font=font)
+            # Create a simple icon
+            size = 16
+            img = Image.new('RGBA', (size, size), (52, 152, 219, 255))  # Blue background
+            draw = ImageDraw.Draw(img)
+            
+            # Add "PP" text
+            try:
+                font = ImageFont.load_default()
+            except:
+                font = None
+            
+            text = "PP"
+            if font:
+                bbox = draw.textbbox((0, 0), text, font=font)
+                text_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
+            else:
+                text_width = size // 2
+                text_height = size // 3
+                
+            x = (size - text_width) // 2
+            y = (size - text_height) // 2
+            draw.text((x, y), text, fill=(255, 255, 255, 255), font=font)
+            
+            # Save to bytes
+            output = BytesIO()
+            img.save(output, format='PNG')
+            icon_data = output.getvalue()
+            
+        except ImportError:
+            # Fallback to a simple colored PNG if PIL is not available
+            icon_data = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
         
-        # Save to bytes
-        output = BytesIO()
-        img.save(output, format='PNG')
-        icon_data = output.getvalue()
+        response = app.make_response(icon_data)
+        response.headers.set('Content-Type', 'image/png')
+        response.headers.set('Cache-Control', 'public, max-age=86400')  # Cache for 1 day
+        return response
+
+@app.route('/favicon-32x32.png')
+def favicon_32x32():
+    # Serve the PixelProbe 32x32 favicon
+    try:
+        return send_file('static/images/favicon-32x32.png', mimetype='image/png')
+    except FileNotFoundError:
+        # Fallback to dynamic generation
+        import base64
+        from io import BytesIO
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            
+            # Create a simple icon
+            size = 32
+            img = Image.new('RGBA', (size, size), (52, 152, 219, 255))  # Blue background
+            draw = ImageDraw.Draw(img)
+            
+            # Add "PP" text
+            try:
+                font = ImageFont.load_default()
+            except:
+                font = None
+            
+            text = "PP"
+            if font:
+                bbox = draw.textbbox((0, 0), text, font=font)
+                text_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
+            else:
+                text_width = size // 2
+                text_height = size // 3
+                
+            x = (size - text_width) // 2
+            y = (size - text_height) // 2
+            draw.text((x, y), text, fill=(255, 255, 255, 255), font=font)
+            
+            # Save to bytes
+            output = BytesIO()
+            img.save(output, format='PNG')
+            icon_data = output.getvalue()
+            
+        except ImportError:
+            # Fallback to a simple colored PNG if PIL is not available
+            icon_data = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
         
-    except ImportError:
-        # Fallback to a simple colored PNG if PIL is not available
-        icon_data = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
-    
-    response = app.make_response(icon_data)
-    response.headers.set('Content-Type', 'image/png')
-    response.headers.set('Cache-Control', 'public, max-age=86400')  # Cache for 1 day
-    return response
+        response = app.make_response(icon_data)
+        response.headers.set('Content-Type', 'image/png')
+        response.headers.set('Cache-Control', 'public, max-age=86400')  # Cache for 1 day
+        return response
+
+@app.route('/static/images/pixelprobe-logo.png')
+def logo():
+    # Serve the PixelProbe logo image
+    try:
+        return send_file('static/images/pixelprobe-logo.png', mimetype='image/png')
+    except FileNotFoundError:
+        return "Logo not found", 404
 
 @app.route('/health')
 def health_check():
@@ -494,12 +565,8 @@ def scan_all_files():
                     logger.info("No valid files to scan")
                     return
                 
-                # Mark all valid files as scanning
-                for file_path in valid_files:
-                    pending_record = ScanResult.query.filter_by(file_path=file_path).first()
-                    if pending_record:
-                        pending_record.scan_status = 'scanning'
-                db.session.commit()
+                # Don't mark all files as scanning upfront - this causes issues if scan is interrupted
+                # Files will be marked as scanning individually when processed
                 
                 # Progress callback for parallel scanning
                 def progress_callback(completed, total, current_file):
@@ -522,51 +589,68 @@ def scan_all_files():
                     scan_paths=scan_paths
                 )
                 
-                # Update database with all results
-                for result in scan_results:
-                    pending_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
-                    if pending_record:
-                        # Update the record with scan results
-                        pending_record.is_corrupted = result['is_corrupted']
-                        pending_record.corruption_details = result['corruption_details']
-                        pending_record.scan_date = datetime.now(timezone.utc)
-                        pending_record.scan_status = 'completed'
-                        
-                        # Update file metadata if available
-                        if 'file_size' in result:
-                            pending_record.file_size = result['file_size']
-                        if 'file_type' in result:
-                            pending_record.file_type = result['file_type']
-                        if 'scan_duration' in result:
-                            pending_record.scan_duration = result['scan_duration']
-                        if 'scan_output' in result:
-                            pending_record.scan_output = result['scan_output']
-                        if 'scan_tool' in result:
-                            pending_record.scan_tool = result['scan_tool']
-                        
-                        files_scanned += 1
-                        
-                        if result['is_corrupted']:
-                            corrupted_found += 1
-                            logger.warning(f"CORRUPTED FILE: {pending_record.file_path} - {result['corruption_details']}")
-                        else:
-                            logger.info(f"HEALTHY FILE: {pending_record.file_path}")
+                # Update database with results in batches to avoid database locks
+                batch_size = 50
+                batch_count = 0
                 
-                # Commit all results
-                try:
-                    db.session.commit()
-                    logger.info(f"Committed scan results for {files_scanned} files")
-                except Exception as e:
-                    logger.error(f"Failed to commit scan results: {str(e)}")
-                    db.session.rollback()
+                for result in scan_results:
+                    try:
+                        pending_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
+                        if pending_record:
+                            # Update the record with scan results
+                            pending_record.is_corrupted = result['is_corrupted']
+                            pending_record.corruption_details = result['corruption_details']
+                            pending_record.scan_date = datetime.now(timezone.utc)
+                            pending_record.scan_status = 'completed'
+                            
+                            # Update file metadata if available
+                            if 'file_size' in result:
+                                pending_record.file_size = result['file_size']
+                            if 'file_type' in result:
+                                pending_record.file_type = result['file_type']
+                            if 'scan_duration' in result:
+                                pending_record.scan_duration = result['scan_duration']
+                            if 'scan_output' in result:
+                                pending_record.scan_output = result['scan_output']
+                            if 'scan_tool' in result:
+                                pending_record.scan_tool = result['scan_tool']
+                            
+                            files_scanned += 1
+                            batch_count += 1
+                            
+                            if result['is_corrupted']:
+                                corrupted_found += 1
+                                logger.warning(f"CORRUPTED FILE: {pending_record.file_path} - {result['corruption_details']}")
+                            else:
+                                logger.info(f"HEALTHY FILE: {pending_record.file_path}")
+                            
+                            # Commit every batch_size files
+                            if batch_count >= batch_size:
+                                try:
+                                    db.session.commit()
+                                    logger.info(f"Committed batch of {batch_count} scan results (total: {files_scanned})")
+                                    batch_count = 0
+                                except Exception as e:
+                                    logger.error(f"Failed to commit batch: {str(e)}")
+                                    db.session.rollback()
+                                    # Mark this file as error
+                                    pending_record.scan_status = 'error'
+                                    pending_record.corruption_details = f"Database error: {str(e)}"
+                                    db.session.commit()
+                                    batch_count = 0
                     
-                    # Mark all files as error if commit fails
-                    for file_path in valid_files:
-                        pending_record = ScanResult.query.filter_by(file_path=file_path).first()
-                        if pending_record and pending_record.scan_status == 'scanning':
-                            pending_record.scan_status = 'error'
-                            pending_record.corruption_details = f"Database error: {str(e)}"
-                    db.session.commit()
+                    except Exception as e:
+                        logger.error(f"Error processing scan result for {result.get('file_path', 'unknown')}: {str(e)}")
+                        continue
+                
+                # Commit any remaining results
+                if batch_count > 0:
+                    try:
+                        db.session.commit()
+                        logger.info(f"Committed final batch of {batch_count} scan results (total: {files_scanned})")
+                    except Exception as e:
+                        logger.error(f"Failed to commit final batch: {str(e)}")
+                        db.session.rollback()
                 
                 files_processed = files_scanned
                 
@@ -678,35 +762,173 @@ def mark_as_good():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/reset-stuck-scans', methods=['POST'])
+def reset_stuck_scans():
+    """Reset files stuck in 'scanning' status back to 'pending'"""
+    try:
+        stuck_files = ScanResult.query.filter_by(scan_status='scanning').all()
+        reset_count = len(stuck_files)
+        
+        if reset_count > 0:
+            logger.info(f"Resetting {reset_count} files stuck in 'scanning' status")
+            batch_size = 1000
+            for i in range(0, reset_count, batch_size):
+                batch = stuck_files[i:i+batch_size]
+                for file in batch:
+                    file.scan_status = 'pending'
+                    file.scan_date = None
+                    file.corruption_details = None
+                    file.is_corrupted = None
+                db.session.commit()
+                logger.info(f"Reset batch {i//batch_size + 1} ({min(i+batch_size, reset_count)}/{reset_count})")
+            
+            logger.info(f"Successfully reset {reset_count} stuck files")
+            
+            return jsonify({
+                'message': f'Successfully reset {reset_count} files stuck in scanning status',
+                'reset_count': reset_count
+            })
+        else:
+            return jsonify({
+                'message': 'No files stuck in scanning status',
+                'reset_count': 0
+            })
+            
+    except Exception as e:
+        logger.error(f"Error resetting stuck scans: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reset-for-rescan', methods=['POST'])
+def reset_for_rescan():
+    """Reset files for rescanning based on various criteria"""
+    try:
+        data = request.get_json() or {}
+        reset_type = data.get('reset_type', 'unscanned')
+        
+        if reset_type == 'all':
+            # Reset ALL files to pending for complete rescan
+            files_to_reset = ScanResult.query.all()
+            logger.info("Resetting ALL files for complete rescan")
+        elif reset_type == 'unscanned':
+            # Reset only files that were never actually scanned (no scan_date)
+            files_to_reset = ScanResult.query.filter(
+                (ScanResult.scan_date == None) | 
+                (ScanResult.scan_status == 'scanning')
+            ).all()
+            logger.info("Resetting unscanned files and stuck files")
+        elif reset_type == 'errors':
+            # Reset files with errors
+            files_to_reset = ScanResult.query.filter_by(scan_status='error').all()
+            logger.info("Resetting files with errors")
+        else:
+            return jsonify({'error': 'Invalid reset_type'}), 400
+        
+        reset_count = len(files_to_reset)
+        
+        if reset_count > 0:
+            logger.info(f"Resetting {reset_count} files to pending status")
+            batch_size = 1000
+            
+            for i in range(0, reset_count, batch_size):
+                batch = files_to_reset[i:i+batch_size]
+                for file in batch:
+                    file.scan_status = 'pending'
+                    file.scan_date = None
+                    file.corruption_details = None
+                    file.is_corrupted = None
+                    file.scan_tool = None
+                    file.scan_duration = None
+                    file.scan_output = None
+                
+                db.session.commit()
+                logger.info(f"Reset batch {i//batch_size + 1} ({min(i+batch_size, reset_count)}/{reset_count})")
+            
+            logger.info(f"Successfully reset {reset_count} files for rescanning")
+            
+            return jsonify({
+                'message': f'Successfully reset {reset_count} files for rescanning',
+                'reset_count': reset_count,
+                'reset_type': reset_type
+            })
+        else:
+            return jsonify({
+                'message': f'No files found to reset for type: {reset_type}',
+                'reset_count': 0,
+                'reset_type': reset_type
+            })
+            
+    except Exception as e:
+        logger.error(f"Error resetting files for rescan: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/stats')
 def get_stats():
-    total_files = ScanResult.query.count()
-    completed_files = ScanResult.query.filter_by(scan_status='completed').count()
-    pending_files = ScanResult.query.filter_by(scan_status='pending').count()
-    scanning_files = ScanResult.query.filter_by(scan_status='scanning').count()
-    error_files = ScanResult.query.filter_by(scan_status='error').count()
-    
-    corrupted_files = ScanResult.query.filter_by(is_corrupted=True).count()
-    healthy_files = ScanResult.query.filter_by(is_corrupted=False).count()
-    marked_as_good = ScanResult.query.filter_by(marked_as_good=True).count()
-    
-    # Files marked as good should be considered healthy
-    healthy_files = ScanResult.query.filter(
-        (ScanResult.is_corrupted == False) | (ScanResult.marked_as_good == True)
-    ).count()
-    
-    logger.info(f"Stats requested - Total: {total_files}, Completed: {completed_files}, Pending: {pending_files}, Scanning: {scanning_files}, Corrupted: {corrupted_files}, Healthy: {healthy_files}, Marked Good: {marked_as_good}")
-    
-    return jsonify({
-        'total_files': total_files,
-        'completed_files': completed_files,
-        'pending_files': pending_files,
-        'scanning_files': scanning_files,
-        'error_files': error_files,
-        'corrupted_files': corrupted_files,
-        'healthy_files': healthy_files,
-        'marked_as_good': marked_as_good
-    })
+    try:
+        # Use a single query with subqueries for better performance
+        stats = db.session.execute(
+            db.text("""
+                SELECT 
+                    COUNT(*) as total_files,
+                    SUM(CASE WHEN scan_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
+                    SUM(CASE WHEN scan_status = 'pending' THEN 1 ELSE 0 END) as pending_files,
+                    SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
+                    SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
+                    SUM(CASE WHEN is_corrupted = 1 AND marked_as_good = 0 THEN 1 ELSE 0 END) as corrupted_files,
+                    SUM(CASE WHEN (is_corrupted = 0 OR marked_as_good = 1) THEN 1 ELSE 0 END) as healthy_files,
+                    SUM(CASE WHEN marked_as_good = 1 THEN 1 ELSE 0 END) as marked_as_good
+                FROM scan_results
+            """)
+        ).fetchone()
+        
+        result = {
+            'total_files': stats[0] or 0,
+            'completed_files': stats[1] or 0,
+            'pending_files': stats[2] or 0,
+            'scanning_files': stats[3] or 0,
+            'error_files': stats[4] or 0,
+            'corrupted_files': stats[5] or 0,
+            'healthy_files': stats[6] or 0,
+            'marked_as_good': stats[7] or 0
+        }
+        
+        logger.info(f"Stats requested - Total: {result['total_files']}, Completed: {result['completed_files']}, Pending: {result['pending_files']}, Scanning: {result['scanning_files']}, Corrupted: {result['corrupted_files']}, Healthy: {result['healthy_files']}, Marked Good: {result['marked_as_good']}")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error getting stats: {str(e)}")
+        # Fallback to individual queries if the optimized query fails
+        try:
+            total_files = ScanResult.query.count()
+            completed_files = ScanResult.query.filter_by(scan_status='completed').count()
+            pending_files = ScanResult.query.filter_by(scan_status='pending').count()
+            scanning_files = ScanResult.query.filter_by(scan_status='scanning').count()
+            error_files = ScanResult.query.filter_by(scan_status='error').count()
+            
+            corrupted_files = ScanResult.query.filter_by(is_corrupted=True).count()
+            healthy_files = ScanResult.query.filter_by(is_corrupted=False).count()
+            marked_as_good = ScanResult.query.filter_by(marked_as_good=True).count()
+            
+            # Files marked as good should be considered healthy
+            healthy_files = ScanResult.query.filter(
+                (ScanResult.is_corrupted == False) | (ScanResult.marked_as_good == True)
+            ).count()
+            
+            return jsonify({
+                'total_files': total_files,
+                'completed_files': completed_files,
+                'pending_files': pending_files,
+                'scanning_files': scanning_files,
+                'error_files': error_files,
+                'corrupted_files': corrupted_files,
+                'healthy_files': healthy_files,
+                'marked_as_good': marked_as_good
+            })
+        except Exception as e2:
+            logger.error(f"Fallback stats query also failed: {str(e2)}")
+            return jsonify({'error': 'Database query failed'}), 500
 
 @app.route('/api/system-info')
 def get_system_info():

@@ -159,6 +159,13 @@
             background: rgba(0, 0, 0, 0.5);
         }
         
+        .header .logo {
+            max-width: 120px;
+            height: auto;
+            margin-bottom: 1rem;
+            filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.3));
+        }
+        
         .header h1 {
             font-size: clamp(1.5rem, 5vw, 2.5rem);
             margin-bottom: 0.5rem;
@@ -1151,6 +1158,7 @@
             <button onclick="showStatsModal()" id="statsBtn" class="stats-button">📊 System Stats</button>
             <button onclick="toggleTheme()" id="themeBtn" class="dark-mode-toggle">🌙 Dark Mode</button>
             <div class="header-content">
+                <img src="/static/images/pixelprobe-logo.png" alt="PixelProbe Logo" class="logo">
                 <h1>PixelProbe</h1>
                 <p>Advanced media integrity scanning and corruption detection</p>
             </div>
