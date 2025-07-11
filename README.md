@@ -81,17 +81,17 @@ Comprehensive system statistics popup showing:
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v1.21)
-- **`ttlequals0/pixelprobe:1.21`** - Thread-safe scan state tracking
-- **`ttlequals0/pixelprobe:1.20`** - Fixed progress bar display issues
-- **`ttlequals0/pixelprobe:1.19`** - Enhanced progress persistence
-- **`ttlequals0/pixelprobe:1.13`** - Warning system and false positive fixes
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v1.26)
+- **`ttlequals0/pixelprobe:1.26`** - UI improvements and ImageMagick UTF-8 fixes
+- **`ttlequals0/pixelprobe:1.25`** - Database resilience for long-running scans
+- **`ttlequals0/pixelprobe:1.24`** - UI color visibility fixes
+- **`ttlequals0/pixelprobe:1.23`** - SQLite WAL mode and connection improvements
 
 You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:1.21  # or :latest for newest
+    image: ttlequals0/pixelprobe:1.26  # or :latest for newest
 ```
 
 ### Development Setup

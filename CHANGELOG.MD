@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.26] - 2025-07-11
+
+### Fixed
+- **UI Column Display Issues**:
+  - Increased Tool column width from 7% to 10% to fully display "imagemagick" without truncation
+  - Adjusted Corruption Details column width from 15% to 12% to compensate
+  - Made Corruption Details column sortable - users can now sort by corruption details text
+  
+### Added
+- **ImageMagick UTF-8 Utility Scripts**:
+  - `tools/fix_imagemagick_utf8_errors.py` - Converts UTF-8 decode false positives to warnings
+  - `tools/reset_imagemagick_utf8_files.py` - Resets UTF-8 error files for rescanning
+  - These handle cases where images contain binary metadata that can't be decoded as UTF-8
+
+### Fixed
+- **ImageMagick UTF-8 Decode Error**: Fixed "'utf-8' codec can't decode byte" error when processing images with binary metadata
+  - Added `encoding='utf-8'` and `errors='replace'` parameters to subprocess.run for ImageMagick identify command
+  - Binary metadata in images no longer causes crashes during scanning
+  - Invalid UTF-8 bytes are replaced with � character, allowing scan to continue
+  - This is a warning-level issue, not actual file corruption
+
+## [1.25] - 2025-07-11
+
+### Fixed
+- **Database Resilience for Long-Running Scans**:
+  - Added automatic database connection refresh every 500 files to prevent stale connections
+  - Implemented connection recovery on commit failures with automatic retry
+  - Added detailed error logging to diagnose database issues
+  - Fixed "database is locked" errors during extended scanning sessions
+
+### Improved
+- **SQLite Configuration Enhancements**:
+  - Enabled WAL (Write-Ahead Logging) mode for better concurrent access
+  - Increased busy timeout to 30 seconds to handle lock contention
+  - Set PRAGMA optimizations for improved performance
+  - Better isolation level settings for concurrent operations
+
+### Added
+- **New Utility Scripts**:
+  - `tools/fix_nal_warnings.py` - Directly converts NAL corrupted files to warnings without rescanning
+  - `tools/reset_nal_files_v2.py` - Improved reset script with retry logic and lock handling
+  - `tools/reset_nal_files_direct.sh` - Shell script for direct SQLite operations when Python fails
+
+## [1.24] - 2025-07-11
+
+### Fixed
+- **UI Color Visibility Issues**:
+  - Fixed pending items count showing white text on white background in light mode
+    - Changed pending items color from white (#ffffff) to purple (#9b59b6) for better visibility
+    - Avoided orange color which is already used for warning files
+  - Fixed progress bar text being hard to read in dark mode
+    - Added white text color (#ecf0f1) for progress bar text in dark mode
+    - Added dark text shadow for better contrast against varying progress bar backgrounds
+
+## [1.23] - 2025-07-11
+
+### Fixed
+- **Long-Running Scan Database Issues**: Fixed database commits failing after hours of scanning
+  - Added periodic database connection refresh every 500 files
+  - Implemented automatic connection recovery on commit failures
+  - Increased database timeout from 15 to 30 seconds
+  - Added better error logging with error types and details
+  
+### Improved
+- **SQLite Configuration**: Enhanced SQLite settings for better concurrency
+  - Enabled WAL (Write-Ahead Logging) mode for better concurrent access
+  - Set busy timeout to 30 seconds to handle lock contention
+  - Changed isolation level to DEFERRED for improved concurrency
+  - Added PRAGMA optimizations for better performance
+  
+### Technical
+- **Database Resilience**: Better handling of long-running operations
+  - Connection pool now tests connections before use (pool_pre_ping)
+  - Automatic session cleanup and engine disposal on errors
+  - Connection recovery attempts with verification queries
+  - More detailed error logging for debugging database issues
+
+## [1.22] - 2025-07-11
+
+### Fixed
+- **Critical Database Commit Issue**: Fixed scan results not being saved to database
+  - Added explicit `db.session.flush()` calls after updating records to ensure changes are persisted
+  - Added verification logging to confirm database updates are working
+  - Enhanced debugging to track database state during scan processing
+  - Files that were being scanned but not showing in counts are now properly saved
+  
+### Technical
+- **Database Session Management**: Improved SQLAlchemy session handling
+  - Explicit flushes ensure pending changes are written to database
+  - Better logging to track commit operations and verify data persistence
+  - Added database state verification after commits
+
 ## [1.21] - 2025-07-10
 
 ### Fixed

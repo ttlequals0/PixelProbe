@@ -154,3 +154,7 @@ private/
 backup/
 
 # No sample media - users must provide their own via MEDIA_PATH
+
+# Claude AI specific files
+.claude/
+CLAUDE.md

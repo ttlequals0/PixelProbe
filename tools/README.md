@@ -96,6 +96,38 @@ python reset_nal_files_for_rescan.py
 python reset_nal_files_for_rescan.py --execute
 ```
 
+#### `fix_imagemagick_utf8_errors.py`
+**Purpose**: Converts files marked as corrupted due to ImageMagick UTF-8 decode errors to warnings.
+
+**When to use**: 
+- When you have images marked as corrupted with "utf-8 codec can't decode" errors
+- These are false positives - the images are valid but contain binary metadata
+
+**Usage**:
+```bash
+# Dry run
+python fix_imagemagick_utf8_errors.py
+
+# Execute fixes
+python fix_imagemagick_utf8_errors.py --execute
+```
+
+#### `reset_imagemagick_utf8_files.py`
+**Purpose**: Resets files with ImageMagick UTF-8 decode errors to pending for rescanning.
+
+**When to use**: 
+- After upgrading to version 1.25+ which properly handles UTF-8 decode errors
+- When you want these files rescanned with the updated logic
+
+**Usage**:
+```bash
+# Dry run
+python reset_imagemagick_utf8_files.py
+
+# Execute reset
+python reset_imagemagick_utf8_files.py --execute
+```
+
 ## Important Notes
 
 1. **Always backup your database** before running any of these scripts

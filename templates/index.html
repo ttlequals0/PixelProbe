@@ -207,7 +207,7 @@
         .total { color: #3498db; }
         .corrupted { color: #e74c3c; }
         .healthy { color: #27ae60; }
-        .pending { color: #ffffff; }
+        .pending { color: #9b59b6; } /* Changed to purple for visibility */
         
         .controls {
             background: white;
@@ -426,9 +426,9 @@
         .col-size { width: 7%; }
         .col-type { width: 7%; }
         .col-scan-status { width: 8%; }
-        .col-corruption { width: 15%; }
+        .col-corruption { width: 12%; }
         .col-date { width: 10%; }
-        .col-tool { width: 7%; }
+        .col-tool { width: 10%; }
         .col-actions { width: 15%; }
         
         .results-table th,
@@ -1072,6 +1072,11 @@
             background: #2c3e50;
         }
         
+        .dark-mode .progress-bar-text {
+            color: #ecf0f1; /* White text for dark mode */
+            text-shadow: 0 0 4px rgba(0,0,0,0.8); /* Dark shadow for contrast */
+        }
+        
         .dropdown {
             position: relative;
             display: inline-block;
@@ -1424,7 +1429,7 @@
                                 <th class="col-size sortable" onclick="sortByColumn('file_size')">Size <span class="sort-indicator" id="sort-file_size"></span></th>
                                 <th class="col-type sortable" onclick="sortByColumn('file_type')">Type <span class="sort-indicator" id="sort-file_type"></span></th>
                                 <th class="col-scan-status sortable" onclick="sortByColumn('scan_status')">Scan Status <span class="sort-indicator" id="sort-scan_status"></span></th>
-                                <th class="col-corruption">Corruption Details</th>
+                                <th class="col-corruption sortable" onclick="sortByColumn('corruption_details')">Corruption Details <span class="sort-indicator" id="sort-corruption_details"></span></th>
                                 <th class="col-date sortable" onclick="sortByColumn('scan_date')">Scan Date <span class="sort-indicator" id="sort-scan_date"></span></th>
                                 <th class="col-tool sortable" onclick="sortByColumn('scan_tool')">Tool <span class="sort-indicator" id="sort-scan_tool"></span></th>
                                 <th class="col-actions">Actions</th>

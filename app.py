@@ -54,11 +54,13 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:/
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Configure SQLAlchemy for better SQLite handling
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_pre_ping': True,
-    'pool_recycle': 300,
+    'pool_pre_ping': True,  # Test connections before using them
+    'pool_recycle': 300,  # Recycle connections after 5 minutes
     'connect_args': {
-        'timeout': 15,
+        'timeout': 30,  # Increased timeout to 30 seconds for long operations
         'check_same_thread': False,
+        # SQLite-specific pragmas for better concurrency
+        'isolation_level': 'DEFERRED',  # Better concurrency than default
     }
 }
 
@@ -111,6 +113,18 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Configure SQLite for better concurrency after logger is available
+with app.app_context():
+    try:
+        from sqlalchemy import text
+        db.session.execute(text("PRAGMA journal_mode=WAL"))
+        db.session.execute(text("PRAGMA busy_timeout=30000"))  # 30 second timeout
+        db.session.execute(text("PRAGMA synchronous=NORMAL"))  # Faster writes, still safe
+        db.session.commit()
+        logger.info("SQLite WAL mode and optimizations enabled")
+    except Exception as e:
+        logger.warning(f"Could not enable SQLite optimizations: {str(e)}")
 
 @app.before_request
 def log_request_info():
@@ -692,83 +706,127 @@ def scan_all_files():
                 
                 def process_scan_result(result):
                     """Process a single scan result and update database"""
-                    with app.app_context():
-                        try:
-                            pending_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
-                            if pending_record:
-                                # Update the record with scan results
-                                pending_record.is_corrupted = result['is_corrupted']
-                                pending_record.corruption_details = result['corruption_details']
-                                pending_record.scan_date = datetime.now(timezone.utc)
-                                pending_record.scan_status = 'completed'
-                                
-                                # Update file metadata if available
-                                if 'file_size' in result:
-                                    pending_record.file_size = result['file_size']
-                                if 'file_type' in result:
-                                    pending_record.file_type = result['file_type']
-                                if 'scan_duration' in result:
-                                    pending_record.scan_duration = result['scan_duration']
-                                if 'scan_output' in result:
-                                    pending_record.scan_output = result['scan_output']
-                                if 'scan_tool' in result:
-                                    pending_record.scan_tool = result['scan_tool']
-                                if 'has_warnings' in result:
-                                    pending_record.has_warnings = result['has_warnings']
-                                if 'warning_details' in result:
-                                    pending_record.warning_details = result['warning_details']
-                                
+                    try:
+                        logger.debug(f"Processing scan result for: {result['file_path']}")
+                        pending_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
+                        if pending_record:
+                            logger.debug(f"Found pending record with status: {pending_record.scan_status}")
+                            # Update the record with scan results
+                            pending_record.is_corrupted = result['is_corrupted']
+                            pending_record.corruption_details = result['corruption_details']
+                            pending_record.scan_date = datetime.now(timezone.utc)
+                            pending_record.scan_status = 'completed'
+                            
+                            # Update file metadata if available
+                            if 'file_size' in result:
+                                pending_record.file_size = result['file_size']
+                            if 'file_type' in result:
+                                pending_record.file_type = result['file_type']
+                            if 'scan_duration' in result:
+                                pending_record.scan_duration = result['scan_duration']
+                            if 'scan_output' in result:
+                                pending_record.scan_output = result['scan_output']
+                            if 'scan_tool' in result:
+                                pending_record.scan_tool = result['scan_tool']
+                            if 'has_warnings' in result:
+                                pending_record.has_warnings = result['has_warnings']
+                            if 'warning_details' in result:
+                                pending_record.warning_details = result['warning_details']
+                            
+                            files_scanned[0] += 1
+                            batch_count[0] += 1
+                            
+                            if result['is_corrupted']:
+                                corrupted_found[0] += 1
+                                logger.warning(f"CORRUPTED FILE: {pending_record.file_path} - {result['corruption_details']}")
+                            else:
+                                logger.info(f"HEALTHY FILE: {pending_record.file_path}")
+                            
+                            # Flush to ensure changes are in the session
+                            db.session.flush()
+                            
+                            # Log the actual database state
+                            db_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
+                            if db_record:
+                                logger.info(f"DB check - File: {db_record.file_path[:50]}... Status: {db_record.scan_status}, Corrupted: {db_record.is_corrupted}")
+                            else:
+                                logger.error(f"DB check - File not found in database after update: {result['file_path']}")
+                            
+                            # Commit every batch_size files
+                            if batch_count[0] >= batch_commit_size:
+                                try:
+                                    db.session.commit()
+                                    logger.info(f"Committed batch of {batch_count[0]} scan results (total: {files_scanned[0]})")
+                                    
+                                    # Verify the commit worked
+                                    total_completed = ScanResult.query.filter_by(scan_status='completed').count()
+                                    logger.info(f"Total completed files in database after commit: {total_completed}")
+                                    
+                                    batch_count[0] = 0
+                                    
+                                    # Refresh database connection every 500 files to prevent stale connections
+                                    if files_scanned[0] % 500 == 0:
+                                        logger.info("Refreshing database connection to prevent staleness")
+                                        try:
+                                            db.session.close()
+                                            db.engine.dispose()
+                                            # The next query will automatically create a new connection
+                                            logger.info("Database connection refreshed successfully")
+                                        except Exception as refresh_error:
+                                            logger.error(f"Error refreshing database connection: {str(refresh_error)}")
+                                            
+                                except Exception as e:
+                                    logger.error(f"Failed to commit batch: {str(e)}")
+                                    logger.error(f"Error type: {type(e).__name__}")
+                                    logger.error(f"Error details: {e.args if hasattr(e, 'args') else 'No details'}")
+                                    
+                                    # Try to recover the database connection
+                                    try:
+                                        db.session.rollback()
+                                        db.session.close()
+                                        db.engine.dispose()
+                                        logger.info("Attempting to recover database connection after error")
+                                        
+                                        # Re-query to test the connection
+                                        test_count = ScanResult.query.count()
+                                        logger.info(f"Database connection recovered, total records: {test_count}")
+                                    except Exception as recovery_error:
+                                        logger.error(f"Failed to recover database connection: {str(recovery_error)}")
+                                    
+                                    batch_count[0] = 0
+                        else:
+                            # Log when a scanned file is not found in database
+                            logger.error(f"CRITICAL: Scanned file not found in database: {result['file_path']}")
+                            logger.error(f"This should not happen - file was supposed to be in pending status")
+                            # Try to create a new record for this file
+                            try:
+                                new_record = ScanResult(
+                                    file_path=result['file_path'],
+                                    file_size=result.get('file_size'),
+                                    file_type=result.get('file_type'),
+                                    creation_date=result.get('creation_date'),
+                                    last_modified=result.get('last_modified'),
+                                    is_corrupted=result['is_corrupted'],
+                                    corruption_details=result['corruption_details'],
+                                    scan_date=datetime.now(timezone.utc),
+                                    scan_status='completed',
+                                    file_hash=result.get('file_hash'),
+                                    scan_tool=result.get('scan_tool'),
+                                    scan_duration=result.get('scan_duration'),
+                                    scan_output=result.get('scan_output'),
+                                    has_warnings=result.get('has_warnings', False),
+                                    warning_details=result.get('warning_details')
+                                )
+                                db.session.add(new_record)
+                                db.session.flush()  # Ensure new record is persisted
                                 files_scanned[0] += 1
                                 batch_count[0] += 1
-                                
-                                if result['is_corrupted']:
-                                    corrupted_found[0] += 1
-                                    logger.warning(f"CORRUPTED FILE: {pending_record.file_path} - {result['corruption_details']}")
-                                else:
-                                    logger.info(f"HEALTHY FILE: {pending_record.file_path}")
-                                
-                                # Commit every batch_size files
-                                if batch_count[0] >= batch_commit_size:
-                                    try:
-                                        db.session.commit()
-                                        logger.info(f"Committed batch of {batch_count[0]} scan results (total: {files_scanned[0]})")
-                                        batch_count[0] = 0
-                                    except Exception as e:
-                                        logger.error(f"Failed to commit batch: {str(e)}")
-                                        db.session.rollback()
-                                        batch_count[0] = 0
-                            else:
-                                # Log when a scanned file is not found in database
-                                logger.error(f"CRITICAL: Scanned file not found in database: {result['file_path']}")
-                                logger.error(f"This should not happen - file was supposed to be in pending status")
-                                # Try to create a new record for this file
-                                try:
-                                    new_record = ScanResult(
-                                        file_path=result['file_path'],
-                                        file_size=result.get('file_size'),
-                                        file_type=result.get('file_type'),
-                                        creation_date=result.get('creation_date'),
-                                        last_modified=result.get('last_modified'),
-                                        is_corrupted=result['is_corrupted'],
-                                        corruption_details=result['corruption_details'],
-                                        scan_date=datetime.now(timezone.utc),
-                                        scan_status='completed',
-                                        file_hash=result.get('file_hash'),
-                                        scan_tool=result.get('scan_tool'),
-                                        scan_duration=result.get('scan_duration'),
-                                        scan_output=result.get('scan_output'),
-                                        has_warnings=result.get('has_warnings', False),
-                                        warning_details=result.get('warning_details')
-                                    )
-                                    db.session.add(new_record)
-                                    files_scanned[0] += 1
-                                    batch_count[0] += 1
-                                    logger.info(f"Created new record for missing file: {result['file_path']}")
-                                except Exception as e:
-                                    logger.error(f"Failed to create new record for {result['file_path']}: {str(e)}")
-                        except Exception as e:
-                            logger.error(f"Error processing scan result for {result.get('file_path', 'unknown')}: {str(e)}")
-                            db.session.rollback()
+                                logger.info(f"Created new record for missing file: {result['file_path']}")
+                            except Exception as e:
+                                logger.error(f"Failed to create new record for {result['file_path']}: {str(e)}")
+                    except Exception as e:
+                        logger.error(f"Error processing scan result for {result.get('file_path', 'unknown')}: {str(e)}")
+                        db.session.rollback()
                 
                 # Progress callback for parallel scanning
                 def progress_callback(completed, total, current_file):
@@ -846,13 +904,17 @@ def scan_all_files():
                 
                 # Commit any remaining results
                 if batch_count[0] > 0:
-                    with app.app_context():
-                        try:
-                            db.session.commit()
-                            logger.info(f"Committed final batch of {batch_count[0]} scan results (total: {files_scanned[0]})")
-                        except Exception as e:
-                            logger.error(f"Failed to commit final batch: {str(e)}")
-                            db.session.rollback()
+                    try:
+                        db.session.commit()
+                        logger.info(f"Committed final batch of {batch_count[0]} scan results (total: {files_scanned[0]})")
+                        
+                        # Verify final commit
+                        total_completed = ScanResult.query.filter_by(scan_status='completed').count()
+                        total_corrupted = ScanResult.query.filter_by(is_corrupted=True).count()
+                        logger.info(f"Final database state - Completed: {total_completed}, Corrupted: {total_corrupted}")
+                    except Exception as e:
+                        logger.error(f"Failed to commit final batch: {str(e)}")
+                        db.session.rollback()
                 
                 scan_completed = True
                 files_processed = files_scanned[0]
