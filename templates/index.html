@@ -207,7 +207,7 @@
         .total { color: #3498db; }
         .corrupted { color: #e74c3c; }
         .healthy { color: #27ae60; }
-        .pending { color: #f39c12; }
+        .pending { color: #ffffff; }
         
         .controls {
             background: white;
@@ -316,11 +316,12 @@
         
         .progress-bar {
             width: 100%;
-            height: 20px;
+            height: 50px;
             background: #e9ecef;
             border-radius: 10px;
             overflow: hidden;
             margin-bottom: 8px;
+            position: relative;
         }
         
         .progress-fill {
@@ -329,6 +330,19 @@
             width: 0%;
             transition: width 0.3s ease;
             border-radius: 10px;
+        }
+        
+        .progress-bar-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #333;
+            font-weight: 600;
+            z-index: 10;
+            text-shadow: 0 0 4px rgba(255,255,255,0.8);
+            font-size: 18px;
+            white-space: nowrap;
         }
         
         .progress-text {
@@ -653,12 +667,14 @@
         }
         
         .file-path {
-            word-wrap: break-word;
+            word-break: break-all;
+            overflow-wrap: break-word;
             white-space: normal;
             cursor: pointer;
             line-height: 1.3;
             font-size: 0.875rem;
             max-width: 25vw;
+            hyphens: none;
         }
         
         .file-path:hover {
@@ -1178,6 +1194,10 @@
                 <div class="stat-label">Healthy Files</div>
             </div>
             <div class="stat-card">
+                <div class="stat-number" style="color: #ff9800;" id="warningFiles">-</div>
+                <div class="stat-label">Files with Warnings</div>
+            </div>
+            <div class="stat-card">
                 <div class="stat-number pending" id="pendingFiles">-</div>
                 <div class="stat-label">Pending Scan</div>
             </div>
@@ -1185,7 +1205,7 @@
         
         <div class="controls">
             <div class="action-buttons">
-                <button onclick="startFullScan()" id="scanAllBtn">Scan All</button>
+                <button onclick="startFullScan()" id="scanAllBtn" style="background-color: #27ae60;">Start Scan</button>
                 <button onclick="refreshResults()" id="refreshBtn">Refresh</button>
                 <button onclick="cleanupOrphaned()" id="cleanupBtn" class="danger">Cleanup Orphaned</button>
                 <button onclick="checkFileChanges()" id="changesBtn">Check File Changes</button>
@@ -1194,6 +1214,7 @@
             <div class="progress-container" id="progressContainer" style="display: none;">
                 <div class="progress-bar">
                     <div class="progress-fill" id="progressFill"></div>
+                    <div class="progress-bar-text" id="progressBarText">Initializing scan...</div>
                 </div>
                 <div class="progress-text">
                     <span id="progressText">Preparing scan...</span>
@@ -1215,6 +1236,7 @@
                             <button class="filter-btn active" onclick="filterResults('all')">All Files</button>
                             <button class="filter-btn" onclick="filterResults('corrupted')">Corrupted Only</button>
                             <button class="filter-btn" onclick="filterResults('healthy')">Healthy Only</button>
+                            <button class="filter-btn" onclick="filterResults('warning')">Warnings Only</button>
                         </div>
                     </div>
                     <div class="results-actions">
@@ -1277,6 +1299,11 @@
         <div class="modal-content">
             <span class="modal-close" onclick="closeModal('statsModal')">&times;</span>
             <h3>System Statistics</h3>
+            <div style="text-align: center; margin-bottom: 15px; color: #666;">
+                <span id="appVersion">Version: Loading...</span>
+                <span style="margin: 0 10px;">|</span>
+                <a id="githubLink" href="#" target="_blank" style="color: #3498db; text-decoration: none;">GitHub</a>
+            </div>
             <div id="statsContent">
                 <div class="stats-section">
                     <h4>Database Statistics</h4>
@@ -1294,16 +1321,16 @@
                             <span class="stat-value" id="modal-corruptedFiles">-</span>
                         </div>
                         <div class="stat-item">
+                            <span class="stat-label">Files with Warnings:</span>
+                            <span class="stat-value" id="modal-warningFiles">-</span>
+                        </div>
+                        <div class="stat-item">
                             <span class="stat-label">Pending Scans:</span>
                             <span class="stat-value" id="modal-pendingFiles">-</span>
                         </div>
                         <div class="stat-item">
                             <span class="stat-label">Files Currently Scanning:</span>
                             <span class="stat-value" id="modal-scanningFiles">-</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">Files Marked as Good:</span>
-                            <span class="stat-value" id="modal-markedGoodFiles">-</span>
                         </div>
                     </div>
                 </div>
@@ -1349,6 +1376,7 @@
                 document.getElementById('totalFiles').textContent = stats.total_files;
                 document.getElementById('corruptedFiles').textContent = stats.corrupted_files;
                 document.getElementById('healthyFiles').textContent = stats.healthy_files;
+                document.getElementById('warningFiles').textContent = stats.warning_files || 0;
                 document.getElementById('pendingFiles').textContent = stats.pending_files || 0;
             } catch (error) {
                 console.error('Error loading stats:', error);
@@ -1414,6 +1442,7 @@
                                         result.scan_status === 'pending' ? '<span class="status-badge" style="background: #fff3cd; color: #856404;">Pending</span>' :
                                         result.scan_status === 'scanning' ? '<span class="status-badge" style="background: #cce5ff; color: #0066cc;">Scanning</span>' :
                                         result.scan_status === 'error' ? '<span class="status-badge status-corrupted">Error</span>' :
+                                        result.has_warnings ? '<span class="status-badge" style="background: #fff3cd; color: #ff9800;">Warning</span>' :
                                         `<span class="status-badge ${result.is_corrupted ? 'status-corrupted' : 'status-healthy'}">${result.is_corrupted ? 'Corrupted' : 'Healthy'}</span>`
                                     }
                                 </td>
@@ -1421,9 +1450,11 @@
                                 <td class="file-size">${result.file_size ? formatFileSize(result.file_size) : 'Unknown'}</td>
                                 <td>${result.file_type || 'Unknown'}</td>
                                 <td><span class="status-badge" style="background: ${result.scan_status === 'completed' ? '#e8f5e8' : result.scan_status === 'pending' ? '#fff3cd' : result.scan_status === 'scanning' ? '#cce5ff' : '#ffebee'}; color: ${result.scan_status === 'completed' ? '#2e7d32' : result.scan_status === 'pending' ? '#856404' : result.scan_status === 'scanning' ? '#0066cc' : '#c62828'};">${result.scan_status}</span></td>
-                                <td class="corruption-details" title="${result.marked_as_good ? 'Marked as Good by User' : (result.corruption_details || 'None')}">
+                                <td class="corruption-details" title="${result.marked_as_good ? 'Marked as Good by User' : (result.has_warnings ? result.warning_details : (result.corruption_details || 'None'))}">
                                     ${result.marked_as_good ? 
                                         '<span style="color: #27ae60; font-weight: 500;">\u2713 Marked as Good</span>' : 
+                                        result.has_warnings ? 
+                                        `<span style="color: #ff9800; font-weight: 500;">\u26A0 ${result.warning_details || 'Warning'}</span>` :
                                         (result.corruption_details || 'None')
                                     }
                                 </td>
@@ -1519,18 +1550,24 @@
                 const response = await fetch('/api/scan-status');
                 const status = await response.json();
                 
-                if (status.is_scanning) {
+                // Only consider scanning if backend says we're scanning
+                const isActuallyScanning = status.is_scanning;
+                
+                if (isActuallyScanning) {
                     const scanBtn = document.getElementById('scanAllBtn');
                     scanBtn.disabled = true;
                     scanBtn.textContent = 'Scanning...';
                     
                     // Calculate completed files based on total minus pending/scanning
-                    const totalFiles = status.estimated_total || (status.scanning_files + status.pending_files);
-                    const completedFiles = Math.max(0, totalFiles - status.pending_files - status.scanning_files);
+                    const totalFiles = status.estimated_total || (status.scanning_files + status.pending_files) || 0;
+                    const completedFiles = totalFiles > 0 ? Math.max(0, totalFiles - status.pending_files - status.scanning_files) : 0;
                     
                     let progressMessage = '';
                     
-                    if (status.phase === 'discovering') {
+                    // Use progress_message from backend if available
+                    if (status.progress_message) {
+                        progressMessage = status.progress_message;
+                    } else if (status.phase === 'discovering') {
                         progressMessage = 'Discovering files...';
                     } else if (status.phase === 'scanning' && status.current_file_progress) {
                         // Show current file being scanned
@@ -1553,10 +1590,15 @@
                             progressMessage += ` | ETA: ${eta}`;
                         }
                     } else {
-                        progressMessage = 'Initializing scan...';
+                        progressMessage = 'Starting scan...';
                     }
                     
-                    updateProgress(completedFiles, totalFiles, progressMessage);
+                    // Calculate phase display name
+                    const phaseDisplay = status.phase === 'discovering' ? 'Discovering Files' : 
+                                       status.phase === 'scanning' ? 'Scanning Files' : 
+                                       status.phase === 'validating' ? 'Validating Paths' : 'Initializing';
+                    
+                    updateProgress(status);
                     
                     // Start monitoring scan progress
                     startScanMonitoring();
@@ -1564,8 +1606,8 @@
                 } else {
                     const scanBtn = document.getElementById('scanAllBtn');
                     scanBtn.disabled = false;
-                    scanBtn.textContent = 'Scan All';
-                    hideProgress();
+                    scanBtn.textContent = 'Start Scan';
+                    // Don't hide progress immediately - let it show completion
                     return false;
                 }
             } catch (error) {
@@ -1586,12 +1628,15 @@
                     
                     if (status.is_scanning) {
                         // Calculate completed files based on total minus pending/scanning
-                        const totalFiles = status.estimated_total || (status.scanning_files + status.pending_files);
-                        const completedFiles = Math.max(0, totalFiles - status.pending_files - status.scanning_files);
+                        const totalFiles = status.estimated_total || (status.scanning_files + status.pending_files) || 0;
+                        const completedFiles = totalFiles > 0 ? Math.max(0, totalFiles - status.pending_files - status.scanning_files) : 0;
                         
                         let progressMessage = '';
                         
-                        if (status.phase === 'discovering') {
+                        // Use progress_message from backend if available
+                        if (status.progress_message) {
+                            progressMessage = status.progress_message;
+                        } else if (status.phase === 'discovering') {
                             progressMessage = 'Discovering files...';
                         } else if (status.phase === 'scanning' && status.current_file_progress) {
                             progressMessage = status.current_file_progress;
@@ -1609,32 +1654,58 @@
                                 progressMessage += ` | ETA: ${eta}`;
                             }
                         } else {
-                            progressMessage = 'Initializing scan...';
+                            progressMessage = 'Starting scan...';
                         }
                         
-                        updateProgress(completedFiles, totalFiles, progressMessage);
+                        // Calculate phase display name
+                        const phaseDisplay = status.phase === 'discovering' ? 'Discovering Files' : 
+                                           status.phase === 'scanning' ? 'Scanning Files' : 
+                                           status.phase === 'validating' ? 'Validating Paths' : 
+                                           status.phase === 'adding' ? 'Adding to Database' : 'Starting';
+                        
+                        updateProgress(status);
                         await loadStats();
                         await loadResults(currentPage);
                     } else {
-                        // Scan completed
-                        clearInterval(scanStatusInterval);
-                        scanStatusInterval = null;
+                        // Check if we were monitoring a scan and it just completed
+                        const progressContainer = document.getElementById('progressContainer');
+                        const wasScanning = progressContainer.style.display !== 'none';
                         
-                        const scanBtn = document.getElementById('scanAllBtn');
-                        scanBtn.disabled = false;
-                        scanBtn.textContent = 'Scan All';
-                        hideProgress();
-                        
-                        showStatus('Scan completed!', 'info');
-                        await loadStats();
-                        await loadResults(currentPage);
+                        // Only clear monitoring if we were actually scanning
+                        if (wasScanning) {
+                            console.log('Scan appears to have completed');
+                            clearInterval(scanStatusInterval);
+                            scanStatusInterval = null;
+                            
+                            const scanBtn = document.getElementById('scanAllBtn');
+                            scanBtn.disabled = false;
+                            scanBtn.textContent = 'Start Scan';
+                            
+                            // Get the current scan stats to show accurate completion
+                            const totalFiles = status.estimated_total || 0;
+                            const completedFiles = totalFiles > 0 ? totalFiles : 0;
+                            
+                            // Only show completion if we actually scanned files
+                            if (totalFiles > 0) {
+                                updateProgress(completedFiles, totalFiles, 'Scan completed!', 'Complete', status.duration || 0, 0);
+                                showStatus('Scan completed!', 'info');
+                            }
+                            
+                            // Keep progress bar visible for 30 seconds after completion
+                            setTimeout(() => {
+                                hideProgress();
+                            }, 30000);
+                            
+                            await loadStats();
+                            await loadResults(currentPage);
+                        }
                     }
                 } catch (error) {
                     console.error('Error monitoring scan:', error);
                     clearInterval(scanStatusInterval);
                     scanStatusInterval = null;
                 }
-            }, 3000); // Check every 3 seconds
+            }, 1000); // Check every second for more responsive updates
         }
 
         async function startFullScan() {
@@ -1650,7 +1721,10 @@
             scanBtn.textContent = 'Starting...';
             
             console.log('Starting scan request...');
-            updateProgress(0, 0, 'Initializing scan...');
+            // Don't show progress yet - wait for actual status
+            const progressContainer = document.getElementById('progressContainer');
+            progressContainer.style.display = 'block';
+            updateProgress({phase: 'idle', phase_current: 0, phase_total: 0, progress_message: 'Starting scan...'});
             
             try {
                 const response = await fetch('/api/scan-all', {
@@ -1676,14 +1750,14 @@
                         showStatus(`Error starting scan: ${data.error || 'Unknown error'}`, 'warning');
                     }
                     scanBtn.disabled = false;
-                    scanBtn.textContent = 'Scan All';
+                    scanBtn.textContent = 'Start Scan';
                 }
             } catch (error) {
                 hideProgress();
                 showStatus(`Error starting scan: ${error.message}`, 'warning');
                 console.error('Scan error:', error);
                 scanBtn.disabled = false;
-                scanBtn.textContent = 'Scan All';
+                scanBtn.textContent = 'Start Scan';
             }
         }
         
@@ -1795,7 +1869,8 @@
                 const filterNames = {
                     'all': 'all files',
                     'corrupted': 'corrupted files only',
-                    'healthy': 'healthy files only'
+                    'healthy': 'healthy files only',
+                    'warning': 'files with warnings only'
                 };
                 
                 showStatus(`Filtering to show ${filterNames[filter] || filter}`, 'info');
@@ -1897,24 +1972,99 @@
             }
         }
         
-        function updateProgress(current, total, message) {
+        function updateProgress(status) {
             const progressContainer = document.getElementById('progressContainer');
             const progressFill = document.getElementById('progressFill');
             const progressText = document.getElementById('progressText');
             const progressFiles = document.getElementById('progressFiles');
+            const progressBarText = document.getElementById('progressBarText');
             
-            if (total > 0) {
-                const percentage = (current / total) * 100;
-                progressFill.style.width = percentage + '%';
-                progressFiles.textContent = `${current}/${total} files`;
+            let percentage = 0;
+            let phaseText = '';
+            let filesText = '';
+            
+            // Calculate phase-specific progress
+            if (status.phase === 'discovering') {
+                // Discovery phase - we don't know total ahead of time
+                if (status.phase_current > 0) {
+                    phaseText = `Phase 1 of 3: Discovery`;
+                    filesText = `Checked ${status.phase_current} files, found ${status.discovery_count} media files`;
+                    // Show indeterminate progress for discovery
+                    percentage = Math.min(50, (status.discovery_count / 100) * 50); // Cap at 50%
+                } else {
+                    phaseText = 'Phase 1 of 3: Discovery';
+                    filesText = 'Starting discovery...';
+                }
+            } else if (status.phase === 'adding') {
+                // Adding to database phase
+                phaseText = 'Phase 2 of 3: Adding to Database';
+                if (status.phase_total > 0) {
+                    percentage = (status.phase_current / status.phase_total) * 100;
+                    filesText = `${status.phase_current}/${status.phase_total} files`;
+                } else {
+                    filesText = 'Preparing to add files...';
+                }
+            } else if (status.phase === 'scanning') {
+                // Scanning phase
+                phaseText = 'Phase 3 of 3: Scanning Files';
+                if (status.phase_total > 0) {
+                    percentage = (status.phase_current / status.phase_total) * 100;
+                    filesText = `${status.phase_current}/${status.phase_total} files`;
+                } else if (status.estimated_total > 0) {
+                    // Fallback to old calculation if phase progress not available
+                    const completedFiles = Math.max(0, status.estimated_total - status.pending_files - status.scanning_files);
+                    percentage = (completedFiles / status.estimated_total) * 100;
+                    filesText = `${completedFiles}/${status.estimated_total} files`;
+                }
+            } else {
+                // Default phase when phase is not set yet
+                phaseText = 'Phase 1 of 3: Starting';
+                filesText = 'Preparing scan...';
+                percentage = 0;
             }
             
-            progressText.textContent = message;
+            // Update progress bar
+            progressFill.style.width = percentage + '%';
+            progressFiles.textContent = filesText;
+            
+            // Update progress bar text
+            let barText = `${phaseText}: ${percentage.toFixed(1)}%`;
+            if (status.duration) {
+                barText += ` • ${formatDuration(status.duration)}`;
+            }
+            if (status.eta_seconds && status.eta_seconds > 0 && status.phase === 'scanning') {
+                barText += ` • ETA: ${formatETA(status.eta_seconds)}`;
+            }
+            progressBarText.textContent = barText;
+            
+            // Update progress message
+            progressText.textContent = status.progress_message || phaseText;
             progressContainer.style.display = 'block';
         }
         
-        function hideProgress() {
-            document.getElementById('progressContainer').style.display = 'none';
+        function formatDuration(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+        }
+        
+        async function hideProgress() {
+            // Double-check if scan is still running before hiding
+            try {
+                const response = await fetch('/api/scan-status');
+                const status = await response.json();
+                
+                // Only hide if truly not scanning AND no pending files
+                if (!status.is_scanning && status.pending_files === 0 && status.scanning_files === 0) {
+                    console.log('Hiding progress bar - scan fully complete');
+                    document.getElementById('progressContainer').style.display = 'none';
+                } else {
+                    console.log('Not hiding progress bar - scan still active:', status);
+                }
+            } catch (error) {
+                console.error('Error checking scan status in hideProgress:', error);
+                // Don't hide on error - better to show progress than hide it
+            }
         }
         
         
@@ -2170,18 +2320,26 @@
                     console.log('System info endpoint not available or timed out, using fallback');
                 }
                 
+                // Update version and GitHub link
+                if (systemInfo.system_info && systemInfo.system_info.version) {
+                    document.getElementById('appVersion').textContent = `Version: ${systemInfo.system_info.version}`;
+                }
+                if (systemInfo.system_info && systemInfo.system_info.github_url) {
+                    document.getElementById('githubLink').href = systemInfo.system_info.github_url;
+                }
+                
                 // Update modal content
                 document.getElementById('modal-totalFiles').textContent = stats.total_files;
                 document.getElementById('modal-healthyFiles').textContent = stats.healthy_files;
                 document.getElementById('modal-corruptedFiles').textContent = stats.corrupted_files;
+                document.getElementById('modal-warningFiles').textContent = stats.warning_files || 0;
                 document.getElementById('modal-pendingFiles').textContent = stats.pending_files || 0;
                 document.getElementById('modal-scanningFiles').textContent = stats.scanning_files || 0;
-                document.getElementById('modal-markedGoodFiles').textContent = stats.marked_good_files || 0;
                 
                 // Update file system stats
                 const totalFoundFiles = systemInfo.total_files_found || 0;
                 const trackedFiles = stats.total_files;
-                const checkedFiles = stats.healthy_files + stats.corrupted_files + (stats.marked_good_files || 0);
+                const checkedFiles = stats.healthy_files + stats.corrupted_files;
                 
                 document.getElementById('modal-totalFoundFiles').textContent = totalFoundFiles.toLocaleString();
                 
@@ -2772,7 +2930,12 @@
             loadStats();
             loadResults();
             // Check if a scan is in progress when page loads
-            await checkScanStatus();
+            const isScanning = await checkScanStatus();
+            // If scan is running, make sure we keep monitoring
+            if (isScanning) {
+                console.log('Scan detected on page load, starting monitoring...');
+                // Progress bar should already be visible from checkScanStatus
+            }
         });
     </script>
 </body>

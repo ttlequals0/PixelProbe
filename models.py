@@ -26,6 +26,10 @@ class ScanResult(db.Model):
     scan_output = db.Column(db.Text)  # Full tool output for debugging
     ignored_error_types = db.Column(db.Text)  # JSON array of ignored error patterns
     
+    # Warning state fields
+    has_warnings = db.Column(db.Boolean, nullable=False, default=False, index=True)  # File has warnings but not corrupted
+    warning_details = db.Column(db.Text)  # Details about warnings (e.g., "NAL unit errors only")
+    
     def to_dict(self):
         return {
             'id': self.id,
@@ -44,7 +48,9 @@ class ScanResult(db.Model):
             'scan_tool': getattr(self, 'scan_tool', None),
             'scan_duration': getattr(self, 'scan_duration', None),
             'scan_output': getattr(self, 'scan_output', None),
-            'ignored_error_types': getattr(self, 'ignored_error_types', None)
+            'ignored_error_types': getattr(self, 'ignored_error_types', None),
+            'has_warnings': getattr(self, 'has_warnings', False),
+            'warning_details': getattr(self, 'warning_details', None)
         }
     
     def __repr__(self):

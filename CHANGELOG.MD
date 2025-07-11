@@ -7,7 +7,288 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.21] - 2025-07-10
+
+### Fixed
+- **Thread-Safe Scan State Updates**: Fixed scan progress not showing during parallel scanning
+  - Added thread lock for scan_state dictionary to prevent race conditions
+  - Created thread-safe update_scan_state() and get_scan_state_copy() functions
+  - Progress updates from parallel scan threads now properly persist
+  - Scan status endpoint now reads state safely without data corruption
+  
+### Technical
+- **Concurrency Improvements**: Better handling of shared state in multi-threaded scanning
+  - Scan state updates are now atomic operations
+  - Progress callbacks use proper locking mechanism
+  - Prevents lost updates when multiple threads modify scan state simultaneously
+
+## [1.20] - 2025-07-10
+
+### Fixed
+- **Progress Bar False Positives**: Fixed progress bar showing when no scan is actually running
+  - Progress bar only shows when `is_scanning` is true from backend
+  - No longer shows progress just because there are pending files
+  - Backend only reports `is_scanning: true` when scan thread is active
+  
+### Improved  
+- **Progress Bar Text Size**: Increased font size from 14px to 18px for better readability
+- **Cleaner Progress States**: Replaced multiple "Initializing" states with clearer phase names
+  - Changed generic "Initializing" to "Phase 1 of 3: Starting"
+  - More descriptive phase indicators throughout scan process
+  - Consistent messaging when scan is preparing
+
+## [1.19] - 2025-07-10
+
+### Fixed
+- **Progress Bar Persistence**: Fixed progress bar disappearing during active scans
+  - Progress bar now stays visible throughout ALL phases until completely done
+  - Added double-check in `hideProgress()` to verify scan is truly complete
+  - Progress bar only hides when `is_scanning=false` AND `pending_files=0` AND `scanning_files=0`
+  - Better error handling - progress bar won't hide if status check fails
+  
+### Improved
+- **Scan Detection Logic**: More robust scan detection
+  - Considers a scan active if `is_scanning` OR there are pending/scanning files
+  - Prevents false "not scanning" detection between phases
+  - Increased monitoring frequency from 3 seconds to 1 second for more responsive updates
+  - Only clears monitoring if progress bar was actually visible (prevents false completions)
+  - Extended completion display time from 10 to 30 seconds
+
+## [1.18] - 2025-07-10
+
+### Enhanced
+- **Phase-Specific Progress Tracking**: Completely redesigned scan progress display
+  - Now shows three distinct phases: Discovery, Adding to Database, and Scanning
+  - Each phase has its own progress tracking (e.g., "Phase 1 of 3: Discovery")
+  - Discovery phase shows files checked and media files found
+  - Database addition phase shows exact progress (e.g., "Added 450/1000 files")
+  - Scanning phase shows file-by-file progress with percentage
+- **Clearer Progress Messages**: Users now understand exactly what's happening
+  - No more confusing "100% complete" when scan is just starting
+  - Progress bar percentage reflects current phase progress, not overall
+  - Phase indicators clearly show which step of the process is running
+- **Better Progress Calculation**: 
+  - Discovery phase uses indeterminate progress since total is unknown
+  - Database addition and scanning phases show accurate percentages
+  - Progress messages include specific details for each phase
+
+### Fixed
+- **Misleading Progress Display**: Fixed issue where progress showed "100% complete" during discovery
+  - Progress bar now accurately reflects the current phase status
+  - Discovery phase no longer shows 100% when no files have been scanned yet
+
+## [1.17] - 2025-07-10
+
+### Fixed
+- **Progress Bar 100/100 Bug**: Fixed incorrect "100/100 completed" display when scan is just starting
+  - Progress bar no longer shows 100% when there are 0 files discovered
+  - When total files is 0, progress shows "Calculating..." instead of 100/100
+  - Progress bar text shows actual status message when initializing
+  - Only shows "Scan completed!" if files were actually scanned
+- **False Completion Messages**: Prevented "Scan completed!" from showing on page load
+  - Completion message only shows if total files > 0
+  - Progress monitoring no longer triggers false completion when no scan is running
+
+### Improved
+- **Progress Calculation**: Better handling of edge cases
+  - Completed files calculation now properly handles 0 total files
+  - Progress bar width correctly shows 0% when initializing
+  - More accurate progress display during scan initialization phase
+
+## [1.16] - 2025-07-10
+
+### Fixed
+- **Persistent Progress Bar**: Progress bar now properly persists across page reloads
+  - When you close and reopen the page, if a scan is running, the progress bar shows immediately
+  - `hideProgress()` now checks if scan is still running before hiding
+  - Progress monitoring automatically resumes on page load if scan is active
+- **Better Word Wrapping**: Fixed file path wrapping without zero-width spaces
+  - Changed to `word-break: break-all` for better path breaking
+  - Removed zero-width space insertion that would cause copy/paste issues
+  - Paths now break naturally without interfering with clipboard operations
+
+### Enhanced
+- **Page Load Behavior**: Page now properly detects and displays active scans on load
+  - Added logging for scan detection on page load
+  - Ensures monitoring continues for in-progress scans
+
+## [1.15] - 2025-07-10
+
+### Fixed
+- **File Path Wrapping**: Properly fixed word wrapping issues
+  - Added zero-width spaces after slashes to allow natural line breaks
+  - Prevents awkward breaks like `/originals/` appearing on its own line
+  - File paths now wrap cleanly without breaking directory names
+- **Progress Bar Persistence**: Fixed progress bar disappearing too quickly
+  - Progress bar now stays visible for 10 seconds after scan completion
+  - Only shows "Scan completed!" if actually monitoring a scan (not on initial load)
+  - Prevents confusing "Scan completed!" message when starting a new scan
+
+### Changed
+- **Button Text**: Changed "Scan All" to "Start Scan" for clarity
+- **Button Color**: Made the Start Scan button green (#27ae60) for better visibility
+- **Status Logic**: Improved scan completion detection to avoid false completion messages
+
+### Enhanced
+- **Scan Progress Visibility**: Improved scan progress display to show immediately when scan starts
+  - Progress now shows "Initializing scan..." immediately when clicking "Scan All"
+  - Added detailed progress messages during path validation phase
+  - Shows "Validating scan paths..." with file counts for each path
+  - Displays "Found X files already in database" during discovery
+  - Shows "Adding X new files to database..." with progress updates
+  - Progress message is updated from backend throughout all scan phases
+  - Fixed issue where progress bar wouldn't appear until scan was already running
+
+## [1.13] - 2025-07-10
+
 ### Added
+- **Dynamic Version Display**: Version number now read from central `version.py` file
+  - No more hardcoded versions in multiple places
+  - Easier version management for releases
+- **GitHub Repository Link**: Added link to GitHub repo in System Statistics modal
+  - Direct link to https://github.com/ttlequals0/PixelProbe
+  - Helps users find documentation and report issues
+
+### Changed
+- **UI Color Fix**: Changed pending scan count from orange to white
+  - Orange was confusing as it matched the warning badge color
+  - White provides better visual distinction
+
+### Developer Experience
+- **Version Management**: Created `version.py` for centralized version control
+  - Single source of truth for application version
+  - Imported in app.py for all version references
+
+### Improved
+- **Enhanced Scan Progress Display**: More detailed and persistent scan progress
+  - Progress bar now shows phase, percentage, duration, and ETA inside the bar
+  - Progress display remains visible throughout entire scan
+  - Shows "Complete" status for 3 seconds before hiding
+  - Taller progress bar (50px) for better visibility
+  - Real-time updates of scan phase (Discovering Files, Scanning Files)
+  - Progress no longer disappears immediately when checking scan status
+
+## [1.12] - 2025-07-10
+
+### Fixed
+- **CRITICAL DATABASE FIX**: Fixed missing warning columns causing application crash
+  - Removed duplicate `migrate_database` function that was missing warning column definitions
+  - Added `has_warnings` and `warning_details` columns to database migration
+  - The duplicate function was preventing proper database migration on startup
+- **Added reset script**: Created `reset_nal_files_for_rescan.py` to reset NAL-only files
+  - Allows existing files with NAL errors to be rescanned with new warning logic
+  - Files will be properly marked with warnings instead of corrupted on rescan
+
+## [1.11] - 2025-07-10
+
+### Added
+- **Warning State Support**: Complete implementation for tracking files with warnings (not corrupted but have issues)
+  - Added `has_warnings` and `warning_details` fields to database schema
+  - Migration script `add_warning_columns.py` to update existing databases
+  - NAL unit errors without other issues now create warnings instead of marking files as corrupted
+  - Warning filter button in UI to show only files with warnings
+  - Orange warning badge displayed for files with warnings
+  - Warning count added to main stats grid and system statistics modal
+  - Updated scan result processing to handle warning states
+- **Version Display**: Added application version display in system statistics popup
+  - Version now shown at top of stats modal
+  - Version matches Docker image version for consistency
+
+### Changed
+- **Mark as Good Enhancement**: Files marked as good now have `is_corrupted` set to `False` in database
+  - This ensures marked files are properly counted as healthy in statistics
+  - Improves consistency in database state management
+
+### Removed
+- **UI Cleanup**: Removed "Files Marked as Good" field from statistics popup
+  - Redundant since marked files are now counted as healthy
+  - Simplifies the statistics display
+
+### Fixed
+- **False Positive Reduction**: Major improvements to corruption detection accuracy
+  - Removed incorrect PIL tile data check that was marking valid images as corrupted
+    - After img.load(), tile data is consumed and cleared in PIL - this is normal behavior
+  - ImageMagick CorruptImageProfile warnings (XMP metadata) no longer mark images as corrupted
+    - These are common in thumbnails and processed images
+  - FFmpeg NAL unit errors alone no longer mark videos as corrupted (now warnings)
+    - NAL unit errors often indicate container/muxing issues, not actual corruption
+    - Videos with only NAL unit errors that still process successfully are marked with warnings
+  - Added scripts to fix existing false positives:
+    - `fix_tile_data_false_positives.py` - Re-scans affected files with fixed detection
+    - `fix_tile_data_sql.py` - Direct SQL updates for faster processing
+    - `fix_imagemagick_profile_warnings.py` - Fixes ImageMagick profile warning false positives
+    - `fix_nal_unit_false_positives.py` - Fixes FFmpeg NAL unit false positives
+
+## [1.10] - 2025-07-10
+
+### Fixed
+- Removed incorrect PIL tile data check that was causing false positives for image corruption
+  - After img.load(), tile data is consumed and cleared in PIL - this is normal behavior
+  - This was incorrectly marking valid images as having "Image has no tile data"
+- Added scripts to fix existing false positives in the database:
+  - `fix_tile_data_false_positives.py` - Re-scans affected files with fixed detection
+  - `fix_tile_data_sql.py` - Direct SQL updates for faster processing
+
+## [1.09] - 2025-07-09
+
+### Fixed
+- **🔧 SCAN LOGIC FIX**: Fixed scan terminating when no new files are discovered
+  - Removed early return when no new files are found
+  - Scan now continues to Phase 3 to process existing pending files
+  - Fixes issue where scan would stop if all files were already in database as pending
+
+## [1.08] - 2025-07-09
+
+### Fixed
+- **⚡ BATCH PROCESSING**: Implemented batch processing to avoid system overload
+  - Files are now processed in batches of 10,000 instead of all at once
+  - Prevents memory issues when scanning 1M+ files
+  - Each batch completes before the next one starts
+  - Maintains real-time updates within each batch
+
+## [1.07] - 2025-07-09
+
+### Fixed
+- **🔧 REAL-TIME SCAN UPDATES**: Fixed scan results not updating in real-time
+  - Replaced batch processing approach with real-time result processing
+  - Scan results are now saved to database immediately as each file completes
+  - Database commits happen every 50 files (configurable via BATCH_COMMIT_SIZE)
+  - UI will now show live updates of completed/corrupted/healthy files during scanning
+  - Removed the wait for all files to complete before processing results
+
+## [1.06] - 2025-07-09
+
+### Fixed
+- **🔧 APPLICATION CONTEXT ERROR**: Fixed "Working outside of application context" error in progress callback
+  - Progress callback was running in thread pool without Flask app context
+  - Added `with app.app_context():` wrapper around database operations in progress callback
+  - This fixes the database updates not being saved during parallel scanning
+
+## [1.05] - 2025-07-09
+
+### Fixed
+- **🔧 DATABASE UPDATE BUG**: Fixed critical issue where scanned files were not being saved to database
+  - Added error logging when scanned files are not found in database (should not happen)
+  - Added fallback logic to create new records if files are missing from database
+  - Improved progress callback to log warnings when files are not found
+  - Added debug logging to track scan result processing
+  - Fixed batch commit size to use configured value instead of hardcoded 50
+  - Added logging to show number of scan results received from parallel scan
+  - **CRITICAL FIX**: Added app context to progress callback to fix "Working outside of application context" error
+    - This was preventing database updates during parallel scanning
+    - Progress callback now properly wraps database operations in app.app_context()
+
+## [1.04] - 2025-07-09
+
+### Fixed
+- **🔧 SCAN STATE SYNCHRONIZATION**: Fixed UI not reflecting real-time scan progress
+  - Fixed synchronization issue between background scan threads and UI state tracking
+  - Added `scan_thread_active` flag to properly track active scan threads
+  - Modified scan-status endpoint to check both database state and thread state
+  - Added proper file status updates during scanning (marks files as 'scanning' when processed)
+  - Fixed scan state reset timing to only occur after all scan processing is complete
+  - Improved error handling in scan result processing loop
+  - UI now properly shows scan progress and file counts update in real-time
 
 ## [1.03] - 2025-07-09
 

@@ -45,7 +45,7 @@ class PixelProbe:
         self.current_scan_file = None
         self.scan_start_time = None
     
-    def discover_files(self, directories, max_files=None, existing_files=None):
+    def discover_files(self, directories, max_files=None, existing_files=None, progress_callback=None):
         """Phase 1: Discover all supported files and return their paths (parallel version)"""
         existing_files = existing_files or set()
         
@@ -54,16 +54,17 @@ class PixelProbe:
         
         # Use parallel discovery for multiple paths
         if len(directories) > 1:
-            return self._discover_files_parallel(directories, max_files, existing_files)
+            return self._discover_files_parallel(directories, max_files, existing_files, progress_callback)
         else:
             # Single path - use original sequential method
-            return self._discover_files_sequential(directories, max_files, existing_files)
+            return self._discover_files_sequential(directories, max_files, existing_files, progress_callback)
     
-    def _discover_files_sequential(self, directories, max_files=None, existing_files=None):
+    def _discover_files_sequential(self, directories, max_files=None, existing_files=None, progress_callback=None):
         """Sequential file discovery for single path or fallback"""
         files_discovered = []
         files_count = 0
         existing_files = existing_files or set()
+        total_files_checked = 0
         
         for directory in directories:
             if not os.path.exists(directory):
@@ -74,6 +75,8 @@ class PixelProbe:
             logger.info(f"Found {len(files)} total files in {directory}")
             
             for file_path in files:
+                total_files_checked += 1
+                
                 if max_files and files_count >= max_files:
                     logger.info(f"Reached maximum discovery limit of {max_files} files")
                     return files_discovered
@@ -85,11 +88,15 @@ class PixelProbe:
                 if self._is_supported_file(file_path):
                     files_discovered.append(file_path)
                     files_count += 1
+                
+                # Call progress callback periodically
+                if progress_callback and total_files_checked % 100 == 0:
+                    progress_callback(total_files_checked, files_count)
         
         logger.info(f"Discovery complete: found {len(files_discovered)} new supported files")
         return files_discovered
     
-    def _discover_files_parallel(self, directories, max_files=None, existing_files=None):
+    def _discover_files_parallel(self, directories, max_files=None, existing_files=None, progress_callback=None):
         """Parallel file discovery across multiple paths"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
@@ -433,6 +440,7 @@ class PixelProbe:
             
             is_corrupted = False
             corruption_details = []
+            warning_details = []
             
             extension = Path(file_path).suffix.lower()
             
@@ -444,10 +452,11 @@ class PixelProbe:
                 scan_output.extend(output)
             elif extension in self.supported_video_formats:
                 logger.info(f"Checking video corruption for: {file_path}")
-                is_corrupted, details, tool, output = self._check_video_corruption(file_path, deep_scan)
+                is_corrupted, details, tool, output, warnings = self._check_video_corruption(file_path, deep_scan)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
+                warning_details = warnings
             else:
                 # File type not supported for detailed scanning
                 logger.info(f"File type {extension} not supported for corruption checking: {file_path}")
@@ -472,7 +481,9 @@ class PixelProbe:
                 'file_hash': file_hash,
                 'scan_tool': scan_tool,
                 'scan_duration': scan_duration,
-                'scan_output': '\n'.join(scan_output) if scan_output else None
+                'scan_output': '\n'.join(scan_output) if scan_output else None,
+                'has_warnings': len(warning_details) > 0,
+                'warning_details': '; '.join(warning_details) if warning_details else None
             })
             
             return result
@@ -491,7 +502,9 @@ class PixelProbe:
                 'file_hash': None,
                 'scan_tool': 'error',
                 'scan_duration': scan_duration,
-                'scan_output': str(e)
+                'scan_output': str(e),
+                'has_warnings': False,
+                'warning_details': None
             }
         finally:
             # Clear current scan tracking
@@ -529,12 +542,8 @@ class PixelProbe:
                 else:
                     scan_output.append(f"Image dimensions: {img.size[0]}x{img.size[1]}")
                 
-                if hasattr(img, 'tile') and not img.tile:
-                    corruption_details.append("Image has no tile data")
-                    is_corrupted = True
-                    scan_output.append("Tile data: MISSING")
-                else:
-                    scan_output.append("Tile data: OK")
+                # Note: After load(), tile data is consumed and cleared in PIL - this is normal behavior
+                # Removed incorrect tile data check that was causing false positives
                 
                 img.transpose(Image.FLIP_LEFT_RIGHT)
                 scan_output.append("Transform test: PASSED")
@@ -562,7 +571,15 @@ class PixelProbe:
                     scan_output.append(f"ImageMagick stderr: {result.stderr[:200]}")
                 logger.warning(f"ImageMagick identify failed for {file_path}")
             elif result.stderr:
-                if any(keyword in result.stderr.lower() for keyword in ['error', 'corrupt', 'truncated', 'damaged']):
+                # Check if this is just a metadata/profile warning (not actual corruption)
+                stderr_lower = result.stderr.lower()
+                is_profile_warning = 'corruptimageprofile' in stderr_lower and '@warning/profile.c' in stderr_lower
+                
+                if is_profile_warning:
+                    # Profile warnings (like XMP) don't indicate actual image corruption
+                    scan_output.append("ImageMagick identify: PASSED (with profile warnings)")
+                    logger.info(f"ImageMagick profile warning (not corruption) for {file_path}: {result.stderr[:100]}")
+                elif any(keyword in stderr_lower for keyword in ['error', 'corrupt', 'truncated', 'damaged']):
                     corruption_details.append(f"ImageMagick warnings: {result.stderr[:100]}")
                     is_corrupted = True
                     scan_tool = "imagemagick"
@@ -623,6 +640,7 @@ class PixelProbe:
         is_corrupted = False
         scan_tool = "ffmpeg"
         scan_output = []
+        warning_details = []
         
         logger.info(f"Starting FFmpeg probe for: {file_path}")
         try:
@@ -633,7 +651,7 @@ class PixelProbe:
                 is_corrupted = True
                 scan_output.append("FFmpeg probe: No streams found")
                 logger.warning(f"No streams found in {file_path}")
-                return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output)
+                return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
             
             video_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
             if not video_stream:
@@ -700,17 +718,36 @@ class PixelProbe:
             
             if result.stderr:
                 error_lines = result.stderr.strip().split('\n')
-                # Filter for actual corruption indicators, not metadata issues
-                significant_errors = [line for line in error_lines if 
-                                    ('error' in line.lower() and 'duration' not in line.lower()) or
-                                    'corrupt' in line.lower() or
-                                    'broken' in line.lower() or
-                                    'invalid nal unit' in line.lower() or
-                                    'no frame' in line.lower()]
+                # Filter for actual corruption indicators, not metadata issues or NAL unit warnings
+                # NAL unit errors alone are often false positives (container/muxing issues)
+                significant_errors = []
+                has_nal_errors = False
+                has_other_errors = False
+                
+                for line in error_lines:
+                    line_lower = line.lower()
+                    if 'invalid nal unit' in line_lower:
+                        has_nal_errors = True
+                        # Don't add NAL errors to significant_errors yet
+                    elif (('error' in line_lower and 'duration' not in line_lower) or
+                          'corrupt' in line_lower or
+                          'broken' in line_lower or
+                          'no frame' in line_lower):
+                        significant_errors.append(line)
+                        has_other_errors = True
+                
+                # Only include NAL errors if there are other errors OR if FFmpeg failed
+                if has_nal_errors and (has_other_errors or result.returncode != 0):
+                    # Add representative NAL error
+                    significant_errors.append("Invalid NAL unit errors detected")
                 
                 if significant_errors:
                     corruption_details.append(f"FFmpeg errors: {'; '.join(significant_errors[:3])}")
                     is_corrupted = True
+                elif has_nal_errors and result.returncode == 0:
+                    # NAL errors only - mark as warning instead of corrupted
+                    logger.info(f"FFmpeg found only NAL unit errors (warning) for {file_path}")
+                    warning_details = ["NAL unit errors detected (video may have playback issues)"]
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         
@@ -752,7 +789,8 @@ class PixelProbe:
                 corruption_details.extend(enhanced_details)
                 scan_output.extend(enhanced_output)
         
-        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output)
+        # Return warning details as well
+        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
     
     def _enhanced_corruption_check(self, file_path, file_size_gb):
         """Enhanced multi-stage corruption detection for files that fail basic checks"""
@@ -997,6 +1035,8 @@ class PixelProbe:
             
             if result.stderr:
                 # Enhanced error pattern recognition
+                # NAL unit errors are often false positives (container/muxing issues)
+                # Only mark as corrupted if there are multiple types of errors
                 error_patterns = [
                     ('invalid nal unit', 'Invalid NAL unit structure'),
                     ('error while decoding mb', 'Macroblock decoding error'),
@@ -1008,11 +1048,28 @@ class PixelProbe:
                 ]
                 
                 stderr_lower = result.stderr.lower()
+                found_errors = []
+                nal_unit_only = True
+                
                 for pattern, description in error_patterns:
                     if pattern in stderr_lower:
-                        corruption_details.append(description)
-                        is_corrupted = True
-                        logger.warning(f"Detected: {description} in {file_path}")
+                        found_errors.append(description)
+                        if pattern != 'invalid nal unit':
+                            nal_unit_only = False
+                        logger.info(f"Detected: {description} in {file_path}")
+                
+                # Only mark as corrupted if:
+                # 1. There are non-NAL unit errors, OR
+                # 2. The return code is non-zero AND there are NAL unit errors
+                if found_errors and (not nal_unit_only or result.returncode != 0):
+                    corruption_details.extend(found_errors)
+                    is_corrupted = True
+                    logger.warning(f"Marking as corrupted due to: {', '.join(found_errors)}")
+                elif nal_unit_only and result.returncode == 0:
+                    logger.info(f"NAL unit errors only (not marking as corrupted) for {file_path}")
+                    # Don't mark as corrupted, but include in details for warning handling
+                    corruption_details.append("NAL unit warnings only (strict mode)")
+                    # Note: The calling function will handle this as a warning
                         
         except subprocess.TimeoutExpired:
             corruption_details.append("Strict error detection timeout")

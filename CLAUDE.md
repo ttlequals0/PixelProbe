@@ -11,7 +11,7 @@
 - When something doesn't work, debug and fix it - don't start over with a simple version
 - docker should be built for platform="linux/amd64" 
 - docker versioning should just be major.minor version ie 0.23
-- docker always check what the next version should be before tagging, you can get this info from docker hub
+- docker always check what the next version should be before tagging, you can get this info from docker hub and should be tracked in CHANGELOG.md
 - docker hub user and org are ttlequals0
 - docker if you test locally cleanup afterwards
 - python testing should use venv

@@ -10,48 +10,43 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 
 - **🎬 Comprehensive Media Support**: Detects corruption in videos (MP4, MKV, AVI, MOV, etc.) and images (JPEG, PNG, GIF, etc.)
 - **🔍 Advanced Detection**: Uses FFmpeg, ImageMagick, and PIL for thorough corruption analysis
+- **⚠️ Warning System**: Differentiates between corrupted files and files with minor issues
 - **🌐 Modern Web Interface**: Clean, responsive dark/light mode UI for viewing and managing scan results
 - **💾 Persistent Storage**: SQLite database stores scan results across application restarts
-- **📁 File Management**: Download, view, and manage corrupted files directly from the web interface
+- **📁 File Management**: Download, view, mark as good, and manage files directly from the web interface
 - **🐳 Docker Support**: Easy deployment with Docker and docker-compose
 - **⚙️ Configurable**: Environment variable configuration for scan directories and behavior
-- **⚡ Parallel Scanning**: Multi-threaded scanning for improved performance
-- **📊 Real-time Stats**: Live scanning progress and detailed system information
+- **⚡ Parallel Scanning**: Multi-threaded scanning for improved performance with real-time progress
+- **📊 System Statistics**: Detailed system statistics with monitored paths and file tracking
+- **🔄 Bulk Actions**: Select multiple files for rescanning, deep scanning, or marking as good
+- **📈 Phase-Based Progress**: Clear scanning phases showing discovery, database addition, and scanning stages
 
 ## 📸 Screenshots
 
 ### Main Dashboard (Light Mode)
-![Light Mode Dashboard](docs/images/light-mode.png)
+![Light Mode Dashboard](screenshots/light-mode.png)
 
 The main dashboard provides an overview of your media library health with:
-- File statistics and corruption summaries
-- Real-time scan progress
-- Quick access to system information
+- File statistics showing total, corrupted, healthy, and warning counts
+- Real-time scan progress with phase indicators
+- Clean, modern interface with action buttons
 
 ### Main Dashboard (Dark Mode)
-![Dark Mode Dashboard](docs/images/dark-mode.png)
+![Dark Mode Dashboard](screenshots/dark-mode.png)
 
-PixelProbe includes a sleek dark mode for comfortable viewing in low-light environments.
-
-### Filtering Corrupted Files
-![Filter Corrupted Files](docs/images/filter-corrupted.png)
-
-Easily filter and view only corrupted files to focus on items requiring attention.
+PixelProbe includes a sleek dark mode for comfortable viewing in low-light environments, featuring:
+- High contrast design for better readability
+- Pending scan counter showing files awaiting processing
+- Consistent UI elements across themes
 
 ### System Statistics
-![System Stats](docs/images/system-stats.png)
+![System Stats](screenshots/stats-popup.png)
 
-Detailed system information including scan performance metrics and path configurations.
-
-### Scan Output Details
-![Scan Output](docs/images/scan-output.png)
-
-View detailed scan output and diagnostic information for each file.
-
-### Media File Viewer
-![Media Viewer](docs/images/media-viewer.png)
-
-Built-in media viewer for previewing files directly in the browser.
+Comprehensive system statistics popup showing:
+- Database statistics with file counts by status
+- Monitored paths with file counts per directory
+- File system tracking showing percentage of files tracked and checked
+- Version information with GitHub link
 
 ## 🚀 Quick Start
 
@@ -86,16 +81,17 @@ Built-in media viewer for previewing files directly in the browser.
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release
-- **`ttlequals0/pixelprobe:1.03`** - Version 1.03 with performance optimizations and reset fixes
-- **`ttlequals0/pixelprobe:1.0`** - Version 1.0 with all features
-- **`ttlequals0/pixelprobe:0.45`** - Previous stable release
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v1.21)
+- **`ttlequals0/pixelprobe:1.21`** - Thread-safe scan state tracking
+- **`ttlequals0/pixelprobe:1.20`** - Fixed progress bar display issues
+- **`ttlequals0/pixelprobe:1.19`** - Enhanced progress persistence
+- **`ttlequals0/pixelprobe:1.13`** - Warning system and false positive fixes
 
 You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:1.03  # or :latest for newest
+    image: ttlequals0/pixelprobe:1.21  # or :latest for newest
 ```
 
 ### Development Setup
@@ -284,11 +280,25 @@ PixelProbe/
 ├── models.py             # SQLAlchemy database models
 ├── templates/
 │   └── index.html        # Web interface template
+├── tools/                # Utility scripts for maintenance
+│   ├── README.md        # Documentation for tools
+│   └── *.py             # Various fix and migration scripts
+├── screenshots/         # UI screenshots for documentation
 ├── requirements.txt      # Python dependencies
 ├── Dockerfile           # Docker container configuration
 ├── docker-compose.yml   # Docker Compose setup
 └── README.md           # This file
 ```
+
+## 🛠️ Utility Tools
+
+The `tools/` directory contains utility scripts for database maintenance and migration tasks. These are useful for:
+
+- Fixing false positives from older versions
+- Adding new database columns
+- Resetting files for rescanning with updated logic
+
+See [tools/README.md](tools/README.md) for detailed documentation on each tool.
 
 ## Development
 
