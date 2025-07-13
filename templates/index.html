@@ -102,6 +102,7 @@
             margin-bottom: 2rem;
             color: white;
             position: relative;
+            padding: 1rem;
         }
         
         .header-content {
@@ -111,29 +112,15 @@
             flex-direction: column;
         }
         
-        .stats-button {
-            position: absolute;
-            top: 0;
-            left: 0;
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 0.5rem 1rem;
-            border-radius: 0.5rem;
-            cursor: pointer;
-            font-size: 0.9rem;
-            transition: all 0.3s ease;
+        /* Header buttons container */
+        .header-buttons {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            margin-bottom: 1rem;
         }
         
-        .stats-button:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
-        }
-        
-        .dark-mode-toggle {
-            position: absolute;
-            top: 0;
-            right: 0;
+        .header-button {
             background: rgba(255, 255, 255, 0.2);
             color: white;
             border: 1px solid rgba(255, 255, 255, 0.3);
@@ -143,19 +130,28 @@
             font-size: 0.875rem;
             transition: all 0.3s ease;
             backdrop-filter: blur(10px);
+            min-width: 140px;
+            height: 40px;
+            text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+            flex: 1;
+            max-width: 180px;
         }
         
-        .dark-mode-toggle:hover {
+        .header-button:hover {
             background: rgba(255, 255, 255, 0.3);
             transform: translateY(-2px);
         }
         
-        .dark-mode .dark-mode-toggle {
+        .dark-mode .header-button {
             background: rgba(0, 0, 0, 0.3);
             border-color: rgba(255, 255, 255, 0.2);
         }
         
-        .dark-mode .dark-mode-toggle:hover {
+        .dark-mode .header-button:hover {
             background: rgba(0, 0, 0, 0.5);
         }
         
@@ -190,12 +186,20 @@
             border-radius: 0.75rem;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             text-align: center;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-height: 120px;
         }
         
         .stat-number {
-            font-size: clamp(1.8rem, 4vw, 2.5rem);
+            font-size: clamp(1.25rem, 2.5vw, 2rem);
             font-weight: bold;
             margin-bottom: 0.5rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.2;
         }
         
         .stat-label {
@@ -375,7 +379,38 @@
         }
         
         .results-header h2 {
-            margin-bottom: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .results-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .search-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex: 1;
+            min-width: 200px;
+        }
+        
+        .search-field {
+            flex: 1;
+            padding: 0.5rem;
+            border: 1px solid #dee2e6;
+            border-radius: 0.25rem;
+            font-size: 0.9rem;
+        }
+        
+        .results-actions {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex-wrap: wrap;
         }
         
         .filters {
@@ -413,31 +448,63 @@
             border-color: #3498db;
         }
         
+        /* Table container */
+        .table-container {
+            width: 100%;
+            overflow-x: auto; /* Allow horizontal scroll if absolutely needed */
+            -webkit-overflow-scrolling: touch;
+        }
+        
         .results-table {
             width: 100%;
             border-collapse: collapse;
-            table-layout: fixed;
+            table-layout: fixed; /* Fixed layout for better column control */
         }
         
-        /* Responsive column widths */
-        .col-checkbox { width: 3%; }
-        .col-status { width: 8%; }
+        /* Column definitions - balanced for no horizontal scroll */
+        .col-checkbox { width: 40px; }
+        .col-status { width: 85px; }
         .col-path { width: 20%; }
-        .col-size { width: 7%; }
-        .col-type { width: 7%; }
-        .col-scan-status { width: 8%; }
-        .col-corruption { width: 12%; }
-        .col-date { width: 10%; }
-        .col-tool { width: 10%; }
-        .col-actions { width: 15%; }
+        .col-size { width: 70px; white-space: nowrap; }
+        .col-type { width: 60px; }
+        .col-tool { width: 60px; }
+        .col-scan-status { width: 90px; }
+        .col-corruption { width: 18%; }
+        .col-date { width: 130px; }
+        .col-actions { width: auto; }
         
         .results-table th,
         .results-table td {
             padding: 0.75rem;
             text-align: left;
             border-bottom: 1px solid #dee2e6;
+            position: relative; /* For corruption details positioning */
+        }
+        
+        /* Only apply ellipsis to specific columns that need it */
+        .file-path,
+        .corruption-details {
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+        
+        /* Ensure headers are never truncated */
+        .results-table th {
+            white-space: nowrap;
+            overflow: visible;
+        }
+        
+        /* Ensure type and tool columns don't truncate */
+        .col-type,
+        .col-tool,
+        .col-status {
+            white-space: nowrap;
+            overflow: visible;
+        }
+        
+        /* Ensure size column doesn't wrap */
+        .file-size {
+            white-space: nowrap;
         }
         
         .results-table td.file-actions {
@@ -448,6 +515,10 @@
             background: #f8f9fa;
             font-weight: 600;
             color: #495057;
+            padding: 0.75rem 0.5rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         
         .results-table th.sortable {
@@ -470,10 +541,12 @@
         }
         
         .status-badge {
-            padding: 4px 8px;
+            padding: 4px 10px;
             border-radius: 12px;
             font-size: 0.8em;
             font-weight: 500;
+            white-space: nowrap;
+            display: inline-block;
         }
         
         .status-corrupted {
@@ -505,15 +578,17 @@
         }
         
         .action-btn {
-            padding: 0.25rem 0.5rem;
-            font-size: 0.7rem;
-            border-radius: 0.2rem;
+            padding: 0.3rem 0.6rem;
+            font-size: 0.75rem;
+            border-radius: 0.25rem;
             white-space: nowrap;
             text-align: center;
             border: none;
             cursor: pointer;
             font-weight: 500;
-            min-width: 50px;
+            min-width: 65px;
+            margin: 0.125rem;
+            display: inline-block;
         }
         
         .action-btn:hover {
@@ -587,12 +662,71 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 10px;
+            gap: 5px;
+            flex-wrap: wrap;
         }
         
         .pagination button {
             padding: 8px 12px;
             font-size: 0.9em;
+        }
+        
+        .page-link {
+            padding: 6px 12px;
+            font-size: 0.9em;
+            background: #fff;
+            border: 1px solid #dee2e6;
+            color: #007bff;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-radius: 4px;
+            min-width: 40px;
+            text-align: center;
+        }
+        
+        .page-link:hover:not(:disabled) {
+            background: #007bff;
+            color: #fff;
+            border-color: #007bff;
+        }
+        
+        .page-link.current-page {
+            background: #007bff;
+            color: #fff;
+            border-color: #007bff;
+            cursor: default;
+        }
+        
+        .page-link:disabled {
+            opacity: 1;
+        }
+        
+        .page-ellipsis {
+            padding: 6px 8px;
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .dark-mode .page-link {
+            background: #34495e;
+            border-color: #555;
+            color: #3498db;
+        }
+        
+        .dark-mode .page-link:hover:not(:disabled) {
+            background: #3498db;
+            color: #fff;
+            border-color: #3498db;
+        }
+        
+        .dark-mode .page-link.current-page {
+            background: #3498db;
+            color: #fff;
+            border-color: #3498db;
+        }
+        
+        .dark-mode .page-ellipsis {
+            color: #95a5a6;
         }
         
         .page-info {
@@ -614,6 +748,22 @@
             .results-info {
                 flex-direction: column;
                 gap: 0.5rem;
+            }
+            
+            .pagination {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            
+            .page-link {
+                padding: 4px 8px;
+                font-size: 0.85em;
+                min-width: 35px;
+            }
+            
+            .pagination button {
+                padding: 6px 10px;
+                font-size: 0.85em;
             }
         }
         
@@ -642,27 +792,45 @@
         
         /* Responsive design for smaller screens */
         @media (max-width: 1200px) {
-            .col-path { width: 18%; }
-            .col-corruption { width: 12%; }
-            .col-actions { width: 18%; }
+            .container {
+                max-width: 98vw;
+            }
+            
+            .col-path { width: 25%; }
+            .col-corruption { width: 130px; }
+            .col-actions { width: auto; min-width: 280px; }
+            
+            .action-btn {
+                font-size: 0.7rem;
+                padding: 0.25rem 0.5rem;
+                min-width: 55px;
+            }
+            
+            .results-table {
+                font-size: 0.95rem;
+            }
+        }
+        
+        @media (max-width: 992px) {
+            .table-container {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            
+            .results-table {
+                min-width: 900px;
+            }
+            
+            /* Adjust columns for tablet */
+            .col-path { width: 20%; }
+            .col-corruption { width: 15%; }
+            .col-date { width: 120px; }
+            .col-actions { width: 240px; }
             
             .action-btn {
                 font-size: 0.65rem;
                 padding: 0.2rem 0.4rem;
                 min-width: 45px;
-            }
-        }
-        
-        @media (max-width: 992px) {
-            .col-path { width: 16%; }
-            .col-corruption { width: 10%; }
-            .col-date { width: 8%; }
-            .col-actions { width: 20%; }
-            
-            .action-btn {
-                font-size: 0.6rem;
-                padding: 0.15rem 0.3rem;
-                min-width: 40px;
             }
         }
         
@@ -698,34 +866,435 @@
         .file-size {
             font-family: monospace;
             font-size: 0.9em;
+            white-space: nowrap;
         }
         
         .corruption-details {
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            font-size: 0.8rem;
+            font-size: 0.85rem;
             color: #666;
             cursor: pointer;
-            padding: 0.25rem;
-            max-width: 20vw;
+            padding: 0.25rem 0.5rem;
+            display: block;
+            /* Show 2 lines with ellipsis */
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.4;
+            transition: all 0.2s ease;
+            position: relative;
+            max-width: 100%;
+            height: 2.8em; /* 2 lines * 1.4 line-height */
         }
         
         .corruption-details:hover {
-            background: #f0f8ff;
-            overflow: visible;
+            /* Create a tooltip-like effect on hover */
+            position: absolute;
+            background: #fff;
+            border: 1px solid #ddd;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            padding: 0.75rem;
+            border-radius: 4px;
             white-space: normal;
             word-wrap: break-word;
-            max-width: none;
-            position: relative;
-            z-index: 10;
+            overflow: visible;
+            max-width: 400px;
+            min-width: 200px;
+            z-index: 1000;
+            left: 0;
+            margin-top: -0.5rem;
         }
         
-        /* Mobile first approach */
+        .dark-mode .corruption-details:hover {
+            background: #34495e;
+            border-color: #555;
+            color: #ecf0f1;
+        }
+        
+        /* Mobile responsive design */
         @media (max-width: 768px) {
+            /* Prevent horizontal scroll on mobile */
+            body {
+                overflow-x: hidden;
+            }
+            
             .container {
                 max-width: 100%;
                 padding: 0.5rem;
+                overflow-x: hidden;
+            }
+            
+            /* Mobile header */
+            .header {
+                padding: 0.5rem;
+                margin-bottom: 1rem;
+            }
+            
+            .header-buttons {
+                margin-bottom: 1rem;
+            }
+            
+            .header-button {
+                font-size: 0.75rem;
+                padding: 0.4rem 0.6rem;
+                min-width: 0;
+                height: 36px;
+            }
+            
+            .header .logo {
+                max-width: 80px;
+                margin-bottom: 0.5rem;
+            }
+            
+            .header h1 {
+                font-size: 1.5rem;
+                margin-bottom: 0.25rem;
+            }
+            
+            .header p {
+                font-size: 0.85rem;
+            }
+            
+            /* Responsive stats grid */
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+                gap: 0.5rem;
+                margin-bottom: 1rem;
+            }
+            
+            .stat-card {
+                padding: 0.75rem;
+                min-height: 80px;
+            }
+            
+            .stat-number {
+                font-size: 1.1rem;
+                margin-bottom: 0.25rem;
+            }
+            
+            .stat-label {
+                font-size: 0.7rem;
+                line-height: 1.2;
+            }
+            
+            /* Mobile card-based table layout */
+            .table-container {
+                padding: 0.5rem;
+                overflow-x: hidden !important;
+                width: 100%;
+                max-width: 100%;
+            }
+            
+            .results-table {
+                display: block;
+                border: none;
+                width: 100% !important;
+                table-layout: fixed !important;
+            }
+            
+            .results-table thead {
+                display: none;
+            }
+            
+            .results-table tbody {
+                display: block;
+            }
+            
+            .results-table tr {
+                display: block;
+                margin-bottom: 1rem;
+                background: white;
+                border: 1px solid #dee2e6;
+                border-radius: 0.5rem;
+                padding: 1rem;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                width: 100%;
+                box-sizing: border-box;
+            }
+            
+            .dark-mode .results-table tr {
+                background: #34495e;
+                border-color: #555;
+            }
+            
+            /* Mobile card content layout */
+            .results-table td {
+                display: none; /* Hide all by default */
+                border: none;
+                padding: 0;
+            }
+            
+            /* Show only needed columns in specific vertical layout */
+            
+            /* Hide checkbox in mobile view */
+            .results-table td:nth-child(1) {
+                display: none;
+            }
+            
+            /* File path - shown first, full width, prominent */
+            .results-table td:nth-child(3) {
+                display: block !important;
+                margin-bottom: 0.75rem;
+                padding-bottom: 0.75rem;
+                border-bottom: 1px solid #e9ecef;
+            }
+            
+            /* Override file-path class styles for mobile */
+            .results-table td:nth-child(3).file-path {
+                max-width: 100% !important;
+                width: 100% !important;
+                font-size: 0.95rem;
+                font-weight: 600;
+                color: #2c3e50;
+                word-break: break-all !important;
+                word-wrap: break-word !important;
+                overflow-wrap: break-word !important;
+                line-height: 1.4;
+                cursor: pointer;
+                margin: 0;
+                padding: 0;
+                white-space: normal !important;
+                overflow: visible !important;
+                text-overflow: unset !important;
+                display: block !important;
+                hyphens: auto;
+            }
+            
+            .dark-mode .results-table td:nth-child(3) {
+                color: #ecf0f1;
+                border-bottom-color: #444;
+            }
+            
+            /* Status badge - shown prominently */
+            .results-table td:nth-child(2) {
+                display: inline-block !important;
+                margin-bottom: 0.75rem;
+            }
+            
+            /* Ensure status badges have proper padding on mobile */
+            .results-table .status-badge {
+                padding: 6px 12px;
+                font-size: 0.85rem;
+            }
+            
+            /* Size - shown inline with label */
+            .results-table td:nth-child(4) {
+                display: inline-block !important;
+                margin-bottom: 0.5rem;
+                font-size: 0.85rem;
+                margin-left: 1rem;
+            }
+            
+            .results-table td:nth-child(4):before {
+                content: "Size: ";
+                font-weight: 600;
+                color: #666;
+            }
+            
+            .dark-mode .results-table td:nth-child(4):before {
+                color: #bdc3c7;
+            }
+            
+            /* Corruption details - shown with label */
+            .results-table td:nth-child(7) {
+                display: block !important;
+                margin-bottom: 0.75rem;
+                font-size: 0.85rem;
+                background: #f8f9fa;
+                padding: 0.5rem;
+                border-radius: 0.25rem;
+                line-height: 1.4;
+            }
+            
+            .dark-mode .results-table td:nth-child(7) {
+                background: #2c3e50;
+            }
+            
+            /* Add label inline with content - use nth-child instead of data-label to avoid vertical text issue */
+            .results-table td:nth-child(7):before {
+                content: "Details: ";
+                font-weight: 600;
+                color: #666;
+                display: inline;
+                margin-right: 0.5rem;
+            }
+            
+            .dark-mode .results-table td:nth-child(7):before {
+                color: #bdc3c7;
+            }
+            
+            /* Actions - shown last with clear separation */
+            .results-table td:nth-child(10) {
+                display: block !important;
+                margin-top: 0.75rem;
+                padding-top: 0.75rem;
+                border-top: 1px solid #e9ecef;
+            }
+            
+            .dark-mode .results-table td:nth-child(10) {
+                border-top-color: #444;
+            }
+            
+            /* Override corruption-details class for mobile */
+            .results-table .corruption-details {
+                display: inline !important;
+                white-space: normal !important;
+                overflow: visible !important;
+                text-overflow: unset !important;
+                max-width: 100% !important;
+                word-break: break-word !important;
+                position: static !important; /* Disable hover effect on mobile */
+                -webkit-line-clamp: unset !important;
+                -webkit-box-orient: unset !important;
+                height: auto !important;
+            }
+            
+            /* Disable hover expansion on mobile */
+            .results-table .corruption-details:hover {
+                position: static !important;
+                background: transparent !important;
+                border: none !important;
+                box-shadow: none !important;
+                padding: 0 !important;
+                max-width: 100% !important;
+                margin-top: 0 !important;
+            }
+            
+            /* Mobile action buttons */
+            .file-actions {
+                display: grid !important;
+                grid-template-columns: 1fr 1fr !important;
+                gap: 0.5rem !important;
+                width: 100% !important;
+            }
+            
+            .action-btn {
+                padding: 0.75rem 0.5rem !important;
+                font-size: 0.8rem !important;
+                min-width: unset !important;
+                width: 100% !important;
+                border-radius: 0.25rem;
+                white-space: nowrap;
+                text-align: center;
+                margin: 0 !important;
+            }
+            
+            /* Responsive controls */
+            .control-group,
+            .action-buttons {
+                flex-direction: column;
+                width: 100%;
+            }
+            
+            .control-group button,
+            .action-buttons button {
+                width: 100%;
+                margin-bottom: 0.5rem;
+            }
+            
+            /* Responsive search and filters */
+            .results-controls {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .search-controls {
+                width: 100%;
+            }
+            
+            .search-field {
+                width: 100%;
+            }
+            
+            .filter-buttons {
+                flex-wrap: wrap;
+                gap: 0.25rem;
+            }
+            
+            .filter-btn {
+                font-size: 0.75rem;
+                padding: 0.4rem 0.6rem;
+            }
+        }
+        
+        @media (min-width: 769px) and (max-width: 1200px) {
+            /* Tablet adjustments */
+            .container {
+                max-width: 95%;
+            }
+            
+            .stats-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+            
+            /* Tablet table adjustments */
+            .results-table {
+                min-width: 900px;
+            }
+            
+            /* Hide type column on tablets */
+            .col-type { display: none; }
+            .results-table th:nth-child(5),
+            .results-table td:nth-child(5) {
+                display: none;
+            }
+            
+            /* Adjust column widths */
+            .col-checkbox { width: 40px; }
+            .col-status { width: 80px; }
+            .col-path { width: 25%; }
+            .col-size { width: 70px; }
+            .col-scan-status { width: 100px; }
+            .col-corruption { width: 20%; }
+            .col-date { width: 130px; }
+            .col-tool { width: 60px; }
+            .col-actions { width: 200px; }
+            
+            .action-btn {
+                font-size: 0.7rem;
+                padding: 0.3rem 0.5rem;
+                min-width: 55px;
+            }
+        }
+        
+        @media (min-width: 1800px) {
+            /* Large screens */
+            .container {
+                max-width: 1600px;
+            }
+            
+            .results-table {
+                min-width: unset;
+            }
+        }
+        
+        /* iPhone and small mobile optimizations */
+        @media (max-width: 480px) {
+            .header {
+                padding: 0.25rem;
+            }
+            
+            .header .logo {
+                max-width: 60px;
+            }
+            
+            .header h1 {
+                font-size: 1.25rem;
+            }
+            
+            .header p {
+                font-size: 0.75rem;
+            }
+            
+            .header-buttons {
+                gap: 0.5rem;
+            }
+            
+            .header-button {
+                font-size: 0.7rem;
+                padding: 0.35rem 0.5rem;
+                height: 32px;
             }
             
             .stats-grid {
@@ -734,46 +1303,66 @@
             }
             
             .stat-card {
+                padding: 0.5rem;
+                min-height: 70px;
+            }
+            
+            .stat-number {
+                font-size: 1rem;
+            }
+            
+            .stat-label {
+                font-size: 0.65rem;
+            }
+            
+            .controls {
+                padding: 0.75rem;
+            }
+            
+            .action-buttons button {
+                font-size: 0.8rem;
+                padding: 0.5rem;
+            }
+            
+            .results-header {
                 padding: 1rem;
             }
             
-            /* Hide less important columns on mobile */
-            .col-type, .col-scan-status {
-                display: none;
+            .results-header h2 {
+                font-size: 1.25rem;
             }
             
-            /* Adjust column widths for mobile */
-            .col-checkbox { width: 10%; }
-            .col-status { width: 20%; }
-            .col-path { width: 40%; }
-            .col-size { width: 0; display: none; }
-            .col-corruption { width: 0; display: none; }
-            .col-date { width: 0; display: none; }
-            .col-actions { width: 30%; }
+            .filter-btn {
+                font-size: 0.7rem;
+                padding: 0.3rem 0.5rem;
+            }
             
-            .action-btn {
-                padding: 0.25rem 0.5rem;
+            .pagination button {
+                padding: 6px 10px;
                 font-size: 0.7rem;
             }
-        }
-        
-        @media (min-width: 769px) and (max-width: 1200px) {
-            /* Tablet adjustments */
-            .col-checkbox { width: 5%; }
-            .col-status { width: 10%; }
-            .col-path { width: 20%; }
-            .col-size { width: 8%; }
-            .col-type { width: 0; display: none; }
-            .col-scan-status { width: 10%; }
-            .col-corruption { width: 22%; }
-            .col-date { width: 10%; }
-            .col-actions { width: 15%; }
-        }
-        
-        @media (min-width: 1800px) {
-            /* Large screens */
-            .container {
-                max-width: 1600px;
+            
+            .page-link {
+                padding: 4px 8px;
+                font-size: 0.65rem;
+                min-width: 25px;
+            }
+            
+            /* Ensure file path is visible in mobile cards */
+            .results-table td:nth-child(3) .file-path {
+                font-size: 0.85rem;
+            }
+            
+            /* Override any min-width that might cause horizontal scroll */
+            .results-table,
+            .results-table * {
+                min-width: 0 !important;
+            }
+            
+            /* Ensure results content fits */
+            #resultsContent {
+                overflow-x: hidden;
+                width: 100%;
             }
         }
         
@@ -1176,8 +1765,10 @@
 <body>
     <div class="container">
         <div class="header">
-            <button onclick="showStatsModal()" id="statsBtn" class="stats-button">📊 System Stats</button>
-            <button onclick="toggleTheme()" id="themeBtn" class="dark-mode-toggle">🌙 Dark Mode</button>
+            <div class="header-buttons">
+                <button onclick="showStatsModal()" id="statsBtn" class="header-button">📊 System Stats</button>
+                <button onclick="toggleTheme()" id="themeBtn" class="header-button">🌙 Dark Mode</button>
+            </div>
             <div class="header-content">
                 <img src="/static/images/pixelprobe-logo.png" alt="PixelProbe Logo" class="logo">
                 <h1>PixelProbe</h1>
@@ -1424,24 +2015,24 @@
                         <thead>
                             <tr>
                                 <th class="col-checkbox"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll()"></th>
-                                <th class="col-status sortable" onclick="sortByColumn('is_corrupted')">Status <span class="sort-indicator" id="sort-is_corrupted"></span></th>
-                                <th class="col-path sortable" onclick="sortByColumn('file_path')">File Path <span class="sort-indicator" id="sort-file_path"></span></th>
-                                <th class="col-size sortable" onclick="sortByColumn('file_size')">Size <span class="sort-indicator" id="sort-file_size"></span></th>
-                                <th class="col-type sortable" onclick="sortByColumn('file_type')">Type <span class="sort-indicator" id="sort-file_type"></span></th>
-                                <th class="col-scan-status sortable" onclick="sortByColumn('scan_status')">Scan Status <span class="sort-indicator" id="sort-scan_status"></span></th>
-                                <th class="col-corruption sortable" onclick="sortByColumn('corruption_details')">Corruption Details <span class="sort-indicator" id="sort-corruption_details"></span></th>
-                                <th class="col-date sortable" onclick="sortByColumn('scan_date')">Scan Date <span class="sort-indicator" id="sort-scan_date"></span></th>
-                                <th class="col-tool sortable" onclick="sortByColumn('scan_tool')">Tool <span class="sort-indicator" id="sort-scan_tool"></span></th>
+                                <th class="col-status sortable" onclick="sortByColumn('is_corrupted')">Status</th>
+                                <th class="col-path sortable" onclick="sortByColumn('file_path')">File Path</th>
+                                <th class="col-size sortable" onclick="sortByColumn('file_size')">Size</th>
+                                <th class="col-type sortable" onclick="sortByColumn('file_type')">Type</th>
+                                <th class="col-scan-status sortable" onclick="sortByColumn('scan_status')">Scan Status</th>
+                                <th class="col-corruption sortable" onclick="sortByColumn('corruption_details')">Corruption Details</th>
+                                <th class="col-date sortable" onclick="sortByColumn('scan_date')">Scan Date</th>
+                                <th class="col-tool sortable" onclick="sortByColumn('scan_tool')">Tool</th>
                                 <th class="col-actions">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                         ${filteredResults.map(result => `
                             <tr>
-                                <td>
+                                <td data-label="">
                                     <input type="checkbox" class="file-checkbox" value="${result.id}" onchange="updateMarkGoodButton()">
                                 </td>
-                                <td>
+                                <td class="col-status" data-label="Status">
                                     ${result.marked_as_good ? 
                                         '<span class="status-badge status-healthy">Healthy</span>' :
                                         result.scan_status === 'pending' ? '<span class="status-badge" style="background: #fff3cd; color: #856404;">Pending</span>' :
@@ -1451,20 +2042,20 @@
                                         `<span class="status-badge ${result.is_corrupted ? 'status-corrupted' : 'status-healthy'}">${result.is_corrupted ? 'Corrupted' : 'Healthy'}</span>`
                                     }
                                 </td>
-                                <td class="file-path" onclick="showFullPath(event, '${result.file_path.replace(/'/g, "\\'")}', ${result.id})" title="Click to view full path">${result.file_path}</td>
-                                <td class="file-size">${result.file_size ? formatFileSize(result.file_size) : 'Unknown'}</td>
-                                <td>${result.file_type || 'Unknown'}</td>
-                                <td><span class="status-badge" style="background: ${result.scan_status === 'completed' ? '#e8f5e8' : result.scan_status === 'pending' ? '#fff3cd' : result.scan_status === 'scanning' ? '#cce5ff' : '#ffebee'}; color: ${result.scan_status === 'completed' ? '#2e7d32' : result.scan_status === 'pending' ? '#856404' : result.scan_status === 'scanning' ? '#0066cc' : '#c62828'};">${result.scan_status}</span></td>
-                                <td class="corruption-details" title="${result.marked_as_good ? 'Marked as Good by User' : (result.has_warnings ? result.warning_details : (result.corruption_details || 'None'))}">
+                                <td class="file-path" data-label="" onclick="showFullPath(event, '${result.file_path.replace(/'/g, "\\'")}', ${result.id})" title="Click to view full path">${result.file_path}</td>
+                                <td class="file-size col-size" data-label="Size">${result.file_size ? formatFileSize(result.file_size) : 'Unknown'}</td>
+                                <td class="col-type" data-label="Type">${result.file_type || 'Unknown'}</td>
+                                <td class="col-scan-status" data-label="Scan Status"><span class="status-badge" style="background: ${result.scan_status === 'completed' ? '#e8f5e8' : result.scan_status === 'pending' ? '#fff3cd' : result.scan_status === 'scanning' ? '#cce5ff' : '#ffebee'}; color: ${result.scan_status === 'completed' ? '#2e7d32' : result.scan_status === 'pending' ? '#856404' : result.scan_status === 'scanning' ? '#0066cc' : '#c62828'};">${result.scan_status}</span></td>
+                                <td class="col-corruption" title="${result.marked_as_good ? 'Marked as Good by User' : (result.has_warnings ? result.warning_details : (result.corruption_details || 'None'))}">
                                     ${result.marked_as_good ? 
                                         '<span style="color: #27ae60; font-weight: 500;">\u2713 Marked as Good</span>' : 
                                         result.has_warnings ? 
                                         `<span style="color: #ff9800; font-weight: 500;">\u26A0 ${result.warning_details || 'Warning'}</span>` :
-                                        (result.corruption_details || 'None')
+                                        `<span class="corruption-details">${result.corruption_details || 'None'}</span>`
                                     }
                                 </td>
-                                <td>${result.scan_date ? new Date(result.scan_date).toLocaleString() : 'Not scanned'}</td>
-                                <td>${result.scan_tool || 'N/A'}</td>
+                                <td class="col-date" data-label="Date">${result.scan_date ? new Date(result.scan_date).toLocaleString() : 'Not scanned'}</td>
+                                <td class="col-tool" data-label="Tool">${result.scan_tool || 'N/A'}</td>
                                 <td class="file-actions">
                                     ${result.scan_date ? `<button class="action-btn" style="background: #3498db; color: white;" onclick="viewFileInModal(${result.id}, '${result.file_type || ''}')">View</button>` : ''}
                                     ${result.scan_date ? `<button class="action-btn" style="background: #f39c12; color: white;" onclick="rescanFile(${result.id})">Rescan</button>` : ''}
@@ -1491,6 +2082,44 @@
             const startItem = ((data.current_page - 1) * data.per_page) + 1;
             const endItem = Math.min(data.current_page * data.per_page, data.total_items);
             
+            // Generate page number links
+            let pageLinks = '';
+            if (currentPerPage !== 'all' && data.pages > 1) {
+                const maxVisible = 7; // Maximum number of page links to show
+                let startPage = Math.max(1, data.current_page - Math.floor(maxVisible / 2));
+                let endPage = Math.min(data.pages, startPage + maxVisible - 1);
+                
+                // Adjust start if we're near the end
+                if (endPage - startPage < maxVisible - 1) {
+                    startPage = Math.max(1, endPage - maxVisible + 1);
+                }
+                
+                // First page and ellipsis
+                if (startPage > 1) {
+                    pageLinks += `<button class="page-link" onclick="loadResults(1)">1</button>`;
+                    if (startPage > 2) {
+                        pageLinks += `<span class="page-ellipsis">...</span>`;
+                    }
+                }
+                
+                // Page number links
+                for (let i = startPage; i <= endPage; i++) {
+                    if (i === data.current_page) {
+                        pageLinks += `<button class="page-link current-page" disabled>${i}</button>`;
+                    } else {
+                        pageLinks += `<button class="page-link" onclick="loadResults(${i})">${i}</button>`;
+                    }
+                }
+                
+                // Last page and ellipsis
+                if (endPage < data.pages) {
+                    if (endPage < data.pages - 1) {
+                        pageLinks += `<span class="page-ellipsis">...</span>`;
+                    }
+                    pageLinks += `<button class="page-link" onclick="loadResults(${data.pages})">${data.pages}</button>`;
+                }
+            }
+            
             const paginationHTML = `
                 <div class="pagination-container">
                     <div class="results-info">
@@ -1507,9 +2136,9 @@
                         </div>
                     </div>
                     <div class="pagination">
-                        <button onclick="loadResults(${data.current_page - 1})" ${data.current_page <= 1 || currentPerPage === 'all' ? 'disabled' : ''}>Previous</button>
-                        <span class="page-info">${currentPerPage === 'all' ? 'All results' : `Page ${data.current_page} of ${data.pages}`}</span>
-                        <button onclick="loadResults(${data.current_page + 1})" ${data.current_page >= data.pages || currentPerPage === 'all' ? 'disabled' : ''}>Next</button>
+                        <button onclick="loadResults(${data.current_page - 1})" ${data.current_page <= 1 || currentPerPage === 'all' ? 'disabled' : ''}>« Previous</button>
+                        ${pageLinks}
+                        <button onclick="loadResults(${data.current_page + 1})" ${data.current_page >= data.pages || currentPerPage === 'all' ? 'disabled' : ''}>Next »</button>
                     </div>
                 </div>
             `;
@@ -1676,9 +2305,18 @@
                         const progressContainer = document.getElementById('progressContainer');
                         const wasScanning = progressContainer.style.display !== 'none';
                         
-                        // Only clear monitoring if we were actually scanning
-                        if (wasScanning) {
-                            console.log('Scan appears to have completed');
+                        // Only clear monitoring if we were actually scanning AND monitoring is active
+                        if (wasScanning && scanStatusInterval) {
+                            console.log('Scan monitoring stopped - checking completion status');
+                            
+                            // First refresh stats to get accurate counts
+                            await loadStats();
+                            await loadResults(currentPage);
+                            
+                            // Get the stats again to check completion
+                            const statsResponse = await fetch('/api/stats');
+                            const stats = await statsResponse.json();
+                            
                             clearInterval(scanStatusInterval);
                             scanStatusInterval = null;
                             
@@ -1686,23 +2324,21 @@
                             scanBtn.disabled = false;
                             scanBtn.textContent = 'Start Scan';
                             
-                            // Get the current scan stats to show accurate completion
-                            const totalFiles = status.estimated_total || 0;
-                            const completedFiles = totalFiles > 0 ? totalFiles : 0;
-                            
-                            // Only show completion if we actually scanned files
-                            if (totalFiles > 0) {
-                                updateProgress(completedFiles, totalFiles, 'Scan completed!', 'Complete', status.duration || 0, 0);
-                                showStatus('Scan completed!', 'info');
-                            }
-                            
-                            // Keep progress bar visible for 30 seconds after completion
-                            setTimeout(() => {
+                            // Only show completion if files were actually processed in this session
+                            const completedFiles = stats.completed_files || 0;
+                            if (status.files_processed > 0 && completedFiles > 0) {
+                                console.log(`Scan completed: ${status.files_processed} files processed`);
+                                showStatus(`Scan completed! Processed ${status.files_processed} files.`, 'info');
+                                
+                                // Keep progress bar visible for 10 seconds after completion
+                                setTimeout(() => {
+                                    hideProgress();
+                                }, 10000);
+                            } else {
+                                console.log('No active scan detected, hiding progress bar');
+                                // Hide immediately if no files were processed
                                 hideProgress();
-                            }, 30000);
-                            
-                            await loadStats();
-                            await loadResults(currentPage);
+                            }
                         }
                     }
                 } catch (error) {
@@ -1988,37 +2624,57 @@
             let phaseText = '';
             let filesText = '';
             
+            // Calculate overall progress based on 3 phases (33% each)
+            const phaseNumber = status.phase_number || 0;
+            const phaseProgress = status.phase_total > 0 ? (status.phase_current / status.phase_total) : 0;
+            
+            // Base percentage from completed phases
+            const basePercentage = (phaseNumber - 1) * 33.33;
+            
+            // Debug logging
+            console.log('Progress update:', {
+                phase: status.phase,
+                phaseNumber: phaseNumber,
+                phaseCurrent: status.phase_current,
+                phaseTotal: status.phase_total,
+                phaseProgress: phaseProgress,
+                basePercentage: basePercentage
+            });
+            
             // Calculate phase-specific progress
             if (status.phase === 'discovering') {
-                // Discovery phase - we don't know total ahead of time
+                // Phase 1: Discovery (0-33%)
+                phaseText = `Phase 1 of 3: Discovering Files`;
                 if (status.phase_current > 0) {
-                    phaseText = `Phase 1 of 3: Discovery`;
-                    filesText = `Checked ${status.phase_current} files, found ${status.discovery_count} media files`;
-                    // Show indeterminate progress for discovery
-                    percentage = Math.min(50, (status.discovery_count / 100) * 50); // Cap at 50%
+                    filesText = `Checked ${status.phase_current} files, found ${status.discovery_count || 0} new media files`;
+                    // For discovery, since we don't know total, use a logarithmic scale
+                    const discoveryProgress = Math.min(1, Math.log10(status.phase_current + 1) / 4); // Approaches 1 at 10000 files
+                    percentage = basePercentage + (discoveryProgress * 33.33);
                 } else {
-                    phaseText = 'Phase 1 of 3: Discovery';
                     filesText = 'Starting discovery...';
+                    percentage = basePercentage;
                 }
             } else if (status.phase === 'adding') {
-                // Adding to database phase
+                // Phase 2: Adding to database (33-66%)
                 phaseText = 'Phase 2 of 3: Adding to Database';
                 if (status.phase_total > 0) {
-                    percentage = (status.phase_current / status.phase_total) * 100;
+                    percentage = basePercentage + (phaseProgress * 33.33);
                     filesText = `${status.phase_current}/${status.phase_total} files`;
                 } else {
                     filesText = 'Preparing to add files...';
+                    percentage = basePercentage;
                 }
             } else if (status.phase === 'scanning') {
-                // Scanning phase
+                // Phase 3: Scanning Files (66-100%)
                 phaseText = 'Phase 3 of 3: Scanning Files';
                 if (status.phase_total > 0) {
-                    percentage = (status.phase_current / status.phase_total) * 100;
+                    percentage = basePercentage + (phaseProgress * 33.33);
                     filesText = `${status.phase_current}/${status.phase_total} files`;
                 } else if (status.estimated_total > 0) {
                     // Fallback to old calculation if phase progress not available
                     const completedFiles = Math.max(0, status.estimated_total - status.pending_files - status.scanning_files);
-                    percentage = (completedFiles / status.estimated_total) * 100;
+                    const scanProgress = (completedFiles / status.estimated_total);
+                    percentage = 66.66 + (scanProgress * 33.33);
                     filesText = `${completedFiles}/${status.estimated_total} files`;
                 }
             } else {

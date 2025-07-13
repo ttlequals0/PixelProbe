@@ -1,5 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+import uuid
 
 db = SQLAlchemy()
 
@@ -114,4 +115,42 @@ class ScanConfiguration(db.Model):
             'value': self.value,
             'description': self.description,
             'updated_date': self.updated_date.isoformat() if self.updated_date else None
+        }
+
+class ScanState(db.Model):
+    __tablename__ = 'scan_state'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(36), nullable=False, unique=True, default=lambda: str(uuid.uuid4()))
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    phase = db.Column(db.String(20), nullable=False, default='idle')  # idle, discovering, adding, scanning, completed
+    phase_number = db.Column(db.Integer, nullable=False, default=0)
+    phase_current = db.Column(db.Integer, nullable=False, default=0)
+    phase_total = db.Column(db.Integer, nullable=False, default=0)
+    files_processed = db.Column(db.Integer, nullable=False, default=0)
+    estimated_total = db.Column(db.Integer, nullable=False, default=0)
+    discovery_count = db.Column(db.Integer, nullable=False, default=0)
+    start_time = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    end_time = db.Column(db.DateTime, nullable=True)
+    current_file = db.Column(db.String(500), nullable=True)
+    progress_message = db.Column(db.String(200), nullable=True)
+    error_message = db.Column(db.String(500), nullable=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'scan_id': self.scan_id,
+            'is_active': self.is_active,
+            'phase': self.phase,
+            'phase_number': self.phase_number,
+            'phase_current': self.phase_current,
+            'phase_total': self.phase_total,
+            'files_processed': self.files_processed,
+            'estimated_total': self.estimated_total,
+            'discovery_count': self.discovery_count,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'current_file': self.current_file,
+            'progress_message': self.progress_message,
+            'error_message': self.error_message
         }

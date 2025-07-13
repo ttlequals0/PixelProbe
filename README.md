@@ -6,6 +6,8 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video and image files across your media libraries.
 
+**Version 2.0** introduces a completely redesigned UI with Hulu-inspired aesthetics, Pi-hole style navigation, and full mobile responsiveness.
+
 ## ✨ Features
 
 - **🎬 Comprehensive Media Support**: Detects corruption in videos (MP4, MKV, AVI, MOV, etc.) and images (JPEG, PNG, GIF, etc.)
@@ -23,30 +25,63 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 
 ## 📸 Screenshots
 
-### Main Dashboard (Light Mode)
-![Light Mode Dashboard](screenshots/light-mode.png)
+### Desktop Interface
 
-The main dashboard provides an overview of your media library health with:
-- File statistics showing total, corrupted, healthy, and warning counts
-- Real-time scan progress with phase indicators
-- Clean, modern interface with action buttons
+#### Light Mode
+![Desktop Light Mode](docs/screenshots/desktop-light.png)
 
-### Main Dashboard (Dark Mode)
-![Dark Mode Dashboard](screenshots/dark-mode.png)
+The modern desktop interface features:
+- Hulu-inspired design with clean, professional aesthetics
+- Pi-hole style sidebar navigation for easy access to all features
+- Real-time statistics dashboard showing file health status
+- Advanced filtering and search capabilities
+- Bulk action support for managing multiple files
 
-PixelProbe includes a sleek dark mode for comfortable viewing in low-light environments, featuring:
-- High contrast design for better readability
-- Pending scan counter showing files awaiting processing
-- Consistent UI elements across themes
+#### Dark Mode
+![Desktop Dark Mode](docs/screenshots/desktop-dark.png)
 
-### System Statistics
-![System Stats](screenshots/stats-popup.png)
+PixelProbe includes a sophisticated dark mode:
+- High contrast design optimized for low-light environments
+- Consistent color scheme across all UI elements
+- Smooth theme transitions
+- Automatic theme persistence
 
-Comprehensive system statistics popup showing:
+### Mobile Interface
+
+<div align="center">
+  <img src="docs/screenshots/mobile-light-dashboard.png" alt="Mobile Light Dashboard" width="300" style="margin: 10px">
+  <img src="docs/screenshots/mobile-dark-dashboard.png" alt="Mobile Dark Dashboard" width="300" style="margin: 10px">
+</div>
+
+The mobile interface is fully responsive and touch-optimized:
+- Adaptive layout that works on all screen sizes
+- Touch-friendly buttons and controls
+- Collapsible sidebar navigation
+- Card-based design for scan results on mobile
+
+<div align="center">
+  <img src="docs/screenshots/mobile-light-menu.png" alt="Mobile Menu Light" width="300" style="margin: 10px">
+  <img src="docs/screenshots/mobile-dark-results.png" alt="Mobile Results Dark" width="300" style="margin: 10px">
+</div>
+
+### Feature Highlights
+
+#### System Statistics Modal
+![System Statistics](docs/screenshots/system-stats-modal.png)
+
+Comprehensive system overview showing:
 - Database statistics with file counts by status
-- Monitored paths with file counts per directory
-- File system tracking showing percentage of files tracked and checked
-- Version information with GitHub link
+- Monitored paths with accessibility status
+- Scan performance metrics
+- File system completion percentages
+
+#### Scan Output Details
+![Scan Output Modal](docs/screenshots/scan-output-modal.png)
+
+Detailed scan results viewer:
+- Shows specific corruption or warning details
+- Displays which tool detected the issue
+- Provides full scan output for debugging
 
 ## 🚀 Quick Start
 

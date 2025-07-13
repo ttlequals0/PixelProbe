@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""
+Fix WebP files incorrectly marked as corrupted due to EXIF/TIFF header errors.
+These are metadata warnings that don't affect image display.
+"""
+
+import os
+import sys
+import sqlite3
+import argparse
+import logging
+from pathlib import Path
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def fix_webp_exif_warnings(db_path, dry_run=True):
+    """Convert WebP EXIF/TIFF header errors from corrupted to warnings"""
+    
+    conn = None
+    try:
+        # Connect with timeout
+        conn = sqlite3.connect(db_path, timeout=30.0)
+        conn.execute("PRAGMA busy_timeout = 30000")
+        
+        # Find WebP files with EXIF/TIFF header errors marked as corrupted
+        logger.info("Finding WebP files with EXIF/TIFF header errors marked as corrupted...")
+        cursor = conn.execute("""
+            SELECT id, file_path, corruption_details, scan_output 
+            FROM scan_results 
+            WHERE is_corrupted = 1 
+            AND file_path LIKE '%.webp'
+            AND (
+                corruption_details LIKE '%invalid TIFF header%'
+                OR scan_output LIKE '%invalid TIFF header in Exif data%'
+                OR corruption_details LIKE '%FFmpeg image validation failed%'
+            )
+        """)
+        
+        files = cursor.fetchall()
+        logger.info(f"Found {len(files)} WebP files with EXIF errors marked as corrupted")
+        
+        if len(files) == 0:
+            logger.info("No files need to be updated")
+            return True
+            
+        # Show files that will be updated
+        logger.info("\nFiles to be converted from corrupted to warning:")
+        for file_id, file_path, details, output in files[:10]:  # Show first 10
+            logger.info(f"  - {file_path}")
+            if details:
+                logger.info(f"    Current error: {details[:100]}")
+        if len(files) > 10:
+            logger.info(f"  ... and {len(files) - 10} more files")
+        
+        if dry_run:
+            logger.info("\nDRY RUN - No changes made. Use --execute to apply changes.")
+            logger.info("\nThis will convert these files from corrupted status to warning status.")
+            logger.info("They will show the orange Warning badge instead of red Corrupted.")
+            logger.info("\nNote: These WebP files have metadata issues but display correctly.")
+            return True
+        
+        # Update the files
+        logger.info("\nConverting files from corrupted to warning status...")
+        
+        # Begin transaction
+        conn.execute("BEGIN IMMEDIATE")
+        
+        try:
+            # Update to warning instead of corrupted
+            result = conn.execute("""
+                UPDATE scan_results 
+                SET is_corrupted = 0,
+                    has_warnings = 1,
+                    warning_details = 'WebP EXIF warning: Invalid metadata detected (image displays correctly)'
+                WHERE is_corrupted = 1 
+                AND file_path LIKE '%.webp'
+                AND (
+                    corruption_details LIKE '%invalid TIFF header%'
+                    OR scan_output LIKE '%invalid TIFF header in Exif data%'
+                    OR corruption_details LIKE '%FFmpeg image validation failed%'
+                )
+            """)
+            
+            updated_count = result.rowcount
+            conn.commit()
+            logger.info(f"Successfully converted {updated_count} files from corrupted to warning status")
+            logger.info("\nThese files will now:")
+            logger.info("- Show with orange Warning badge instead of red Corrupted")
+            logger.info("- NOT appear in the Corrupted Only filter")
+            logger.info("- Appear in the Warnings Only filter")
+            logger.info("\nNote: WebP files with EXIF warnings display correctly in all viewers")
+            return True
+            
+        except Exception as e:
+            conn.rollback()
+            raise
+            
+    except sqlite3.OperationalError as e:
+        if "database is locked" in str(e):
+            logger.error("Database is locked. Please stop any running scans and try again.")
+        else:
+            logger.error(f"Database error: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Error updating files: {str(e)}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def main():
+    parser = argparse.ArgumentParser(description='Fix WebP files with EXIF false positives')
+    parser.add_argument('--execute', action='store_true', 
+                       help='Execute the update (without this flag, runs in dry-run mode)')
+    parser.add_argument('--db-path', type=str, 
+                       default='/app/instance/media_checker.db',
+                       help='Path to the database file')
+    args = parser.parse_args()
+    
+    # Check if database exists
+    db_path = Path(args.db_path)
+    if not db_path.exists():
+        logger.error(f"Database not found at {db_path}")
+        sys.exit(1)
+    
+    logger.info(f"Using database: {db_path}")
+    logger.info("This script will convert WebP EXIF/TIFF header errors to warning status")
+    logger.info("These files have metadata issues but display correctly")
+    
+    success = fix_webp_exif_warnings(str(db_path), dry_run=not args.execute)
+    
+    if success and not args.execute:
+        logger.info("\nTo execute the conversion, run: python fix_webp_exif_false_positives.py --execute")
+    
+    sys.exit(0 if success else 1)
+
+if __name__ == '__main__':
+    main()

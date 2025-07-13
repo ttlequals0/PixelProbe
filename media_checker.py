@@ -446,10 +446,11 @@ class PixelProbe:
             
             if extension in self.supported_image_formats:
                 logger.info(f"Checking image corruption for: {file_path}")
-                is_corrupted, details, tool, output = self._check_image_corruption(file_path)
+                is_corrupted, details, tool, output, warnings = self._check_image_corruption(file_path)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
+                warning_details = warnings
             elif extension in self.supported_video_formats:
                 logger.info(f"Checking video corruption for: {file_path}")
                 is_corrupted, details, tool, output, warnings = self._check_video_corruption(file_path, deep_scan)
@@ -517,19 +518,28 @@ class PixelProbe:
         is_corrupted = False
         scan_tool = "pil"
         scan_output = []
+        warning_details = []
         
         logger.info(f"Starting PIL verification for: {file_path}")
+        
+        # Check if this is a GIF file
+        is_gif = file_path.lower().endswith('.gif')
+        pil_failed = False
+        pil_error = None
+        
         try:
             with Image.open(file_path) as img:
                 img.verify()
             logger.info(f"PIL verification passed for: {file_path}")
             scan_output.append("PIL verification: PASSED")
         except Exception as e:
-            corruption_details.append(f"PIL verify failed: {str(e)}")
-            is_corrupted = True
-            scan_tool = "pil"
+            pil_failed = True
+            pil_error = str(e)
             scan_output.append(f"PIL verification: FAILED - {str(e)}")
             logger.warning(f"PIL verification failed for {file_path}: {str(e)}")
+        
+        pil_load_failed = False
+        pil_load_error = None
         
         try:
             with Image.open(file_path) as img:
@@ -549,8 +559,8 @@ class PixelProbe:
                 scan_output.append("Transform test: PASSED")
         
         except Exception as e:
-            corruption_details.append(f"PIL load/transform failed: {str(e)}")
-            is_corrupted = True
+            pil_load_failed = True
+            pil_load_error = str(e)
             scan_output.append(f"PIL load/transform: FAILED - {str(e)}")
         
         logger.info(f"Starting ImageMagick verification for: {file_path}")
@@ -565,12 +575,22 @@ class PixelProbe:
             )
             
             if result.returncode != 0:
-                corruption_details.append("ImageMagick identify failed")
-                is_corrupted = True
-                scan_tool = "imagemagick"
                 scan_output.append(f"ImageMagick identify: FAILED (exit code {result.returncode})")
                 if result.stderr:
                     scan_output.append(f"ImageMagick stderr: {result.stderr[:200]}")
+                    stderr_lower = result.stderr.lower()
+                    # Check for GIF header errors specifically
+                    if is_gif and 'improper image header' in stderr_lower and 'readgifimage' in stderr_lower:
+                        # This is a common false positive for GIFs that still work
+                        logger.info(f"GIF header warning (not corruption) for {file_path}")
+                    else:
+                        corruption_details.append("ImageMagick identify failed")
+                        is_corrupted = True
+                        scan_tool = "imagemagick"
+                else:
+                    corruption_details.append("ImageMagick identify failed")
+                    is_corrupted = True
+                    scan_tool = "imagemagick"
                 logger.warning(f"ImageMagick identify failed for {file_path}")
             elif result.stderr:
                 # Check if this is just a metadata/profile warning (not actual corruption)
@@ -623,6 +643,20 @@ class PixelProbe:
                 scan_tool = "ffmpeg"
                 scan_output.append(f"FFmpeg image validation: FAILED")
                 scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
+            elif result.stderr:
+                # Check if this is just an EXIF/metadata warning (not actual corruption)
+                stderr_lower = result.stderr.lower()
+                if 'invalid tiff header in exif data' in stderr_lower:
+                    # EXIF metadata warnings don't indicate actual image corruption
+                    scan_output.append("FFmpeg image validation: PASSED (with EXIF warnings)")
+                    logger.info(f"FFmpeg EXIF warning (not corruption) for {file_path}: {result.stderr[:100]}")
+                else:
+                    # Other stderr output might be actual issues
+                    corruption_details.append("FFmpeg image validation warnings")
+                    is_corrupted = True
+                    scan_tool = "ffmpeg"
+                    scan_output.append(f"FFmpeg image validation: WARNINGS")
+                    scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
             else:
                 scan_output.append("FFmpeg image validation: PASSED")
         
@@ -635,7 +669,51 @@ class PixelProbe:
             scan_output.append(f"FFmpeg image validation error: {str(e)}")
             logger.debug(f"FFmpeg image validation error: {str(e)}")
         
-        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output)
+        # Check if this is a GIF with header issues that should be a warning instead
+        if is_gif and is_corrupted:
+            # Check if all failures are related to "cannot identify" or "improper header"
+            gif_header_issue = False
+            
+            if pil_failed and pil_error and 'cannot identify image file' in pil_error:
+                gif_header_issue = True
+            
+            if any('improper image header' in detail.lower() for detail in corruption_details):
+                gif_header_issue = True
+            
+            # If FFmpeg passed but PIL/ImageMagick failed, it's likely a false positive
+            ffmpeg_passed = any('FFmpeg image validation: PASSED' in line for line in scan_output)
+            
+            if gif_header_issue and (ffmpeg_passed or (pil_failed and not pil_load_failed)):
+                # Convert to warning instead of corruption
+                logger.info(f"Converting GIF header errors to warnings for {file_path}")
+                is_corrupted = False
+                warning_details = ["GIF header warning: Non-standard header detected (file may still be playable)"]
+                # Clear corruption details since we're treating it as a warning
+                corruption_details = []
+        
+        # Check if this is a WebP with EXIF issues that should be a warning instead
+        is_webp = file_path.lower().endswith('.webp')
+        if is_webp and is_corrupted:
+            # Check if the only issue is EXIF/TIFF header warnings
+            only_exif_issues = True
+            
+            # Check if FFmpeg only reported EXIF warnings
+            ffmpeg_exif_only = any('PASSED (with EXIF warnings)' in line for line in scan_output)
+            
+            # Check if other tools passed
+            pil_passed = not pil_failed or any('PIL verification: PASSED' in line for line in scan_output)
+            imagemagick_passed = any('ImageMagick identify: PASSED' in line for line in scan_output)
+            
+            # If the only failures are EXIF-related, convert to warning
+            if ffmpeg_exif_only or (pil_passed and imagemagick_passed and 
+                any('invalid tiff header' in detail.lower() for detail in corruption_details)):
+                logger.info(f"Converting WebP EXIF errors to warnings for {file_path}")
+                is_corrupted = False
+                warning_details = ["WebP EXIF warning: Invalid metadata detected (image displays correctly)"]
+                # Clear corruption details since we're treating it as a warning
+                corruption_details = []
+        
+        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
     
     def _check_video_corruption(self, file_path, deep_scan=False):
         corruption_details = []

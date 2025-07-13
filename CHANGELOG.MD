@@ -7,6 +7,633 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Project Organization**:
+  - Moved Docker development files to `docker/` directory
+  - Moved utility scripts to `scripts/` directory
+  - Consolidated screenshots in `docs/screenshots/`
+  - Removed duplicate directories and files
+  - Added PROJECT_STRUCTURE.md documentation
+
+## [2.0.4] - 2025-07-13
+
+### Fixed
+- **Modal Improvements**:
+  - Fixed close button (X) color to match theme (now uses text-primary color)
+  - Close button turns red on hover for better UX
+  - Fixed image/video scaling in media viewer to avoid scroll bars (max-height: 60vh)
+  - Media content is now centered in the modal
+
+- **Table Header Fixes**:
+  - All table headers now stay on one line (added white-space: nowrap)
+  - Scan Date sort arrow is now on the same line as the text
+  - No more wrapped headers
+
+- **File Path Column**:
+  - Set consistent width (350px) for cleaner wrapping
+  - Uses word-break: break-word for better line breaking
+  - No more awkward mid-word breaks
+
+### Added
+- **Scan Button State Management**:
+  - Start Scan button is now disabled (grayed out) when a scan is in progress
+  - Prevents accidental double-scanning
+  - Button automatically re-enables when scan completes
+  
+- **Mobile UI Enhancements**:
+  - Added missing View and Download buttons to mobile card view
+  - Mobile now has feature parity with desktop interface
+
+## [2.0.3] - 2025-07-13
+
+### Fixed
+- **Table Display Issues**:
+  - Fixed Scan Date column header to show sort arrows on a new line
+  - Fixed file path column to wrap long paths instead of squishing other columns
+  - Added max-width and word-break to file path cells
+  
+- **Details Button**: Fixed "Failed to load scan output" error by properly handling null values
+
+- **Progress Bar Enhancement**: 
+  - Implemented proper 3-phase progress tracking as per version 1.30
+  - Phase 1: Discovery (0-33%)
+  - Phase 2: Adding to Database (33-66%)  
+  - Phase 3: Scanning (66-100%)
+  - Shows current file being scanned in each phase
+  - Uses phase_number from backend for accurate tracking
+
+## [2.0.2] - 2025-07-13
+
+### Fixed
+- **Progress Bar Display**: 
+  - Fixed progress bar to show percentage in the bar (like original UI)
+  - Shows current file being scanned below the progress bar
+  - Better progress calculation including files currently being scanned
+  - Initial display shows 0% instead of "Initializing..."
+
+### Changed
+- **UI Improvements**: Made Scan Date column wider (150px minimum) for better display
+
+## [2.0.1] - 2025-07-13
+
+### Fixed
+- **Critical Production Issues**:
+  - Fixed Start Scan button not working (added empty JSON body to request)
+  - Fixed Details popup showing 400 error (corrected API endpoint)
+  - Fixed View button not opening media player (implemented showMediaViewerModal)
+  - Added missing Download buttons for individual items
+  - Added bulk download functionality
+  
+### Changed
+- **Export CSV Enhancement**: Export now includes all items in current filter when nothing is selected
+- **UI Improvements**: Made Size column wider to accommodate sort arrows on the same line
+
+### Enhanced
+- **CSV Export Feedback**: Added loading notification to indicate CSV generation is in progress
+- **Bug Fixes**: Fixed escapeHtml function scope issue for View and Details buttons
+
+## [2.0] - 2025-07-13
+
+### Added
+- **MAJOR UI OVERHAUL**: Complete frontend redesign with modern, professional interface
+  - Hulu-inspired design language with green accent color (#1ce783)
+  - Pi-hole style sidebar navigation with collapsible menu
+  - Separate CSS files for desktop and mobile to avoid conflicts
+  - Modern responsive design with mobile-first approach
+  - iPhone optimization with notch awareness using safe-area-inset
+  
+- **New UI Components**:
+  - Professional sidebar with navigation sections (Main, Tools, System, Settings)
+  - Integrated dark/light mode toggle in sidebar settings
+  - System stats and build info in sidebar navigation
+  - Modern card-based layout with proper shadows and spacing
+  - Responsive stats grid with hover effects
+  - Enhanced table design with sortable columns
+  - Professional button styles with Hulu-inspired colors
+  
+- **API Documentation Page**: 
+  - Comprehensive REST API documentation at /api-docs
+  - Organized by endpoint categories (Core, Scanning, File Management, etc.)
+  - Request/response examples for all endpoints
+  - Parameter tables with types and descriptions
+  - Professional documentation layout matching main UI theme
+  
+- **Mobile Optimizations**:
+  - Touch-friendly interface with 44px minimum touch targets
+  - Collapsible sidebar with overlay for mobile
+  - Responsive table that converts to cards on small screens
+  - Optimized for iPhone with notch awareness
+  - Landscape orientation adjustments
+  
+- **Modern JavaScript Architecture**:
+  - Modular ES6+ class-based architecture
+  - ThemeManager for dark/light mode with localStorage persistence
+  - SidebarManager for mobile navigation
+  - APIClient for centralized API communication
+  - StatsDashboard with auto-refresh capabilities
+  - ProgressManager for scan progress tracking
+  - TableManager for advanced data display
+  
+- **Enhanced User Experience**:
+  - Smooth theme transitions between light and dark modes
+  - Real-time stats updates every 5 seconds
+  - Improved progress bar with detailed status messages
+  - Better error handling and user notifications
+  - Responsive design that works on all screen sizes
+
+### Changed
+- **Database Configuration**: Updated to use provided database for local testing
+- **Template System**: Added USE_MODERN_UI environment variable to toggle between classic and modern UI
+- **Color Scheme**: Adopted Hulu green (#1ce783) as primary accent color
+- **Layout**: Moved from single-page layout to sidebar navigation pattern
+
+### Technical Improvements
+- Separated mobile and desktop CSS for better maintainability
+- Implemented CSS variables for easy theming
+- Added proper viewport meta tags for mobile devices
+- Used modern flexbox and grid layouts
+- Added Font Awesome 6.4.0 for icons
+- Implemented proper modal system for dialogs
+
+### Docker Support
+- Created `Dockerfile.modern` for easy testing of the new UI
+- Added `docker-compose.modern.yml` for local development
+- Included sample test data generation in Docker image
+- Created `docker-run-modern.sh` script for one-command startup
+
+### Final Refinements
+- Fixed warnings filter to properly show only files with warnings
+- Added pagination UI with page numbers and navigation
+- Removed redundant "Scan Results" menu item from sidebar
+- Added "Details" button to view full scan output in modal
+- Implemented File System Statistics showing completion percentages
+- Fixed mobile layout issues including horizontal scroll
+- Changed action buttons to vertical stack layout
+- Removed unnecessary "Scanning Files" stat card
+- Fixed mixed mobile/desktop view rendering
+- Ensured consistent button styling throughout the UI
+
+## [1.47] - 2025-07-13
+
+### Fixed
+- **Mobile Vertical Text Display Issue**:
+  - Fixed "Details:" label appearing character by character vertically
+  - Changed from data-label attribute selector to nth-child selector
+  - Added proper display properties to ensure inline text rendering
+  - Removed webkit-line-clamp and box-orient from mobile corruption details
+  
+- **Desktop Table Layout**:
+  - Fixed horizontal scrolling issue while maintaining all column visibility
+  - Adjusted column widths: status (85px), type (60px), tool (60px), path (20%)
+  - Changed table layout to fixed for better column control
+  - Allowed auto scroll on desktop table container when absolutely needed
+  
+- **Corruption Details Hover**:
+  - Restored hover expansion functionality with 2-line initial display
+  - Added span wrapper to corruption details content for proper styling
+  - Maintained hover tooltip effect on desktop
+  - Disabled hover effect on mobile for better touch experience
+  
+- **General Improvements**:
+  - Changed default Flask port to 5001 to avoid macOS AirPlay conflict
+  - Fixed mobile card layout corruption details display
+  - Ensured proper text wrapping and overflow handling
+
+## [1.46] - 2025-07-13
+
+### Fixed
+- **Mobile Display Issues**:
+  - Removed problematic writing-mode CSS that was causing vertical text
+  - Simplified mobile corruption details display
+  - Fixed "Details:" label to display inline properly
+  - Removed unnecessary CSS overrides
+  
+- **Desktop Table Layout**:
+  - Changed table layout to fixed for better column control
+  - Increased minimum table width to 1400px
+  - Adjusted corruption column to prevent content overflow
+
+## [1.45] - 2025-07-13
+
+### Fixed
+- **Desktop Display Issues**:
+  - Fixed corruption details column being cut off
+  - Increased actions column width to 360px minimum
+  - Increased corruption column width to 25%
+  - Fixed action buttons being cut off on right side
+  
+- **Mobile Corruption Details Display**:
+  - Fixed vertical text display issue
+  - Kept block display for mobile
+  - Removed conflicting flex styles
+  - Ensured "Details:" label displays inline
+  
+- **Responsive Design Improvements**:
+  - Added proper breakpoints for tablets (992px)
+  - Implemented horizontal scrolling for smaller screens
+  - Adjusted column widths for different screen sizes
+  - Made action buttons responsive with smaller text
+
+## [1.44] - 2025-07-13
+
+### Fixed
+- **Mobile Details Display**:
+  - Fixed "Details:" label displaying vertically character by character
+  - Changed label display from block to inline with margin
+  - Added writing-mode reset to ensure horizontal text display
+  - Fixed issue affecting healthy, warning, and corrupted files
+  - Ensured proper text orientation for all mobile card views
+
+## [1.43] - 2025-07-13
+
+### Fixed
+- **Corruption Details Display**:
+  - Changed from multi-line to single-line with ellipsis by default
+  - Implemented tooltip-style hover expansion with proper styling
+  - Added white background, border, and shadow for better readability
+  - Fixed text wrapping and alignment issues
+  - Increased font size to 0.85rem for better legibility
+  
+- **Hover Expansion Improvements**:
+  - Changed to absolute positioning to prevent layout shifts
+  - Added max-width of 400px to control expansion size
+  - Added proper z-index to ensure hover appears above other content
+  - Fixed dark mode hover styling
+  
+- **Mobile Corruption Details**:
+  - Disabled hover effects on mobile devices
+  - Kept normal text wrapping for touch interfaces
+  - Prevented tooltip positioning issues on small screens
+
+## [1.42] - 2025-07-13
+
+### Fixed
+- **Column Header Truncation**: 
+  - Increased scan status column width to 140px
+  - Increased corruption details column width to 280px
+  - Added `white-space: nowrap` to headers to prevent truncation
+  - Removed overflow ellipsis from headers
+  
+- **Column Content Display**:
+  - Fixed status badge truncation with nowrap and inline-block
+  - Increased status column width to 120px
+  - Increased type column width to 150px
+  - Increased tool column width to 120px
+  - Added specific styles to prevent type/tool/status truncation
+  
+- **Corruption Details Enhancement**:
+  - Changed to multi-line display (up to 2 lines)
+  - Increased column width to 280px
+  - Added line clamping for better text visibility
+  - Set minimum height for consistent row heights
+  
+- **Desktop Responsiveness**:
+  - Changed table layout from fixed to auto
+  - Reduced minimum table width to 1200px
+  - Added flexible column sizing with percentages
+  - Added min-width constraints for all columns
+  - Made path and corruption columns percentage-based
+
+## [1.41] - 2025-07-13
+
+### Fixed
+- **Desktop Table Column Issues**:
+  - Fixed size column wrapping by adding `white-space: nowrap`
+  - Increased size column width from 80px to 100px
+  - Increased type column width from 80px to 120px  
+  - Increased tool column width from 80px to 100px
+  - Added proper column classes to table cells for consistent styling
+  - Increased table minimum width to 1400px to accommodate wider columns
+  - Ensured file size never wraps to multiple lines
+
+## [1.40] - 2025-07-13
+
+### Fixed
+- **Mobile Status Badge Padding**: Added proper padding (6px 12px) to status badges
+- **File Path Word Wrapping**: Implemented aggressive word breaking for long file paths
+  - Added `word-break: break-all` for better path splitting
+  - Added `hyphens: auto` for better line breaks
+  - Ensured full width display for paths
+  
+- **Action Buttons Layout**: Changed to 2x2 grid layout
+  - Buttons now display in clean 2-column grid
+  - Increased padding for better touch targets
+  - Fixed width to prevent layout issues
+  
+- **Horizontal Scroll Removal**: Eliminated unwanted horizontal scrolling
+  - Added `overflow-x: hidden` to body and containers
+  - Fixed table width and layout issues
+  - Removed all min-width constraints causing overflow
+  
+- **Details Word Wrapping**: Added proper text wrapping for corruption details
+  - Long error messages now wrap properly
+  - Better readability on small screens
+
+## [1.39] - 2025-07-13
+
+### Fixed
+- **Mobile Scan Results Table**: Complete redesign to address user feedback
+  - File paths now display prominently at the top of each card
+  - Fixed missing file path issue from v1.38
+  - Added !important declarations to ensure mobile styles override desktop
+  - Removed checkbox column on mobile for cleaner layout
+  - Improved text wrapping and readability
+  
+### Changed
+- **Mobile Card Layout Improvements**:
+  - File path shown first with clear visual separation
+  - Status and size displayed inline for better space usage
+  - Corruption details in dedicated background section
+  - Actions clearly separated with top border
+  - Better contrast and spacing throughout
+  - Fixed overflow issues preventing content visibility
+
+## [1.38] - 2025-07-13
+
+### Fixed
+- **iPhone UI Overhaul**: Complete redesign for mobile/iPhone devices
+  - Fixed header buttons overlapping with logo
+  - Buttons now properly contained in horizontal layout
+  - Logo properly sized and centered
+  - Eliminated awkward button positioning
+
+- **Mobile Table Redesign**: Replaced broken table with card-based layout
+  - Each scan result now displayed as a card on mobile
+  - Key information (status, path, size, actions) clearly visible
+  - No more truncated column headers
+  - Touch-friendly action buttons in 2x2 grid
+  - Proper spacing and readability on small screens
+
+- **Stats Cards Mobile Layout**: Optimized for iPhone screens
+  - 2x2 grid layout prevents text wrapping
+  - Smaller font sizes for better fit
+  - Reduced padding for space efficiency
+  - Numbers no longer wrap to multiple lines
+
+### Added
+- **iPhone-Specific Optimizations** (screens ≤480px):
+  - Compact header with smaller logo (60px)
+  - Smaller fonts throughout (h1: 1.25rem, body: 0.75rem)
+  - Optimized button sizes (32px height)
+  - Touch-friendly tap targets (minimum 44px)
+  - Efficient use of vertical space
+
+- **Card-Based Mobile Table**:
+  - Each result displayed as individual card
+  - Status badge prominently displayed
+  - Full file path visible with word wrapping
+  - Key data (size, corruption details) with labels
+  - Action buttons in responsive grid
+
+### Changed
+- **Responsive Breakpoints**:
+  - Mobile: ≤768px (tablets and phones)
+  - iPhone: ≤480px (small phones)
+  - Tablet: 769px-1200px
+  - Desktop: >1200px
+  
+- **Mobile-First Architecture**:
+  - Tables transform to cards on mobile
+  - Progressive enhancement for larger screens
+  - Touch-optimized interactions
+  - Efficient vertical scrolling
+
+## [1.37] - 2025-07-13
+
+### Fixed
+- **Real-time Stats Updates**: Removed batching to enable immediate count updates
+  - Each scan result is now sent immediately to the write queue
+  - Stats update in real-time as each file completes scanning
+  - No more waiting for 50 files to complete before seeing progress
+  - Fixes issue where counts were stuck during slow scans of large files
+
+### Removed
+- **Batch Processing**: Eliminated redundant batching layer
+  - The write queue already handles database serialization
+  - Batching on top of the queue was delaying real-time updates
+  - Removed `BATCH_COMMIT_SIZE` environment variable (no longer needed)
+
+## [1.36] - 2025-07-13
+
+### Fixed
+- **UI Button Consistency**: Fixed System Stats and Dark/Light Mode buttons having different sizes
+  - Unified button styling with consistent height (40px) and min-width (140px)
+  - Added flexbox centering for proper text alignment
+  - Both buttons now use shared `.header-button` class
+
+- **Stat Card Number Wrapping**: Fixed file totals wrapping to multiple lines
+  - Added `white-space: nowrap` to prevent number wrapping
+  - Reduced font size with better responsive scaling
+  - Set minimum card height to ensure consistent layout
+
+- **Table Column Truncation**: Fixed table headers being cut off ("Sta...", "Corrupt...", etc.)
+  - Increased column widths for better content visibility
+  - Improved table layout with proper min-widths
+  - Added horizontal scrolling for better mobile experience
+
+### Added
+- **Comprehensive Responsive Design**: Implemented modern mobile-first approach
+  - Mobile (≤768px): Simplified table view, stacked controls, single column stats
+  - Tablet (769px-1200px): Optimized column visibility, 3-column stats grid
+  - Desktop (>1200px): Full feature set with all columns visible
+  - Added touch-friendly scrolling for mobile devices
+
+- **Mobile UI Optimizations**:
+  - Vertically stacked header buttons on small screens
+  - Responsive stats grid (2 columns on mobile, 1 column on very small screens)
+  - Collapsible table columns based on screen size
+  - Touch-optimized action buttons with proper sizing
+  - Full-width search and filter controls on mobile
+
+### Changed
+- **Table Architecture**: Updated to use modern CSS techniques
+  - Fixed table layout for better column control
+  - Proper overflow handling with horizontal scroll
+  - Responsive column hiding based on importance
+  - Improved text truncation with ellipsis
+
+## [1.35] - 2025-07-13
+
+### Fixed
+- **Database Locking Issues**: Implemented database write queue to fix SQLite locking errors
+  - Added centralized write queue to serialize all database write operations
+  - Workers now submit results to queue instead of writing directly
+  - Dedicated write thread processes queue to avoid concurrent write conflicts
+  - Fixes "database is locked" errors during high-volume scanning
+
+### Added
+- **Database Write Queue System**: New architecture for handling database writes
+  - `db_write_queue` for queuing all database operations
+  - `db_write_thread` for processing writes sequentially
+  - Support for batch updates to improve performance
+  - Automatic thread startup on application initialization
+
+### Changed
+- **Scan Result Processing**: Refactored to use write queue
+  - `process_scan_result` now queues writes instead of direct DB access
+  - Batch processing of scan results for better performance
+  - Scan state updates routed through write queue
+  - Final batch commits handled via queue system
+
+## [1.34] - 2025-07-12
+
+### Fixed
+- **UI Scaling Issues**: Fixed various UI elements not displaying properly
+  - Fixed table column headers being truncated ("Sta...", "Ty...", "Corrupt...")
+  - Made System Stats and Dark/Light Mode buttons the same size (140px min-width)
+  - Fixed action buttons text being cut off by increasing padding and min-width
+  - Improved stat card number display to prevent truncation of large numbers
+  - Adjusted column widths for better content visibility
+
+### Changed
+- **Table Layout**: Improved table column width distribution
+  - Status: 90px (was 80px)
+  - Scan Status: 110px (was 100px)  
+  - Corruption Details: 140px (was truncated)
+  - Date: 150px (was 140px)
+  - Actions: auto-width with 300px minimum
+  - Path: 30% with proper text truncation
+
+- **Responsive Design**: Enhanced responsive behavior
+  - Better scaling at 1200px breakpoint
+  - Improved container max-width at different screen sizes
+  - Action buttons scale better on smaller screens
+  - Font sizes adjust more appropriately
+
+## [1.33] - 2025-07-12
+
+### Added
+- **Database Scan State Tracking**: Implemented persistent scan state tracking in database
+  - Added new `ScanState` model to track scan progress across app restarts
+  - Scan state persists in database with unique scan_id for each scan
+  - Prevents multiple concurrent scans by checking both memory and database state
+  - Automatically cleans up stale active scans on app startup
+
+- **Stats Update Thread**: Added dedicated background thread for UI updates
+  - Separate thread reads scan progress from database every second
+  - Workers update database directly without UI concerns
+  - UI/API endpoints read from synchronized in-memory state
+  - Ensures real-time progress updates even during slow file processing
+
+### Fixed
+- **Scan Progress Not Updating**: Fixed scan counts not updating until app restart
+  - Stats are now read from database by dedicated thread
+  - Progress updates show immediately in UI during scans
+  - File counts update in real-time as workers process files
+
+- **"Scan Completed" False Positive**: Fixed completion message showing at wrong times
+  - Only shows completion when files were actually processed
+  - Checks actual processed file count before showing message
+  - No false completion on page refresh or when no scan is running
+
+- **Concurrent Scan Prevention**: Enhanced scan concurrency checking
+  - Checks both in-memory state and database state
+  - Prevents scan button spam from starting multiple scans
+  - Shows proper error when scan is already in progress
+
+### Changed
+- **Scan State Architecture**: Refactored to use database-backed state management
+  - Scan progress persists across page refreshes
+  - State survives app restarts (marked as interrupted)
+  - More reliable progress tracking for long-running scans
+
+## [1.32] - 2025-07-12
+
+### Fixed
+- **Progress Tracking During Slow Scans**: Fixed progress bar not updating during hash calculation
+  - Reduced batch size from 10,000 to 100 files for more frequent progress updates
+  - Added logging when each file scan completes
+  - Fixed state tracking to properly maintain phase information
+  - Added completion logging to track scan progress
+  - Smaller batches ensure progress updates even when individual files take long to scan
+
+### Changed
+- **Batch Processing**: Reduced scan batch size for better responsiveness
+  - Large video files (20-40GB) can take minutes to hash
+  - Smaller batches allow progress updates between batches
+  - Improves UI responsiveness during scans
+
+## [1.31] - 2025-07-12
+
+### Fixed
+- **Scan State Persistence**: Fixed critical issues with scan state management
+  - Fixed early returns in scan thread that left state inconsistent
+  - Added proper state updates when Phase 2 is skipped (no new files)
+  - Fixed thread_active flag flipping between true/false during scans
+  - Added scan duration tracking for ETA calculations
+  - Added better exception handling with full traceback logging
+  - Added debug logging to track state updates
+  - Fixed scan state not being maintained when no new files are discovered
+
+## [1.30] - 2025-07-12
+
+### Fixed
+- **Progress Bar Tracking**: Fixed progress bar not updating during scans
+  - Implemented proper 3-phase progress tracking (33% per phase)
+  - Phase 1: Discovery - Shows files being checked and new media files found
+  - Phase 2: Adding to Database - Shows files being added with percentage
+  - Phase 3: Scanning - Shows individual file scan progress from 66% to 100%
+  - Fixed thread-safe state updates using update_scan_state function
+  - Added proper phase_number tracking for accurate progress calculation
+  - Enhanced logging for debugging scan state issues
+
+## [1.29] - 2025-07-12
+
+### Added
+- **Page Number Navigation**: Added numbered page links to pagination for quicker navigation
+  - Shows up to 7 page numbers at a time with smart ellipsis for large page counts
+  - Current page is highlighted in blue
+  - First and last page always visible with ellipsis when needed
+  - Responsive design adjusts page link size on mobile devices
+  - Page links only show when there are multiple pages and not in "All" view
+
+### Fixed
+- **WebP False Positives**: Fixed WebP files being incorrectly marked as corrupted
+  - WebP files with "invalid TIFF header in Exif data" are now treated as warnings
+  - These are metadata issues that don't affect image display
+  - FFmpeg EXIF warnings no longer mark WebP files as corrupted
+  - Created fix script for existing false positives: `fix_webp_exif_false_positives.py`
+
+## [1.28] - 2025-07-12
+
+### Fixed
+- **GIF False Positives**: Fixed GIF files being incorrectly marked as corrupted
+  - Added warning support to image scanning (previously only videos had warnings)
+  - GIF files with "improper image header" errors are now marked as warnings instead of corrupted
+  - GIF files with "cannot identify image file" errors from PIL are marked as warnings if FFmpeg validates them
+  - These GIFs often have non-standard headers but still play correctly in browsers
+  - Matches the pattern of NAL unit warnings for videos - technical issues that don't prevent playback
+
+### Changed
+- **Image Scanning Enhancement**: Image scanning now returns warning details like video scanning
+  - Enables consistent warning handling across all media types
+  - Future false positive patterns can be converted to warnings without database changes
+
+## [1.27] - 2025-07-12
+
+### Fixed
+- **Corrupted Filter UI Issue**: Fixed corrupted filter showing files with warnings
+  - Updated filter logic to exclude files where `has_warnings = True`
+  - Only files that are corrupted without warnings now appear in "Corrupted Only" filter
+  - Fixed stats calculation to exclude warning files from corrupted count
+
+- **System Stats Performance**: Fixed system-info endpoint timeout issues
+  - Replaced individual database queries with single aggregated query
+  - Fixed loading ALL completed scans (497,977 records) into memory
+  - Used SQL AVG() function instead of Python calculation for average scan time
+  - Added execution time logging and timeout protection
+
+- **Path Counting Performance**: Fixed expensive filesystem operations in system-info
+  - Replaced filesystem path checking with database aggregation
+  - Used CASE statements to group files by base path efficiently
+  - All file counts now come from database as requested by user
+
+### Added
+- **NAL Warning Conversion Script**: Created comprehensive script to convert FFmpeg NAL errors to warnings
+  - `tools/fix_all_nal_warnings.py` handles all variations of NAL unit errors
+  - Supports dry run mode to preview changes before execution
+  - Converts existing corrupted NAL errors to warning status
+
 ## [1.26] - 2025-07-11
 
 ### Fixed

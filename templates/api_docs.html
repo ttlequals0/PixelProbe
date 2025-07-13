@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PixelProbe API Documentation</title>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/css/desktop.css">
+    <link rel="stylesheet" href="/static/css/mobile.css">
+    
+    <style>
+        .api-endpoint {
+            background-color: var(--bg-tertiary);
+            border-radius: var(--border-radius);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .api-method {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: var(--border-radius-sm);
+            font-weight: 600;
+            font-size: 0.875rem;
+            margin-right: 0.5rem;
+        }
+        
+        .method-get {
+            background-color: #28a745;
+            color: white;
+        }
+        
+        .method-post {
+            background-color: #007bff;
+            color: white;
+        }
+        
+        .method-delete {
+            background-color: #dc3545;
+            color: white;
+        }
+        
+        .api-path {
+            font-family: var(--font-mono);
+            font-size: 1rem;
+            color: var(--hulu-green);
+        }
+        
+        .api-description {
+            margin-top: 1rem;
+            color: var(--text-secondary);
+        }
+        
+        .api-params {
+            margin-top: 1rem;
+        }
+        
+        .param-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .param-table th,
+        .param-table td {
+            padding: 0.5rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .param-table th {
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+        
+        .param-name {
+            font-family: var(--font-mono);
+            color: var(--hulu-green);
+        }
+        
+        .param-type {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+        
+        .code-block {
+            background-color: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-sm);
+            padding: 1rem;
+            font-family: var(--font-mono);
+            font-size: 0.875rem;
+            overflow-x: auto;
+            margin-top: 1rem;
+        }
+        
+        .response-example {
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-wrapper">
+        <!-- Include sidebar from main app -->
+        <aside class="sidebar">
+            <!-- Sidebar content would be included here -->
+        </aside>
+        
+        <main class="main-content">
+            <header class="header">
+                <div class="header-content">
+                    <button class="mobile-menu-btn" onclick="window.history.back()">
+                        <i class="fas fa-arrow-left"></i>
+                    </button>
+                    <h2 class="header-title">API Documentation</h2>
+                </div>
+            </header>
+            
+            <div class="content">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">PixelProbe REST API</h3>
+                    </div>
+                    <div class="card-body">
+                        <p>The PixelProbe API provides programmatic access to all media scanning and management functionality. All API endpoints return JSON responses.</p>
+                        
+                        <h4 class="mt-4 mb-3">Base URL</h4>
+                        <div class="code-block">
+                            https://your-server.com/api
+                        </div>
+                        
+                        <h4 class="mt-4 mb-3">Authentication</h4>
+                        <p>Currently, the API does not require authentication. In production environments, you should implement proper authentication.</p>
+                    </div>
+                </div>
+                
+                <!-- Core Endpoints -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Core Endpoints</h3>
+                    </div>
+                    <div class="card-body">
+                        <!-- Version -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/version</span>
+                            </div>
+                            <p class="api-description">Get the current application version and GitHub URL.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "version": "1.47",
+    "github_url": "https://github.com/ttlequals0/PixelProbe"
+}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Health Check -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/health</span>
+                            </div>
+                            <p class="api-description">Health check endpoint for monitoring.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "status": "healthy"
+}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Stats -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/stats</span>
+                            </div>
+                            <p class="api-description">Get summary statistics of all scanned files.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "total_files": 10542,
+    "corrupted_files": 245,
+    "healthy_files": 9897,
+    "warning_files": 400,
+    "pending_files": 0,
+    "scanning_files": 0,
+    "marked_as_good": 150
+}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- System Info -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/system-info</span>
+                            </div>
+                            <p class="api-description">Get detailed system information including monitored paths and scan statistics.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "database_stats": {
+        "total_files": 10542,
+        "corrupted_files": 245,
+        "healthy_files": 9897,
+        "files_by_path": {
+            "/media/photos": 5234,
+            "/media/videos": 5308
+        }
+    },
+    "monitored_paths": [
+        {
+            "path": "/media/photos",
+            "exists": true,
+            "file_count": 5234,
+            "is_accessible": true
+        }
+    ],
+    "scan_stats": {
+        "total_scans": 156,
+        "average_scan_time": 12.5,
+        "last_scan_date": "2024-01-15T10:30:00Z"
+    },
+    "current_scan": {
+        "is_scanning": false,
+        "scan_id": null
+    }
+}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Scanning Endpoints -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Scanning Endpoints</h3>
+                    </div>
+                    <div class="card-body">
+                        <!-- Scan All -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/scan-all</span>
+                            </div>
+                            <p class="api-description">Start a full scan of all configured media paths.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "message": "Scan started",
+    "scan_id": "scan_123456"
+}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Scan File -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/scan-file</span>
+                            </div>
+                            <p class="api-description">Scan a specific file by its database ID.</p>
+                            <div class="api-params">
+                                <h5>Request Body:</h5>
+                                <table class="param-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Parameter</th>
+                                            <th>Type</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><span class="param-name">file_id</span></td>
+                                            <td><span class="param-type">integer</span></td>
+                                            <td>The database ID of the file to scan</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="code-block">
+{
+    "file_id": 123
+}
+                            </div>
+                        </div>
+                        
+                        <!-- Scan Parallel -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/scan-parallel</span>
+                            </div>
+                            <p class="api-description">Scan multiple files in parallel with optional deep scanning.</p>
+                            <div class="api-params">
+                                <h5>Request Body:</h5>
+                                <table class="param-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Parameter</th>
+                                            <th>Type</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><span class="param-name">file_paths</span></td>
+                                            <td><span class="param-type">array[string]</span></td>
+                                            <td>Array of file paths to scan</td>
+                                        </tr>
+                                        <tr>
+                                            <td><span class="param-name">deep_scan</span></td>
+                                            <td><span class="param-type">boolean</span></td>
+                                            <td>Enable enhanced corruption detection (optional, default: false)</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Scan Status -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/scan-status</span>
+                            </div>
+                            <p class="api-description">Get the current scan status and progress information.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "is_scanning": true,
+    "scan_id": "scan_123456",
+    "total_files": 1000,
+    "completed_files": 450,
+    "pending_files": 550,
+    "scanning_files": 5,
+    "scan_phase": "scanning",
+    "current_file": "video_file.mp4",
+    "eta": 300,
+    "scan_state_message": "Scanning: video_file.mp4 (45s)"
+}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- File Management Endpoints -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">File Management Endpoints</h3>
+                    </div>
+                    <div class="card-body">
+                        <!-- Scan Results -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/scan-results</span>
+                            </div>
+                            <p class="api-description">Get paginated scan results with filtering and sorting options.</p>
+                            <div class="api-params">
+                                <h5>Query Parameters:</h5>
+                                <table class="param-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Parameter</th>
+                                            <th>Type</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><span class="param-name">page</span></td>
+                                            <td><span class="param-type">integer</span></td>
+                                            <td>Page number (default: 1)</td>
+                                        </tr>
+                                        <tr>
+                                            <td><span class="param-name">per_page</span></td>
+                                            <td><span class="param-type">integer</span></td>
+                                            <td>Items per page (default: 50, max: 500)</td>
+                                        </tr>
+                                        <tr>
+                                            <td><span class="param-name">sort_field</span></td>
+                                            <td><span class="param-type">string</span></td>
+                                            <td>Field to sort by (default: scan_date)</td>
+                                        </tr>
+                                        <tr>
+                                            <td><span class="param-name">sort_order</span></td>
+                                            <td><span class="param-type">string</span></td>
+                                            <td>Sort order: asc or desc (default: desc)</td>
+                                        </tr>
+                                        <tr>
+                                            <td><span class="param-name">filter</span></td>
+                                            <td><span class="param-type">string</span></td>
+                                            <td>Filter: all, corrupted, warnings, healthy</td>
+                                        </tr>
+                                        <tr>
+                                            <td><span class="param-name">search</span></td>
+                                            <td><span class="param-type">string</span></td>
+                                            <td>Search in file paths</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Get Single Result -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/scan-results/{result_id}</span>
+                            </div>
+                            <p class="api-description">Get details for a specific scan result.</p>
+                        </div>
+                        
+                        <!-- Mark as Good -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/mark-as-good</span>
+                            </div>
+                            <p class="api-description">Mark files as verified good (false positives).</p>
+                            <div class="api-params">
+                                <h5>Request Body:</h5>
+                                <table class="param-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Parameter</th>
+                                            <th>Type</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><span class="param-name">file_ids</span></td>
+                                            <td><span class="param-type">array[integer]</span></td>
+                                            <td>Array of file IDs to mark as good</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- View File -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/view/{result_id}</span>
+                            </div>
+                            <p class="api-description">Stream a media file for viewing (images and videos).</p>
+                        </div>
+                        
+                        <!-- Download File -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/download/{result_id}</span>
+                            </div>
+                            <p class="api-description">Download a media file.</p>
+                        </div>
+                        
+                        <!-- Export CSV -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/export-csv</span>
+                            </div>
+                            <p class="api-description">Export scan results to CSV format.</p>
+                            <div class="api-params">
+                                <h5>Request Body:</h5>
+                                <table class="param-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Parameter</th>
+                                            <th>Type</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><span class="param-name">file_ids</span></td>
+                                            <td><span class="param-type">array[integer]</span></td>
+                                            <td>Optional: specific file IDs to export (default: all)</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Maintenance Endpoints -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Maintenance Endpoints</h3>
+                    </div>
+                    <div class="card-body">
+                        <!-- Reset for Rescan -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/reset-for-rescan</span>
+                            </div>
+                            <p class="api-description">Reset files for rescanning based on criteria.</p>
+                            <div class="api-params">
+                                <h5>Request Body:</h5>
+                                <table class="param-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Parameter</th>
+                                            <th>Type</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><span class="param-name">reset_type</span></td>
+                                            <td><span class="param-type">string</span></td>
+                                            <td>Type: "unscanned", "errors", or "all"</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Reset Stuck Scans -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/reset-stuck-scans</span>
+                            </div>
+                            <p class="api-description">Reset files stuck in 'scanning' status.</p>
+                        </div>
+                        
+                        <!-- Cleanup Orphaned -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/cleanup-orphaned</span>
+                            </div>
+                            <p class="api-description">Remove database entries for files that no longer exist on disk.</p>
+                        </div>
+                        
+                        <!-- File Changes -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/file-changes</span>
+                            </div>
+                            <p class="api-description">Check for files that have changed since last scan (based on hash).</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Configuration Endpoints -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Configuration Endpoints</h3>
+                    </div>
+                    <div class="card-body">
+                        <!-- Get Configurations -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/configurations</span>
+                            </div>
+                            <p class="api-description">Get all configuration settings.</p>
+                        </div>
+                        
+                        <!-- Update Configuration -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/configurations</span>
+                            </div>
+                            <p class="api-description">Update configuration settings.</p>
+                            <div class="api-params">
+                                <h5>Request Body:</h5>
+                                <table class="param-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Parameter</th>
+                                            <th>Type</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><span class="param-name">key</span></td>
+                                            <td><span class="param-type">string</span></td>
+                                            <td>Configuration key</td>
+                                        </tr>
+                                        <tr>
+                                            <td><span class="param-name">value</span></td>
+                                            <td><span class="param-type">string</span></td>
+                                            <td>Configuration value</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Ignored Patterns -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/ignored-patterns</span>
+                            </div>
+                            <p class="api-description">Get list of ignored error patterns.</p>
+                        </div>
+                        
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/ignored-patterns</span>
+                            </div>
+                            <p class="api-description">Add a new ignored error pattern.</p>
+                        </div>
+                        
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-delete">DELETE</span>
+                                <span class="api-path">/api/ignored-patterns/{pattern_id}</span>
+                            </div>
+                            <p class="api-description">Delete an ignored error pattern.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

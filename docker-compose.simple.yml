@@ -1,0 +1,18 @@
+services:
+  pixelprobe-modern:
+    build:
+      context: .
+      dockerfile: Dockerfile.modern-simple
+    container_name: pixelprobe-modern-ui
+    ports:
+      - "5001:5001"
+    environment:
+      - USE_MODERN_UI=true
+      - SECRET_KEY=development-secret-key
+      - TZ=America/New_York
+      - FLASK_ENV=development
+      - DATABASE_URL=sqlite:////data/media_checker.db
+    volumes:
+      # Mount the provided database
+      - /Users/dkrachtus/Downloads/media_checker.db:/data/media_checker.db
+    restart: unless-stopped

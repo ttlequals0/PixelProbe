@@ -1,0 +1,33 @@
+services:
+  pixelprobe-modern:
+    build:
+      context: .
+      dockerfile: Dockerfile.modern
+    container_name: pixelprobe-modern-ui
+    ports:
+      - "5001:5001"
+    environment:
+      - USE_MODERN_UI=true
+      - SECRET_KEY=development-secret-key-change-in-production
+      - TZ=America/New_York
+      - FLASK_ENV=development
+      # Override with external database if needed
+      # - DATABASE_URL=sqlite:////data/media_checker.db
+    volumes:
+      # Mount local database if you have one
+      # - /Users/dkrachtus/Downloads/media_checker.db:/data/media_checker.db
+      
+      # Mount media directories for scanning (optional)
+      # - /path/to/your/media:/media:ro
+      
+      # Mount for persistent test database
+      - ./test_media_checker.db:/app/test_media_checker.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    labels:
+      - "traefik.enable=false"  # Disable if using Traefik
+      - "com.pixelprobe.description=PixelProbe Modern UI Test"
