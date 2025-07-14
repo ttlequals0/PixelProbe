@@ -429,3 +429,26 @@
         grid-template-columns: repeat(4, 1fr);
     }
 }
+
+/* Mobile video player styles - match v1.x */
+@media (max-width: 768px) {
+    .video-player {
+        width: 100%;
+        max-width: 100%;
+        height: auto;
+        display: block;
+    }
+    
+    /* Modal adjustments for mobile */
+    .modal-content {
+        margin: 10px;
+        width: calc(100% - 20px);
+        max-height: calc(100vh - 20px);
+    }
+    
+    .modal-body {
+        max-height: calc(100vh - 120px);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+}

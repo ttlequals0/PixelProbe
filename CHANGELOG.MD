@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.8] - 2025-07-14
+
+### Fixed
+- **Mobile Video Playback CSS**:
+  - Added mobile-specific CSS styles matching v1.x approach
+  - Set video width to 100% on mobile devices
+  - Added smooth scrolling for modal content
+  - Improved modal sizing for mobile viewports
+
+## [2.0.7] - 2025-07-14
+
+### Fixed
+- **Video Playback - Reverted to v1.x Implementation**:
+  - Removed playsinline and webkit-playsinline attributes that may cause issues
+  - Removed muted attribute to match v1.x behavior
+  - Set preload="metadata" consistently (not "auto")
+  - Added multiple video format sources (mp4, webm, ogg) like v1.x
+  - Simplified video player to match proven v1.x implementation
+  - Removed mobile-specific JavaScript handling that was causing issues
+  - Let browser handle video playback natively without interference
+
+## [2.0.6] - 2025-07-14
+
+### Fixed
+- **Video Playback on Mobile (Additional Fixes)**:
+  - Enhanced byte-range request handling for better mobile compatibility
+  - Improved CORS configuration for video streaming
+  - Added proper OPTIONS preflight handling
+  - Fixed Response import in Flask app
+  - Ensured proper content-type headers for video responses
+  - Removed muted attribute for mobile devices to allow user control
+  - Added preload="metadata" for mobile to reduce data usage
+  - Added "Open in new tab" option for mobile users
+  - Enhanced error logging for video playback issues
+  - Added video load event listeners for better debugging
+
+## [2.0.5] - 2025-07-13
+
+### Fixed
+- **Video Playback on Mobile (Enhanced)**:
+  - Added byte-range request support for video streaming (required by mobile Safari)
+  - Implemented proper 206 Partial Content responses
+  - Added playsinline and webkit-playsinline attributes for iOS
+  - Added muted attribute for autoplay compatibility
+  - Changed preload to "auto" for better mobile loading
+  - Added CORS headers for cross-origin video requests
+  - Added OPTIONS preflight handler for mobile browsers
+  - Added fallback direct link if video fails to load
+  - Added error handling with user-friendly message
+  - Limited to essential video formats (original + mp4)
+
 ### Changed
 - **Project Organization**:
   - Moved Docker development files to `docker/` directory
@@ -501,6 +552,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Font sizes adjust more appropriately
 
 ## [1.33] - 2025-07-12
+
 
 ### Added
 - **Database Scan State Tracking**: Implemented persistent scan state tracking in database

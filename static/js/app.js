@@ -770,6 +770,28 @@ class PixelProbeApp {
         div.textContent = text;
         return div.innerHTML;
     }
+    
+    handleVideoError(fileId) {
+        console.error(`Video failed to load for file ${fileId}`);
+        const video = document.getElementById(`video-player-${fileId}`);
+        const errorDiv = document.getElementById(`video-error-${fileId}`);
+        
+        if (video) {
+            // Log detailed error information
+            console.error('Video error details:', {
+                error: video.error,
+                networkState: video.networkState,
+                readyState: video.readyState,
+                currentSrc: video.currentSrc
+            });
+            
+            video.style.display = 'none';
+        }
+        
+        if (errorDiv) {
+            errorDiv.style.display = 'block';
+        }
+    }
 
     async init() {
         // Initialize components
@@ -863,11 +885,28 @@ class PixelProbeApp {
         if (fileType.startsWith('image/')) {
             content = `<img src="/api/view/${file.id}" alt="${this.escapeHtml(filePath)}" style="max-width: 100%; max-height: 60vh; height: auto; object-fit: contain; display: block; margin: 0 auto;">`;
         } else if (fileType.startsWith('video/')) {
+            // Match v1.x implementation more closely
+            const videoUrl = `/api/view/${file.id}`;
+            
             content = `
-                <video controls style="max-width: 100%; max-height: 60vh; height: auto; display: block; margin: 0 auto;">
-                    <source src="/api/view/${file.id}" type="${fileType}">
-                    Your browser does not support the video tag.
-                </video>
+                <div style="position: relative; width: 100%; max-width: 800px; margin: 0 auto;">
+                    <video id="video-player-${file.id}"
+                           class="video-player"
+                           controls 
+                           preload="metadata"
+                           style="width: 100%; display: block;"
+                           onloadedmetadata="console.log('Video metadata loaded for file ${file.id}')"
+                           onerror="app.handleVideoError(${file.id})">
+                        <source src="${videoUrl}" type="${fileType}">
+                        <source src="${videoUrl}" type="video/mp4">
+                        <source src="${videoUrl}" type="video/webm">
+                        <source src="${videoUrl}" type="video/ogg">
+                        Your browser does not support the video tag.
+                    </video>
+                    <div id="video-error-${file.id}" style="display: none; padding: 20px; text-align: center; color: #ff6b6b;">
+                        <p>Unable to load video. <a href="${videoUrl}" target="_blank">Try opening directly</a></p>
+                    </div>
+                </div>
             `;
         } else if (fileType.startsWith('audio/')) {
             content = `
@@ -903,6 +942,7 @@ class PixelProbeApp {
                 modal.style.display = 'none';
             }
         };
+        
     }
 
     async rescanFile(fileId) {
