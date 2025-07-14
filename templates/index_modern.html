@@ -36,11 +36,11 @@
             <nav class="sidebar-nav">
                 <div class="nav-section">
                     <div class="nav-section-title">Main</div>
-                    <a href="#dashboard" class="nav-item active">
+                    <a href="#dashboard" class="nav-item active" title="Dashboard">
                         <i class="fas fa-tachometer-alt"></i>
                         <span>Dashboard</span>
                     </a>
-                    <a href="#api-docs" class="nav-item" onclick="app.showApiDocs()">
+                    <a href="#api-docs" class="nav-item" onclick="app.showApiDocs()" title="API Documentation">
                         <i class="fas fa-code"></i>
                         <span>API Documentation</span>
                     </a>
@@ -48,15 +48,15 @@
                 
                 <div class="nav-section">
                     <div class="nav-section-title">Tools</div>
-                    <a href="#" class="nav-item" onclick="app.startScan()">
+                    <a href="#" class="nav-item" onclick="app.startScan()" title="Start Scan">
                         <i class="fas fa-play"></i>
                         <span>Start Scan</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.cleanupOrphaned()">
+                    <a href="#" class="nav-item" onclick="app.cleanupOrphaned()" title="Cleanup Orphaned">
                         <i class="fas fa-broom"></i>
                         <span>Cleanup Orphaned</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.checkFileChanges()">
+                    <a href="#" class="nav-item" onclick="app.checkFileChanges()" title="Check File Changes">
                         <i class="fas fa-sync"></i>
                         <span>Check File Changes</span>
                     </a>
@@ -64,11 +64,11 @@
                 
                 <div class="nav-section">
                     <div class="nav-section-title">System</div>
-                    <a href="#" class="nav-item" onclick="app.showSystemStats()">
+                    <a href="#" class="nav-item" onclick="app.showSystemStats()" title="System Stats">
                         <i class="fas fa-chart-line"></i>
                         <span>System Stats</span>
                     </a>
-                    <a href="https://github.com/ttlequals0/PixelProbe" target="_blank" class="nav-item">
+                    <a href="https://github.com/ttlequals0/PixelProbe" target="_blank" class="nav-item" title="Build Info">
                         <i class="fas fa-info-circle"></i>
                         <span>Build Info</span>
                         <small class="text-muted d-block" id="version-info">Loading...</small>
@@ -77,7 +77,7 @@
                 
                 <div class="nav-section">
                     <div class="nav-section-title">Settings</div>
-                    <div class="nav-item">
+                    <div class="nav-item" title="Dark Mode">
                         <i class="fas fa-moon"></i>
                         <span>Dark Mode</span>
                         <label class="toggle-switch" style="float: right;">
@@ -95,6 +95,9 @@
             <header class="header">
                 <div class="header-content">
                     <button class="mobile-menu-btn">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <button class="desktop-sidebar-toggle" title="Toggle sidebar">
                         <i class="fas fa-bars"></i>
                     </button>
                     <h2 class="header-title">Media Integrity Scanner</h2>

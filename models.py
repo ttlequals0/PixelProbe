@@ -31,6 +31,9 @@ class ScanResult(db.Model):
     has_warnings = db.Column(db.Boolean, nullable=False, default=False, index=True)  # File has warnings but not corrupted
     warning_details = db.Column(db.Text)  # Details about warnings (e.g., "NAL unit errors only")
     
+    # Deep scan flag
+    deep_scan = db.Column(db.Boolean, nullable=False, default=False, index=True)  # Whether to perform deep scan
+    
     def to_dict(self):
         return {
             'id': self.id,
@@ -51,7 +54,8 @@ class ScanResult(db.Model):
             'scan_output': getattr(self, 'scan_output', None),
             'ignored_error_types': getattr(self, 'ignored_error_types', None),
             'has_warnings': getattr(self, 'has_warnings', False),
-            'warning_details': getattr(self, 'warning_details', None)
+            'warning_details': getattr(self, 'warning_details', None),
+            'deep_scan': getattr(self, 'deep_scan', False)
         }
     
     def __repr__(self):

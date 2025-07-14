@@ -48,39 +48,84 @@ class SidebarManager {
     constructor() {
         this.sidebar = document.querySelector('.sidebar');
         this.overlay = document.querySelector('.sidebar-overlay');
-        this.toggleBtn = document.querySelector('.mobile-menu-btn');
+        this.mobileToggleBtn = document.querySelector('.mobile-menu-btn');
+        this.desktopToggleBtn = document.querySelector('.desktop-sidebar-toggle');
         this.init();
     }
 
     init() {
-        if (!this.toggleBtn) return;
+        // Mobile toggle
+        if (this.mobileToggleBtn) {
+            this.mobileToggleBtn.addEventListener('click', () => this.toggleMobile());
+        }
         
-        this.toggleBtn.addEventListener('click', () => this.toggle());
+        // Desktop toggle
+        if (this.desktopToggleBtn) {
+            this.desktopToggleBtn.addEventListener('click', () => this.toggleDesktop());
+        }
         
         if (this.overlay) {
-            this.overlay.addEventListener('click', () => this.close());
+            this.overlay.addEventListener('click', () => this.closeMobile());
         }
 
         // Close sidebar on navigation item click (mobile)
         document.querySelectorAll('.nav-item').forEach(item => {
             item.addEventListener('click', () => {
                 if (window.innerWidth <= 768) {
-                    this.close();
+                    this.closeMobile();
                 }
             });
         });
+        
+        // Restore desktop sidebar state from localStorage
+        const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+        if (isCollapsed && window.innerWidth > 768) {
+            this.sidebar?.classList.add('collapsed');
+            this.updateToggleIcon(true);
+        }
+        
+        // Allow clicking sidebar header to expand when collapsed
+        const sidebarHeader = document.querySelector('.sidebar-header');
+        if (sidebarHeader) {
+            sidebarHeader.addEventListener('click', () => {
+                if (this.sidebar?.classList.contains('collapsed') && window.innerWidth > 768) {
+                    this.toggleDesktop();
+                }
+            });
+        }
     }
 
-    toggle() {
+    toggleMobile() {
         this.sidebar?.classList.toggle('active');
         this.overlay?.classList.toggle('active');
         document.body.style.overflow = this.sidebar?.classList.contains('active') ? 'hidden' : '';
     }
 
-    close() {
+    closeMobile() {
         this.sidebar?.classList.remove('active');
         this.overlay?.classList.remove('active');
         document.body.style.overflow = '';
+    }
+    
+    toggleDesktop() {
+        this.sidebar?.classList.toggle('collapsed');
+        
+        // Save state to localStorage
+        const isCollapsed = this.sidebar?.classList.contains('collapsed');
+        localStorage.setItem('sidebarCollapsed', isCollapsed);
+        
+        // Update button icon
+        this.updateToggleIcon(isCollapsed);
+    }
+    
+    updateToggleIcon(isCollapsed) {
+        if (this.desktopToggleBtn) {
+            const icon = this.desktopToggleBtn.querySelector('i');
+            if (icon) {
+                icon.className = isCollapsed ? 'fas fa-angles-right' : 'fas fa-bars';
+            }
+            this.desktopToggleBtn.title = isCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+        }
     }
 }
 
@@ -284,7 +329,8 @@ class ProgressManager {
                 if (status.is_scanning) {
                     const progress = this.calculateProgress(status);
                     this.update(progress.percentage, progress.text);
-                } else if (status.pending_files === 0 && status.scanning_files === 0) {
+                } else {
+                    // Scan is complete when is_scanning is false
                     this.complete();
                 }
             } catch (error) {
@@ -383,6 +429,7 @@ class ProgressManager {
     }
 
     complete() {
+        // Always show 100% when scan completes, even if not all files were processed
         this.update(100, 'Scan completed!');
         this.stopMonitoring();
         this.updateScanButtons(false); // Re-enable scan buttons
@@ -404,6 +451,13 @@ class TableManager {
     }
 
     async init() {
+        // Read initial value from select element
+        const perPageSelect = document.querySelector('#items-per-page');
+        if (perPageSelect) {
+            const value = perPageSelect.value;
+            this.itemsPerPage = value === 'all' ? -1 : parseInt(value);
+        }
+        
         this.bindEvents();
         await this.loadData();
         
@@ -657,6 +711,12 @@ class TableManager {
         const paginationEl = document.querySelector('.pagination');
         if (!paginationEl) return;
 
+        // Handle "All" case where itemsPerPage is -1
+        if (this.itemsPerPage === -1) {
+            paginationEl.innerHTML = '';
+            return;
+        }
+
         const totalPages = Math.ceil(data.total / this.itemsPerPage);
         const currentPage = this.currentPage;
         
@@ -667,28 +727,63 @@ class TableManager {
             <a class="page-link" href="#" data-page="prev">Previous</a>
         </li>`;
         
-        // Page numbers
-        const startPage = Math.max(1, currentPage - 2);
-        const endPage = Math.min(totalPages, currentPage + 2);
+        // Smart pagination for mobile
+        const isMobile = window.innerWidth <= 768;
         
-        if (startPage > 1) {
-            html += `<li class="page-item"><a class="page-link" href="#" data-page="1">1</a></li>`;
-            if (startPage > 2) {
-                html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+        if (isMobile && totalPages > 5) {
+            // Mobile: Show fewer pages to fit screen
+            const pages = new Set();
+            
+            // Always show first page
+            pages.add(1);
+            
+            // Show current page
+            pages.add(currentPage);
+            
+            // Always show last page
+            pages.add(totalPages);
+            
+            // Convert to sorted array
+            const pageArray = Array.from(pages).sort((a, b) => a - b);
+            
+            let lastPage = 0;
+            for (const page of pageArray) {
+                // Add ellipsis if there's a gap
+                if (page - lastPage > 1) {
+                    html += `<li class="page-item disabled ellipsis"><span class="page-link">…</span></li>`;
+                }
+                
+                html += `<li class="page-item ${page === currentPage ? 'active' : ''}">
+                    <a class="page-link" href="#" data-page="${page}">${page}</a>
+                </li>`;
+                
+                lastPage = page;
             }
-        }
-        
-        for (let i = startPage; i <= endPage; i++) {
-            html += `<li class="page-item ${i === currentPage ? 'active' : ''}">
-                <a class="page-link" href="#" data-page="${i}">${i}</a>
-            </li>`;
-        }
-        
-        if (endPage < totalPages) {
-            if (endPage < totalPages - 1) {
-                html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+        } else {
+            // Desktop or few pages: show normal range
+            const pageRange = isMobile ? 1 : 2;
+            const startPage = Math.max(1, currentPage - pageRange);
+            const endPage = Math.min(totalPages, currentPage + pageRange);
+            
+            if (startPage > 1) {
+                html += `<li class="page-item"><a class="page-link" href="#" data-page="1">1</a></li>`;
+                if (startPage > 2) {
+                    html += `<li class="page-item disabled ellipsis"><span class="page-link">…</span></li>`;
+                }
             }
-            html += `<li class="page-item"><a class="page-link" href="#" data-page="${totalPages}">${totalPages}</a></li>`;
+            
+            for (let i = startPage; i <= endPage; i++) {
+                html += `<li class="page-item ${i === currentPage ? 'active' : ''}">
+                    <a class="page-link" href="#" data-page="${i}">${i}</a>
+                </li>`;
+            }
+            
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    html += `<li class="page-item disabled ellipsis"><span class="page-link">…</span></li>`;
+                }
+                html += `<li class="page-item"><a class="page-link" href="#" data-page="${totalPages}">${totalPages.toLocaleString()}</a></li>`;
+            }
         }
         
         // Next button
@@ -947,11 +1042,32 @@ class PixelProbeApp {
 
     async rescanFile(fileId) {
         try {
-            await this.api.scanFile(fileId);
-            this.showNotification('File rescan started', 'success');
-            await this.table.loadData();
+            // Check if scan is already running
+            const status = await this.api.getScanStatus();
+            if (status.is_scanning) {
+                this.showNotification('A scan is already in progress', 'warning');
+                return;
+            }
+            
+            // Get file path first
+            const response = await fetch(`/api/scan-results/${fileId}`);
+            if (response.ok) {
+                const file = await response.json();
+                // Use scan-parallel which will mark as pending and start full scan
+                const scanResponse = await this.api.request('/scan-parallel', {
+                    method: 'POST',
+                    body: JSON.stringify({ 
+                        file_paths: [file.file_path],
+                        deep_scan: false
+                    })
+                });
+                this.showNotification(scanResponse.message || 'File rescan started', 'success');
+                this.progress.startMonitoring();
+            } else {
+                throw new Error('Failed to get file info');
+            }
         } catch (error) {
-            this.showNotification('Failed to rescan file', 'error');
+            this.showNotification(error.message || 'Failed to rescan file', 'error');
         }
     }
 

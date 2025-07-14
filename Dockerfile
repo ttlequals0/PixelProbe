@@ -21,4 +21,8 @@ EXPOSE 5000
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
 
+# Set version as build argument
+ARG VERSION=2.0.14
+ENV APP_VERSION=$VERSION
+
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "300", "app:app"]

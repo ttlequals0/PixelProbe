@@ -1,4 +1,6 @@
 """Version information for PixelProbe"""
+import os
 
-__version__ = "1.47"
+# Get version from environment variable (set during Docker build) or use default
+__version__ = os.environ.get('APP_VERSION', '2.0.19')
 __github_url__ = "https://github.com/ttlequals0/PixelProbe"

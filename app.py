@@ -673,21 +673,49 @@ def get_scan_results():
     else:
         query = query.order_by(sort_column.desc())
     
-    results = query.paginate(
-        page=page, per_page=per_page, error_out=False
-    )
+    # Handle "All" option (per_page = -1)
+    if per_page == -1:
+        # Get all results without pagination
+        all_results = query.all()
+        results = {
+            'items': all_results,
+            'total': len(all_results),
+            'has_prev': False,
+            'has_next': False,
+            'pages': 1
+        }
+    else:
+        results = query.paginate(
+            page=page, per_page=per_page, error_out=False
+        )
     
-    logger.info(f"Retrieved {len(results.items)} results (total: {results.total})")
+    # Handle logging for both paginated and non-paginated results
+    if per_page == -1:
+        logger.info(f"Retrieved all {len(results['items'])} results")
+    else:
+        logger.info(f"Retrieved {len(results.items)} results (total: {results.total})")
     
-    return jsonify({
-        'results': [result.to_dict() for result in results.items],
-        'total': results.total,
-        'pages': results.pages,
-        'current_page': page,
-        'sort_field': sort_field,
-        'sort_order': sort_order,
-        'filter': filter_type
-    })
+    # Handle response for both paginated and non-paginated results
+    if per_page == -1:
+        return jsonify({
+            'results': [result.to_dict() for result in results['items']],
+            'total': results['total'],
+            'pages': results['pages'],
+            'current_page': 1,
+            'sort_field': sort_field,
+            'sort_order': sort_order,
+            'filter': filter_type
+        })
+    else:
+        return jsonify({
+            'results': [result.to_dict() for result in results.items],
+            'total': results.total,
+            'pages': results.pages,
+            'current_page': page,
+            'sort_field': sort_field,
+            'sort_order': sort_order,
+            'filter': filter_type
+        })
 
 @app.route('/api/scan-results/<int:result_id>')
 def get_scan_result(result_id):
@@ -875,7 +903,22 @@ def scan_all_files():
                     progress_message='Phase 1 of 3: Discovering new files...'
                 )
                 logger.info("Phase 1: Discovering files...")
-                existing_files = set(result.file_path for result in ScanResult.query.all())
+                # Load existing files in batches to avoid memory issues
+                existing_files = set()
+                batch_size = 10000
+                offset = 0
+                total_existing = ScanResult.query.count()
+                logger.info(f"Loading {total_existing} existing file paths in batches...")
+                
+                while True:
+                    batch = ScanResult.query.order_by(ScanResult.id).offset(offset).limit(batch_size).all()
+                    if not batch:
+                        break
+                    existing_files.update(result.file_path for result in batch)
+                    offset += batch_size
+                    if offset % 50000 == 0:
+                        logger.info(f"Loaded {offset} file paths...")
+                
                 logger.info(f"Found {len(existing_files)} files already in database")
                 update_scan_state(progress_message=f'Phase 1 of 3: Found {len(existing_files)} files already in database')
                 
@@ -946,23 +989,33 @@ def scan_all_files():
                 
                 # Phase 3: Scan pending files using parallel scanning
                 logger.info("Phase 3: Scanning pending files using parallel workers...")
-                pending_files = ScanResult.query.filter_by(scan_status='pending').all()
-                logger.info(f"Found {len(pending_files)} pending files to scan")
+                
+                # Get all pending file IDs upfront - much simpler!
+                # Memory usage: ~200 bytes per record (ID + path), so 1M files = ~190MB
+                logger.info("Loading pending file IDs...")
+                pending_records = ScanResult.query.filter_by(scan_status='pending').with_entities(ScanResult.id, ScanResult.file_path).all()
+                pending_count = len(pending_records)
+                logger.info(f"Found {pending_count} pending files to scan")
+                
+                # Log memory usage estimate for transparency
+                if pending_count > 100000:
+                    estimated_mb = (pending_count * 200) / (1024 * 1024)
+                    logger.info(f"Estimated memory usage for ID list: {estimated_mb:.1f} MB")
                 
                 # Ensure scan state is still active before proceeding
                 update_scan_state(
                     phase='scanning',
                     phase_number=3,
                     phase_current=0,
-                    phase_total=len(pending_files),
-                    estimated_total=len(pending_files),
+                    phase_total=pending_count,
+                    estimated_total=pending_count,
                     scan_times=[],
                     is_scanning=True,
                     scan_thread_active=True,
-                    progress_message=f'Phase 3 of 3: Starting scan of {len(pending_files)} files...'
+                    progress_message=f'Phase 3 of 3: Starting scan of {pending_count} files...'
                 )
                 
-                if len(pending_files) == 0:
+                if pending_count == 0:
                     logger.info("No pending files found to scan")
                     update_scan_state(progress_message="No pending files to scan")
                     return
@@ -973,164 +1026,118 @@ def scan_all_files():
                 files_scanned = 0
                 corrupted_found = 0
                 
-                # Filter out files that don't exist
-                valid_files = []
-                for pending_record in pending_files:
-                    if not os.path.exists(pending_record.file_path):
-                        logger.warning(f"File no longer exists: {pending_record.file_path}")
-                        pending_record.scan_status = 'error'
-                        pending_record.corruption_details = 'File not found'
-                        db.session.commit()
+                # Process pending files in batches
+                batch_size = 1000
+                
+                # Process files in batches from our ID list
+                for batch_start in range(0, pending_count, batch_size):
+                    batch_end = min(batch_start + batch_size, pending_count)
+                    batch_records = pending_records[batch_start:batch_end]
+                    
+                    if not batch_records:
+                        break
+                    
+                    # Get the actual file records for this batch
+                    batch_ids = [record.id for record in batch_records]
+                    pending_batch = ScanResult.query.filter(ScanResult.id.in_(batch_ids)).all()
+                    
+                    # Filter out files that don't exist in this batch
+                    valid_files_in_batch = []
+                    for pending_record in pending_batch:
+                        if not os.path.exists(pending_record.file_path):
+                            logger.warning(f"File no longer exists: {pending_record.file_path}")
+                            pending_record.scan_status = 'error'
+                            pending_record.corruption_details = 'File not found'
+                            db.session.commit()
+                            files_processed += 1
+                            continue
+                        valid_files_in_batch.append(pending_record.file_path)
+                    
+                    if not valid_files_in_batch:
                         continue
-                    valid_files.append(pending_record.file_path)
-                
-                if not valid_files:
-                    logger.info("No valid files to scan")
-                    update_scan_state(progress_message="No valid files to scan")
-                    return
-                
-                # Don't mark all files as scanning upfront - this causes issues if scan is interrupted
-                # Files will be marked as scanning individually when processed
-                
-                # Create a result processor that will be called for each completed scan
-                files_scanned = [0]
-                corrupted_found = [0]
-                scan_times_list = []  # Track individual scan times
-                
-                def process_scan_result(result):
-                    """Process a single scan result and send to write queue immediately"""
-                    try:
-                        logger.debug(f"Processing scan result for: {result['file_path']}")
-                        
-                        # Add scan metadata
-                        result['scan_date'] = datetime.now(timezone.utc)
-                        result['scan_status'] = 'completed'
-                        
-                        # Track scan statistics
-                        if 'scan_duration' in result:
-                            scan_times_list.append(result['scan_duration'])
-                            if len(scan_times_list) > 100:
-                                scan_times_list.pop(0)
-                            avg_time = sum(scan_times_list) / len(scan_times_list)
-                            update_scan_state(
-                                average_scan_time=avg_time,
-                                scan_times=scan_times_list[-10:]
-                            )
-                        
-                        files_scanned[0] += 1
-                        if result.get('is_corrupted'):
-                            corrupted_found[0] += 1
-                            logger.warning(f"CORRUPTED FILE: {result['file_path']} - {result.get('corruption_details')}")
-                        else:
-                            logger.info(f"HEALTHY FILE: {result['file_path']}")
-                        
-                        # Send to write queue immediately - no batching needed with write queue!
-                        logger.debug(f"Queueing scan result for {result['file_path']}")
-                        db_write_queue.put({
-                            'type': 'batch_update_scan_results',
-                            'results': [result]  # Single result as a list
-                        })
-                            
-                    except Exception as e:
-                        logger.error(f"Error processing scan result for {result.get('file_path', 'unknown')}: {str(e)}")
-                
-                # Progress callback for parallel scanning
-                def progress_callback(completed, total, current_file):
-                    # Calculate phase percentage
-                    percentage = (completed / total * 100) if total > 0 else 0
-                    file_name = current_file.split('/')[-1] if current_file else ''
                     
-                    update_scan_state(
-                        files_processed=completed,
-                        phase_current=completed,  # Update phase-specific progress
-                        current_file=current_file,
-                        current_file_start_time=datetime.now(),
-                        progress_message=f"Phase 3 of 3: Scanning {file_name} ({completed}/{total} - {percentage:.1f}%)"
-                    )
+                    # Process this batch of files using parallel scanning
+                    logger.info(f"Processing batch of {len(valid_files_in_batch)} files (offset {offset})")
                     
-                    logger.info(f"Scan progress: {completed}/{total} - {current_file}")
-                
-                # Use custom parallel scanning that processes results in real-time
-                logger.info(f"Starting parallel scan of {len(valid_files)} files across {len(scan_paths)} paths")
-                
-                # Instead of waiting for all results, process them as they complete
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-                
-                results_processed = 0
-                scan_completed = False
-                
-                # Process files in manageable batches to avoid overwhelming the system
-                SCAN_BATCH_SIZE = 100  # Process smaller batches for better progress tracking
-                total_files = len(valid_files)
-                
-                for batch_start in range(0, total_files, SCAN_BATCH_SIZE):
-                    batch_end = min(batch_start + SCAN_BATCH_SIZE, total_files)
-                    batch_files = valid_files[batch_start:batch_end]
-                    
-                    logger.info(f"Processing batch {batch_start//SCAN_BATCH_SIZE + 1}: files {batch_start+1}-{batch_end} of {total_files}")
+                    # Use ThreadPoolExecutor for this batch
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
                     
                     with ThreadPoolExecutor(max_workers=checker.max_workers) as executor:
-                        # Submit batch of scan tasks
+                        # Submit scan tasks for this batch
+                        # First, create a mapping of file paths to their deep_scan settings
+                        file_to_deep_scan = {}
+                        for record in pending_batch:
+                            if os.path.exists(record.file_path):
+                                # Use deep_scan flag from database, default to False if not set
+                                file_to_deep_scan[record.file_path] = getattr(record, 'deep_scan', False)
+                        
                         future_to_file = {
-                            executor.submit(checker.scan_file, file_path, False): file_path 
-                            for file_path in batch_files
+                            executor.submit(checker.scan_file, file_path, file_to_deep_scan.get(file_path, False)): file_path 
+                            for file_path in valid_files_in_batch
                         }
                         
-                        logger.info(f"Submitted {len(future_to_file)} scan tasks for this batch")
-                        
-                        # Add a periodic update to show progress even during slow scans
-                        start_time = datetime.now()
-                        files_in_batch = len(future_to_file)
-                        
                         # Process results as they complete
-                        for idx, future in enumerate(as_completed(future_to_file)):
+                        for future in as_completed(future_to_file):
                             file_path = future_to_file[future]
                             try:
                                 result = future.result()
-                                results_processed += 1
+                                files_processed += 1
+                                files_scanned += 1
                                 
-                                # Log completion
-                                logger.info(f"Scan completed for file {results_processed}/{total_files}: {file_path}")
+                                if result.get('is_corrupted'):
+                                    corrupted_found += 1
+                                    logger.warning(f"CORRUPTED FILE: {file_path} - {result.get('corruption_details')}")
+                                else:
+                                    logger.info(f"HEALTHY FILE: {file_path}")
                                 
                                 # Update progress
-                                progress_callback(results_processed, total_files, file_path)
+                                percentage = (files_processed / pending_count * 100) if pending_count > 0 else 0
+                                file_name = file_path.split('/')[-1] if file_path else ''
+                                update_scan_state(
+                                    files_processed=files_processed,
+                                    phase_current=files_processed,
+                                    current_file=file_path,
+                                    progress_message=f"Phase 3 of 3: Scanning {file_name} ({files_processed}/{pending_count} - {percentage:.1f}%)"
+                                )
                                 
-                                # Process the scan result immediately
-                                process_scan_result(result)
+                                # Add scan metadata
+                                result['scan_date'] = datetime.now(timezone.utc)
+                                result['scan_status'] = 'completed'
+                                
+                                # Send to database write queue
+                                db_write_queue.put({
+                                    'type': 'batch_update_scan_results',
+                                    'results': [result]
+                                })
                                 
                             except Exception as e:
                                 logger.error(f"Error scanning {file_path}: {str(e)}")
-                                # Create error result
+                                files_processed += 1
+                                # Update database with error
                                 error_result = {
                                     'file_path': file_path,
-                                    'file_size': 0,
-                                    'file_type': 'unknown',
-                                    'creation_date': datetime.now(),
-                                    'last_modified': datetime.now(),
-                                    'is_corrupted': True,
-                                    'corruption_details': f"Scan error: {str(e)}"
+                                    'scan_status': 'error',
+                                    'corruption_details': f"Scan error: {str(e)}",
+                                    'scan_date': datetime.now(timezone.utc)
                                 }
-                                process_scan_result(error_result)
-                                results_processed += 1
-                                progress_callback(results_processed, total_files, file_path)
+                                db_write_queue.put({
+                                    'type': 'batch_update_scan_results',
+                                    'results': [error_result]
+                                })
                     
-                    logger.info(f"Completed batch {batch_start//SCAN_BATCH_SIZE + 1}, processed {results_processed}/{total_files} files total")
+                    logger.info(f"Completed batch, processed {files_processed} files total")
                 
-                # No need to queue remaining results - each result is sent immediately
+                # All batches processed - verify we actually processed all pending files
+                remaining_pending = ScanResult.query.filter_by(scan_status='pending').count()
+                if remaining_pending > 0:
+                    logger.warning(f"SCAN INCOMPLETE: {remaining_pending} files still pending after processing {files_processed} files")
+                    logger.warning(f"This may indicate a pagination issue. Consider running scan again.")
                 
-                scan_completed = True
-                files_processed = files_scanned[0]
-                
-                scan_end_time = datetime.now()
-                scan_duration = scan_end_time - scan_start_time
                 logger.info(f"=== FULL SCAN COMPLETED ===")
-                logger.info(f"Duration: {scan_duration}")
                 logger.info(f"Files processed: {files_processed}")
-                logger.info(f"Files scanned: {files_scanned[0]}")
-                logger.info(f"Files added to database: {files_added}")
-                logger.info(f"Corrupted files found: {corrupted_found[0]}")
-                logger.info(f"Scan completed successfully: {scan_completed}")
-                logger.info(f"=== SCAN SUMMARY END ===")
+                logger.info(f"Files scanned: {files_scanned}")
+                logger.info(f"Corrupted files found: {corrupted_found}")
+                logger.info(f"Files still pending: {remaining_pending}")
                 
             except Exception as e:
                 logger.error(f"CRITICAL ERROR in scan thread: {str(e)}")
@@ -1412,7 +1419,7 @@ def reset_for_rescan():
                 offset = batch_num * batch_size
                 
                 # Get IDs for this batch to avoid loading all data into memory
-                batch_query = files_query.offset(offset).limit(batch_size)
+                batch_query = files_query.order_by(ScanResult.id).offset(offset).limit(batch_size)
                 batch_ids = [file.id for file in batch_query]
                 
                 if batch_ids:
@@ -1693,6 +1700,13 @@ def get_scan_status():
         logger.info(f"Scan status requested - Is scanning: {is_scanning} (scanning: {scanning_files}, pending: {pending_files}, thread_active: {state.get('scan_thread_active', False)})")
         logger.info(f"Scan state details - phase: {state.get('phase')}, phase_number: {state.get('phase_number')}, phase_current: {state.get('phase_current')}, phase_total: {state.get('phase_total')}")
         
+        # Detect and log stuck scan state
+        if state.get('scan_thread_active') and state.get('phase') == 'scanning':
+            phase_current = state.get('phase_current', 0)
+            phase_total = state.get('phase_total', 0)
+            if phase_total > 0 and phase_current >= phase_total:
+                logger.error(f"STUCK SCAN DETECTED: phase_current ({phase_current}) >= phase_total ({phase_total})")
+        
         # Calculate ETA if we have scan time data
         eta_seconds = 0
         current_file_progress = ""
@@ -1892,7 +1906,7 @@ def cleanup_orphaned_records():
 
 @app.route('/api/scan-parallel', methods=['POST'])
 def scan_files_parallel():
-    """Scan multiple files in parallel"""
+    """Mark files as pending and start a targeted rescan"""
     data = request.get_json()
     file_paths = data.get('file_paths', [])
     deep_scan = data.get('deep_scan', False)
@@ -1900,43 +1914,314 @@ def scan_files_parallel():
     if not file_paths:
         return jsonify({'error': 'No file paths provided'}), 400
     
+    # Check if a scan is already in progress
+    active_scan = ScanState.query.filter_by(is_active=True).first()
+    if active_scan or scan_state['is_scanning']:
+        logger.warning("Scan already in progress, rejecting rescan request")
+        return jsonify({'error': 'Scan already in progress'}), 409
+    
     try:
-        # Get scan paths for parallel optimization
-        scan_paths = os.environ.get('SCAN_PATHS', '').split(',')
-        scan_paths = [path.strip() for path in scan_paths if path.strip()]
+        scan_type = "deep scan" if deep_scan else "rescan"
+        logger.info(f"{scan_type.title()} requested for {len(file_paths)} files")
         
-        # Scan files in parallel
-        checker = initialize_media_checker()
-        results = checker.scan_files_parallel(file_paths, deep_scan=deep_scan, scan_paths=scan_paths)
+        # Mark files as pending in batches
+        batch_size = 500
+        reset_count = 0
         
-        # Update database with results
-        for result in results:
-            existing_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
+        for i in range(0, len(file_paths), batch_size):
+            batch = file_paths[i:i + batch_size]
             
-            if existing_record:
-                # Update existing record
-                for key, value in result.items():
-                    if hasattr(existing_record, key):
-                        setattr(existing_record, key, value)
-                existing_record.scan_date = datetime.now(timezone.utc)
-                existing_record.scan_status = 'completed'
-            else:
-                # Create new record
-                scan_result = ScanResult(**result)
-                scan_result.scan_date = datetime.now(timezone.utc)
-                scan_result.scan_status = 'completed'
-                db.session.add(scan_result)
+            # Use bulk update to reset files to pending and set deep_scan flag
+            updated = db.session.query(ScanResult).filter(
+                ScanResult.file_path.in_(batch)
+            ).update({
+                'scan_status': 'pending',
+                'scan_date': None,
+                'corruption_details': None,
+                'is_corrupted': None,
+                'scan_tool': None,
+                'scan_duration': None,
+                'scan_output': None,
+                'has_warnings': None,
+                'warning_details': None,
+                'deep_scan': deep_scan  # Set the deep scan flag
+            }, synchronize_session=False)
+            
+            db.session.commit()
+            reset_count += updated
+            logger.info(f"Reset batch {i//batch_size + 1}: {updated} files marked as pending (deep_scan={deep_scan})")
         
-        db.session.commit()
+        logger.info(f"Successfully marked {reset_count} files as pending for {scan_type}")
         
-        logger.info(f"Parallel scan completed for {len(file_paths)} files")
-        return jsonify({
-            'results': [r for r in results],
-            'scanned_count': len(results)
+        # Create scan state
+        import uuid
+        scan_id = str(uuid.uuid4())
+        
+        # Queue the scan state creation
+        db_write_queue.put({
+            'type': 'create_scan_state',
+            'data': {
+                'scan_id': scan_id,
+                'is_active': True,
+                'phase': 'scanning',
+                'start_time': datetime.now(timezone.utc),
+                'progress_message': f'Starting {scan_type} of {reset_count} files...'
+            }
         })
+        
+        # Set initial scan state - jump directly to scanning phase
+        update_scan_state(
+            is_scanning=True,
+            start_time=datetime.now(),
+            files_processed=0,
+            estimated_total=reset_count,
+            scan_thread_active=True,
+            phase='scanning',
+            current_file=None,
+            progress_message=f'Starting {scan_type} of {reset_count} files...',
+            scan_id=scan_id,
+            phase_number=3,  # Jump straight to scanning phase
+            total_phases=3,
+            phase_current=0,
+            phase_total=reset_count
+        )
+        
+        # Start stats update thread to monitor progress
+        start_stats_update_thread()
+        
+        def run_targeted_rescan():
+            with app.app_context():
+                try:
+                    logger.info(f"=== TARGETED {scan_type.upper()} STARTED FOR {reset_count} FILES ===")
+                    
+                    # Initialize checker
+                    checker = initialize_media_checker()
+                    
+                    # Get all pending file IDs upfront
+                    # Memory usage: ~200 bytes per record (ID + path), so 1M files = ~190MB
+                    logger.info("Loading pending file IDs...")
+                    pending_records = ScanResult.query.filter_by(scan_status='pending').with_entities(ScanResult.id, ScanResult.file_path).all()
+                    pending_count = len(pending_records)
+                    logger.info(f"Found {pending_count} pending files to scan")
+                    
+                    # Log memory usage estimate for transparency
+                    if pending_count > 100000:
+                        estimated_mb = (pending_count * 200) / (1024 * 1024)
+                        logger.info(f"Estimated memory usage for ID list: {estimated_mb:.1f} MB")
+                    
+                    if pending_count == 0:
+                        logger.info("No pending files found to scan")
+                        update_scan_state(
+                            is_scanning=False,
+                            scan_thread_active=False,
+                            phase='idle',
+                            progress_message="No pending files to scan"
+                        )
+                        return
+                    
+                    scan_start_time = datetime.now()
+                    files_processed = 0
+                    files_scanned = 0
+                    corrupted_found = 0
+                    
+                    # Process pending files in batches
+                    batch_size = 100  # Smaller batches for better progress tracking
+                    
+                    # Process files in batches from our ID list
+                    for batch_start in range(0, pending_count, batch_size):
+                        batch_end = min(batch_start + batch_size, pending_count)
+                        batch_records = pending_records[batch_start:batch_end]
+                        
+                        if not batch_records:
+                            break
+                        
+                        # Get the actual file records for this batch
+                        batch_ids = [record.id for record in batch_records]
+                        pending_batch = ScanResult.query.filter(ScanResult.id.in_(batch_ids)).all()
+                        
+                        # Process this batch using ThreadPoolExecutor
+                        from concurrent.futures import ThreadPoolExecutor, as_completed
+                        
+                        with ThreadPoolExecutor(max_workers=checker.max_workers) as executor:
+                            # Create mapping of file paths to deep_scan settings
+                            file_to_deep_scan = {}
+                            valid_files_in_batch = []
+                            
+                            for record in pending_batch:
+                                if os.path.exists(record.file_path):
+                                    file_to_deep_scan[record.file_path] = getattr(record, 'deep_scan', False)
+                                    valid_files_in_batch.append(record.file_path)
+                                else:
+                                    # File doesn't exist
+                                    logger.warning(f"File no longer exists: {record.file_path}")
+                                    record.scan_status = 'error'
+                                    record.corruption_details = 'File not found'
+                                    db.session.commit()
+                                    files_processed += 1
+                            
+                            if not valid_files_in_batch:
+                                continue
+                            
+                            # Submit scan tasks
+                            future_to_file = {
+                                executor.submit(checker.scan_file, file_path, file_to_deep_scan.get(file_path, False)): file_path 
+                                for file_path in valid_files_in_batch
+                            }
+                            
+                            # Process results as they complete
+                            for future in as_completed(future_to_file):
+                                file_path = future_to_file[future]
+                                try:
+                                    result = future.result()
+                                    files_processed += 1
+                                    files_scanned += 1
+                                    
+                                    if result.get('is_corrupted'):
+                                        corrupted_found += 1
+                                        logger.warning(f"CORRUPTED FILE: {file_path} - {result.get('corruption_details')}")
+                                    else:
+                                        logger.info(f"HEALTHY FILE: {file_path}")
+                                    
+                                    # Update progress
+                                    percentage = (files_processed / pending_count * 100) if pending_count > 0 else 0
+                                    file_name = file_path.split('/')[-1] if file_path else ''
+                                    update_scan_state(
+                                        files_processed=files_processed,
+                                        phase_current=files_processed,
+                                        current_file=file_path,
+                                        progress_message=f"Phase 3 of 3: Scanning {file_name} ({files_processed}/{pending_count} - {percentage:.1f}%)"
+                                    )
+                                    
+                                    # Add scan metadata
+                                    result['scan_date'] = datetime.now(timezone.utc)
+                                    result['scan_status'] = 'completed'
+                                    
+                                    # Send to database write queue
+                                    db_write_queue.put({
+                                        'type': 'batch_update_scan_results',
+                                        'results': [result]
+                                    })
+                                    
+                                except Exception as e:
+                                    logger.error(f"Error scanning {file_path}: {str(e)}")
+                                    files_processed += 1
+                                    # Update database with error
+                                    error_result = {
+                                        'file_path': file_path,
+                                        'scan_status': 'error',
+                                        'corruption_details': f"Scan error: {str(e)}",
+                                        'scan_date': datetime.now(timezone.utc)
+                                    }
+                                    db_write_queue.put({
+                                        'type': 'batch_update_scan_results',
+                                        'results': [error_result]
+                                    })
+                        
+                        logger.info(f"Completed batch, processed {files_processed} files total")
+                    
+                    # Scan completed
+                    scan_end_time = datetime.now()
+                    scan_duration = scan_end_time - scan_start_time
+                    logger.info(f"=== {scan_type.upper()} COMPLETED ===")
+                    logger.info(f"Duration: {scan_duration}")
+                    logger.info(f"Files processed: {files_processed}")
+                    logger.info(f"Files scanned: {files_scanned}")
+                    logger.info(f"Corrupted files found: {corrupted_found}")
+                    
+                    # Update scan state to complete
+                    update_scan_state(
+                        is_scanning=False,
+                        scan_thread_active=False,
+                        phase='idle',
+                        progress_message=f'{scan_type.title()} completed',
+                        files_processed=files_processed
+                    )
+                    
+                    # Mark scan as inactive in database
+                    db_write_queue.put({
+                        'type': 'update_scan_state',
+                        'data': {
+                            'scan_id': scan_id,
+                            'is_active': False,
+                            'end_time': datetime.now(timezone.utc),
+                            'phase': 'completed',
+                            'progress_message': f'{scan_type.title()} completed - {files_scanned} files processed, {corrupted_found} corrupted'
+                        }
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error in {scan_type} thread: {str(e)}")
+                    update_scan_state(
+                        is_scanning=False,
+                        scan_thread_active=False,
+                        phase='idle',
+                        progress_message=f'{scan_type.title()} failed: {str(e)}'
+                    )
+                    
+                    # Mark scan as failed in database
+                    db_write_queue.put({
+                        'type': 'update_scan_state',
+                        'data': {
+                            'scan_id': scan_id,
+                            'is_active': False,
+                            'end_time': datetime.now(timezone.utc),
+                            'phase': 'failed',
+                            'progress_message': f'{scan_type.title()} failed: {str(e)}'
+                        }
+                    })
+        
+        # Start rescan in background thread
+        scan_thread = threading.Thread(target=run_targeted_rescan)
+        scan_thread.daemon = True
+        scan_thread.start()
+        
+        return jsonify({
+            'message': f'{scan_type.title()} started for {reset_count} files',
+            'reset_count': reset_count,
+            'scan_id': scan_id
+        })
+            
     except Exception as e:
-        logger.error(f"Error in parallel scan: {str(e)}")
+        logger.error(f"Error in {scan_type}: {str(e)}")
         db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/recover-stuck-scan', methods=['POST'])
+def recover_stuck_scan():
+    """Emergency recovery endpoint for stuck scans"""
+    try:
+        with scan_state_lock:
+            if not scan_state.get('scan_thread_active'):
+                return jsonify({'error': 'No active scan to recover'}), 400
+                
+            # Force reset scan state
+            logger.warning("Forcing recovery of stuck scan")
+            scan_state['is_scanning'] = False
+            scan_state['scan_thread_active'] = False
+            scan_state['phase'] = 'idle'
+            scan_state['phase_current'] = 0
+            scan_state['phase_total'] = 0
+            scan_state['files_processed'] = 0
+            
+        # Mark any scanning files as pending again
+        with app.app_context():
+            scanning_files = ScanResult.query.filter_by(scan_status='scanning').all()
+            for file in scanning_files:
+                file.scan_status = 'pending'
+            db.session.commit()
+            logger.info(f"Reset {len(scanning_files)} files from 'scanning' to 'pending' status")
+            
+        # Update scan state in database
+        if scan_state.get('scan_id'):
+            db_write_queue.put({
+                'type': 'update_scan_state_complete',
+                'scan_id': scan_state.get('scan_id')
+            })
+            
+        return jsonify({'message': 'Scan recovery initiated'}), 200
+        
+    except Exception as e:
+        logger.error(f"Error recovering stuck scan: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/ignored-patterns')
@@ -2136,6 +2421,11 @@ def migrate_database():
             {
                 'column': 'warning_details',
                 'type': 'TEXT',
+                'post_update': None
+            },
+            {
+                'column': 'deep_scan',
+                'type': 'BOOLEAN DEFAULT 0',
                 'post_update': None
             }
         ]

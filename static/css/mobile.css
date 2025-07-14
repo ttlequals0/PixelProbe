@@ -451,4 +451,128 @@
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
     }
+    
+    /* Pagination fixes for mobile */
+    .pagination-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 1rem 0.25rem;
+        width: 100%;
+        max-width: 100vw;
+        position: relative;
+        overflow: hidden;
+        box-sizing: border-box;
+    }
+    
+    .pagination {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 0.125rem;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+        margin: 0;
+        padding: 0 0.25rem;
+        position: relative;
+        overflow: hidden;
+        max-width: 100%;
+    }
+    
+    .page-link {
+        padding: 0.375rem 0.5rem;
+        font-size: 0.813rem;
+        min-width: auto;
+        text-align: center;
+        white-space: nowrap;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* More compact number buttons */
+    .page-item:not(:first-child):not(:last-child):not(.ellipsis) .page-link {
+        min-width: 2.25rem;
+        padding: 0.375rem 0.375rem;
+    }
+    
+    /* Ellipsis styling */
+    .page-item.ellipsis .page-link {
+        min-width: 1.75rem;
+        padding: 0.375rem 0.125rem;
+        font-size: 0.75rem;
+    }
+    
+    /* Prevent overlapping page numbers */
+    .page-item {
+        flex-shrink: 1;
+    }
+    
+    /* Compact Previous/Next buttons */
+    .page-item:first-child .page-link,
+    .page-item:last-child .page-link {
+        min-width: auto;
+        padding: 0.375rem 0.375rem;
+        font-size: 0.688rem;
+    }
+    
+    /* Even more compact on very small screens */
+    @media (max-width: 375px) {
+        .page-link {
+            padding: 0.25rem 0.375rem;
+            font-size: 0.75rem;
+        }
+        
+        .page-item:first-child .page-link,
+        .page-item:last-child .page-link {
+            padding: 0.25rem 0.25rem;
+            font-size: 0.625rem;
+        }
+        
+        .page-item:not(:first-child):not(:last-child):not(.ellipsis) .page-link {
+            min-width: 2rem;
+            padding: 0.25rem 0.25rem;
+        }
+    }
+    
+    /* Ensure Previous/Next buttons are always visible */
+    .page-item:first-child,
+    .page-item:last-child {
+        flex-shrink: 0;
+    }
+    
+    /* Remove sticky behavior - let pagination scroll naturally */
+    .pagination {
+        padding: 0 0.5rem;
+    }
+    
+    /* Ensure all buttons are same height */
+    .page-item {
+        display: flex;
+        align-items: stretch;
+    }
+    
+    /* Compact page numbers on mobile */
+    .page-item:not(:first-child):not(:last-child) .page-link {
+        min-width: 2.5rem;
+        padding: 0.5rem 0.5rem;
+    }
+    
+    /* Remove shadow gradients - they interfere with sticky buttons */
+    
+    /* Better mobile footer layout */
+    .footer-controls {
+        flex-direction: column;
+        gap: 0.75rem;
+        align-items: stretch;
+    }
+    
+    .footer-controls .items-per-page {
+        justify-content: center;
+    }
+    
+    .footer-controls .pagination-container {
+        width: 100%;
+    }
 }

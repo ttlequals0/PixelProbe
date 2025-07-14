@@ -6,7 +6,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video and image files across your media libraries.
 
-**Version 2.0** introduces a completely redesigned UI with Hulu-inspired aesthetics, Pi-hole style navigation, and full mobile responsiveness.
+**Version 2.0.19** introduces a completely redesigned UI with Hulu-inspired aesthetics, Pi-hole style navigation, and full mobile responsiveness.
 
 ## ✨ Features
 
@@ -116,7 +116,8 @@ Detailed scan results viewer:
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v1.26)
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0)
+- **`ttlequals0/pixelprobe:2.0`** - Complete UI overhaul with modern responsive design
 - **`ttlequals0/pixelprobe:1.26`** - UI improvements and ImageMagick UTF-8 fixes
 - **`ttlequals0/pixelprobe:1.25`** - Database resilience for long-running scans
 - **`ttlequals0/pixelprobe:1.24`** - UI color visibility fixes
@@ -126,7 +127,7 @@ You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:1.26  # or :latest for newest
+    image: ttlequals0/pixelprobe:2.0  # or :latest for newest
 ```
 
 ### Development Setup
@@ -192,7 +193,7 @@ For Docker deployment, you can also configure paths in `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:1.03  # Specify version
+    image: ttlequals0/pixelprobe:2.0  # Specify version
     environment:
       - SCAN_PATHS=/media
       - DATABASE_URL=sqlite:///media_checker.db
@@ -232,7 +233,7 @@ docker-compose up -d
 
 ### Web Interface
 
-1. **Access the Dashboard**: Navigate to http://localhost:5000
+1. **Access the Dashboard**: Navigate to http://localhost:5001
 2. **Start a Scan**: Click "Scan All Files" to begin scanning your media directories
 3. **View Results**: Results appear in the table below with corruption status
 4. **Filter Results**: Use the filter buttons to show only corrupted or healthy files
@@ -313,13 +314,26 @@ PixelProbe/
 ├── app.py                 # Flask web application
 ├── media_checker.py       # Core corruption detection logic
 ├── models.py             # SQLAlchemy database models
+├── version.py            # Version information
 ├── templates/
-│   └── index.html        # Web interface template
-├── tools/                # Utility scripts for maintenance
+│   ├── index.html        # Legacy web interface
+│   ├── index_modern.html # Modern responsive UI
+│   └── api_docs.html     # API documentation
+├── static/
+│   ├── css/             # Stylesheets
+│   │   ├── desktop.css  # Desktop responsive styles
+│   │   ├── mobile.css   # Mobile responsive styles
+│   │   └── logo-styles.css # Logo styling
+│   ├── js/              # JavaScript
+│   │   └── app.js       # Main application logic
+│   └── images/          # Images and icons
+├── tools/               # Utility scripts for maintenance
 │   ├── README.md        # Documentation for tools
 │   └── *.py             # Various fix and migration scripts
-├── screenshots/         # UI screenshots for documentation
-├── requirements.txt      # Python dependencies
+├── docs/                # Documentation
+│   └── screenshots/     # UI screenshots
+├── scripts/             # Development and deployment scripts
+├── requirements.txt     # Python dependencies
 ├── Dockerfile           # Docker container configuration
 ├── docker-compose.yml   # Docker Compose setup
 └── README.md           # This file

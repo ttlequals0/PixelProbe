@@ -7,6 +7,165 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.19] - 2025-07-14
+
+### Fixed
+- **Simplified Scanning Logic - Fixed Pagination Issues**:
+  - Completely rewrote scanning logic to use pre-loaded ID lists instead of pagination
+  - Previous offset-based pagination would skip files as their status changed
+  - Now loads all pending file IDs upfront into memory (minimal overhead)
+  - Processes files in batches from the ID list - guaranteed to scan all files
+  - Much simpler and more reliable than complex pagination logic
+  - Eliminates all edge cases where files could be skipped
+  - Affects both main scan and rescan operations
+
+## [2.0.18] - 2025-07-14
+
+### Fixed
+- **Premature Scan Termination Bug**:
+  - Fixed critical bug where scans would terminate after processing only 3000 files
+  - Added ORDER BY clause to all paginated queries to ensure stable pagination
+  - Without ORDER BY, offset queries can skip records when data changes during iteration
+  - Affected queries: main scan loop, batch discovery, and rescan operations
+  
+### Added
+- **Scan Completion Verification**:
+  - Added check after scan loop to verify all pending files were processed
+  - Logs warning if files remain pending after scan completion
+  - Reports exact count of remaining pending files in completion summary
+
+## [2.0.17] - 2025-07-14
+
+### Fixed
+- **Scan Deadlock Prevention**:
+  - Fixed critical issue where scan gets stuck when phase_current exceeds pending_count
+  - Added safeguard in scan loop to detect and break when files_processed >= pending_count
+  - Added logging to identify when no more pending files are found at offset
+  - Prevents infinite loop condition that left scan in stuck "idle" state
+  
+### Added
+- **Emergency Scan Recovery Endpoint**:
+  - Added `/api/recover-stuck-scan` POST endpoint for manual recovery
+  - Resets scan state and marks any "scanning" files back to "pending"
+  - Provides clean recovery path without restarting the application
+  
+- **Stuck Scan Detection**:
+  - Added automatic detection in `/api/scan-status` endpoint
+  - Logs error when phase_current >= phase_total indicating stuck state
+  - Helps identify stuck scans before they impact user experience
+
+## [2.0.16] - 2025-07-14
+
+### Fixed
+- **Targeted Rescan Implementation**:
+  - Fixed rescan getting stuck in discovery phase for over 1 million files
+  - Rescan now skips directly to Phase 3 (scanning) without discovery
+  - Only processes the specific files marked as pending
+  - Significantly faster rescan startup (immediate vs minutes of loading)
+  - Proper progress tracking shows "Phase 3 of 3: Scanning"
+  - Memory efficient - doesn't load all existing files
+
+### Added
+- **Collapsible Sidebar on Desktop**:
+  - Added toggle button in header to collapse/expand sidebar
+  - Collapsed state shows only icons with tooltips on hover
+  - Main content area expands when sidebar is collapsed for more table space
+  - Sidebar state is saved in localStorage and restored on page load
+  - Smooth transitions for width changes
+  - Toggle icon changes to indicate state (bars vs angles-right)
+
+## [2.0.15] - 2025-07-14
+
+### Fixed
+- **Rescan Progress Tracking & Memory Optimization**:
+  - Simplified rescan approach: marks files as pending and starts normal scan
+  - Rescan now shows same progress bar and UI elements as normal scan
+  - Added `deep_scan` column to database to track deep scan requests
+  - Deep scan and regular rescan both use the same infrastructure
+  - Fixed memory issues:
+    - Removed accumulation of results in memory during batch processing
+    - Process pending files in batches instead of loading all at once
+    - Load existing file paths in batches (10k at a time) instead of all at once
+    - Clear database session periodically to free memory
+    - Use bulk updates for better performance
+  - Prevents multiple concurrent scans during rescan operations
+  - Frontend properly handles scan status checks before starting rescans
+
+## [2.0.14] - 2025-07-14
+
+### Fixed
+- **"All" Pagination Option**:
+  - Fixed backend to properly handle per_page=-1 for showing all results
+  - Added special handling to bypass pagination when "All" is selected
+  - Returns all results in a single response without pagination limits
+
+## [2.0.13] - 2025-07-14
+
+### Fixed
+- **Mobile Pagination Next Button Cutoff**:
+  - Reduced number of visible pages on mobile (only 1, current, last)
+  - Made buttons even more compact
+  - Reduced gaps between buttons
+  - Added responsive sizing for very small screens (375px and below)
+  - Ensured container stays within viewport width
+  - Fixed padding to prevent cutoff
+
+## [2.0.12] - 2025-07-14
+
+### Fixed
+- **Mobile Pagination - No More Horizontal Scroll**:
+  - Removed horizontal scrolling - pagination now fits on screen
+  - Smart page display: shows 1, prev, current, next, last pages only
+  - Made buttons more compact with smaller padding and font
+  - Previous/Next buttons always visible
+  - Ellipsis used intelligently to save space
+  - Different logic for mobile vs desktop pagination
+
+## [2.0.11] - 2025-07-14
+
+### Fixed
+- **Dynamic Version Display**:
+  - Version now reads from APP_VERSION environment variable
+  - Dockerfile updated to set version during build with ARG
+  - Version can be passed during docker build: --build-arg VERSION=x.x.x
+  
+- **Mobile Pagination Final Fix**:
+  - Increased z-index for Previous/Next buttons to stay on top
+  - Added margins to prevent button overlap
+  - Added background extensions to ensure clickability
+  - Increased padding space for sticky buttons
+  - Enhanced box shadows for better visibility
+
+## [2.0.10] - 2025-07-14
+
+### Fixed
+- **Mobile Pagination Button Overlap**:
+  - Fixed page number buttons overlapping and getting cut off
+  - Improved sticky Previous/Next button implementation
+  - Added proper spacing between buttons
+  - Reduced ellipsis width for better space usage
+  - Enhanced button backgrounds and borders for sticky elements
+
+## [2.0.9] - 2025-07-14
+
+### Fixed
+- **Pagination Issues**:
+  - Fixed items per page selector not working (was always showing 20)
+  - Fixed initialization to read selected value from dropdown
+  - Fixed pagination calculation for "All" option
+  - Hide pagination when "All" is selected
+  
+- **Mobile Pagination Display**:
+  - Made Previous/Next buttons sticky on mobile to prevent cutoff
+  - Added horizontal scrolling for page numbers
+  - Auto-scroll to center active page on mobile
+  - Fixed button overlap and cutoff issues
+  - Reduced page range on mobile (shows fewer page numbers)
+  - Improved button sizing and spacing for touch targets
+  - Added proper ellipsis styling
+  - Fixed Previous/Next button backgrounds and borders
+  - Added padding to prevent page numbers from going under sticky buttons
+
 ## [2.0.8] - 2025-07-14
 
 ### Fixed
