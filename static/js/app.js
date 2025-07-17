@@ -48,20 +48,20 @@ class SidebarManager {
     constructor() {
         this.sidebar = document.querySelector('.sidebar');
         this.overlay = document.querySelector('.sidebar-overlay');
-        this.mobileToggleBtn = document.querySelector('.mobile-menu-btn');
-        this.desktopToggleBtn = document.querySelector('.desktop-sidebar-toggle');
+        this.toggleBtn = document.querySelector('.sidebar-toggle-btn');
         this.init();
     }
 
     init() {
-        // Mobile toggle
-        if (this.mobileToggleBtn) {
-            this.mobileToggleBtn.addEventListener('click', () => this.toggleMobile());
-        }
-        
-        // Desktop toggle
-        if (this.desktopToggleBtn) {
-            this.desktopToggleBtn.addEventListener('click', () => this.toggleDesktop());
+        // Single toggle button handles both mobile and desktop
+        if (this.toggleBtn) {
+            this.toggleBtn.addEventListener('click', () => {
+                if (window.innerWidth <= 768) {
+                    this.toggleMobile();
+                } else {
+                    this.toggleDesktop();
+                }
+            });
         }
         
         if (this.overlay) {
@@ -119,12 +119,12 @@ class SidebarManager {
     }
     
     updateToggleIcon(isCollapsed) {
-        if (this.desktopToggleBtn) {
-            const icon = this.desktopToggleBtn.querySelector('i');
+        if (this.toggleBtn && window.innerWidth > 768) {
+            const icon = this.toggleBtn.querySelector('i');
             if (icon) {
                 icon.className = isCollapsed ? 'fas fa-angles-right' : 'fas fa-bars';
             }
-            this.desktopToggleBtn.title = isCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+            this.toggleBtn.title = isCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
         }
     }
 }
@@ -216,7 +216,18 @@ class APIClient {
     }
 
     async checkFileChanges() {
-        return this.request('/file-changes');
+        return this.request('/file-changes', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+    }
+
+    async getCleanupStatus() {
+        return this.request('/cleanup-status');
+    }
+
+    async getFileChangesStatus() {
+        return this.request('/file-changes-status');
     }
 
     // Export
@@ -285,17 +296,31 @@ class StatsDashboard {
 
 // Progress Manager
 class ProgressManager {
-    constructor(apiClient) {
+    constructor(apiClient, app = null) {
         this.api = apiClient;
+        this.app = app;
         this.progressBar = document.querySelector('.progress-bar');
         this.progressText = document.querySelector('.progress-text');
         this.progressContainer = document.querySelector('.progress-container');
         this.checkInterval = null;
+        this.operationType = 'scan'; // 'scan', 'cleanup', or 'file-changes'
     }
 
     show() {
         if (this.progressContainer) {
             this.progressContainer.style.display = 'block';
+            
+            // Update progress title based on operation type
+            const progressTitle = this.progressContainer.querySelector('.progress-title');
+            if (progressTitle) {
+                if (this.operationType === 'scan') {
+                    progressTitle.textContent = 'Scan Progress';
+                } else if (this.operationType === 'cleanup') {
+                    progressTitle.textContent = 'Cleanup Progress';
+                } else if (this.operationType === 'file-changes') {
+                    progressTitle.textContent = 'File Changes Check Progress';
+                }
+            }
         }
     }
 
@@ -320,23 +345,67 @@ class ProgressManager {
         }
     }
 
-    async startMonitoring() {
+    async startMonitoring(operationType = 'scan') {
+        this.operationType = operationType;
         this.show();
-        this.updateScanButtons(true); // Disable scan buttons
+        
+        // Update button states based on operation type
+        if (operationType === 'scan') {
+            this.updateScanButtons(true);
+        } else if (operationType === 'cleanup') {
+            this.updateCleanupButton(true);
+        } else if (operationType === 'file-changes') {
+            this.updateFileChangesButton(true);
+        }
+        
         this.checkInterval = setInterval(async () => {
             try {
-                const status = await this.api.getScanStatus();
-                if (status.is_scanning) {
-                    const progress = this.calculateProgress(status);
-                    this.update(progress.percentage, progress.text);
+                let status;
+                let isRunning = false;
+                
+                // Get status based on operation type
+                if (operationType === 'scan') {
+                    status = await this.api.getScanStatus();
+                    isRunning = status.is_scanning;
+                } else if (operationType === 'cleanup') {
+                    status = await this.api.getCleanupStatus();
+                    isRunning = status.is_running;
+                } else if (operationType === 'file-changes') {
+                    status = await this.api.getFileChangesStatus();
+                    isRunning = status.is_running;
+                }
+                
+                if (isRunning) {
+                    const progress = this.calculateProgress(status, operationType);
+                    this.update(progress.percentage, progress.text, progress.details);
                 } else {
-                    // Scan is complete when is_scanning is false
-                    this.complete();
+                    // Operation is complete
+                    this.complete(operationType, status);
                 }
             } catch (error) {
-                console.error('Failed to check scan status:', error);
+                console.error(`Failed to check ${operationType} status:`, error);
             }
-        }, 1000);
+        }, 1000); // Poll every 1 second
+    }
+    
+    updateCleanupButton(isRunning) {
+        const cleanupButton = document.querySelector('[onclick*="cleanupOrphaned"]');
+        if (cleanupButton) {
+            cleanupButton.disabled = isRunning;
+            cleanupButton.innerHTML = isRunning ? 
+                '<i class="fas fa-spinner fa-spin"></i> Cleaning up...' : 
+                '<i class="fas fa-broom"></i> Cleanup Orphaned';
+        }
+    }
+    
+    updateFileChangesButton(isRunning) {
+        const fileChangesButton = document.querySelector('[onclick*="checkFileChanges"]');
+        if (fileChangesButton) {
+            fileChangesButton.disabled = isRunning;
+            fileChangesButton.innerHTML = isRunning ? 
+                '<i class="fas fa-spinner fa-spin"></i> Checking...' : 
+                '<i class="fas fa-exchange-alt"></i> Check File Changes';
+        }
     }
     
     updateScanButtons(isScanning) {
@@ -363,63 +432,57 @@ class ProgressManager {
         }
     }
 
-    calculateProgress(status) {
-        // 3-phase progress tracking as per version 1.30
-        // Phase 1: Discovery (0-33%)
-        // Phase 2: Adding to Database (33-66%)
-        // Phase 3: Scanning (66-100%)
-        
+    calculateProgress(status, operationType = 'scan') {
         let percentage = 0;
         let text = '';
+        let details = '';
         
-        const phaseNumber = status.phase_number || 1;
-        const totalPhases = status.total_phases || 3;
-        const phaseCurrent = status.phase_current || 0;
-        const phaseTotal = status.phase_total || 0;
-        
-        // Calculate percentage based on phase
-        const phasePercentage = 100 / totalPhases;
-        const phaseStart = (phaseNumber - 1) * phasePercentage;
-        
-        if (phaseTotal > 0) {
-            const phaseProgress = (phaseCurrent / phaseTotal) * phasePercentage;
-            percentage = Math.round(phaseStart + phaseProgress);
-        } else {
-            percentage = Math.round(phaseStart);
-        }
-        
-        // Use the progress_message from backend if available
-        if (status.progress_message) {
-            text = status.progress_message;
-        } else {
-            // Fallback text generation
-            const phase = status.phase || '';
+        if (operationType === 'scan') {
+            // 3-phase progress tracking for scans
+            const phaseNumber = status.phase_number || 1;
+            const totalPhases = status.total_phases || 3;
+            const phaseCurrent = status.phase_current || 0;
+            const phaseTotal = status.phase_total || 0;
             
-            if (phaseNumber === 1) {
-                text = `Phase 1 of ${totalPhases}: Discovery`;
-            } else if (phaseNumber === 2) {
-                text = `Phase 2 of ${totalPhases}: Adding to Database`;
-            } else if (phaseNumber === 3) {
-                text = `Phase 3 of ${totalPhases}: Scanning`;
+            // Calculate percentage based on phase
+            const phasePercentage = 100 / totalPhases;
+            const phaseStart = (phaseNumber - 1) * phasePercentage;
+            
+            if (phaseTotal > 0) {
+                const phaseProgress = (phaseCurrent / phaseTotal) * phasePercentage;
+                percentage = Math.round(phaseStart + phaseProgress);
+            } else {
+                percentage = Math.round(phaseStart);
             }
             
-            if (phaseCurrent > 0 && phaseTotal > 0) {
-                const phasePercent = ((phaseCurrent / phaseTotal) * 100).toFixed(1);
-                text += ` (${phaseCurrent}/${phaseTotal} - ${phasePercent}%)`;
-            }
+            text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
+            
+        } else if (operationType === 'cleanup') {
+            // Progress for cleanup operation
+            percentage = status.progress_percentage || 0;
+            text = status.progress_message || 'Checking for orphaned files...';
             
             if (status.current_file) {
-                const filename = status.current_file.split('/').pop();
-                text += ` - ${filename}`;
+                details = `Checking: ${status.current_file.split('/').pop()}`;
+            }
+            if (status.orphaned_found > 0) {
+                details += ` - Found ${status.orphaned_found} orphaned files`;
+            }
+            
+        } else if (operationType === 'file-changes') {
+            // Progress for file changes check
+            percentage = status.progress_percentage || 0;
+            text = status.progress_message || 'Checking for file changes...';
+            
+            if (status.current_file) {
+                details = `Checking: ${status.current_file.split('/').pop()}`;
+            }
+            if (status.changes_found > 0) {
+                details += ` - Found ${status.changes_found} changed files`;
             }
         }
         
-        // Add ETA if available
-        if (status.eta_seconds && status.eta_seconds > 0) {
-            text += ` | ETA: ${this.formatTime(status.eta_seconds)}`;
-        }
-        
-        return { percentage, text };
+        return { percentage, text, details };
     }
 
     formatTime(seconds) {
@@ -428,12 +491,54 @@ class ProgressManager {
         return `${mins}m ${secs}s`;
     }
 
-    complete() {
-        // Always show 100% when scan completes, even if not all files were processed
-        this.update(100, 'Scan completed!');
+    async complete(operationType = 'scan', status = null) {
+        // Always show 100% when operation completes
+        let completionMessage = '';
+        
+        if (operationType === 'scan') {
+            completionMessage = 'Scan completed!';
+            this.updateScanButtons(false); // Re-enable scan buttons
+        } else if (operationType === 'cleanup') {
+            const deletedCount = status?.orphaned_found || 0;
+            completionMessage = `Cleanup completed! Removed ${deletedCount} orphaned records.`;
+            this.updateCleanupButton(false); // Re-enable cleanup button
+        } else if (operationType === 'file-changes') {
+            const changesFound = status?.changes_found || 0;
+            completionMessage = `File changes check completed! Found ${changesFound} changed files.`;
+            this.updateFileChangesButton(false); // Re-enable file changes button
+            
+            // Show results if any changes were found
+            if (status?.result && changesFound > 0) {
+                this.showFileChangesResults(status.result);
+            }
+        }
+        
+        this.update(100, completionMessage);
         this.stopMonitoring();
-        this.updateScanButtons(false); // Re-enable scan buttons
-        setTimeout(() => this.hide(), 3000);
+        
+        // Refresh the stats and table to show updated results
+        if (this.app) {
+            await this.app.stats.updateStats();
+            
+            // Only reload table for scan and cleanup operations
+            if (operationType === 'scan' || operationType === 'cleanup') {
+                await this.app.table.loadData();
+            }
+        }
+        
+        setTimeout(() => this.hide(), 5000);
+    }
+    
+    showFileChangesResults(result) {
+        // Show file changes in a modal or alert
+        const changedFiles = result.changed_files || [];
+        if (changedFiles.length > 0) {
+            let message = `Found ${changedFiles.length} changed files:\n\n`;
+            changedFiles.forEach(file => {
+                message += `${file.file_path} - ${file.change_type}\n`;
+            });
+            alert(message);
+        }
     }
 }
 
@@ -625,8 +730,8 @@ class TableManager {
     }
 
     renderMobileCard(file) {
-        const statusClass = file.is_corrupted ? 'danger' : (file.has_warnings ? 'warning' : 'success');
-        const statusText = file.is_corrupted ? 'CORRUPTED' : (file.has_warnings ? 'WARNING' : 'HEALTHY');
+        const statusClass = file.marked_as_good ? 'success' : (file.is_corrupted ? 'danger' : (file.has_warnings ? 'warning' : 'success'));
+        const statusText = file.marked_as_good ? 'HEALTHY' : (file.is_corrupted ? 'CORRUPTED' : (file.has_warnings ? 'WARNING' : 'HEALTHY'));
         
         return `
             <div class="result-card">
@@ -671,8 +776,8 @@ class TableManager {
     }
 
     renderRow(file) {
-        const statusClass = file.is_corrupted ? 'danger' : (file.has_warnings ? 'warning' : 'success');
-        const statusText = file.is_corrupted ? 'Corrupted' : (file.has_warnings ? 'Warning' : 'Healthy');
+        const statusClass = file.marked_as_good ? 'success' : (file.is_corrupted ? 'danger' : (file.has_warnings ? 'warning' : 'success'));
+        const statusText = file.marked_as_good ? 'Healthy' : (file.is_corrupted ? 'Corrupted' : (file.has_warnings ? 'Warning' : 'Healthy'));
         
         return `
             <tr>
@@ -856,7 +961,7 @@ class PixelProbeApp {
         this.theme = new ThemeManager();
         this.sidebar = new SidebarManager();
         this.stats = new StatsDashboard(this.api);
-        this.progress = new ProgressManager(this.api);
+        this.progress = new ProgressManager(this.api, this);
         this.table = new TableManager(this.api);
     }
 
@@ -929,10 +1034,32 @@ class PixelProbeApp {
         
         try {
             const result = await this.api.cleanupOrphaned();
-            this.showNotification(`Cleaned up ${result.deleted_count || 0} orphaned entries`, 'success');
-            await this.stats.updateStats();
-            await this.table.loadData();
+            console.log('Cleanup response:', result);
+            
+            if (result.status === 'started') {
+                console.log('Starting progress monitoring for cleanup');
+                this.showNotification('Cleanup started...', 'info');
+                // Start monitoring cleanup progress
+                this.progress.startMonitoring('cleanup');
+                
+                // Also do a manual check after 1 second to debug
+                setTimeout(async () => {
+                    try {
+                        const status = await this.api.getCleanupStatus();
+                        console.log('Cleanup status after 1s:', status);
+                    } catch (e) {
+                        console.error('Failed to get cleanup status:', e);
+                    }
+                }, 1000);
+            } else {
+                // This is the old synchronous response - still handle it
+                console.log('Got synchronous response, not async');
+                this.showNotification(`Cleaned up ${result.deleted_count || 0} orphaned entries`, 'success');
+                await this.stats.updateStats();
+                await this.table.loadData();
+            }
         } catch (error) {
+            console.error('Cleanup error:', error);
             this.showNotification('Failed to cleanup orphaned entries', 'error');
         }
     }
@@ -940,13 +1067,23 @@ class PixelProbeApp {
     async checkFileChanges() {
         try {
             const result = await this.api.checkFileChanges();
-            const changedCount = result.changed_files?.length || 0;
-            if (changedCount > 0) {
-                this.showNotification(`Found ${changedCount} files with changes`, 'info');
+            console.log('File changes response:', result);
+            
+            if (result.status === 'started') {
+                this.showNotification('File changes check started...', 'info');
+                // Start monitoring file changes progress
+                this.progress.startMonitoring('file-changes');
             } else {
-                this.showNotification('No file changes detected', 'success');
+                // This is the old synchronous response - still handle it
+                const changedCount = result.changed_files?.length || 0;
+                if (changedCount > 0) {
+                    this.showNotification(`Found ${changedCount} files with changes`, 'info');
+                } else {
+                    this.showNotification('No file changes detected', 'success');
+                }
             }
         } catch (error) {
+            console.error('File changes error:', error);
             this.showNotification('Failed to check file changes', 'error');
         }
     }
@@ -1409,7 +1546,7 @@ class PixelProbeApp {
         modalBody.innerHTML = `
             <div class="scan-output-details">
                 <h4>File: ${this.escapeHtml(file.file_path)}</h4>
-                <p><strong>Status:</strong> ${file.is_corrupted ? 'Corrupted' : (file.has_warnings ? 'Warning' : 'Healthy')}</p>
+                <p><strong>Status:</strong> ${file.marked_as_good ? 'Healthy' : (file.is_corrupted ? 'Corrupted' : (file.has_warnings ? 'Warning' : 'Healthy'))}</p>
                 <p><strong>Tool:</strong> ${file.scan_tool || 'N/A'}</p>
                 <p><strong>Scanned:</strong> ${file.scan_date ? new Date(file.scan_date).toLocaleString() : 'N/A'}</p>
                 <hr>

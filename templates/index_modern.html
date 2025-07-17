@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     
     <title>PixelProbe - Media Integrity Scanner</title>
@@ -17,9 +18,9 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/css/desktop.css">
-    <link rel="stylesheet" href="/static/css/mobile.css">
-    <link rel="stylesheet" href="/static/css/logo-styles.css">
+    <link rel="stylesheet" href="/static/css/desktop.css?v=2.0.28">
+    <link rel="stylesheet" href="/static/css/mobile.css?v=2.0.28">
+    <link rel="stylesheet" href="/static/css/logo-styles.css?v=2.0.28">
 </head>
 <body>
     <div class="app-wrapper">
@@ -94,10 +95,7 @@
             <!-- Header -->
             <header class="header">
                 <div class="header-content">
-                    <button class="mobile-menu-btn">
-                        <i class="fas fa-bars"></i>
-                    </button>
-                    <button class="desktop-sidebar-toggle" title="Toggle sidebar">
+                    <button class="sidebar-toggle-btn">
                         <i class="fas fa-bars"></i>
                     </button>
                     <h2 class="header-title">Media Integrity Scanner</h2>
@@ -295,7 +293,7 @@
     </div>
     
     <!-- Scripts -->
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=2.0.28"></script>
     
     <!-- Initialize version info -->
     <script>
