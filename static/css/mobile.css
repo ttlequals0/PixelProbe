@@ -36,14 +36,30 @@
         position: relative;
     }
     
-    /* Sidebar mobile behavior */
+    /* Hide desktop-specific elements */
+    .desktop-only {
+        display: none !important;
+    }
+    
+    /* Sidebar mobile behavior - ensure it's hidden by default */
     .sidebar {
-        transform: translateX(-100%);
-        width: var(--sidebar-width);
+        position: fixed !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: var(--sidebar-width) !important;
+        height: 100vh !important;
+        z-index: 1000 !important;
+        transform: translateX(-100%) !important;
+        transition: transform 0.3s ease !important;
     }
     
     .sidebar.active {
-        transform: translateX(0);
+        transform: translateX(0) !important;
+    }
+    
+    /* Prevent sidebar from showing in collapsed state on mobile */
+    .sidebar.collapsed {
+        transform: translateX(-100%) !important;
     }
     
     /* Sidebar overlay */
@@ -62,11 +78,11 @@
         display: block;
     }
     
-    /* Main content adjustments */
+    /* Main content adjustments - ensure no left margin from desktop sidebar */
     .main-content {
-        margin-left: 0;
-        width: 100%;
-        max-width: 100%;
+        margin-left: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
         overflow-x: hidden;
         padding: 0;
     }
@@ -91,18 +107,15 @@
         text-overflow: ellipsis;
     }
     
-    /* Mobile menu button */
-    .mobile-menu-btn {
+    /* Sidebar toggle button styling for mobile */
+    .sidebar-toggle-btn {
         display: flex;
         align-items: center;
         justify-content: center;
         width: 2.5rem;
         height: 2.5rem;
-        border: none;
-        background: none;
-        color: var(--text-primary);
-        font-size: 1.25rem;
-        cursor: pointer;
+        padding: 0.5rem;
+        margin-right: 0.5rem;
         flex-shrink: 0;
     }
     
@@ -392,6 +405,7 @@
     }
 }
 
+
 /* Touch-friendly adjustments */
 @media (hover: none) and (pointer: coarse) {
     /* Increase touch targets */
@@ -574,5 +588,47 @@
     
     .footer-controls .pagination-container {
         width: 100%;
+    }
+}
+
+/* Critical mobile overrides to fix duplicate elements */
+@media (max-width: 768px) {
+    /* Ensure desktop sidebar behavior doesn't interfere */
+    .sidebar:not(.active) {
+        visibility: hidden !important;
+        pointer-events: none !important;
+    }
+    
+    .sidebar.active {
+        visibility: visible !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Fix any desktop styles that might cause duplication */
+    .main-content {
+        transition: none !important;
+    }
+    
+    /* Ensure only one sidebar toggle button */
+    .sidebar-toggle-btn {
+        display: flex !important;
+    }
+    
+    /* Remove any desktop-specific sidebar features */
+    .sidebar-header {
+        cursor: default !important;
+    }
+    
+    .sidebar-header:hover {
+        background-color: transparent !important;
+    }
+    
+    /* Ensure proper mobile menu behavior */
+    .sidebar-overlay {
+        display: none;
+    }
+    
+    .sidebar-overlay.active {
+        display: block !important;
     }
 }

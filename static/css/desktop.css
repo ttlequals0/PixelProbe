@@ -244,8 +244,8 @@ body {
     align-items: center;
 }
 
-/* Desktop sidebar toggle button */
-.desktop-sidebar-toggle {
+/* Sidebar toggle button - works for both mobile and desktop */
+.sidebar-toggle-btn {
     background: none;
     border: none;
     color: var(--text-primary);
@@ -257,15 +257,8 @@ body {
     transition: background-color 0.2s ease;
 }
 
-.desktop-sidebar-toggle:hover {
+.sidebar-toggle-btn:hover {
     background-color: var(--bg-tertiary);
-}
-
-/* Hide mobile menu button on desktop */
-@media (min-width: 769px) {
-    .mobile-menu-btn {
-        display: none;
-    }
 }
 
 .header-title {

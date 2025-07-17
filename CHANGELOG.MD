@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.28] - 2025-07-16
+
+### Fixed
+- **Marked as Good Files Properly Treated as Healthy**:
+  - Files marked as good no longer appear in corrupted or warning filters
+  - Backend filtering logic updated to exclude marked_as_good files from corrupted/warning counts
+  - Stats calculations now properly exclude marked_as_good files from corrupted and warning totals
+  - Frontend UI now displays "Healthy" status for all files marked as good
+  - Fixed both desktop table view and mobile card view to show correct status
+  - Updated scan output modal to display correct status for marked_as_good files
+  - Ensures consistency across all views and filters
+
+## [2.0.27] - 2025-07-15
+
+### Fixed
+- **Mobile UI Duplicate Elements**:
+  - Fixed duplicate sidebar showing on mobile devices
+  - Added proper CSS overrides to ensure desktop sidebar is completely hidden on mobile
+  - Used !important declarations strategically to override desktop styles
+  - Added visibility and pointer-events controls to prevent interaction with hidden sidebar
+  - Ensured main content has no left margin on mobile (was inheriting desktop sidebar margin)
+  - Fixed sidebar transform and position properties to work correctly on mobile
+  - Added cache-busting version parameters to force CSS reload
+  - Mobile sidebar now properly slides in from left only when activated
+  - Desktop sidebar collapse functionality no longer interferes with mobile behavior
+
+## [2.0.26] - 2025-07-15
+
+### Fixed
+- **Completely Refactored Mobile/Desktop Toggle**:
+  - Removed separate mobile and desktop toggle buttons from HTML
+  - Created single unified toggle button that works for both mobile and desktop
+  - Updated JavaScript to detect screen size and use appropriate toggle behavior
+  - Removed all CSS attempting to hide desktop button on mobile
+  - Fixed the root cause of double hamburger menu on mobile
+  - Added cache busting query parameters to CSS files to force reload
+
+## [2.0.25] - 2025-07-15
+
+### Fixed
+- **Mobile UI Desktop Toggle Still Visible**:
+  - Added more aggressive CSS rules to force hide desktop-sidebar-toggle on mobile
+  - Used multiple CSS properties including visibility, dimensions, and positioning
+  - Added explicit display rule for mobile-menu-btn to ensure it's the only visible toggle
+  - Placed rules at end of mobile.css to ensure they take precedence
+
+## [2.0.24] - 2025-07-15
+
+### Fixed
+- **Mobile UI Double Toggle Button**:
+  - Fixed issue where desktop sidebar toggle button was visible on mobile
+  - Added CSS rule to hide desktop-sidebar-toggle on screens smaller than 768px
+  - Mobile now correctly shows only the hamburger menu button
+
+## [2.0.23] - 2025-07-15
+
+### Added
+- **Enhanced Debugging for Progress Operations**:
+  - Added extensive logging to cleanup orphaned endpoint and async function
+  - Added console logging in JavaScript to track operation flow
+  - Added automatic status check after 1 second to debug progress monitoring
+  - Added test endpoint `/api/test-cleanup` to inspect cleanup state
+  - Added exception logging with full stack traces
+  - Added try-catch around thread creation to catch startup errors
+
+## [2.0.22] - 2025-07-15
+
+### Fixed
+- **Progress Tracking App Context Issue**:
+  - Fixed missing Flask app context in async cleanup and file changes functions
+  - Both async functions now properly wrap database operations in app.app_context()
+  - This was preventing the async operations from executing properly
+  - Added debug logging to help diagnose issues with operation responses
+
+## [2.0.21] - 2025-07-15
+
+### Added
+- **Progress Bars for Cleanup and File Changes Operations**:
+  - Added real-time progress tracking for cleanup orphaned records operation
+  - Added real-time progress tracking for file changes check operation
+  - Both operations now run asynchronously with visual progress indicators
+  - Progress bars show current file being processed, percentage complete, and items found
+  - Cleanup orphans shows count of orphaned files found during scan
+  - File changes check shows count of modified/deleted files found
+  - Operations can run without blocking the UI
+  - Added `/api/cleanup-status` and `/api/file-changes-status` endpoints for progress monitoring
+  - Reused existing progress UI components for consistent user experience
+  - Progress titles dynamically update based on operation type
+  - Automatic UI refresh after cleanup operation completes
+  - File changes results displayed in alert dialog when changes are found
+
+### Fixed
+- **Modern UI Progress Monitoring Bug**:
+  - Fixed missing interval parameter in setInterval call that caused excessive server polling
+  - Was polling server potentially hundreds of times per second instead of once per second
+  - Added explicit 1000ms interval to match legacy UI behavior
+
+## [2.0.20] - 2025-07-14
+
+### Fixed
+- **UI Not Updating After Rescan**:
+  - Fixed issue where rescanned items that changed status (e.g., corrupted to warning) weren't updating in the UI
+  - Modified ProgressManager to accept app instance reference
+  - Added automatic table and stats refresh when scan completes
+  - UI now properly reflects status changes immediately after rescan without requiring page refresh
+
 ## [2.0.19] - 2025-07-14
 
 ### Fixed
