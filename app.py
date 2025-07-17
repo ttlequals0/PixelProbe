@@ -2196,13 +2196,16 @@ def cleanup_orphaned_async():
                         cleanup_state['phase_current'] = deleted_so_far
                         cleanup_state['progress_message'] = f'Phase 2 of 2: Deleted {deleted_so_far} of {len(orphaned_ids)} records...'
             else:
-                # No orphaned files found, skip deletion phase
+                # No orphaned files found, still show Phase 2 completion
                 with cleanup_state_lock:
-                    cleanup_state['phase'] = 'complete'
+                    cleanup_state['phase'] = 'deleting'
                     cleanup_state['phase_number'] = 2
                     cleanup_state['phase_current'] = 0
                     cleanup_state['phase_total'] = 0
-                    cleanup_state['progress_message'] = 'No orphaned records found to delete'
+                    cleanup_state['progress_message'] = 'Phase 2 of 2: No orphaned records to delete'
+                
+                # Give UI time to show Phase 2 status
+                time.sleep(1)
             
             # Mark as complete
             with cleanup_state_lock:
