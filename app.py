@@ -1826,6 +1826,10 @@ def get_cleanup_status():
         response = {
             'is_running': state.get('is_running', False),
             'phase': state.get('phase', 'idle'),
+            'phase_number': state.get('phase_number', 1),
+            'total_phases': state.get('total_phases', 2),
+            'phase_current': state.get('phase_current', 0),
+            'phase_total': state.get('phase_total', 0),
             'files_processed': state.get('files_processed', 0),
             'total_files': state.get('total_files', 0),
             'orphaned_found': state.get('orphaned_found', 0),
@@ -1863,6 +1867,10 @@ def get_file_changes_status():
         response = {
             'is_running': state.get('is_running', False),
             'phase': state.get('phase', 'idle'),
+            'phase_number': state.get('phase_number', 1),
+            'total_phases': state.get('total_phases', 1),
+            'phase_current': state.get('phase_current', 0),
+            'phase_total': state.get('phase_total', 0),
             'files_processed': state.get('files_processed', 0),
             'total_files': state.get('total_files', 0),
             'changes_found': state.get('changes_found', 0),
@@ -1997,46 +2005,62 @@ def check_file_changes_async():
         try:
             with file_changes_state_lock:
                 file_changes_state['phase'] = 'checking'
-                file_changes_state['progress_message'] = 'Loading files with hashes from database...'
+                file_changes_state['phase_number'] = 1
+                file_changes_state['total_phases'] = 1
+                file_changes_state['progress_message'] = 'Phase 1 of 1: Counting files in database...'
             
-            # Get all records with hashes from database
-            all_results = ScanResult.query.filter(ScanResult.file_hash.isnot(None)).all()
-            total_files = len(all_results)
+            # Get total count of files
+            total_files = ScanResult.query.count()
             
             with file_changes_state_lock:
                 file_changes_state['total_files'] = total_files
-                file_changes_state['progress_message'] = f'Checking {total_files} files for changes...'
+                file_changes_state['phase_total'] = total_files
+                file_changes_state['progress_message'] = f'Phase 1 of 1: Checking {total_files} files for changes...'
             
             checker = initialize_media_checker()
             changed_files = []
+            batch_size = 1000  # Process files in batches to handle large databases
             
-            # Check each file with progress tracking
-            for idx, result in enumerate(all_results):
-                with file_changes_state_lock:
-                    file_changes_state['files_processed'] = idx + 1
-                    file_changes_state['current_file'] = result.file_path
+            # Process files in batches
+            for offset in range(0, total_files, batch_size):
+                # Get batch of records
+                batch_results = ScanResult.query.order_by(ScanResult.id).offset(offset).limit(batch_size).all()
                 
-                file_path = result.file_path
-                stored_hash = result.file_hash
-                stored_modified = result.last_modified
+                if not batch_results:
+                    break
                 
-                if not os.path.exists(file_path):
-                    changed_files.append({
-                        'file_path': file_path,
-                        'change_type': 'deleted',
-                        'stored_hash': stored_hash,
-                        'current_hash': None
-                    })
+                # Check each file in the batch
+                for result in batch_results:
+                    idx = offset + batch_results.index(result)
+                    
                     with file_changes_state_lock:
-                        file_changes_state['changes_found'] = len(changed_files)
-                    continue
-                
-                # Check if file was modified
-                current_stats = os.stat(file_path)
-                current_modified = datetime.fromtimestamp(current_stats.st_mtime)
-                
-                if stored_modified and current_modified != stored_modified:
+                        file_changes_state['files_processed'] = idx + 1
+                        file_changes_state['phase_current'] = idx + 1
+                        file_changes_state['current_file'] = result.file_path
+                    
+                    file_path = result.file_path
+                    stored_hash = result.file_hash
+                    stored_modified = result.last_modified
+                    
+                    if not os.path.exists(file_path):
+                        changed_files.append({
+                            'file_path': file_path,
+                            'change_type': 'deleted',
+                            'stored_hash': stored_hash,
+                            'current_hash': None
+                        })
+                        with file_changes_state_lock:
+                            file_changes_state['changes_found'] = len(changed_files)
+                        continue
+                    
+                    # Calculate hash for ALL files to detect silent corruption
                     current_hash = checker.calculate_file_hash(file_path)
+                    
+                    # Get current modification time
+                    current_stats = os.stat(file_path)
+                    current_modified = datetime.fromtimestamp(current_stats.st_mtime)
+                    
+                    # Check if hash has changed (regardless of timestamp)
                     if current_hash != stored_hash:
                         changed_files.append({
                             'file_path': file_path,
@@ -2105,55 +2129,73 @@ def cleanup_orphaned_async():
             logger.info("Inside app context, updating state to checking")
             with cleanup_state_lock:
                 cleanup_state['phase'] = 'checking'
-                cleanup_state['progress_message'] = 'Loading database records...'
+                cleanup_state['phase_number'] = 1
+                cleanup_state['total_phases'] = 2
+                cleanup_state['progress_message'] = 'Phase 1 of 2: Counting files in database...'
             
-            # Get all records from database
-            logger.info("Loading all scan results from database")
-            all_results = ScanResult.query.all()
-            total_files = len(all_results)
+            # Get total count of files
+            total_files = ScanResult.query.count()
             logger.info(f"Found {total_files} total files to check")
             
             with cleanup_state_lock:
                 cleanup_state['total_files'] = total_files
-                cleanup_state['progress_message'] = f'Checking {total_files} files for orphaned records...'
+                cleanup_state['phase_total'] = total_files
+                cleanup_state['progress_message'] = f'Phase 1 of 2: Checking {total_files} files for orphaned records...'
             
             checker = initialize_media_checker()
-            orphaned_records = []
+            orphaned_ids = []  # Store IDs instead of full records to save memory
+            batch_size = 1000  # Process files in batches to handle large databases
             
-            # Check each file with progress tracking
-            for idx, result in enumerate(all_results):
-                with cleanup_state_lock:
-                    cleanup_state['files_processed'] = idx + 1
-                    cleanup_state['current_file'] = result.file_path
+            # Process files in batches
+            for offset in range(0, total_files, batch_size):
+                # Get batch of records
+                batch_results = ScanResult.query.order_by(ScanResult.id).offset(offset).limit(batch_size).all()
                 
-                if not os.path.exists(result.file_path):
-                    orphaned_records.append(result)
+                if not batch_results:
+                    break
+                
+                # Check each file in the batch
+                for result in batch_results:
+                    idx = offset + batch_results.index(result)
+                    
                     with cleanup_state_lock:
-                        cleanup_state['orphaned_found'] = len(orphaned_records)
+                        cleanup_state['files_processed'] = idx + 1
+                        cleanup_state['phase_current'] = idx + 1
+                        cleanup_state['current_file'] = result.file_path
+                    
+                    if not os.path.exists(result.file_path):
+                        orphaned_ids.append(result.id)
+                        with cleanup_state_lock:
+                            cleanup_state['orphaned_found'] = len(orphaned_ids)
             
             # Start deletion phase
             with cleanup_state_lock:
                 cleanup_state['phase'] = 'deleting'
-                cleanup_state['progress_message'] = f'Deleting {len(orphaned_records)} orphaned records...'
+                cleanup_state['phase_number'] = 2
+                cleanup_state['phase_current'] = 0
+                cleanup_state['phase_total'] = len(orphaned_ids)
+                cleanup_state['progress_message'] = f'Phase 2 of 2: Deleting {len(orphaned_ids)} orphaned records...'
             
-            # Delete orphaned records in batches
-            batch_size = 100
-            for i in range(0, len(orphaned_records), batch_size):
-                batch = orphaned_records[i:i + batch_size]
-                for record in batch:
-                    db.session.delete(record)
+            # Delete orphaned records in batches using IDs
+            deletion_batch_size = 1000
+            for i in range(0, len(orphaned_ids), deletion_batch_size):
+                batch_ids = orphaned_ids[i:i + deletion_batch_size]
+                # Use bulk delete for efficiency
+                ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
                 db.session.commit()
                 
                 with cleanup_state_lock:
-                    cleanup_state['progress_message'] = f'Deleted {min(i + batch_size, len(orphaned_records))} of {len(orphaned_records)} records...'
+                    deleted_so_far = min(i + deletion_batch_size, len(orphaned_ids))
+                    cleanup_state['phase_current'] = deleted_so_far
+                    cleanup_state['progress_message'] = f'Phase 2 of 2: Deleted {deleted_so_far} of {len(orphaned_ids)} records...'
             
             # Mark as complete
             with cleanup_state_lock:
                 cleanup_state['phase'] = 'complete'
-                cleanup_state['progress_message'] = f'Successfully removed {len(orphaned_records)} orphaned records'
+                cleanup_state['progress_message'] = f'Successfully removed {len(orphaned_ids)} orphaned records'
                 cleanup_state['is_running'] = False
             
-            logger.info(f"Cleaned up {len(orphaned_records)} orphaned records")
+            logger.info(f"Cleaned up {len(orphaned_ids)} orphaned records")
             
         except Exception as e:
             logger.error(f"Error in async cleanup: {str(e)}", exc_info=True)

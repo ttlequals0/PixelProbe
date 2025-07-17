@@ -458,9 +458,24 @@ class ProgressManager {
             text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
             
         } else if (operationType === 'cleanup') {
-            // Progress for cleanup operation
-            percentage = status.progress_percentage || 0;
-            text = status.progress_message || 'Checking for orphaned files...';
+            // Phase-based progress for cleanup operation
+            const phaseNumber = status.phase_number || 1;
+            const totalPhases = status.total_phases || 2;
+            const phaseCurrent = status.phase_current || 0;
+            const phaseTotal = status.phase_total || 0;
+            
+            // Calculate percentage based on phase
+            const phasePercentage = 100 / totalPhases;
+            const phaseStart = (phaseNumber - 1) * phasePercentage;
+            
+            if (phaseTotal > 0) {
+                const phaseProgress = (phaseCurrent / phaseTotal) * phasePercentage;
+                percentage = Math.round(phaseStart + phaseProgress);
+            } else {
+                percentage = Math.round(phaseStart);
+            }
+            
+            text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
             
             if (status.current_file) {
                 details = `Checking: ${status.current_file.split('/').pop()}`;
@@ -470,8 +485,19 @@ class ProgressManager {
             }
             
         } else if (operationType === 'file-changes') {
-            // Progress for file changes check
-            percentage = status.progress_percentage || 0;
+            // Phase-based progress for file changes check
+            const phaseNumber = status.phase_number || 1;
+            const totalPhases = status.total_phases || 1;
+            const phaseCurrent = status.phase_current || 0;
+            const phaseTotal = status.phase_total || 0;
+            
+            // Calculate percentage based on phase
+            if (phaseTotal > 0) {
+                percentage = Math.round((phaseCurrent / phaseTotal) * 100);
+            } else {
+                percentage = 0;
+            }
+            
             text = status.progress_message || 'Checking for file changes...';
             
             if (status.current_file) {

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.29] - 2025-01-17
+
+### Enhanced
+- **File Change Detection Improvements**:
+  - Now calculates hashes for ALL files, not just those with changed timestamps
+  - Detects silent file corruption and any modifications regardless of timestamp changes
+  - Processes files in batches of 1000 records to handle databases with millions of files
+  - Phase-based progress tracking with persistent progress bar throughout entire process
+  - Memory efficient processing that can handle large databases without issues
+
+- **Orphaned Files Cleanup Optimization**:
+  - Completely rewritten to use batched queries instead of loading entire database into memory
+  - Processes files in batches of 1000 records for checking file existence
+  - Stores only file IDs during detection phase to minimize memory usage
+  - Bulk deletion operations in batches of 1000 for efficient database cleanup
+  - Two-phase progress tracking: Phase 1 for detection, Phase 2 for deletion
+  - Can handle databases with millions of files without memory issues
+
+- **Unified Progress Display**:
+  - All operations (scan, file changes, cleanup) now use consistent phase-based progress tracking
+  - Progress bars persist throughout entire operation with clear phase indicators
+  - Real-time file processing updates showing current file and counts
+  - Progress percentage calculated based on current phase completion
+  - Consistent UI experience across all long-running operations
+
 ## [2.0.28] - 2025-07-16
 
 ### Fixed
