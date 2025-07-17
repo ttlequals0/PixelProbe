@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.30] - 2025-01-17
+
+### Fixed
+- **Cleanup Orphans Progress Bar**:
+  - Fixed progress bar jumping to 100% and disappearing while scan continues in background
+  - Added proper handling for cases where no orphaned files are found
+  - Progress bar now accurately reflects Phase 1 (file checking) completion
+  - Added detailed batch processing logs to track actual scan progress
+  - Progress bar remains visible until the entire operation completes, not just the deletion phase
+
 ## [2.0.29] - 2025-01-17
 
 ### Enhanced

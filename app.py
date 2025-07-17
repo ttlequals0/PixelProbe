@@ -2154,6 +2154,9 @@ def cleanup_orphaned_async():
                 if not batch_results:
                     break
                 
+                # Log batch progress
+                logger.info(f"Processing batch {offset//batch_size + 1} of {(total_files + batch_size - 1)//batch_size} (offset: {offset}, size: {len(batch_results)})")
+                
                 # Check each file in the batch
                 for result in batch_results:
                     idx = offset + batch_results.index(result)
@@ -2168,26 +2171,38 @@ def cleanup_orphaned_async():
                         with cleanup_state_lock:
                             cleanup_state['orphaned_found'] = len(orphaned_ids)
             
-            # Start deletion phase
-            with cleanup_state_lock:
-                cleanup_state['phase'] = 'deleting'
-                cleanup_state['phase_number'] = 2
-                cleanup_state['phase_current'] = 0
-                cleanup_state['phase_total'] = len(orphaned_ids)
-                cleanup_state['progress_message'] = f'Phase 2 of 2: Deleting {len(orphaned_ids)} orphaned records...'
+            logger.info(f"Phase 1 complete: Checked {total_files} files, found {len(orphaned_ids)} orphaned records")
             
-            # Delete orphaned records in batches using IDs
-            deletion_batch_size = 1000
-            for i in range(0, len(orphaned_ids), deletion_batch_size):
-                batch_ids = orphaned_ids[i:i + deletion_batch_size]
-                # Use bulk delete for efficiency
-                ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
-                db.session.commit()
-                
+            # Check if we have any orphaned files to delete
+            if len(orphaned_ids) > 0:
+                # Start deletion phase
                 with cleanup_state_lock:
-                    deleted_so_far = min(i + deletion_batch_size, len(orphaned_ids))
-                    cleanup_state['phase_current'] = deleted_so_far
-                    cleanup_state['progress_message'] = f'Phase 2 of 2: Deleted {deleted_so_far} of {len(orphaned_ids)} records...'
+                    cleanup_state['phase'] = 'deleting'
+                    cleanup_state['phase_number'] = 2
+                    cleanup_state['phase_current'] = 0
+                    cleanup_state['phase_total'] = len(orphaned_ids)
+                    cleanup_state['progress_message'] = f'Phase 2 of 2: Deleting {len(orphaned_ids)} orphaned records...'
+                
+                # Delete orphaned records in batches using IDs
+                deletion_batch_size = 1000
+                for i in range(0, len(orphaned_ids), deletion_batch_size):
+                    batch_ids = orphaned_ids[i:i + deletion_batch_size]
+                    # Use bulk delete for efficiency
+                    ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
+                    db.session.commit()
+                    
+                    with cleanup_state_lock:
+                        deleted_so_far = min(i + deletion_batch_size, len(orphaned_ids))
+                        cleanup_state['phase_current'] = deleted_so_far
+                        cleanup_state['progress_message'] = f'Phase 2 of 2: Deleted {deleted_so_far} of {len(orphaned_ids)} records...'
+            else:
+                # No orphaned files found, skip deletion phase
+                with cleanup_state_lock:
+                    cleanup_state['phase'] = 'complete'
+                    cleanup_state['phase_number'] = 2
+                    cleanup_state['phase_current'] = 0
+                    cleanup_state['phase_total'] = 0
+                    cleanup_state['progress_message'] = 'No orphaned records found to delete'
             
             # Mark as complete
             with cleanup_state_lock:
