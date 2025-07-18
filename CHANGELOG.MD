@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.35] - 2025-01-18
+
+### Fixed
+- Fixed Docker build version display issue (was showing 2.0.14 instead of actual version)
+- Updated Dockerfile ARG to properly pass APP_VERSION
+
 ## [2.0.34] - 2025-01-18
 
 ### Added
