@@ -203,7 +203,8 @@ scan_state = {
     'total_phases': 3,   # Total number of phases
     'discovery_count': 0,  # Files discovered in discovery phase
     'adding_progress': 0,   # Files added to database in adding phase
-    'scan_id': None  # Unique identifier for current scan
+    'scan_id': None,  # Unique identifier for current scan
+    'cancel_requested': False  # Flag to request cancellation
 }
 
 # Cleanup orphans operation state
@@ -216,7 +217,8 @@ cleanup_state = {
     'orphaned_found': 0,
     'current_file': None,
     'phase': 'idle',  # idle, checking, deleting, complete
-    'progress_message': ''
+    'progress_message': '',
+    'cancel_requested': False  # Flag to request cancellation
 }
 
 # File changes check operation state
@@ -229,7 +231,11 @@ file_changes_state = {
     'changes_found': 0,
     'current_file': None,
     'phase': 'idle',  # idle, checking, complete
-    'progress_message': ''
+    'progress_message': '',
+    'cancel_requested': False,
+    'batch_start_time': None,
+    'batch_number': 0,
+    'total_batches': 0
 }
 
 # Stats update thread state
@@ -891,7 +897,8 @@ def scan_all_files():
         phase='initializing',
         current_file=None,
         progress_message='Initializing scan...',
-        scan_id=scan_id
+        scan_id=scan_id,
+        cancel_requested=False  # Reset cancel flag
     )
     
     # Start stats update thread to monitor progress
@@ -1062,6 +1069,18 @@ def scan_all_files():
                 
                 # Process files in batches from our ID list
                 for batch_start in range(0, pending_count, batch_size):
+                    # Check for cancellation
+                    with scan_state_lock:
+                        if scan_state.get('cancel_requested'):
+                            logger.info("Scan cancelled by user")
+                            update_scan_state(
+                                phase='cancelled',
+                                progress_message='Scan cancelled by user',
+                                is_scanning=False,
+                                scan_thread_active=False
+                            )
+                            return
+                    
                     batch_end = min(batch_start + batch_size, pending_count)
                     batch_records = pending_records[batch_start:batch_end]
                     
@@ -1109,6 +1128,21 @@ def scan_all_files():
                         
                         # Process results as they complete
                         for future in as_completed(future_to_file):
+                            # Check for cancellation
+                            with scan_state_lock:
+                                if scan_state.get('cancel_requested'):
+                                    logger.info("Scan cancelled during batch processing")
+                                    # Cancel remaining futures
+                                    for f in future_to_file:
+                                        f.cancel()
+                                    update_scan_state(
+                                        phase='cancelled',
+                                        progress_message='Scan cancelled by user',
+                                        is_scanning=False,
+                                        scan_thread_active=False
+                                    )
+                                    return
+                            
                             file_path = future_to_file[future]
                             try:
                                 result = future.result()
@@ -1902,6 +1936,66 @@ def get_file_changes_status():
             'error': str(e)
         })
 
+@app.route('/api/cancel-scan', methods=['POST'])
+def cancel_scan():
+    """Cancel running scan operation"""
+    try:
+        with scan_state_lock:
+            if not scan_state['is_scanning']:
+                return jsonify({'error': 'No scan operation is currently running'}), 400
+            
+            scan_state['cancel_requested'] = True
+            logger.info("Scan cancellation requested")
+        
+        return jsonify({
+            'message': 'Scan cancellation requested',
+            'status': 'cancelling'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error cancelling scan: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cancel-cleanup', methods=['POST'])
+def cancel_cleanup():
+    """Cancel running cleanup operation"""
+    try:
+        with cleanup_state_lock:
+            if not cleanup_state['is_running']:
+                return jsonify({'error': 'No cleanup operation is currently running'}), 400
+            
+            cleanup_state['cancel_requested'] = True
+            logger.info("Cleanup cancellation requested")
+        
+        return jsonify({
+            'message': 'Cleanup cancellation requested',
+            'status': 'cancelling'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error cancelling cleanup: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cancel-file-changes', methods=['POST'])
+def cancel_file_changes():
+    """Cancel running file changes check operation"""
+    try:
+        with file_changes_state_lock:
+            if not file_changes_state['is_running']:
+                return jsonify({'error': 'No file changes check is currently running'}), 400
+            
+            file_changes_state['cancel_requested'] = True
+            logger.info("File changes check cancellation requested")
+        
+        return jsonify({
+            'message': 'File changes check cancellation requested',
+            'status': 'cancelling'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error cancelling file changes check: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/export-csv', methods=['GET', 'POST'])
 def export_csv():
     try:
@@ -2001,6 +2095,10 @@ def create_tables():
 
 def check_file_changes_async():
     """Async function to check file changes with progress tracking"""
+    import concurrent.futures
+    import signal
+    from functools import partial
+    
     with app.app_context():
         try:
             with file_changes_state_lock:
@@ -2013,71 +2111,171 @@ def check_file_changes_async():
             total_files = ScanResult.query.count()
             logger.info(f"File change check starting - found {total_files} total files in database")
             
+            batch_size = 1000  # Process files in batches to handle large databases
+            total_batches = (total_files + batch_size - 1) // batch_size
+            
             with file_changes_state_lock:
                 file_changes_state['total_files'] = total_files
                 file_changes_state['phase_total'] = total_files
+                file_changes_state['total_batches'] = total_batches
                 file_changes_state['progress_message'] = f'Phase 1 of 1: Checking {total_files} files for changes...'
             
             checker = initialize_media_checker()
             changed_files = []
-            batch_size = 1000  # Process files in batches to handle large databases
             
-            # Process files in batches
-            for offset in range(0, total_files, batch_size):
-                # Get batch of records
-                batch_results = ScanResult.query.order_by(ScanResult.id).offset(offset).limit(batch_size).all()
+            # Helper function to process a single file with timeout
+            def process_file_with_timeout(file_data, timeout_seconds=300):
+                """Process a single file with timeout (default 5 minutes)"""
+                file_path = file_data['file_path']
+                stored_hash = file_data['stored_hash']
+                stored_modified = file_data['stored_modified']
                 
-                if not batch_results:
-                    break
-                
-                # Log batch progress
-                logger.info(f"Processing batch {offset//batch_size + 1} of {(total_files + batch_size - 1)//batch_size} (offset: {offset}, size: {len(batch_results)})")
-                
-                # Check each file in the batch
-                for result in batch_results:
-                    idx = offset + batch_results.index(result)
-                    
-                    with file_changes_state_lock:
-                        file_changes_state['files_processed'] = idx + 1
-                        file_changes_state['phase_current'] = idx + 1
-                        file_changes_state['current_file'] = result.file_path
-                    
-                    file_path = result.file_path
-                    stored_hash = result.file_hash
-                    stored_modified = result.last_modified
-                    
+                try:
+                    # Check if file exists
                     if not os.path.exists(file_path):
-                        changed_files.append({
+                        return {
                             'file_path': file_path,
                             'change_type': 'deleted',
                             'stored_hash': stored_hash,
                             'current_hash': None
-                        })
-                        with file_changes_state_lock:
-                            file_changes_state['changes_found'] = len(changed_files)
-                        continue
+                        }
                     
-                    # Calculate hash for ALL files to detect silent corruption
+                    # Calculate hash with timeout
+                    start_time = time.time()
                     current_hash = checker.calculate_file_hash(file_path)
+                    hash_time = time.time() - start_time
+                    
+                    if hash_time > timeout_seconds:
+                        logger.error(f"ERROR: File hash calculation timed out for {file_path} after {hash_time:.2f}s")
+                        return None
                     
                     # Get current modification time
                     current_stats = os.stat(file_path)
                     current_modified = datetime.fromtimestamp(current_stats.st_mtime)
                     
-                    # Check if hash has changed (regardless of timestamp)
+                    # Check if hash has changed
                     if current_hash != stored_hash:
-                        changed_files.append({
+                        return {
                             'file_path': file_path,
                             'change_type': 'modified',
                             'stored_hash': stored_hash,
                             'current_hash': current_hash,
                             'stored_modified': stored_modified.isoformat() if stored_modified else None,
                             'current_modified': current_modified.isoformat()
-                        })
-                        with file_changes_state_lock:
-                            file_changes_state['changes_found'] = len(changed_files)
+                        }
+                    
+                    return None  # No change
+                    
+                except Exception as e:
+                    logger.error(f"Error processing file {file_path}: {str(e)}")
+                    return None
             
-            logger.info(f"File change check complete: Checked {total_files} files")
+            # Process files in batches with parallel processing
+            with concurrent.futures.ThreadPoolExecutor(max_workers=checker.max_workers) as executor:
+                for batch_num in range(total_batches):
+                    # Check for cancellation
+                    with file_changes_state_lock:
+                        if file_changes_state['cancel_requested']:
+                            logger.info("File changes check cancelled by user")
+                            file_changes_state['phase'] = 'cancelled'
+                            file_changes_state['progress_message'] = 'Operation cancelled'
+                            file_changes_state['is_running'] = False
+                            return
+                        
+                        file_changes_state['batch_number'] = batch_num + 1
+                        file_changes_state['batch_start_time'] = time.time()
+                    
+                    offset = batch_num * batch_size
+                    
+                    # Get batch of records
+                    batch_results = ScanResult.query.order_by(ScanResult.id).offset(offset).limit(batch_size).all()
+                    
+                    if not batch_results:
+                        break
+                    
+                    # Log batch progress
+                    logger.info(f"Processing batch {batch_num + 1} of {total_batches} (offset: {offset}, size: {len(batch_results)})")
+                    
+                    # Prepare file data for parallel processing
+                    file_data_list = []
+                    for result in batch_results:
+                        file_data_list.append({
+                            'file_path': result.file_path,
+                            'stored_hash': result.file_hash,
+                            'stored_modified': result.last_modified
+                        })
+                    
+                    # Process files in parallel
+                    futures = []
+                    for file_data in file_data_list:
+                        future = executor.submit(process_file_with_timeout, file_data)
+                        futures.append(future)
+                    
+                    # Collect results
+                    batch_changed_files = []
+                    for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                        # Check for cancellation during batch processing
+                        with file_changes_state_lock:
+                            if file_changes_state['cancel_requested']:
+                                # Cancel remaining futures
+                                for f in futures:
+                                    f.cancel()
+                                logger.info("File changes check cancelled by user during batch processing")
+                                file_changes_state['phase'] = 'cancelled'
+                                file_changes_state['progress_message'] = 'Operation cancelled'
+                                file_changes_state['is_running'] = False
+                                return
+                        
+                        try:
+                            result = future.result(timeout=300)  # 5-minute timeout per file
+                            if result:
+                                batch_changed_files.append(result)
+                        except concurrent.futures.TimeoutError:
+                            file_path = file_data_list[futures.index(future)]['file_path']
+                            logger.error(f"ERROR: Timeout processing file {file_path}")
+                        except Exception as e:
+                            logger.error(f"Error in future result: {str(e)}")
+                        
+                        # Update progress
+                        with file_changes_state_lock:
+                            files_done = offset + i + 1
+                            file_changes_state['files_processed'] = files_done
+                            file_changes_state['phase_current'] = files_done
+                            file_changes_state['current_file'] = file_data_list[i]['file_path']
+                            
+                            # Calculate ETA
+                            elapsed_time = time.time() - file_changes_state['start_time']
+                            if files_done > 0:
+                                avg_time_per_file = elapsed_time / files_done
+                                remaining_files = total_files - files_done
+                                eta_seconds = remaining_files * avg_time_per_file
+                                eta_minutes = int(eta_seconds / 60)
+                                eta_hours = int(eta_minutes / 60)
+                                eta_minutes = eta_minutes % 60
+                                
+                                if eta_hours > 0:
+                                    eta_str = f"{eta_hours}h {eta_minutes}m"
+                                else:
+                                    eta_str = f"{eta_minutes}m"
+                                
+                                file_changes_state['progress_message'] = f'Batch {batch_num + 1}/{total_batches}: Checking files... ETA: {eta_str}'
+                    
+                    # Add batch results to overall results
+                    changed_files.extend(batch_changed_files)
+                    
+                    with file_changes_state_lock:
+                        file_changes_state['changes_found'] = len(changed_files)
+                    
+                    # Log batch completion
+                    batch_time = time.time() - file_changes_state['batch_start_time']
+                    logger.info(f"Completed batch {batch_num + 1} of {total_batches} in {batch_time:.1f}s - found {len(batch_changed_files)} changes")
+            
+            # Final check for cancellation
+            with file_changes_state_lock:
+                if file_changes_state['cancel_requested']:
+                    return
+            
+            logger.info(f"File change check complete: Checked {total_files} files, found {len(changed_files)} changes")
             
             # Mark as complete and store results
             with file_changes_state_lock:
@@ -2089,8 +2287,6 @@ def check_file_changes_async():
                     'changed_files': changed_files,
                     'total_checked': total_files
                 }
-            
-            logger.info(f"File change check found {len(changed_files)} changed files")
             
         except Exception as e:
             logger.error(f"Error in async file changes check: {str(e)}")
@@ -2117,6 +2313,7 @@ def check_file_changes():
         file_changes_state['phase'] = 'starting'
         file_changes_state['progress_message'] = 'Starting file changes check...'
         file_changes_state['result'] = None
+        file_changes_state['cancel_requested'] = False  # Reset cancel flag
     
     # Start check in background thread
     check_thread = threading.Thread(target=check_file_changes_async)
@@ -2154,6 +2351,15 @@ def cleanup_orphaned_async():
             
             # Process files in batches
             for offset in range(0, total_files, batch_size):
+                # Check for cancellation
+                with cleanup_state_lock:
+                    if cleanup_state.get('cancel_requested'):
+                        logger.info("Cleanup cancelled by user")
+                        cleanup_state['phase'] = 'cancelled'
+                        cleanup_state['progress_message'] = 'Operation cancelled'
+                        cleanup_state['is_running'] = False
+                        return
+                
                 # Get batch of records
                 batch_results = ScanResult.query.order_by(ScanResult.id).offset(offset).limit(batch_size).all()
                 
@@ -2192,6 +2398,15 @@ def cleanup_orphaned_async():
                 # Delete orphaned records in batches using IDs
                 deletion_batch_size = 1000
                 for i in range(0, len(orphaned_ids), deletion_batch_size):
+                    # Check for cancellation
+                    with cleanup_state_lock:
+                        if cleanup_state.get('cancel_requested'):
+                            logger.info("Cleanup cancelled during deletion phase")
+                            cleanup_state['phase'] = 'cancelled'
+                            cleanup_state['progress_message'] = f'Operation cancelled (deleted {i} of {len(orphaned_ids)} records)'
+                            cleanup_state['is_running'] = False
+                            return
+                    
                     batch_ids = orphaned_ids[i:i + deletion_batch_size]
                     # Use bulk delete for efficiency
                     ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
@@ -2248,6 +2463,7 @@ def cleanup_orphaned_records():
         cleanup_state['current_file'] = None
         cleanup_state['phase'] = 'starting'
         cleanup_state['progress_message'] = 'Starting cleanup operation...'
+        cleanup_state['cancel_requested'] = False  # Reset cancel flag
     
     logger.info("Starting cleanup thread")
     

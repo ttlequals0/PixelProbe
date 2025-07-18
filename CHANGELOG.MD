@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.34] - 2025-01-18
+
+### Added
+- **Parallel Hash Processing for File Changes Check**:
+  - File changes check now uses parallel processing with configured MAX_SCAN_WORKERS (default: 4)
+  - Dramatically improves performance when checking large databases (1M+ files)
+  - Processes files in parallel within each batch for maximum efficiency
+
+- **Enhanced Progress Tracking**:
+  - Added batch completion logging for all long-running operations
+  - Real-time ETA calculation shows estimated time remaining
+  - Progress messages now show current batch number and total batches
+  - Detailed logging of batch processing times for performance monitoring
+
+- **Operation Cancellation Support**:
+  - Added cancel button to progress bar UI for all operations
+  - New API endpoints: `/api/cancel-scan`, `/api/cancel-cleanup`, `/api/cancel-file-changes`
+  - All operations (scan, cleanup, file changes) can now be gracefully cancelled
+  - Cancellation properly cleans up state and stops processing
+  - UI dynamically shows stop button during operations
+
+- **Timeout Handling for File Processing**:
+  - Added 5-minute timeout for individual file hash calculations
+  - Files that exceed timeout are logged as ERROR and skipped
+  - Prevents single large files from blocking entire operation
+
+### Fixed
+- **Progress Bar Persistence During App Initialization**:
+  - Fixed issue where progress bar would disappear when PixelProbe startup occurs during ongoing operations
+  - App initialization now checks for all ongoing operations (scan, cleanup, file-changes), not just scans
+  - Progress bar correctly resumes monitoring any in-progress operation after page reload or app restart
+  - Ensures file-changes and cleanup operations maintain their progress display throughout the entire process
+
 ## [2.0.32] - 2025-01-17
 
 ### Fixed

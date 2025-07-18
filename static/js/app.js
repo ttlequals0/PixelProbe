@@ -230,6 +230,28 @@ class APIClient {
         return this.request('/file-changes-status');
     }
 
+    // Cancel operations
+    async cancelScan() {
+        return this.request('/cancel-scan', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+    }
+
+    async cancelCleanup() {
+        return this.request('/cancel-cleanup', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+    }
+
+    async cancelFileChanges() {
+        return this.request('/cancel-file-changes', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+    }
+
     // Export
     async exportCSV(fileIds = null) {
         return this.request('/export-csv', {
@@ -321,12 +343,24 @@ class ProgressManager {
                     progressTitle.textContent = 'File Changes Check Progress';
                 }
             }
+            
+            // Show cancel button
+            const cancelButton = this.progressContainer.querySelector('.cancel-button');
+            if (cancelButton) {
+                cancelButton.style.display = 'flex';
+            }
         }
     }
 
     hide() {
         if (this.progressContainer) {
             this.progressContainer.style.display = 'none';
+            
+            // Hide cancel button
+            const cancelButton = this.progressContainer.querySelector('.cancel-button');
+            if (cancelButton) {
+                cancelButton.style.display = 'none';
+            }
         }
     }
 
@@ -1024,14 +1058,33 @@ class PixelProbeApp {
         await this.stats.init();
         await this.table.init();
         
-        // Check for ongoing scan
+        // Check for ongoing operations
         try {
-            const status = await this.api.getScanStatus();
-            if (status.is_scanning) {
+            // Check for ongoing scan
+            const scanStatus = await this.api.getScanStatus();
+            if (scanStatus.is_scanning) {
+                this.progress.operationType = 'scan';
                 this.progress.startMonitoring();
+                return; // Only monitor one operation at a time
+            }
+            
+            // Check for ongoing cleanup
+            const cleanupStatus = await this.api.getCleanupStatus();
+            if (cleanupStatus.is_running) {
+                this.progress.operationType = 'cleanup';
+                this.progress.startMonitoring();
+                return; // Only monitor one operation at a time
+            }
+            
+            // Check for ongoing file changes check
+            const fileChangesStatus = await this.api.getFileChangesStatus();
+            if (fileChangesStatus.is_running) {
+                this.progress.operationType = 'file-changes';
+                this.progress.startMonitoring();
+                return; // Only monitor one operation at a time
             }
         } catch (error) {
-            console.error('Failed to check scan status on init:', error);
+            console.error('Failed to check operation status on init:', error);
         }
     }
 
@@ -1595,6 +1648,38 @@ class PixelProbeApp {
                 modal.style.display = 'none';
             }
         };
+    }
+
+    async cancelCurrentOperation() {
+        try {
+            // Determine which operation is currently running and cancel it
+            const operationType = this.progress.operationType;
+            
+            if (operationType === 'scan') {
+                const status = await this.api.getScanStatus();
+                if (status.is_scanning) {
+                    await this.api.cancelScan();
+                    this.showNotification('Scan cancellation requested', 'info');
+                }
+            } else if (operationType === 'cleanup') {
+                const status = await this.api.getCleanupStatus();
+                if (status.is_running) {
+                    await this.api.cancelCleanup();
+                    this.showNotification('Cleanup cancellation requested', 'info');
+                }
+            } else if (operationType === 'file-changes') {
+                const status = await this.api.getFileChangesStatus();
+                if (status.is_running) {
+                    await this.api.cancelFileChanges();
+                    this.showNotification('File changes check cancellation requested', 'info');
+                }
+            } else {
+                this.showNotification('No operation is currently running', 'warning');
+            }
+        } catch (error) {
+            console.error('Failed to cancel operation:', error);
+            this.showNotification('Failed to cancel operation', 'error');
+        }
     }
 
 }

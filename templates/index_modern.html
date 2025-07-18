@@ -112,7 +112,12 @@
             <div class="content">
                 <!-- Progress Bar -->
                 <div class="progress-container" style="display: none;">
-                    <h3 class="progress-title">Scan Progress</h3>
+                    <div class="progress-header">
+                        <h3 class="progress-title">Scan Progress</h3>
+                        <button class="cancel-button" onclick="app.cancelCurrentOperation()" title="Cancel operation" style="display: none;">
+                            <i class="fas fa-stop"></i> Cancel
+                        </button>
+                    </div>
                     <div class="progress">
                         <div class="progress-bar" style="width: 0%">
                             <span class="progress-text">0%</span>

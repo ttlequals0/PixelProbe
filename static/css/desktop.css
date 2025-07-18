@@ -449,10 +449,47 @@ body {
     box-shadow: var(--shadow-sm);
 }
 
+.progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
 .progress-title {
-    margin: 0 0 1rem 0;
+    margin: 0;
     font-size: 1.125rem;
     font-weight: 600;
+}
+
+.cancel-button {
+    background-color: var(--danger);
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: var(--border-radius);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.2s ease;
+}
+
+.cancel-button:hover {
+    background-color: #a02f2f;
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+
+.cancel-button:active {
+    transform: translateY(0);
+    box-shadow: var(--shadow-sm);
+}
+
+.cancel-button i {
+    font-size: 0.875rem;
 }
 
 .progress-details {
