@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.40] - 2025-01-18
+
+### Fixed
+- Fixed cleanup operation progress calculation showing incorrect percentage
+  - Progress was showing ~6% when actual progress was ~12% due to incorrect phase weighting
+  - Backend now weights checking phase as 90% and deleting phase as 10% of total progress
+  - Frontend now uses progress percentage directly from backend instead of recalculating
+  - This reflects reality where checking all files is the bulk of the work
+- Fixed file-changes operation progress calculation
+  - Frontend now uses progress percentage directly from backend
+  - Prevents inconsistency between backend and frontend calculations
+
 ## [2.0.39] - 2025-01-18
 
 ### Fixed

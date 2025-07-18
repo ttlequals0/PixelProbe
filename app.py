@@ -1896,10 +1896,14 @@ def get_cleanup_status():
                 response['start_time'] = start_time_utc.timestamp()
             
             # Calculate progress percentage based on current phase
+            # For cleanup, the checking phase is the majority of the work (checking all files)
+            # The deleting phase is usually much smaller (only orphaned files)
             if cleanup_record.phase == 'checking' and cleanup_record.total_files > 0:
-                response['progress_percentage'] = (cleanup_record.files_processed / cleanup_record.total_files) * 50  # First phase is 50%
+                # Checking phase is weighted as 90% of total progress
+                response['progress_percentage'] = (cleanup_record.files_processed / cleanup_record.total_files) * 90
             elif cleanup_record.phase == 'deleting' and cleanup_record.phase_total > 0:
-                response['progress_percentage'] = 50 + (cleanup_record.phase_current / cleanup_record.phase_total) * 50  # Second phase is remaining 50%
+                # Deleting phase is the remaining 10%
+                response['progress_percentage'] = 90 + (cleanup_record.phase_current / cleanup_record.phase_total) * 10
             elif cleanup_record.phase == 'complete':
                 response['progress_percentage'] = 100
             else:
