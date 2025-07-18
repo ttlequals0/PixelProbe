@@ -17,6 +17,7 @@ import io
 from media_checker import PixelProbe
 from models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration, ScanState, CleanupState
 from version import __version__, __github_url__
+from scheduler import MediaScheduler
 
 load_dotenv()
 
@@ -70,6 +71,9 @@ CORS(app, resources={
     r"/api/*": {"origins": "*"},
     r"/": {"origins": "*"}
 })
+
+# Initialize scheduler (will be initialized after app context is ready)
+scheduler = MediaScheduler()
 
 def create_performance_indexes():
     """Create performance indexes on application startup"""
@@ -159,7 +163,11 @@ def initialize_media_checker():
         logger.info(f"Scan paths configured: {scan_paths}")
         logger.info(f"Max files to scan: {max_files_to_scan}")
         
-        media_checker = PixelProbe(max_workers=max_workers)
+        media_checker = PixelProbe(
+            max_workers=max_workers,
+            excluded_paths=scheduler.excluded_paths,
+            excluded_extensions=scheduler.excluded_extensions
+        )
         logger.info(f"PixelProbe initialized with {max_workers} max workers")
         
         # Clean up any files stuck in scanning status
@@ -2352,6 +2360,7 @@ def check_file_changes_async():
                                     eta_str = f"{eta_minutes}m"
                                 
                                 file_changes_state['progress_message'] = f'Batch {batch_num + 1}/{total_batches}: Checking files... ETA: {eta_str}'
+                                file_changes_state['progress_percentage'] = (files_done / total_files) * 100 if total_files > 0 else 0
                     
                     # Add batch results to overall results
                     changed_files.extend(batch_changed_files)
@@ -2374,12 +2383,17 @@ def check_file_changes_async():
             with file_changes_state_lock:
                 file_changes_state['phase'] = 'complete'
                 file_changes_state['progress_message'] = f'Check complete: {len(changed_files)} files changed'
-                file_changes_state['is_running'] = False
+                file_changes_state['progress_percentage'] = 100  # Ensure 100% on completion
+                file_changes_state['files_processed'] = total_files  # Ensure counts match
+                file_changes_state['phase_current'] = total_files
+                file_changes_state['phase_total'] = total_files
                 # Store results for retrieval
                 file_changes_state['result'] = {
                     'changed_files': changed_files,
                     'total_checked': total_files
                 }
+                # Set is_running to False AFTER setting all completion data
+                file_changes_state['is_running'] = False
             
         except Exception as e:
             logger.error(f"Error in async file changes check: {str(e)}")
@@ -2404,6 +2418,11 @@ def check_file_changes():
         file_changes_state['changes_found'] = 0
         file_changes_state['current_file'] = None
         file_changes_state['phase'] = 'starting'
+        file_changes_state['phase_number'] = 1
+        file_changes_state['total_phases'] = 1
+        file_changes_state['phase_current'] = 0
+        file_changes_state['phase_total'] = 0
+        file_changes_state['progress_percentage'] = 0
         file_changes_state['progress_message'] = 'Starting file changes check...'
         file_changes_state['result'] = None
         file_changes_state['cancel_requested'] = False  # Reset cancel flag
@@ -3166,11 +3185,94 @@ def migrate_database():
         logger.error(f"Migration error: {str(e)}")
         db.session.rollback()
 
+# Schedule Management API endpoints
+@app.route('/api/schedules', methods=['GET'])
+def get_schedules():
+    """Get all scan schedules"""
+    try:
+        status = scheduler.get_schedule_status()
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Failed to get schedules: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/schedules', methods=['POST'])
+def create_schedule():
+    """Create a new scan schedule"""
+    try:
+        data = request.get_json()
+        name = data.get('name')
+        cron_expression = data.get('cron_expression')
+        scan_paths = data.get('scan_paths', [])
+        
+        if not name or not cron_expression:
+            return jsonify({'error': 'Name and cron_expression are required'}), 400
+            
+        schedule = scheduler.create_schedule(name, cron_expression, scan_paths)
+        return jsonify(schedule.to_dict())
+    except Exception as e:
+        logger.error(f"Failed to create schedule: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/schedules/<int:schedule_id>', methods=['PUT'])
+def update_schedule(schedule_id):
+    """Update an existing schedule"""
+    try:
+        data = request.get_json()
+        schedule = scheduler.update_schedule(schedule_id, **data)
+        return jsonify(schedule.to_dict())
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        logger.error(f"Failed to update schedule: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/schedules/<int:schedule_id>', methods=['DELETE'])
+def delete_schedule(schedule_id):
+    """Delete a schedule"""
+    try:
+        scheduler.delete_schedule(schedule_id)
+        return jsonify({'message': 'Schedule deleted successfully'})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        logger.error(f"Failed to delete schedule: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/exclusions', methods=['GET'])
+def get_exclusions():
+    """Get current path and extension exclusions"""
+    return jsonify({
+        'excluded_paths': scheduler.excluded_paths,
+        'excluded_extensions': scheduler.excluded_extensions
+    })
+
+@app.route('/api/exclusions', methods=['PUT'])
+def update_exclusions():
+    """Update path and extension exclusions"""
+    try:
+        data = request.get_json()
+        paths = data.get('excluded_paths')
+        extensions = data.get('excluded_extensions')
+        
+        scheduler.update_exclusions(paths=paths, extensions=extensions)
+        
+        return jsonify({
+            'excluded_paths': scheduler.excluded_paths,
+            'excluded_extensions': scheduler.excluded_extensions
+        })
+    except Exception as e:
+        logger.error(f"Failed to update exclusions: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 # Initialize database when module is imported
 create_tables()
 
 # Start stats update thread on application startup
 with app.app_context():
+    # Initialize scheduler after app context is ready
+    scheduler.init_app(app)
+    
     # Clean up any stale active scans on startup
     try:
         stale_scans = ScanState.query.filter_by(is_active=True).all()

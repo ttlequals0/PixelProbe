@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.41] - 2025-01-18
+
+### Added
+- **Scheduled Scanning and Cleanup**
+  - Added automatic periodic scanning with cron and interval-based scheduling
+  - Added automatic cleanup scheduling for orphaned records
+  - Configurable via environment variables (PERIODIC_SCAN_SCHEDULE, CLEANUP_SCHEDULE)
+  - Support for both cron expressions and simple intervals (e.g., "interval:hours:6")
+  - UI interface for managing scan schedules
+  - API endpoints for creating, updating, and deleting schedules
+  - File hash checking already exists and is used during deep scans
+  
+- **Path and Extension Exclusions**
+  - Added ability to exclude specific paths from scanning
+  - Added ability to exclude specific file extensions
+  - Configurable via environment variables (EXCLUDED_PATHS, EXCLUDED_EXTENSIONS)
+  - UI interface for managing exclusions
+  - API endpoints for updating exclusions (/api/exclusions)
+  - Exclusions are applied during file discovery and scanning
+
+- **Schedule Management API**
+  - GET /api/schedules - List all schedules
+  - POST /api/schedules - Create new schedule
+  - PUT /api/schedules/{id} - Update schedule
+  - DELETE /api/schedules/{id} - Delete schedule
+
+- Enhanced API documentation with comprehensive examples
+  - Added cURL examples for all major endpoints
+  - Added code examples in Python, JavaScript/Node.js, Bash, and PowerShell
+  - Added request/response examples for all endpoints
+  - Documented all query parameters and request body fields
+  - Added documentation for maintenance endpoints (cleanup, file changes, recovery)
+  - Added documentation for configuration management endpoints
+
+### Changed
+- Updated PixelProbe class to accept excluded paths and extensions
+- Modified file discovery to respect exclusions during directory traversal
+- Updated API documentation to reflect actual endpoint behavior
+  - Fixed scan-file endpoint documentation to use file_path instead of file_id
+  - Added support for both GET and POST methods on export-csv endpoint
+  - Added documentation for all status monitoring endpoints
+  - Clarified file-changes endpoint checks modification time, not hash
+
+### Fixed
+- Fixed file changes progress bar not staying active during the entire operation
+  - Added proper phase tracking to file changes state initialization
+  - Added progress percentage updates during batch processing
+  - Fixed frontend to keep showing progress during phase transitions
+  - Ensured progress bar shows 100% on completion before hiding
+
 ## [2.0.40] - 2025-01-18
 
 ### Fixed

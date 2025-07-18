@@ -184,6 +184,20 @@ SECRET_KEY=your-very-secret-key-here
 
 # Optional: Set to development for debugging
 FLASK_ENV=production
+
+# Scheduled Scanning (optional)
+# Cron format: "cron:minute hour day month day_of_week"
+# Interval format: "interval:unit:value" (unit: hours/days/weeks)
+PERIODIC_SCAN_SCHEDULE=cron:0 2 * * *  # Daily at 2 AM
+# PERIODIC_SCAN_SCHEDULE=interval:hours:6  # Every 6 hours
+
+# Scheduled Cleanup (optional)
+CLEANUP_SCHEDULE=cron:0 3 * * 0  # Weekly on Sunday at 3 AM
+# CLEANUP_SCHEDULE=interval:days:7  # Every 7 days
+
+# Path and Extension Exclusions (optional)
+EXCLUDED_PATHS=/media/temp,/media/cache
+EXCLUDED_EXTENSIONS=.tmp,.temp,.cache
 ```
 
 ### Docker Compose Configuration
@@ -193,7 +207,7 @@ For Docker deployment, you can also configure paths in `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0  # Specify version
+    image: ttlequals0/pixelprobe:2.0.41  # Specify version
     environment:
       - SCAN_PATHS=/media
       - DATABASE_URL=sqlite:///media_checker.db
@@ -240,6 +254,8 @@ docker-compose up -d
 5. **File Actions**: 
    - **Rescan**: Re-examine a specific file
    - **Download**: Download the file to your local machine
+6. **Schedules**: Manage automated scan schedules (v2.0.41+)
+7. **Exclusions**: Configure paths and extensions to exclude from scanning (v2.0.41+)
 
 ### API Endpoints
 
@@ -250,6 +266,12 @@ The application provides REST API endpoints:
 - `POST /api/scan-all` - Start a full scan of all configured directories
 - `POST /api/scan-file` - Scan a specific file
 - `GET /api/download/<id>` - Download a file
+- `GET /api/schedules` - List all scan schedules (v2.0.41+)
+- `POST /api/schedules` - Create a new scan schedule (v2.0.41+)
+- `PUT /api/schedules/<id>` - Update a scan schedule (v2.0.41+)
+- `DELETE /api/schedules/<id>` - Delete a scan schedule (v2.0.41+)
+- `GET /api/exclusions` - Get current exclusions (v2.0.41+)
+- `PUT /api/exclusions` - Update exclusions (v2.0.41+)
 
 ### Command Line Usage
 

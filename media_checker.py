@@ -36,7 +36,7 @@ def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
     return lines
 
 class PixelProbe:
-    def __init__(self, max_workers=None):
+    def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None):
         self.supported_video_formats = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v']
         self.supported_image_formats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
         self.supported_formats = self.supported_video_formats + self.supported_image_formats
@@ -44,6 +44,8 @@ class PixelProbe:
         self.scan_lock = threading.Lock()
         self.current_scan_file = None
         self.scan_start_time = None
+        self.excluded_paths = excluded_paths or []
+        self.excluded_extensions = excluded_extensions or []
     
     def discover_files(self, directories, max_files=None, existing_files=None, progress_callback=None):
         """Phase 1: Discover all supported files and return their paths (parallel version)"""
@@ -201,6 +203,13 @@ class PixelProbe:
     def _get_files_sorted_by_age(self, directory):
         files = []
         for root, dirs, filenames in os.walk(directory):
+            # Skip excluded directories
+            dirs[:] = [d for d in dirs if not any(os.path.join(root, d).startswith(exc) for exc in self.excluded_paths)]
+            
+            # Skip if current directory is excluded
+            if any(root.startswith(exc) for exc in self.excluded_paths):
+                continue
+                
             for filename in filenames:
                 file_path = os.path.join(root, filename)
                 if os.path.isfile(file_path):
@@ -211,6 +220,16 @@ class PixelProbe:
     
     def _is_supported_file(self, file_path):
         extension = Path(file_path).suffix.lower()
+        
+        # Check if extension is excluded
+        if extension in self.excluded_extensions:
+            return False
+            
+        # Check if path is excluded
+        for excluded_path in self.excluded_paths:
+            if file_path.startswith(excluded_path):
+                return False
+                
         return extension in self.supported_formats
     
     def get_file_info(self, file_path):

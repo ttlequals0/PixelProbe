@@ -414,9 +414,13 @@ class ProgressManager {
                 if (isRunning) {
                     const progress = this.calculateProgress(status, operationType);
                     this.update(progress.percentage, progress.text, progress.details);
-                } else {
-                    // Operation is complete
+                } else if (status.phase === 'complete' || status.phase === 'cancelled' || status.phase === 'error') {
+                    // Operation is complete - show completion state
                     this.complete(operationType, status);
+                } else {
+                    // Still initializing or in transition - keep showing progress
+                    const progress = this.calculateProgress(status, operationType);
+                    this.update(progress.percentage, progress.text, progress.details);
                 }
             } catch (error) {
                 console.error(`Failed to check ${operationType} status:`, error);
@@ -1669,10 +1673,267 @@ class PixelProbeApp {
         }
     }
 
+    // Schedule Management
+    async showSchedules() {
+        const modal = document.querySelector('#schedules-modal');
+        if (!modal) return;
+        
+        modal.style.display = 'block';
+        await this.loadSchedules();
+    }
+
+    async loadSchedules() {
+        try {
+            const response = await fetch('/api/schedules');
+            const data = await response.json();
+            
+            const listContainer = document.querySelector('#schedules-list');
+            if (!listContainer) return;
+            
+            if (data.schedules && data.schedules.length > 0) {
+                let html = '<div class="schedules-list">';
+                data.schedules.forEach(schedule => {
+                    const nextRun = schedule.next_run ? new Date(schedule.next_run).toLocaleString() : 'Not scheduled';
+                    const lastRun = schedule.last_run ? new Date(schedule.last_run).toLocaleString() : 'Never';
+                    
+                    html += `
+                        <div class="schedule-item">
+                            <div class="schedule-header">
+                                <h4>${this.escapeHtml(schedule.name)}</h4>
+                                <div class="schedule-actions">
+                                    <button class="btn btn-sm ${schedule.is_active ? 'btn-warning' : 'btn-success'}" 
+                                            onclick="app.toggleSchedule(${schedule.id}, ${!schedule.is_active})">
+                                        ${schedule.is_active ? 'Disable' : 'Enable'}
+                                    </button>
+                                    <button class="btn btn-sm btn-danger" onclick="app.deleteSchedule(${schedule.id})">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="schedule-info">
+                                <p><strong>Schedule:</strong> ${this.escapeHtml(schedule.cron_expression)}</p>
+                                <p><strong>Next Run:</strong> ${nextRun}</p>
+                                <p><strong>Last Run:</strong> ${lastRun}</p>
+                                ${schedule.scan_paths ? `<p><strong>Paths:</strong> ${this.escapeHtml(JSON.parse(schedule.scan_paths).join(', '))}</p>` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+                listContainer.innerHTML = html;
+            } else {
+                listContainer.innerHTML = '<p class="text-muted">No schedules configured.</p>';
+            }
+        } catch (error) {
+            console.error('Failed to load schedules:', error);
+            this.showNotification('Failed to load schedules', 'error');
+        }
+    }
+
+    showAddSchedule() {
+        const modal = document.querySelector('#add-schedule-modal');
+        if (modal) {
+            modal.style.display = 'block';
+            
+            // Reset form
+            const form = document.querySelector('#add-schedule-form');
+            if (form) form.reset();
+        }
+    }
+
+    toggleScheduleInput() {
+        const scheduleType = document.querySelector('#schedule-type').value;
+        const cronInput = document.querySelector('#cron-input');
+        const intervalInput = document.querySelector('#interval-input');
+        
+        if (scheduleType === 'cron') {
+            cronInput.style.display = 'block';
+            intervalInput.style.display = 'none';
+        } else {
+            cronInput.style.display = 'none';
+            intervalInput.style.display = 'block';
+        }
+    }
+
+    async toggleSchedule(scheduleId, activate) {
+        try {
+            const response = await fetch(`/api/schedules/${scheduleId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ is_active: activate })
+            });
+            
+            if (response.ok) {
+                this.showNotification(`Schedule ${activate ? 'enabled' : 'disabled'}`, 'success');
+                await this.loadSchedules();
+            } else {
+                throw new Error('Failed to update schedule');
+            }
+        } catch (error) {
+            console.error('Failed to toggle schedule:', error);
+            this.showNotification('Failed to update schedule', 'error');
+        }
+    }
+
+    async deleteSchedule(scheduleId) {
+        if (!confirm('Are you sure you want to delete this schedule?')) return;
+        
+        try {
+            const response = await fetch(`/api/schedules/${scheduleId}`, {
+                method: 'DELETE'
+            });
+            
+            if (response.ok) {
+                this.showNotification('Schedule deleted', 'success');
+                await this.loadSchedules();
+            } else {
+                throw new Error('Failed to delete schedule');
+            }
+        } catch (error) {
+            console.error('Failed to delete schedule:', error);
+            this.showNotification('Failed to delete schedule', 'error');
+        }
+    }
+
+    // Exclusions Management
+    async showExclusions() {
+        const modal = document.querySelector('#exclusions-modal');
+        if (!modal) return;
+        
+        modal.style.display = 'block';
+        await this.loadExclusions();
+    }
+
+    async loadExclusions() {
+        try {
+            const response = await fetch('/api/exclusions');
+            const data = await response.json();
+            
+            const pathsTextarea = document.querySelector('#excluded-paths');
+            const extensionsTextarea = document.querySelector('#excluded-extensions');
+            
+            if (pathsTextarea && data.excluded_paths) {
+                pathsTextarea.value = data.excluded_paths.join('\n');
+            }
+            
+            if (extensionsTextarea && data.excluded_extensions) {
+                extensionsTextarea.value = data.excluded_extensions.join('\n');
+            }
+        } catch (error) {
+            console.error('Failed to load exclusions:', error);
+            this.showNotification('Failed to load exclusions', 'error');
+        }
+    }
+
+    closeModal(modalId) {
+        const modal = document.querySelector(`#${modalId}`);
+        if (modal) {
+            modal.style.display = 'none';
+        }
+    }
+
 }
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new PixelProbeApp();
     window.app.init();
+    
+    // Setup modal close buttons
+    document.querySelectorAll('.modal-close').forEach(btn => {
+        btn.addEventListener('click', function() {
+            this.closest('.modal').style.display = 'none';
+        });
+    });
+    
+    // Close modal when clicking outside
+    document.querySelectorAll('.modal').forEach(modal => {
+        modal.addEventListener('click', function(e) {
+            if (e.target === this) {
+                this.style.display = 'none';
+            }
+        });
+    });
+    
+    // Setup add schedule form
+    const addScheduleForm = document.querySelector('#add-schedule-form');
+    if (addScheduleForm) {
+        addScheduleForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const scheduleType = document.querySelector('#schedule-type').value;
+            let cronExpression = '';
+            
+            if (scheduleType === 'cron') {
+                cronExpression = document.querySelector('#cron-expression').value;
+            } else {
+                const value = document.querySelector('#interval-value').value;
+                const unit = document.querySelector('#interval-unit').value;
+                cronExpression = `interval:${unit}:${value}`;
+            }
+            
+            const name = document.querySelector('#schedule-name').value;
+            const pathsText = document.querySelector('#schedule-paths').value;
+            const scanPaths = pathsText.trim() ? pathsText.split('\n').filter(p => p.trim()) : [];
+            
+            try {
+                const response = await fetch('/api/schedules', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name,
+                        cron_expression: cronExpression,
+                        scan_paths: scanPaths
+                    })
+                });
+                
+                if (response.ok) {
+                    app.showNotification('Schedule created successfully', 'success');
+                    app.closeModal('add-schedule-modal');
+                    await app.loadSchedules();
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to create schedule');
+                }
+            } catch (error) {
+                console.error('Failed to create schedule:', error);
+                app.showNotification(error.message || 'Failed to create schedule', 'error');
+            }
+        });
+    }
+    
+    // Setup exclusions form
+    const exclusionsForm = document.querySelector('#exclusions-form');
+    if (exclusionsForm) {
+        exclusionsForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const pathsText = document.querySelector('#excluded-paths').value;
+            const extensionsText = document.querySelector('#excluded-extensions').value;
+            
+            const excludedPaths = pathsText.trim() ? pathsText.split('\n').filter(p => p.trim()) : [];
+            const excludedExtensions = extensionsText.trim() ? extensionsText.split('\n').filter(e => e.trim()) : [];
+            
+            try {
+                const response = await fetch('/api/exclusions', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        excluded_paths: excludedPaths,
+                        excluded_extensions: excludedExtensions
+                    })
+                });
+                
+                if (response.ok) {
+                    app.showNotification('Exclusions updated successfully', 'success');
+                    app.closeModal('exclusions-modal');
+                } else {
+                    throw new Error('Failed to update exclusions');
+                }
+            } catch (error) {
+                console.error('Failed to update exclusions:', error);
+                app.showNotification('Failed to update exclusions', 'error');
+            }
+        });
+    }
 });

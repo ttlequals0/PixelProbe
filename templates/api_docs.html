@@ -199,6 +199,12 @@
 }
                                 </div>
                             </div>
+                            <div class="response-example">
+                                <h5>cURL Example:</h5>
+                                <div class="code-block">
+curl -X GET "https://your-server.com/api/stats"
+                                </div>
+                            </div>
                         </div>
                         
                         <!-- System Info -->
@@ -275,7 +281,7 @@
                                 <span class="api-method method-post">POST</span>
                                 <span class="api-path">/api/scan-file</span>
                             </div>
-                            <p class="api-description">Scan a specific file by its database ID.</p>
+                            <p class="api-description">Scan a specific file by its path with optional deep scan.</p>
                             <div class="api-params">
                                 <h5>Request Body:</h5>
                                 <table class="param-table">
@@ -288,17 +294,34 @@
                                     </thead>
                                     <tbody>
                                         <tr>
-                                            <td><span class="param-name">file_id</span></td>
-                                            <td><span class="param-type">integer</span></td>
-                                            <td>The database ID of the file to scan</td>
+                                            <td><span class="param-name">file_path</span></td>
+                                            <td><span class="param-type">string</span></td>
+                                            <td>The full path of the file to scan</td>
+                                        </tr>
+                                        <tr>
+                                            <td><span class="param-name">deep_scan</span></td>
+                                            <td><span class="param-type">boolean</span></td>
+                                            <td>Enable enhanced corruption detection (optional, default: false)</td>
                                         </tr>
                                     </tbody>
                                 </table>
                             </div>
-                            <div class="code-block">
+                            <div class="response-example">
+                                <h5>Request Example:</h5>
+                                <div class="code-block">
 {
-    "file_id": 123
+    "file_path": "/media/videos/movie.mp4",
+    "deep_scan": true
 }
+                                </div>
+                            </div>
+                            <div class="response-example">
+                                <h5>cURL Example:</h5>
+                                <div class="code-block">
+curl -X POST "https://your-server.com/api/scan-file" \
+     -H "Content-Type: application/json" \
+     -d '{"file_path": "/media/videos/movie.mp4", "deep_scan": true}'
+                                </div>
                             </div>
                         </div>
                         
@@ -356,6 +379,24 @@
     "current_file": "video_file.mp4",
     "eta": 300,
     "scan_state_message": "Scanning: video_file.mp4 (45s)"
+}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Cancel Scan -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/cancel-scan</span>
+                            </div>
+                            <p class="api-description">Cancel the currently running scan operation.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "message": "Scan cancelled",
+    "cancelled_files": 550
 }
                                 </div>
                             </div>
@@ -429,6 +470,39 @@
                                 <span class="api-path">/api/scan-results/{result_id}</span>
                             </div>
                             <p class="api-description">Get details for a specific scan result.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "id": 123,
+    "file_path": "/media/videos/movie.mp4",
+    "file_type": "video",
+    "scan_status": "corrupted",
+    "scan_date": "2024-01-15T10:30:00Z",
+    "scan_output": "Error: Invalid codec parameters",
+    "file_size": 1073741824,
+    "file_hash": "abc123def456",
+    "marked_as_good": false
+}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Scan Output -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/scan-output/{result_id}</span>
+                            </div>
+                            <p class="api-description">Get the full scan output for a specific result.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "scan_output": "[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7f8b8c000000] moov atom not found\nInput #0, mov,mp4,m4a,3gp,3g2,mj2, from '/media/videos/movie.mp4':\n  Duration: N/A, bitrate: N/A\nError: Invalid data found when processing input"
+}
+                                </div>
+                            </div>
                         </div>
                         
                         <!-- Mark as Good -->
@@ -480,12 +554,13 @@
                         <!-- Export CSV -->
                         <div class="api-endpoint">
                             <div>
+                                <span class="api-method method-get">GET</span>
                                 <span class="api-method method-post">POST</span>
                                 <span class="api-path">/api/export-csv</span>
                             </div>
-                            <p class="api-description">Export scan results to CSV format.</p>
+                            <p class="api-description">Export scan results to CSV format. GET exports all results, POST can export specific files.</p>
                             <div class="api-params">
-                                <h5>Request Body:</h5>
+                                <h5>Request Body (POST only):</h5>
                                 <table class="param-table">
                                     <thead>
                                         <tr>
@@ -498,10 +573,25 @@
                                         <tr>
                                             <td><span class="param-name">file_ids</span></td>
                                             <td><span class="param-type">array[integer]</span></td>
-                                            <td>Optional: specific file IDs to export (default: all)</td>
+                                            <td>Specific file IDs to export</td>
                                         </tr>
                                     </tbody>
                                 </table>
+                            </div>
+                            <div class="response-example">
+                                <h5>cURL Example (Export All):</h5>
+                                <div class="code-block">
+curl -X GET "https://your-server.com/api/export-csv" -o scan_results.csv
+                                </div>
+                            </div>
+                            <div class="response-example">
+                                <h5>cURL Example (Export Specific Files):</h5>
+                                <div class="code-block">
+curl -X POST "https://your-server.com/api/export-csv" \
+     -H "Content-Type: application/json" \
+     -d '{"file_ids": [123, 456, 789]}' \
+     -o selected_results.csv
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -563,9 +653,86 @@
                         <div class="api-endpoint">
                             <div>
                                 <span class="api-method method-get">GET</span>
+                                <span class="api-method method-post">POST</span>
                                 <span class="api-path">/api/file-changes</span>
                             </div>
-                            <p class="api-description">Check for files that have changed since last scan (based on hash).</p>
+                            <p class="api-description">Check for files that have changed since last scan (based on modification time).</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "message": "File changes check started",
+    "task_id": "file_changes_123456"
+}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Cleanup Status -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/cleanup-status</span>
+                            </div>
+                            <p class="api-description">Get the status of the cleanup operation.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+{
+    "is_cleaning": true,
+    "cleanup_phase": "checking",
+    "total_files": 1000,
+    "checked_files": 500,
+    "orphaned_files": 25,
+    "cleanup_message": "Checking file existence: 500/1000"
+}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Cancel Cleanup -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/cancel-cleanup</span>
+                            </div>
+                            <p class="api-description">Cancel the running cleanup operation.</p>
+                        </div>
+                        
+                        <!-- Reset Cleanup State -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/reset-cleanup-state</span>
+                            </div>
+                            <p class="api-description">Reset stuck cleanup state (emergency recovery).</p>
+                        </div>
+                        
+                        <!-- File Changes Status -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-get">GET</span>
+                                <span class="api-path">/api/file-changes-status</span>
+                            </div>
+                            <p class="api-description">Get the status of the file changes check operation.</p>
+                        </div>
+                        
+                        <!-- Cancel File Changes -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/cancel-file-changes</span>
+                            </div>
+                            <p class="api-description">Cancel the running file changes check operation.</p>
+                        </div>
+                        
+                        <!-- Recover Stuck Scan -->
+                        <div class="api-endpoint">
+                            <div>
+                                <span class="api-method method-post">POST</span>
+                                <span class="api-path">/api/recover-stuck-scan</span>
+                            </div>
+                            <p class="api-description">Emergency recovery for stuck scans.</p>
                         </div>
                     </div>
                 </div>
@@ -625,6 +792,25 @@
                                 <span class="api-path">/api/ignored-patterns</span>
                             </div>
                             <p class="api-description">Get list of ignored error patterns.</p>
+                            <div class="response-example">
+                                <h5>Response Example:</h5>
+                                <div class="code-block">
+[
+    {
+        "id": 1,
+        "pattern": ".*moov atom not found.*",
+        "description": "Ignore moov atom errors for MP4 files",
+        "created_at": "2024-01-15T10:30:00Z"
+    },
+    {
+        "id": 2,
+        "pattern": ".*Non-monotonous DTS.*",
+        "description": "Ignore DTS timestamp warnings",
+        "created_at": "2024-01-16T11:00:00Z"
+    }
+]
+                                </div>
+                            </div>
                         </div>
                         
                         <div class="api-endpoint">
@@ -633,6 +819,39 @@
                                 <span class="api-path">/api/ignored-patterns</span>
                             </div>
                             <p class="api-description">Add a new ignored error pattern.</p>
+                            <div class="api-params">
+                                <h5>Request Body:</h5>
+                                <table class="param-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Parameter</th>
+                                            <th>Type</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><span class="param-name">pattern</span></td>
+                                            <td><span class="param-type">string</span></td>
+                                            <td>Regular expression pattern to match errors</td>
+                                        </tr>
+                                        <tr>
+                                            <td><span class="param-name">description</span></td>
+                                            <td><span class="param-type">string</span></td>
+                                            <td>Description of the pattern (optional)</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="response-example">
+                                <h5>Request Example:</h5>
+                                <div class="code-block">
+{
+    "pattern": ".*Invalid NAL unit size.*",
+    "description": "Ignore NAL unit size errors in H.264 streams"
+}
+                                </div>
+                            </div>
                         </div>
                         
                         <div class="api-endpoint">
@@ -641,6 +860,255 @@
                                 <span class="api-path">/api/ignored-patterns/{pattern_id}</span>
                             </div>
                             <p class="api-description">Delete an ignored error pattern.</p>
+                            <div class="response-example">
+                                <h5>cURL Example:</h5>
+                                <div class="code-block">
+curl -X DELETE "https://your-server.com/api/ignored-patterns/1"
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Code Examples -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Code Examples</h3>
+                    </div>
+                    <div class="card-body">
+                        <h4 class="mb-3">Python Example</h4>
+                        <div class="code-block">
+import requests
+import json
+
+# Base URL for the API
+BASE_URL = "https://your-server.com/api"
+
+# Start a full scan
+def start_scan():
+    response = requests.post(f"{BASE_URL}/scan-all")
+    return response.json()
+
+# Get scan status
+def get_scan_status():
+    response = requests.get(f"{BASE_URL}/scan-status")
+    return response.json()
+
+# Get scan results with filtering
+def get_scan_results(page=1, filter="corrupted"):
+    params = {
+        "page": page,
+        "per_page": 50,
+        "filter": filter
+    }
+    response = requests.get(f"{BASE_URL}/scan-results", params=params)
+    return response.json()
+
+# Mark files as good
+def mark_files_as_good(file_ids):
+    data = {"file_ids": file_ids}
+    response = requests.post(f"{BASE_URL}/mark-as-good", json=data)
+    return response.json()
+
+# Example usage
+if __name__ == "__main__":
+    # Start scan
+    scan_result = start_scan()
+    print(f"Scan started: {scan_result}")
+    
+    # Check status
+    status = get_scan_status()
+    print(f"Scan status: {status}")
+    
+    # Get corrupted files
+    results = get_scan_results(filter="corrupted")
+    print(f"Found {results['total']} corrupted files")
+                        </div>
+                        
+                        <h4 class="mt-4 mb-3">JavaScript/Node.js Example</h4>
+                        <div class="code-block">
+const axios = require('axios');
+
+const BASE_URL = 'https://your-server.com/api';
+
+// Start a full scan
+async function startScan() {
+    try {
+        const response = await axios.post(`${BASE_URL}/scan-all`);
+        return response.data;
+    } catch (error) {
+        console.error('Error starting scan:', error);
+    }
+}
+
+// Get scan results with pagination
+async function getScanResults(page = 1, filter = 'all') {
+    try {
+        const response = await axios.get(`${BASE_URL}/scan-results`, {
+            params: { page, per_page: 50, filter }
+        });
+        return response.data;
+    } catch (error) {
+        console.error('Error getting results:', error);
+    }
+}
+
+// Scan specific files with deep scan
+async function scanFiles(filePaths, deepScan = true) {
+    try {
+        const response = await axios.post(`${BASE_URL}/scan-parallel`, {
+            file_paths: filePaths,
+            deep_scan: deepScan
+        });
+        return response.data;
+    } catch (error) {
+        console.error('Error scanning files:', error);
+    }
+}
+
+// Example usage
+(async () => {
+    // Start full scan
+    const scanResult = await startScan();
+    console.log('Scan started:', scanResult);
+    
+    // Get results
+    const results = await getScanResults(1, 'corrupted');
+    console.log(`Found ${results.total} corrupted files`);
+    
+    // Scan specific files
+    const files = ['/media/video1.mp4', '/media/video2.mp4'];
+    await scanFiles(files, true);
+})();
+                        </div>
+                        
+                        <h4 class="mt-4 mb-3">Bash/cURL Example</h4>
+                        <div class="code-block">
+#!/bin/bash
+
+BASE_URL="https://your-server.com/api"
+
+# Function to start a scan
+start_scan() {
+    curl -X POST "$BASE_URL/scan-all"
+}
+
+# Function to check scan status
+check_status() {
+    curl -X GET "$BASE_URL/scan-status" | jq '.'
+}
+
+# Function to get corrupted files
+get_corrupted_files() {
+    curl -X GET "$BASE_URL/scan-results?filter=corrupted&per_page=100" | jq '.'
+}
+
+# Function to export results to CSV
+export_to_csv() {
+    curl -X GET "$BASE_URL/export-csv" -o "scan_results_$(date +%Y%m%d).csv"
+    echo "Results exported to scan_results_$(date +%Y%m%d).csv"
+}
+
+# Function to cleanup orphaned files
+cleanup_orphaned() {
+    echo "Starting cleanup..."
+    curl -X POST "$BASE_URL/cleanup-orphaned"
+    
+    # Monitor cleanup status
+    while true; do
+        STATUS=$(curl -s "$BASE_URL/cleanup-status" | jq -r '.is_cleaning')
+        if [ "$STATUS" = "false" ]; then
+            echo "Cleanup completed"
+            break
+        fi
+        sleep 2
+    done
+}
+
+# Example workflow
+echo "Starting PixelProbe scan..."
+start_scan
+
+# Wait for scan to complete
+while true; do
+    IS_SCANNING=$(curl -s "$BASE_URL/scan-status" | jq -r '.is_scanning')
+    if [ "$IS_SCANNING" = "false" ]; then
+        echo "Scan completed"
+        break
+    fi
+    sleep 5
+done
+
+# Get results
+echo "Fetching corrupted files..."
+get_corrupted_files
+
+# Export to CSV
+export_to_csv
+                        </div>
+                        
+                        <h4 class="mt-4 mb-3">PowerShell Example</h4>
+                        <div class="code-block">
+$BaseUrl = "https://your-server.com/api"
+
+# Start a full scan
+function Start-PixelProbeScan {
+    $response = Invoke-RestMethod -Uri "$BaseUrl/scan-all" -Method Post
+    return $response
+}
+
+# Get scan status
+function Get-ScanStatus {
+    $response = Invoke-RestMethod -Uri "$BaseUrl/scan-status" -Method Get
+    return $response
+}
+
+# Get scan results
+function Get-ScanResults {
+    param(
+        [int]$Page = 1,
+        [string]$Filter = "all"
+    )
+    
+    $params = @{
+        page = $Page
+        per_page = 50
+        filter = $Filter
+    }
+    
+    $response = Invoke-RestMethod -Uri "$BaseUrl/scan-results" -Method Get -Body $params
+    return $response
+}
+
+# Mark files as good
+function Set-FilesAsGood {
+    param(
+        [int[]]$FileIds
+    )
+    
+    $body = @{
+        file_ids = $FileIds
+    } | ConvertTo-Json
+    
+    $response = Invoke-RestMethod -Uri "$BaseUrl/mark-as-good" -Method Post -Body $body -ContentType "application/json"
+    return $response
+}
+
+# Example usage
+Write-Host "Starting PixelProbe scan..."
+$scan = Start-PixelProbeScan
+Write-Host "Scan ID: $($scan.scan_id)"
+
+# Monitor scan progress
+do {
+    Start-Sleep -Seconds 5
+    $status = Get-ScanStatus
+    Write-Host "Progress: $($status.completed_files)/$($status.total_files)"
+} while ($status.is_scanning)
+
+# Get corrupted files
+$corrupted = Get-ScanResults -Filter "corrupted"
+Write-Host "Found $($corrupted.total) corrupted files"
                         </div>
                     </div>
                 </div>
