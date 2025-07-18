@@ -1886,8 +1886,14 @@ def get_cleanup_status():
             }
             
             if cleanup_record.start_time and cleanup_record.is_active:
-                response['duration'] = (datetime.now(timezone.utc) - cleanup_record.start_time).total_seconds()
-                response['start_time'] = cleanup_record.start_time.timestamp()
+                # Handle both timezone-aware and timezone-naive datetimes
+                if cleanup_record.start_time.tzinfo is None:
+                    # If naive, assume UTC
+                    start_time_utc = cleanup_record.start_time.replace(tzinfo=timezone.utc)
+                else:
+                    start_time_utc = cleanup_record.start_time
+                response['duration'] = (datetime.now(timezone.utc) - start_time_utc).total_seconds()
+                response['start_time'] = start_time_utc.timestamp()
             
             # Calculate progress percentage based on current phase
             if cleanup_record.phase == 'checking' and cleanup_record.total_files > 0:
@@ -2806,8 +2812,8 @@ def scan_files_parallel():
                     # Mark scan as inactive in database
                     db_write_queue.put({
                         'type': 'update_scan_state',
-                        'data': {
-                            'scan_id': scan_id,
+                        'scan_id': scan_id,
+                        'updates': {
                             'is_active': False,
                             'end_time': datetime.now(timezone.utc),
                             'phase': 'completed',
@@ -2827,8 +2833,8 @@ def scan_files_parallel():
                     # Mark scan as failed in database
                     db_write_queue.put({
                         'type': 'update_scan_state',
-                        'data': {
-                            'scan_id': scan_id,
+                        'scan_id': scan_id,
+                        'updates': {
                             'is_active': False,
                             'end_time': datetime.now(timezone.utc),
                             'phase': 'failed',

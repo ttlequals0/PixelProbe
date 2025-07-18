@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.38] - 2025-01-18
+
+### Fixed
+- Fixed progress bar stuck at 100% after rescan completes
+  - Database write queue now properly updates scan state with correct structure
+  - is_active flag is now correctly set to False when scan completes
+  - Prevents stats update thread from continuously showing scan as active
+- Fixed "Failed to cleanup orphaned entries" error in UI
+  - Fixed timezone mismatch error in cleanup status endpoint
+  - Now handles both timezone-aware and timezone-naive datetimes from database
+  - Cleanup operations should now complete and report status correctly
+
 ## [2.0.37] - 2025-01-18
 
 ### Fixed
