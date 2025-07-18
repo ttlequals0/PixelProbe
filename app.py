@@ -2005,6 +2005,34 @@ def cancel_cleanup():
         logger.error(f"Error cancelling cleanup: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/reset-cleanup-state', methods=['POST'])
+def reset_cleanup_state():
+    """Reset stuck cleanup state - use when cleanup state is stuck after restart"""
+    try:
+        # Find any active cleanup operations
+        active_cleanups = CleanupState.query.filter_by(is_active=True).all()
+        
+        if not active_cleanups:
+            return jsonify({'message': 'No active cleanup operations found'}), 200
+        
+        # Mark all active cleanups as inactive
+        for cleanup in active_cleanups:
+            cleanup.is_active = False
+            cleanup.phase = 'interrupted'
+            cleanup.progress_message = 'Reset due to stuck state'
+            logger.info(f"Resetting stuck cleanup state for ID: {cleanup.cleanup_id}")
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': f'Reset {len(active_cleanups)} stuck cleanup operations',
+            'count': len(active_cleanups)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting cleanup state: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/cancel-file-changes', methods=['POST'])
 def cancel_file_changes():
     """Cancel running file changes check operation"""

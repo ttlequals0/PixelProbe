@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.39] - 2025-01-18
+
+### Fixed
+- Fixed progress bar showing incorrect "Scan completed!" message when cleanup is running
+  - UI now correctly passes operation type to progress monitoring on page load
+  - Progress completion messages now match the actual operation type (scan/cleanup/file-changes)
+- Added endpoint to reset stuck cleanup state after container restart
+  - New `/api/reset-cleanup-state` endpoint marks stuck cleanup operations as interrupted
+  - Prevents progress bar from appearing indefinitely when cleanup state is corrupted
+
 ## [2.0.38] - 2025-01-18
 
 ### Fixed

@@ -1069,7 +1069,7 @@ class PixelProbeApp {
             const scanStatus = await this.api.getScanStatus();
             if (scanStatus.is_scanning) {
                 this.progress.operationType = 'scan';
-                this.progress.startMonitoring();
+                this.progress.startMonitoring('scan');
                 return; // Only monitor one operation at a time
             }
             
@@ -1077,7 +1077,7 @@ class PixelProbeApp {
             const cleanupStatus = await this.api.getCleanupStatus();
             if (cleanupStatus.is_running) {
                 this.progress.operationType = 'cleanup';
-                this.progress.startMonitoring();
+                this.progress.startMonitoring('cleanup');
                 return; // Only monitor one operation at a time
             }
             
@@ -1085,7 +1085,7 @@ class PixelProbeApp {
             const fileChangesStatus = await this.api.getFileChangesStatus();
             if (fileChangesStatus.is_running) {
                 this.progress.operationType = 'file-changes';
-                this.progress.startMonitoring();
+                this.progress.startMonitoring('file-changes');
                 return; // Only monitor one operation at a time
             }
         } catch (error) {
