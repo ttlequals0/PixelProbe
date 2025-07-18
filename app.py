@@ -2011,6 +2011,7 @@ def check_file_changes_async():
             
             # Get total count of files
             total_files = ScanResult.query.count()
+            logger.info(f"File change check starting - found {total_files} total files in database")
             
             with file_changes_state_lock:
                 file_changes_state['total_files'] = total_files
@@ -2028,6 +2029,9 @@ def check_file_changes_async():
                 
                 if not batch_results:
                     break
+                
+                # Log batch progress
+                logger.info(f"Processing batch {offset//batch_size + 1} of {(total_files + batch_size - 1)//batch_size} (offset: {offset}, size: {len(batch_results)})")
                 
                 # Check each file in the batch
                 for result in batch_results:
@@ -2072,6 +2076,8 @@ def check_file_changes_async():
                         })
                         with file_changes_state_lock:
                             file_changes_state['changes_found'] = len(changed_files)
+            
+            logger.info(f"File change check complete: Checked {total_files} files")
             
             # Mark as complete and store results
             with file_changes_state_lock:
