@@ -158,3 +158,41 @@ class ScanState(db.Model):
             'progress_message': self.progress_message,
             'error_message': self.error_message
         }
+
+class CleanupState(db.Model):
+    __tablename__ = 'cleanup_state'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    cleanup_id = db.Column(db.String(36), nullable=False, unique=True, default=lambda: str(uuid.uuid4()))
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    phase = db.Column(db.String(20), nullable=False, default='idle')  # idle, checking, deleting, complete, error, cancelled
+    phase_number = db.Column(db.Integer, nullable=False, default=1)
+    phase_current = db.Column(db.Integer, nullable=False, default=0)
+    phase_total = db.Column(db.Integer, nullable=False, default=0)
+    files_processed = db.Column(db.Integer, nullable=False, default=0)
+    total_files = db.Column(db.Integer, nullable=False, default=0)
+    orphaned_found = db.Column(db.Integer, nullable=False, default=0)
+    start_time = db.Column(db.DateTime(timezone=True), nullable=True)
+    end_time = db.Column(db.DateTime(timezone=True), nullable=True)
+    current_file = db.Column(db.String(500), nullable=True)
+    progress_message = db.Column(db.String(200), nullable=True)
+    error_message = db.Column(db.String(500), nullable=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'cleanup_id': self.cleanup_id,
+            'is_active': self.is_active,
+            'phase': self.phase,
+            'phase_number': self.phase_number,
+            'phase_current': self.phase_current,
+            'phase_total': self.phase_total,
+            'files_processed': self.files_processed,
+            'total_files': self.total_files,
+            'orphaned_found': self.orphaned_found,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'current_file': self.current_file,
+            'progress_message': self.progress_message,
+            'error_message': self.error_message
+        }

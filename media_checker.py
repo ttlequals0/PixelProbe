@@ -802,6 +802,7 @@ class PixelProbe:
                 # NAL unit errors alone are often false positives (container/muxing issues)
                 significant_errors = []
                 has_nal_errors = False
+                has_reference_frame_warnings = False
                 has_other_errors = False
                 
                 for line in error_lines:
@@ -809,6 +810,9 @@ class PixelProbe:
                     if 'invalid nal unit' in line_lower:
                         has_nal_errors = True
                         # Don't add NAL errors to significant_errors yet
+                    elif 'number of reference frames' in line_lower and 'exceeds max' in line_lower:
+                        has_reference_frame_warnings = True
+                        # This is a common encoding issue that doesn't affect playback
                     elif (('error' in line_lower and 'duration' not in line_lower) or
                           'corrupt' in line_lower or
                           'broken' in line_lower or
@@ -824,10 +828,17 @@ class PixelProbe:
                 if significant_errors:
                     corruption_details.append(f"FFmpeg errors: {'; '.join(significant_errors[:3])}")
                     is_corrupted = True
-                elif has_nal_errors and result.returncode == 0:
-                    # NAL errors only - mark as warning instead of corrupted
-                    logger.info(f"FFmpeg found only NAL unit errors (warning) for {file_path}")
-                    warning_details = ["NAL unit errors detected (video may have playback issues)"]
+                elif (has_nal_errors or has_reference_frame_warnings) and result.returncode == 0:
+                    # NAL errors or reference frame warnings only - mark as warning instead of corrupted
+                    warnings = []
+                    if has_nal_errors:
+                        warnings.append("NAL unit errors detected")
+                    if has_reference_frame_warnings:
+                        warnings.append("H.264 reference frame count exceeds profile limit")
+                    
+                    warning_msg = " and ".join(warnings) + " (video may have minor playback issues)"
+                    logger.info(f"FFmpeg found only minor warnings for {file_path}: {warning_msg}")
+                    warning_details = [warning_msg]
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         

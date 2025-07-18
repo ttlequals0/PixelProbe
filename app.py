@@ -15,7 +15,7 @@ import csv
 import io
 
 from media_checker import PixelProbe
-from models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration, ScanState
+from models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration, ScanState, CleanupState
 from version import __version__, __github_url__
 
 load_dotenv()
@@ -207,19 +207,10 @@ scan_state = {
     'cancel_requested': False  # Flag to request cancellation
 }
 
-# Cleanup orphans operation state
+# Cleanup orphans operation state - NOW USING DATABASE (CleanupState model)
+# Keeping for backwards compatibility but no longer used
 cleanup_state_lock = threading.Lock()
-cleanup_state = {
-    'is_running': False,
-    'start_time': None,
-    'files_processed': 0,
-    'total_files': 0,
-    'orphaned_found': 0,
-    'current_file': None,
-    'phase': 'idle',  # idle, checking, deleting, complete
-    'progress_message': '',
-    'cancel_requested': False  # Flag to request cancellation
-}
+cleanup_state = {}
 
 # File changes check operation state
 file_changes_state_lock = threading.Lock()
@@ -1842,44 +1833,71 @@ def get_scan_status():
 
 @app.route('/api/test-cleanup')
 def test_cleanup():
-    """Test endpoint to check cleanup state"""
-    with cleanup_state_lock:
-        state = cleanup_state.copy()
-    return jsonify({
-        'current_state': state,
-        'timestamp': datetime.now().isoformat()
-    })
+    """Test endpoint to check cleanup state from database"""
+    cleanup_record = CleanupState.query.order_by(CleanupState.id.desc()).first()
+    if cleanup_record:
+        return jsonify({
+            'current_state': cleanup_record.to_dict(),
+            'timestamp': datetime.now().isoformat()
+        })
+    else:
+        return jsonify({
+            'current_state': None,
+            'timestamp': datetime.now().isoformat(),
+            'message': 'No cleanup operations found'
+        })
 
 @app.route('/api/cleanup-status')
 def get_cleanup_status():
     """Get current cleanup orphans operation status"""
     try:
-        with cleanup_state_lock:
-            state = cleanup_state.copy()
+        # Get the most recent cleanup state from database
+        cleanup_record = CleanupState.query.order_by(CleanupState.id.desc()).first()
         
-        response = {
-            'is_running': state.get('is_running', False),
-            'phase': state.get('phase', 'idle'),
-            'phase_number': state.get('phase_number', 1),
-            'total_phases': state.get('total_phases', 2),
-            'phase_current': state.get('phase_current', 0),
-            'phase_total': state.get('phase_total', 0),
-            'files_processed': state.get('files_processed', 0),
-            'total_files': state.get('total_files', 0),
-            'orphaned_found': state.get('orphaned_found', 0),
-            'current_file': state.get('current_file'),
-            'progress_message': state.get('progress_message', '')
-        }
-        
-        if state.get('start_time') and state.get('is_running'):
-            response['duration'] = time.time() - state['start_time']
-            response['start_time'] = state['start_time']
-        
-        # Calculate progress percentage
-        if state.get('total_files', 0) > 0:
-            response['progress_percentage'] = (state.get('files_processed', 0) / state['total_files']) * 100
+        if not cleanup_record:
+            # No cleanup has ever been run
+            response = {
+                'is_running': False,
+                'phase': 'idle',
+                'phase_number': 1,
+                'total_phases': 2,
+                'phase_current': 0,
+                'phase_total': 0,
+                'files_processed': 0,
+                'total_files': 0,
+                'orphaned_found': 0,
+                'current_file': None,
+                'progress_message': '',
+                'progress_percentage': 0
+            }
         else:
-            response['progress_percentage'] = 0
+            response = {
+                'is_running': cleanup_record.is_active,
+                'phase': cleanup_record.phase,
+                'phase_number': cleanup_record.phase_number,
+                'total_phases': 2,
+                'phase_current': cleanup_record.phase_current,
+                'phase_total': cleanup_record.phase_total,
+                'files_processed': cleanup_record.files_processed,
+                'total_files': cleanup_record.total_files,
+                'orphaned_found': cleanup_record.orphaned_found,
+                'current_file': cleanup_record.current_file,
+                'progress_message': cleanup_record.progress_message or ''
+            }
+            
+            if cleanup_record.start_time and cleanup_record.is_active:
+                response['duration'] = (datetime.now(timezone.utc) - cleanup_record.start_time).total_seconds()
+                response['start_time'] = cleanup_record.start_time.timestamp()
+            
+            # Calculate progress percentage based on current phase
+            if cleanup_record.phase == 'checking' and cleanup_record.total_files > 0:
+                response['progress_percentage'] = (cleanup_record.files_processed / cleanup_record.total_files) * 50  # First phase is 50%
+            elif cleanup_record.phase == 'deleting' and cleanup_record.phase_total > 0:
+                response['progress_percentage'] = 50 + (cleanup_record.phase_current / cleanup_record.phase_total) * 50  # Second phase is remaining 50%
+            elif cleanup_record.phase == 'complete':
+                response['progress_percentage'] = 100
+            else:
+                response['progress_percentage'] = 0
         
         return jsonify(response)
         
@@ -1960,12 +1978,17 @@ def cancel_scan():
 def cancel_cleanup():
     """Cancel running cleanup operation"""
     try:
-        with cleanup_state_lock:
-            if not cleanup_state['is_running']:
-                return jsonify({'error': 'No cleanup operation is currently running'}), 400
-            
-            cleanup_state['cancel_requested'] = True
-            logger.info("Cleanup cancellation requested")
+        # Find active cleanup operation
+        active_cleanup = CleanupState.query.filter_by(is_active=True).first()
+        if not active_cleanup:
+            return jsonify({'error': 'No cleanup operation is currently running'}), 400
+        
+        # Mark as cancelled - the async thread will check this
+        active_cleanup.is_active = False
+        active_cleanup.phase = 'cancelled' 
+        active_cleanup.progress_message = 'Cancellation requested'
+        db.session.commit()
+        logger.info(f"Cleanup cancellation requested for ID: {active_cleanup.cleanup_id}")
         
         return jsonify({
             'message': 'Cleanup cancellation requested',
@@ -2010,10 +2033,42 @@ def export_csv():
                 export_type = "selected"
                 logger.info(f"Exporting {len(results)} selected scan results to CSV")
             else:
-                # Export all files (POST with empty file_ids)
-                results = ScanResult.query.all()
-                export_type = "all"
-                logger.info(f"Exporting {len(results)} scan results to CSV (all results via POST)")
+                # Export based on current filter and search
+                filter_type = data.get('filter', 'all')
+                search = data.get('search', '')
+                
+                query = ScanResult.query
+                
+                # Apply search filter
+                if search:
+                    query = query.filter(ScanResult.file_path.contains(search))
+                
+                # Apply corruption filter
+                if filter_type == 'corrupted':
+                    # Show only corrupted files that don't have warnings and aren't marked as good
+                    query = query.filter(
+                        (ScanResult.is_corrupted == True) & 
+                        ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None)) &
+                        (ScanResult.marked_as_good == False)
+                    )
+                elif filter_type == 'healthy':
+                    # Show only healthy files (no corruption, no warnings, or marked as good)
+                    query = query.filter(
+                        ((ScanResult.is_corrupted == False) & 
+                         ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None))) |
+                        (ScanResult.marked_as_good == True)
+                    )
+                elif filter_type == 'warning':
+                    # Show files with warnings that aren't marked as good
+                    query = query.filter(
+                        (ScanResult.has_warnings == True) &
+                        (ScanResult.marked_as_good == False)
+                    )
+                # 'all' filter - no additional filtering needed
+                
+                results = query.all()
+                export_type = filter_type if filter_type != 'all' else 'all'
+                logger.info(f"Exporting {len(results)} scan results to CSV (filter: {filter_type}, search: '{search}')")
         else:
             # GET request - export all files
             results = ScanResult.query.all()
@@ -2324,26 +2379,31 @@ def check_file_changes():
         'status': 'started'
     })
 
-def cleanup_orphaned_async():
+def cleanup_orphaned_async(cleanup_id):
     """Async function to clean up orphaned records with progress tracking"""
-    logger.info("Cleanup async function started")
+    logger.info(f"Cleanup async function started with ID: {cleanup_id}")
     with app.app_context():
         try:
+            # Get the cleanup state from database
+            cleanup_record = CleanupState.query.filter_by(cleanup_id=cleanup_id).first()
+            if not cleanup_record:
+                logger.error(f"Cleanup state not found for ID: {cleanup_id}")
+                return
+            
             logger.info("Inside app context, updating state to checking")
-            with cleanup_state_lock:
-                cleanup_state['phase'] = 'checking'
-                cleanup_state['phase_number'] = 1
-                cleanup_state['total_phases'] = 2
-                cleanup_state['progress_message'] = 'Phase 1 of 2: Counting files in database...'
+            cleanup_record.phase = 'checking'
+            cleanup_record.phase_number = 1
+            cleanup_record.progress_message = 'Phase 1 of 2: Counting files in database...'
+            db.session.commit()
             
             # Get total count of files
             total_files = ScanResult.query.count()
             logger.info(f"Found {total_files} total files to check")
             
-            with cleanup_state_lock:
-                cleanup_state['total_files'] = total_files
-                cleanup_state['phase_total'] = total_files
-                cleanup_state['progress_message'] = f'Phase 1 of 2: Checking {total_files} files for orphaned records...'
+            cleanup_record.total_files = total_files
+            cleanup_record.phase_total = total_files
+            cleanup_record.progress_message = f'Phase 1 of 2: Checking {total_files} files for orphaned records...'
+            db.session.commit()
             
             checker = initialize_media_checker()
             orphaned_ids = []  # Store IDs instead of full records to save memory
@@ -2352,14 +2412,15 @@ def cleanup_orphaned_async():
             
             # Process files in batches
             for offset in range(0, total_files, batch_size):
-                # Check for cancellation
-                with cleanup_state_lock:
-                    if cleanup_state.get('cancel_requested'):
-                        logger.info("Cleanup cancelled by user")
-                        cleanup_state['phase'] = 'cancelled'
-                        cleanup_state['progress_message'] = 'Operation cancelled'
-                        cleanup_state['is_running'] = False
-                        return
+                # Check for cancellation by refreshing from database
+                db.session.refresh(cleanup_record)
+                if not cleanup_record.is_active:
+                    logger.info("Cleanup cancelled by user")
+                    cleanup_record.phase = 'cancelled'
+                    cleanup_record.progress_message = 'Operation cancelled'
+                    cleanup_record.end_time = datetime.now(timezone.utc)
+                    db.session.commit()
+                    return
                 
                 # Get batch of records
                 batch_results = ScanResult.query.order_by(ScanResult.id).offset(offset).limit(batch_size).all()
@@ -2374,16 +2435,16 @@ def cleanup_orphaned_async():
                 for result in batch_results:
                     idx = offset + batch_results.index(result)
                     
-                    with cleanup_state_lock:
-                        cleanup_state['files_processed'] = idx + 1
-                        cleanup_state['phase_current'] = idx + 1
-                        cleanup_state['current_file'] = result.file_path
+                    cleanup_record.files_processed = idx + 1
+                    cleanup_record.phase_current = idx + 1
+                    cleanup_record.current_file = result.file_path
+                    db.session.commit()
                     
                     if not os.path.exists(result.file_path):
                         orphaned_ids.append(result.id)
                         orphaned_files.append(result.file_path)
-                        with cleanup_state_lock:
-                            cleanup_state['orphaned_found'] = len(orphaned_ids)
+                        cleanup_record.orphaned_found = len(orphaned_ids)
+                        db.session.commit()
             
             logger.info(f"Phase 1 complete: Checked {total_files} files, found {len(orphaned_ids)} orphaned records")
             
@@ -2398,63 +2459,67 @@ def cleanup_orphaned_async():
             # Check if we have any orphaned files to delete
             if len(orphaned_ids) > 0:
                 # Start deletion phase
-                with cleanup_state_lock:
-                    cleanup_state['phase'] = 'deleting'
-                    cleanup_state['phase_number'] = 2
-                    cleanup_state['phase_current'] = 0
-                    cleanup_state['phase_total'] = len(orphaned_ids)
-                    cleanup_state['progress_message'] = f'Phase 2 of 2: Deleting {len(orphaned_ids)} orphaned records...'
+                cleanup_record.phase = 'deleting'
+                cleanup_record.phase_number = 2
+                cleanup_record.phase_current = 0
+                cleanup_record.phase_total = len(orphaned_ids)
+                cleanup_record.progress_message = f'Phase 2 of 2: Deleting {len(orphaned_ids)} orphaned records...'
+                db.session.commit()
                 
                 # Delete orphaned records in batches using IDs
                 deletion_batch_size = 1000
                 for i in range(0, len(orphaned_ids), deletion_batch_size):
                     # Check for cancellation
-                    with cleanup_state_lock:
-                        if cleanup_state.get('cancel_requested'):
-                            logger.info("Cleanup cancelled during deletion phase")
-                            cleanup_state['phase'] = 'cancelled'
-                            cleanup_state['progress_message'] = f'Operation cancelled (deleted {i} of {len(orphaned_ids)} records)'
-                            cleanup_state['is_running'] = False
-                            return
+                    db.session.refresh(cleanup_record)
+                    if not cleanup_record.is_active:
+                        logger.info("Cleanup cancelled during deletion phase")
+                        cleanup_record.phase = 'cancelled'
+                        cleanup_record.progress_message = f'Operation cancelled (deleted {i} of {len(orphaned_ids)} records)'
+                        cleanup_record.end_time = datetime.now(timezone.utc)
+                        db.session.commit()
+                        return
                     
                     batch_ids = orphaned_ids[i:i + deletion_batch_size]
                     # Use bulk delete for efficiency
                     ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
                     db.session.commit()
                     
-                    with cleanup_state_lock:
-                        deleted_so_far = min(i + deletion_batch_size, len(orphaned_ids))
-                        cleanup_state['phase_current'] = deleted_so_far
-                        cleanup_state['progress_message'] = f'Phase 2 of 2: Deleted {deleted_so_far} of {len(orphaned_ids)} records...'
+                    deleted_so_far = min(i + deletion_batch_size, len(orphaned_ids))
+                    cleanup_record.phase_current = deleted_so_far
+                    cleanup_record.progress_message = f'Phase 2 of 2: Deleted {deleted_so_far} of {len(orphaned_ids)} records...'
+                    db.session.commit()
             else:
                 # No orphaned files found, still show Phase 2 completion
-                with cleanup_state_lock:
-                    cleanup_state['phase'] = 'deleting'
-                    cleanup_state['phase_number'] = 2
-                    cleanup_state['phase_current'] = 0
-                    cleanup_state['phase_total'] = 0
-                    cleanup_state['progress_message'] = 'Phase 2 of 2: No orphaned records to delete'
+                cleanup_record.phase = 'deleting'
+                cleanup_record.phase_number = 2
+                cleanup_record.phase_current = 0
+                cleanup_record.phase_total = 0
+                cleanup_record.progress_message = 'Phase 2 of 2: No orphaned records to delete'
+                db.session.commit()
                 
                 # Give UI time to show Phase 2 status
                 time.sleep(1)
             
             # Mark as complete
-            with cleanup_state_lock:
-                cleanup_state['phase'] = 'complete'
-                cleanup_state['progress_message'] = f'Successfully removed {len(orphaned_ids)} orphaned records'
-                cleanup_state['is_running'] = False
-                # Ensure orphaned_found is preserved in the final state
-                cleanup_state['orphaned_found'] = len(orphaned_ids)
+            cleanup_record.phase = 'complete'
+            cleanup_record.progress_message = f'Successfully removed {len(orphaned_ids)} orphaned records'
+            cleanup_record.is_active = False
+            cleanup_record.orphaned_found = len(orphaned_ids)
+            cleanup_record.end_time = datetime.now(timezone.utc)
+            db.session.commit()
             
             logger.info(f"Cleaned up {len(orphaned_ids)} orphaned records")
             logger.info(f"Total size of orphaned files cleaned: {len(orphaned_files)} files")
             
         except Exception as e:
             logger.error(f"Error in async cleanup: {str(e)}", exc_info=True)
-            with cleanup_state_lock:
-                cleanup_state['phase'] = 'error'
-                cleanup_state['progress_message'] = f'Error: {str(e)}'
-                cleanup_state['is_running'] = False
+            if cleanup_record:
+                cleanup_record.phase = 'error'
+                cleanup_record.error_message = str(e)
+                cleanup_record.progress_message = f'Error: {str(e)}'
+                cleanup_record.is_active = False
+                cleanup_record.end_time = datetime.now(timezone.utc)
+                db.session.commit()
 
 @app.route('/api/cleanup-orphaned', methods=['POST'])
 def cleanup_orphaned_records():
@@ -2462,33 +2527,40 @@ def cleanup_orphaned_records():
     logger.info("Cleanup orphaned endpoint called")
     
     # Check if cleanup is already running
-    with cleanup_state_lock:
-        if cleanup_state['is_running']:
-            logger.warning("Cleanup already in progress")
-            return jsonify({'error': 'Cleanup operation already in progress'}), 409
-        
-        # Reset state
-        cleanup_state['is_running'] = True
-        cleanup_state['start_time'] = time.time()
-        cleanup_state['files_processed'] = 0
-        cleanup_state['total_files'] = 0
-        cleanup_state['orphaned_found'] = 0
-        cleanup_state['current_file'] = None
-        cleanup_state['phase'] = 'starting'
-        cleanup_state['progress_message'] = 'Starting cleanup operation...'
-        cleanup_state['cancel_requested'] = False  # Reset cancel flag
+    active_cleanup = CleanupState.query.filter_by(is_active=True).first()
+    if active_cleanup:
+        logger.warning("Cleanup already in progress")
+        return jsonify({'error': 'Cleanup operation already in progress'}), 409
     
-    logger.info("Starting cleanup thread")
+    # Create new cleanup state record
+    import uuid
+    cleanup_id = str(uuid.uuid4())
+    cleanup_record = CleanupState(
+        cleanup_id=cleanup_id,
+        is_active=True,
+        phase='starting',
+        start_time=datetime.now(timezone.utc),
+        progress_message='Starting cleanup operation...',
+        files_processed=0,
+        total_files=0,
+        orphaned_found=0
+    )
+    db.session.add(cleanup_record)
+    db.session.commit()
+    
+    logger.info(f"Starting cleanup thread with ID: {cleanup_id}")
     
     # Start cleanup in background thread
     try:
-        cleanup_thread = threading.Thread(target=cleanup_orphaned_async)
+        cleanup_thread = threading.Thread(target=cleanup_orphaned_async, args=(cleanup_id,))
         cleanup_thread.start()
         logger.info("Cleanup thread started successfully")
     except Exception as e:
         logger.error(f"Failed to start cleanup thread: {str(e)}")
-        with cleanup_state_lock:
-            cleanup_state['is_running'] = False
+        cleanup_record.is_active = False
+        cleanup_record.phase = 'error'
+        cleanup_record.error_message = str(e)
+        db.session.commit()
         return jsonify({'error': f'Failed to start cleanup: {str(e)}'}), 500
     
     logger.info("Cleanup thread started, returning status=started")

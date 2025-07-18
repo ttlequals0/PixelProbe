@@ -1433,10 +1433,15 @@ class PixelProbeApp {
     async exportCSV() {
         try {
             // Show loading notification
-            const itemCount = this.table.selectedFiles.size > 0 ? 
-                `${this.table.selectedFiles.size} selected files` : 
-                'all files in current view';
-            this.showNotification(`Generating CSV export for ${itemCount}...`, 'info');
+            let itemDescription;
+            if (this.table.selectedFiles.size > 0) {
+                itemDescription = `${this.table.selectedFiles.size} selected files`;
+            } else {
+                const filterText = this.table.filter !== 'all' ? `${this.table.filter} files` : 'all files';
+                const searchText = this.table.searchQuery ? ` matching "${this.table.searchQuery}"` : '';
+                itemDescription = filterText + searchText;
+            }
+            this.showNotification(`Generating CSV export for ${itemDescription}...`, 'info');
             
             let requestBody = {};
             

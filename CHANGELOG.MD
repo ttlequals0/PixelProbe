@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.37] - 2025-01-18
+
+### Fixed
+- CSV export now properly exports filtered results when no files are selected
+  - Exports only corrupted files when "Corrupted" filter is active
+  - Exports only warning files when "Warnings" filter is active
+  - Exports only healthy files when "Healthy" filter is active
+  - Respects current search query in combination with filters
+  - Improved export notification to clearly indicate what's being exported
+- H.264 reference frame warnings are now properly handled as warnings instead of corruption
+  - Files with "number of reference frames exceeds max" errors are marked with warnings
+  - These files play normally despite the encoding issue
+  - Prevents false positives for files encoded with non-standard reference frame counts
+- Fixed cleanup orphaned records progress tracking in multi-worker environment
+  - Cleanup state is now stored in database instead of memory
+  - Progress updates work correctly across all gunicorn workers
+  - UI accurately reflects cleanup progress throughout the operation
+  - Prevents race conditions where cleanup appears complete while still running
+
+### Added
+- CleanupState database model for persistent cleanup operation tracking
+  - Tracks cleanup progress across multiple workers
+  - Maintains state even if workers restart
+
 ## [2.0.36] - 2025-01-18
 
 ### Added
