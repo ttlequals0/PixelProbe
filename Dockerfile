@@ -22,7 +22,7 @@ ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
 
 # Set version as build argument
-ARG VERSION=2.0.14
-ENV APP_VERSION=$VERSION
+ARG APP_VERSION=2.0.34
+ENV APP_VERSION=$APP_VERSION
 
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "300", "app:app"]
