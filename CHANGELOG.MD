@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.36] - 2025-01-18
+
+### Added
+- Enhanced logging for cleanup orphaned records operation
+  - Now logs the file paths of orphaned records found (first 100 files)
+  - Provides better visibility into which files were removed from the database
+
+### Fixed
+- Fixed cleanup orphaned records UI showing 0 cleaned when backend actually cleaned records
+  - Backend now preserves orphaned_found count in completion state
+  - UI correctly displays the number of orphaned records removed
+
 ## [2.0.35] - 2025-01-18
 
 ### Fixed

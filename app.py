@@ -2347,6 +2347,7 @@ def cleanup_orphaned_async():
             
             checker = initialize_media_checker()
             orphaned_ids = []  # Store IDs instead of full records to save memory
+            orphaned_files = []  # Store file paths for logging
             batch_size = 1000  # Process files in batches to handle large databases
             
             # Process files in batches
@@ -2380,10 +2381,19 @@ def cleanup_orphaned_async():
                     
                     if not os.path.exists(result.file_path):
                         orphaned_ids.append(result.id)
+                        orphaned_files.append(result.file_path)
                         with cleanup_state_lock:
                             cleanup_state['orphaned_found'] = len(orphaned_ids)
             
             logger.info(f"Phase 1 complete: Checked {total_files} files, found {len(orphaned_ids)} orphaned records")
+            
+            # Log the orphaned files
+            if len(orphaned_files) > 0:
+                logger.info("Orphaned files found:")
+                for file_path in orphaned_files[:100]:  # Log first 100 files to avoid huge logs
+                    logger.info(f"  - {file_path}")
+                if len(orphaned_files) > 100:
+                    logger.info(f"  ... and {len(orphaned_files) - 100} more orphaned files")
             
             # Check if we have any orphaned files to delete
             if len(orphaned_ids) > 0:
@@ -2433,8 +2443,11 @@ def cleanup_orphaned_async():
                 cleanup_state['phase'] = 'complete'
                 cleanup_state['progress_message'] = f'Successfully removed {len(orphaned_ids)} orphaned records'
                 cleanup_state['is_running'] = False
+                # Ensure orphaned_found is preserved in the final state
+                cleanup_state['orphaned_found'] = len(orphaned_ids)
             
             logger.info(f"Cleaned up {len(orphaned_ids)} orphaned records")
+            logger.info(f"Total size of orphaned files cleaned: {len(orphaned_files)} files")
             
         except Exception as e:
             logger.error(f"Error in async cleanup: {str(e)}", exc_info=True)

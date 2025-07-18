@@ -404,6 +404,8 @@ class ProgressManager {
                 } else if (operationType === 'cleanup') {
                     status = await this.api.getCleanupStatus();
                     isRunning = status.is_running;
+                    // Debug log for cleanup status
+                    console.log('Cleanup status:', status);
                 } else if (operationType === 'file-changes') {
                     status = await this.api.getFileChangesStatus();
                     isRunning = status.is_running;
@@ -554,6 +556,9 @@ class ProgressManager {
     async complete(operationType = 'scan', status = null) {
         // Always show 100% when operation completes
         let completionMessage = '';
+        
+        // Debug log the status on completion
+        console.log(`${operationType} complete with status:`, status);
         
         if (operationType === 'scan') {
             completionMessage = 'Scan completed!';
