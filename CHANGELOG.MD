@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.51] - 2025-01-20
+
+### Fixed
+- Removed timeout restrictions from file-changes hash calculations
+  - Files are now checked regardless of how long they take
+  - Removed 5-minute timeout that was causing large files to be skipped
+  - Renamed process_file_with_timeout to process_file_for_changes to reflect new behavior
+
+### Added
+- Enhanced progress logging for large file hash calculations
+  - Progress updates every 100MB for large files
+  - Completion time logged for files taking more than 10 seconds
+  - Better visibility into which files are taking longer to process
+
+## [2.0.50] - 2025-01-20
+
+### Fixed
+- Fixed files_processed counter not incrementing during file-changes scans
+  - Database updates now occur more frequently (every 5 files instead of 10)
+  - Added forced database update at the end of each batch to ensure progress is saved
+  - Added logging to track when database updates occur
+  - Progress now updates correctly even when some files timeout during hash calculation
+
 ## [2.0.49] - 2025-01-20
 
 ### Fixed

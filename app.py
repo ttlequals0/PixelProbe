@@ -2275,8 +2275,8 @@ def check_file_changes_async(check_id):
             changed_files = []
             
             # Helper function to process a single file with timeout
-            def process_file_with_timeout(file_data, timeout_seconds=300):
-                """Process a single file with timeout (default 5 minutes)"""
+            def process_file_for_changes(file_data):
+                """Process a single file to check for changes"""
                 file_path = file_data['file_path']
                 stored_hash = file_data['stored_hash']
                 stored_modified = file_data['stored_modified']
@@ -2298,14 +2298,14 @@ def check_file_changes_async(check_id):
                             'current_hash': None
                         }
                     
-                    # Calculate hash with timeout
+                    # Calculate hash - no timeout, we want to check all files
                     start_time = time.time()
                     current_hash = checker.calculate_file_hash(file_path)
                     hash_time = time.time() - start_time
                     
-                    if hash_time > timeout_seconds:
-                        logger.error(f"ERROR: File hash calculation timed out for {file_path} after {hash_time:.2f}s")
-                        return None
+                    # Log if file took a long time but don't skip it
+                    if hash_time > 60:  # Log files that take more than 1 minute
+                        logger.info(f"Large file processed: {file_path} took {hash_time:.1f}s")
                     
                     # Get current modification time
                     current_stats = os.stat(file_path)
@@ -2367,7 +2367,7 @@ def check_file_changes_async(check_id):
                     futures = []
                     future_to_file_data = {}  # Map futures to file data
                     for file_data in file_data_list:
-                        future = executor.submit(process_file_with_timeout, file_data)
+                        future = executor.submit(process_file_for_changes, file_data)
                         futures.append(future)
                         future_to_file_data[future] = file_data
                     
@@ -2391,13 +2391,12 @@ def check_file_changes_async(check_id):
                         file_path = file_data['file_path']
                         
                         try:
-                            result = future.result(timeout=300)  # 5-minute timeout per file
+                            # Wait for result without timeout - we want to check all files
+                            result = future.result()
                             if result:
                                 batch_changed_files.append(result)
-                        except concurrent.futures.TimeoutError:
-                            logger.error(f"ERROR: Timeout processing file {file_path}")
                         except Exception as e:
-                            logger.error(f"Error in future result: {str(e)}")
+                            logger.error(f"Error processing file {file_path}: {str(e)}")
                         
                         # Update progress
                         files_completed_in_batch += 1
@@ -2424,8 +2423,9 @@ def check_file_changes_async(check_id):
                                 file_changes_state['progress_message'] = f'Batch {batch_num + 1}/{total_batches}: Checking files... ETA: {eta_str}'
                                 file_changes_state['progress_percentage'] = (files_done / total_files) * 100 if total_files > 0 else 0
                         
-                        # Update database progress periodically (every 10 files or at end of batch)
-                        if files_completed_in_batch % 10 == 0 or files_completed_in_batch == len(batch_results):
+                        # Update database progress more frequently (every 5 files or at end of batch)
+                        # This ensures progress is visible even if some files timeout
+                        if files_completed_in_batch % 5 == 0 or files_completed_in_batch == len(batch_results):
                             with app.app_context():
                                 file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
                                 if file_changes_record:
@@ -2434,12 +2434,25 @@ def check_file_changes_async(check_id):
                                     file_changes_record.changes_found = len(changed_files)
                                     file_changes_record.progress_message = file_changes_state['progress_message']
                                     db.session.commit()
+                                    logger.info(f"Updated database: files_processed={files_done}, batch={batch_num + 1}, files_in_batch={files_completed_in_batch}")
                     
                     # Add batch results to overall results
                     changed_files.extend(batch_changed_files)
                     
                     with file_changes_state_lock:
                         file_changes_state['changes_found'] = len(changed_files)
+                    
+                    # Force database update at end of each batch to ensure progress is saved
+                    with app.app_context():
+                        file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                        if file_changes_record:
+                            files_done = offset + files_completed_in_batch
+                            file_changes_record.files_processed = files_done
+                            file_changes_record.phase_current = files_done
+                            file_changes_record.changes_found = len(changed_files)
+                            file_changes_record.progress_message = file_changes_state.get('progress_message', '')
+                            db.session.commit()
+                            logger.info(f"Batch {batch_num + 1} complete - Updated database: files_processed={files_done}")
                     
                     # Log batch completion
                     batch_time = time.time() - file_changes_state['batch_start_time']

@@ -263,9 +263,25 @@ class PixelProbe:
         try:
             logger.info(f"Calculating hash for: {file_path}")
             hash_sha256 = hashlib.sha256()
+            start_time = time.time()
+            bytes_processed = 0
+            
             with open(file_path, "rb") as f:
                 for chunk in iter(lambda: f.read(4096), b""):
                     hash_sha256.update(chunk)
+                    bytes_processed += len(chunk)
+                    
+                    # Log progress for large files every 100MB
+                    if bytes_processed % (100 * 1024 * 1024) == 0:
+                        elapsed = time.time() - start_time
+                        mb_processed = bytes_processed / (1024 * 1024)
+                        logger.info(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s")
+            
+            total_time = time.time() - start_time
+            if total_time > 10:  # Log completion time for files that take more than 10 seconds
+                mb_size = bytes_processed / (1024 * 1024)
+                logger.info(f"Hash complete for {file_path}: {mb_size:.1f}MB in {total_time:.1f}s")
+            
             return hash_sha256.hexdigest()
         except Exception as e:
             logger.error(f"Error calculating hash for {file_path}: {str(e)}")
