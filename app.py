@@ -2423,6 +2423,17 @@ def check_file_changes_async(check_id):
                                 
                                 file_changes_state['progress_message'] = f'Batch {batch_num + 1}/{total_batches}: Checking files... ETA: {eta_str}'
                                 file_changes_state['progress_percentage'] = (files_done / total_files) * 100 if total_files > 0 else 0
+                        
+                        # Update database progress periodically (every 10 files or at end of batch)
+                        if files_completed_in_batch % 10 == 0 or files_completed_in_batch == len(batch_results):
+                            with app.app_context():
+                                file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                                if file_changes_record:
+                                    file_changes_record.files_processed = files_done
+                                    file_changes_record.phase_current = files_done
+                                    file_changes_record.changes_found = len(changed_files)
+                                    file_changes_record.progress_message = file_changes_state['progress_message']
+                                    db.session.commit()
                     
                     # Add batch results to overall results
                     changed_files.extend(batch_changed_files)
@@ -2439,23 +2450,138 @@ def check_file_changes_async(check_id):
                 if file_changes_state['cancel_requested']:
                     return
             
-            logger.info(f"File change check complete: Checked {total_files} files, found {len(changed_files)} changes")
+            logger.info(f"Phase 2 complete: Checked {total_files} files, found {len(changed_files)} changes")
+            
+            # Phase 3: Verify changed files for corruption
+            corrupted_count = 0
+            
+            # Update database for Phase 3
+            with app.app_context():
+                file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                if file_changes_record:
+                    file_changes_record.phase = 'verifying_changes'
+                    file_changes_record.phase_number = 3
+                    file_changes_record.phase_current = 0
+                    file_changes_record.phase_total = len(changed_files) if changed_files else 1  # At least 1 to show progress
+                    file_changes_record.changes_found = len(changed_files)
+                    file_changes_record.progress_message = f'Phase 3 of 3: Verifying {len(changed_files)} changed files for corruption...'
+                    db.session.commit()
+            
+            with file_changes_state_lock:
+                file_changes_state['phase'] = 'verifying_changes'
+                file_changes_state['phase_number'] = 3
+                file_changes_state['phase_current'] = 0
+                file_changes_state['phase_total'] = len(changed_files) if changed_files else 1
+                file_changes_state['progress_message'] = f'Phase 3 of 3: Verifying {len(changed_files)} changed files for corruption...'
+            
+            if changed_files:
+                # Verify each changed file for corruption
+                logger.info(f"Starting Phase 3: Verifying {len(changed_files)} changed files for corruption")
+                
+                for idx, changed_file in enumerate(changed_files):
+                    # Check for cancellation
+                    with file_changes_state_lock:
+                        if file_changes_state['cancel_requested']:
+                            logger.info("File changes check cancelled during verification phase")
+                            return
+                    
+                    file_path = changed_file['file_path']
+                    
+                    # Update progress
+                    with file_changes_state_lock:
+                        file_changes_state['phase_current'] = idx + 1
+                        file_changes_state['current_file'] = file_path
+                        file_changes_state['progress_message'] = f'Phase 3 of 3: Verifying file {idx + 1}/{len(changed_files)} for corruption...'
+                    
+                    # Update database progress
+                    with app.app_context():
+                        file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                        if file_changes_record:
+                            file_changes_record.phase_current = idx + 1
+                            file_changes_record.current_file = file_path
+                            file_changes_record.progress_message = f'Phase 3 of 3: Verifying file {idx + 1}/{len(changed_files)} for corruption...'
+                            db.session.commit()
+                    
+                    # Scan the changed file for corruption
+                    try:
+                        scan_result = checker.scan_file(file_path, deep_scan=False)
+                        if scan_result.get('is_corrupted'):
+                            corrupted_count += 1
+                            changed_file['is_corrupted'] = True
+                            changed_file['corruption_details'] = scan_result.get('corruption_details')
+                            logger.warning(f"Changed file is corrupted: {file_path}")
+                        else:
+                            changed_file['is_corrupted'] = False
+                    except Exception as e:
+                        logger.error(f"Error scanning changed file {file_path}: {str(e)}")
+                        changed_file['scan_error'] = str(e)
+                    
+                    # Update corrupted count in state
+                    with file_changes_state_lock:
+                        file_changes_state['corrupted_found'] = corrupted_count
+                    
+                    # Update database with corrupted count
+                    with app.app_context():
+                        file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                        if file_changes_record:
+                            file_changes_record.corrupted_found = corrupted_count
+                            db.session.commit()
+            else:
+                # No files changed - still show Phase 3 progress for smooth transition
+                logger.info("No files changed, completing Phase 3")
+                
+                # Update progress to show Phase 3 completion
+                with file_changes_state_lock:
+                    file_changes_state['phase_current'] = 1
+                    file_changes_state['phase_total'] = 1
+                    file_changes_state['progress_message'] = 'Phase 3 of 3: No changed files to verify'
+                
+                # Update database
+                with app.app_context():
+                    file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                    if file_changes_record:
+                        file_changes_record.phase_current = 1
+                        file_changes_record.phase_total = 1
+                        file_changes_record.progress_message = 'Phase 3 of 3: No changed files to verify'
+                        db.session.commit()
+                
+                # Small delay to show Phase 3 progress
+                time.sleep(0.5)
+            
+            logger.info(f"File change check complete: Checked {total_files} files, found {len(changed_files)} changes, {corrupted_count} corrupted")
             
             # Mark as complete and store results
             with file_changes_state_lock:
                 file_changes_state['phase'] = 'complete'
-                file_changes_state['progress_message'] = f'Check complete: {len(changed_files)} files changed'
+                file_changes_state['progress_message'] = f'Check complete: {len(changed_files)} files changed, {corrupted_count} corrupted'
                 file_changes_state['progress_percentage'] = 100  # Ensure 100% on completion
                 file_changes_state['files_processed'] = total_files  # Ensure counts match
-                file_changes_state['phase_current'] = total_files
-                file_changes_state['phase_total'] = total_files
+                file_changes_state['phase_current'] = len(changed_files) if changed_files else 1
+                file_changes_state['phase_total'] = len(changed_files) if changed_files else 1
+                file_changes_state['corrupted_found'] = corrupted_count
                 # Store results for retrieval
                 file_changes_state['result'] = {
                     'changed_files': changed_files,
-                    'total_checked': total_files
+                    'total_checked': total_files,
+                    'corrupted_found': corrupted_count
                 }
                 # Set is_running to False AFTER setting all completion data
                 file_changes_state['is_running'] = False
+            
+            # Update database with final results
+            with app.app_context():
+                file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                if file_changes_record:
+                    file_changes_record.phase = 'complete'
+                    file_changes_record.is_active = False
+                    file_changes_record.end_time = datetime.now(timezone.utc)
+                    file_changes_record.files_processed = total_files
+                    file_changes_record.phase_current = len(changed_files) if changed_files else 1
+                    file_changes_record.phase_total = len(changed_files) if changed_files else 1
+                    file_changes_record.corrupted_found = corrupted_count
+                    file_changes_record.progress_message = f'Check complete: {len(changed_files)} files changed, {corrupted_count} corrupted'
+                    file_changes_record.changed_files = json.dumps(changed_files)
+                    db.session.commit()
             
         except Exception as e:
             logger.error(f"Error in async file changes check: {str(e)}")

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.49] - 2025-01-20
+
+### Fixed
+- Fixed missing Phase 3 implementation in file-changes scan
+  - Phase 3 now properly verifies changed files for corruption
+  - Updates corrupted_found counter correctly
+  - Shows smooth progress from 85% to 100%
+  - Handles case where no files changed with proper phase transition
+- Fixed database updates during file-changes scan
+  - files_processed counter now updates correctly in database during Phase 2
+  - phase_current is properly synchronized with files_processed
+  - Progress updates are persisted every 10 files for better tracking
+  - Final completion state and results are now saved to database
+- Fixed progress display showing 0 files_processed despite current_file changing
+
 ## [2.0.48] - 2025-01-19
 
 ### Fixed
