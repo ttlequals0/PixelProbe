@@ -3293,6 +3293,54 @@ def update_exclusions():
         logger.error(f"Failed to update exclusions: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/exclusions/<exclusion_type>/<path:item>', methods=['POST'])
+def add_exclusion(exclusion_type, item):
+    """Add a single exclusion"""
+    try:
+        if exclusion_type not in ['path', 'extension']:
+            return jsonify({'error': 'Invalid exclusion type'}), 400
+        
+        if exclusion_type == 'path':
+            if item not in scheduler.excluded_paths:
+                scheduler.excluded_paths.append(item)
+                scheduler.update_exclusions(paths=scheduler.excluded_paths)
+        else:  # extension
+            if item not in scheduler.excluded_extensions:
+                scheduler.excluded_extensions.append(item)
+                scheduler.update_exclusions(extensions=scheduler.excluded_extensions)
+        
+        return jsonify({
+            'excluded_paths': scheduler.excluded_paths,
+            'excluded_extensions': scheduler.excluded_extensions
+        })
+    except Exception as e:
+        logger.error(f"Failed to add exclusion: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/exclusions/<exclusion_type>/<path:item>', methods=['DELETE'])
+def remove_exclusion(exclusion_type, item):
+    """Remove a single exclusion"""
+    try:
+        if exclusion_type not in ['path', 'extension']:
+            return jsonify({'error': 'Invalid exclusion type'}), 400
+        
+        if exclusion_type == 'path':
+            if item in scheduler.excluded_paths:
+                scheduler.excluded_paths.remove(item)
+                scheduler.update_exclusions(paths=scheduler.excluded_paths)
+        else:  # extension
+            if item in scheduler.excluded_extensions:
+                scheduler.excluded_extensions.remove(item)
+                scheduler.update_exclusions(extensions=scheduler.excluded_extensions)
+        
+        return jsonify({
+            'excluded_paths': scheduler.excluded_paths,
+            'excluded_extensions': scheduler.excluded_extensions
+        })
+    except Exception as e:
+        logger.error(f"Failed to remove exclusion: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 # Initialize database when module is imported
 create_tables()
 

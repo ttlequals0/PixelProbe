@@ -1819,19 +1819,84 @@ class PixelProbeApp {
             const response = await fetch('/api/exclusions');
             const data = await response.json();
             
-            const pathsTextarea = document.querySelector('#excluded-paths');
-            const extensionsTextarea = document.querySelector('#excluded-extensions');
-            
-            if (pathsTextarea && data.excluded_paths) {
-                pathsTextarea.value = data.excluded_paths.join('\n');
+            // Update paths list
+            const pathsList = document.querySelector('#excluded-paths-list');
+            if (pathsList) {
+                if (data.excluded_paths && data.excluded_paths.length > 0) {
+                    pathsList.innerHTML = data.excluded_paths.map(path => `
+                        <div class="exclusion-item">
+                            <span>${this.escapeHtml(path)}</span>
+                            <button class="btn btn-sm btn-danger" onclick="app.removeExclusion('path', '${this.escapeHtml(path)}')">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    `).join('');
+                } else {
+                    pathsList.innerHTML = '<div class="empty-state">No excluded paths</div>';
+                }
             }
             
-            if (extensionsTextarea && data.excluded_extensions) {
-                extensionsTextarea.value = data.excluded_extensions.join('\n');
+            // Update extensions list
+            const extensionsList = document.querySelector('#excluded-extensions-list');
+            if (extensionsList) {
+                if (data.excluded_extensions && data.excluded_extensions.length > 0) {
+                    extensionsList.innerHTML = data.excluded_extensions.map(ext => `
+                        <div class="exclusion-item">
+                            <span>${this.escapeHtml(ext)}</span>
+                            <button class="btn btn-sm btn-danger" onclick="app.removeExclusion('extension', '${this.escapeHtml(ext)}')">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    `).join('');
+                } else {
+                    extensionsList.innerHTML = '<div class="empty-state">No excluded extensions</div>';
+                }
             }
         } catch (error) {
             console.error('Failed to load exclusions:', error);
             this.showNotification('Failed to load exclusions', 'error');
+        }
+    }
+    
+    async addExclusion(type) {
+        try {
+            const inputId = type === 'path' ? 'new-excluded-path' : 'new-excluded-extension';
+            const input = document.querySelector(`#${inputId}`);
+            if (!input || !input.value.trim()) return;
+            
+            const value = input.value.trim();
+            const response = await fetch(`/api/exclusions/${type}/${encodeURIComponent(value)}`, {
+                method: 'POST'
+            });
+            
+            if (response.ok) {
+                input.value = '';
+                await this.loadExclusions();
+                this.showNotification(`${type === 'path' ? 'Path' : 'Extension'} excluded successfully`, 'success');
+            } else {
+                throw new Error('Failed to add exclusion');
+            }
+        } catch (error) {
+            console.error('Failed to add exclusion:', error);
+            this.showNotification('Failed to add exclusion', 'error');
+        }
+    }
+    
+    async removeExclusion(type, value) {
+        try {
+            const response = await fetch(`/api/exclusions/${type}/${encodeURIComponent(value)}`, {
+                method: 'DELETE'
+            });
+            
+            if (response.ok) {
+                await this.loadExclusions();
+                this.showNotification(`${type === 'path' ? 'Path' : 'Extension'} removed from exclusions`, 'success');
+            } else {
+                throw new Error('Failed to remove exclusion');
+            }
+        } catch (error) {
+            console.error('Failed to remove exclusion:', error);
+            this.showNotification('Failed to remove exclusion', 'error');
         }
     }
 
@@ -1914,37 +1979,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
-    // Setup exclusions form
-    const exclusionsForm = document.querySelector('#exclusions-form');
-    if (exclusionsForm) {
-        exclusionsForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const pathsText = document.querySelector('#excluded-paths').value;
-            const extensionsText = document.querySelector('#excluded-extensions').value;
-            
-            const excludedPaths = pathsText.trim() ? pathsText.split('\n').filter(p => p.trim()) : [];
-            const excludedExtensions = extensionsText.trim() ? extensionsText.split('\n').filter(e => e.trim()) : [];
-            
-            try {
-                const response = await fetch('/api/exclusions', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        excluded_paths: excludedPaths,
-                        excluded_extensions: excludedExtensions
-                    })
-                });
-                
-                if (response.ok) {
-                    app.showNotification('Exclusions updated successfully', 'success');
-                    app.closeModal('exclusions-modal');
-                } else {
-                    throw new Error('Failed to update exclusions');
-                }
-            } catch (error) {
-                console.error('Failed to update exclusions:', error);
-                app.showNotification('Failed to update exclusions', 'error');
+    // Setup exclusion input handlers
+    const pathInput = document.querySelector('#new-excluded-path');
+    const extensionInput = document.querySelector('#new-excluded-extension');
+    
+    if (pathInput) {
+        pathInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                app.addExclusion('path');
+            }
+        });
+    }
+    
+    if (extensionInput) {
+        extensionInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                app.addExclusion('extension');
             }
         });
     }

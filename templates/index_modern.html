@@ -392,22 +392,31 @@
                 <button class="modal-close">&times;</button>
             </div>
             <div class="modal-body">
-                <form id="exclusions-form">
-                    <div class="form-group">
-                        <label for="excluded-paths">Excluded Paths</label>
-                        <textarea id="excluded-paths" class="form-control" rows="5" placeholder="/media/temp&#10;/media/cache"></textarea>
-                        <small class="form-text text-muted">One path per line</small>
+                <div class="exclusions-section">
+                    <h4>Excluded Paths</h4>
+                    <div class="exclusion-input-group">
+                        <input type="text" id="new-excluded-path" class="form-control" placeholder="/media/temp">
+                        <button class="btn btn-primary" onclick="app.addExclusion('path')">
+                            <i class="fas fa-plus"></i> Add
+                        </button>
                     </div>
-                    <div class="form-group">
-                        <label for="excluded-extensions">Excluded Extensions</label>
-                        <textarea id="excluded-extensions" class="form-control" rows="5" placeholder=".tmp&#10;.temp&#10;.cache"></textarea>
-                        <small class="form-text text-muted">One extension per line</small>
+                    <div id="excluded-paths-list" class="exclusion-list">
+                        <div class="loading">Loading...</div>
                     </div>
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-primary">Save Exclusions</button>
-                        <button type="button" class="btn btn-secondary" onclick="app.closeModal('exclusions-modal')">Cancel</button>
+                </div>
+                
+                <div class="exclusions-section">
+                    <h4>Excluded Extensions</h4>
+                    <div class="exclusion-input-group">
+                        <input type="text" id="new-excluded-extension" class="form-control" placeholder=".tmp">
+                        <button class="btn btn-primary" onclick="app.addExclusion('extension')">
+                            <i class="fas fa-plus"></i> Add
+                        </button>
                     </div>
-                </form>
+                    <div id="excluded-extensions-list" class="exclusion-list">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

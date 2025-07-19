@@ -947,6 +947,67 @@ input:checked + .toggle-slider:before {
     color: var(--text-primary);
 }
 
+/* Exclusions styles */
+.exclusions-section {
+    margin-bottom: 2rem;
+}
+
+.exclusions-section h4 {
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
+.exclusion-input-group {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.exclusion-input-group input {
+    flex: 1;
+}
+
+.exclusion-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-primary);
+}
+
+.exclusion-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    transition: background-color 0.2s;
+}
+
+.exclusion-item:hover {
+    background-color: var(--bg-secondary);
+}
+
+.exclusion-item:last-child {
+    border-bottom: none;
+}
+
+.exclusion-item span {
+    color: var(--text-primary);
+    font-family: monospace;
+}
+
+.exclusion-item button {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+}
+
+.exclusion-list .empty-state {
+    padding: 2rem;
+    text-align: center;
+    color: var(--text-secondary);
+}
+
 /* Form styles for modals */
 .form-group {
     margin-bottom: 1.25rem;

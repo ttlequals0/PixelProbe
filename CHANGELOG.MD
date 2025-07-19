@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.45] - 2025-01-19
+
+### Added
+- **Enhanced Exclusions Management UI**
+  - Replaced textarea-based exclusions with interactive list UI
+  - Added individual remove buttons for each excluded path and extension
+  - Added ability to add exclusions one at a time with dedicated input fields
+  - Press Enter to quickly add new exclusions
+  - API endpoints for adding and removing individual exclusions
+
+### Documentation
+- Updated README with screenshots of new features
+- Added Advanced Features section showcasing scheduled scanning and exclusions
+- Updated version references throughout documentation
+
 ## [2.0.44] - 2025-01-18
 
 ### Added
