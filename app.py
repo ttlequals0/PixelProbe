@@ -354,6 +354,11 @@ def start_db_write_thread():
     """Start the database write queue processor thread"""
     global db_write_thread
     
+    # Check if thread is already running
+    if db_write_thread and db_write_thread.is_alive():
+        logger.info("Database write thread is already running")
+        return
+    
     def db_write_worker():
         """Worker thread that processes database writes from the queue"""
         logger.info("Database write queue thread started")
@@ -370,6 +375,7 @@ def start_db_write_thread():
                     break
                 
                 task_type = write_task.get('type')
+                logger.debug(f"Processing database write task: {task_type}")
                 
                 try:
                     with app.app_context():
@@ -402,6 +408,8 @@ def start_db_write_thread():
                         elif task_type == 'batch_update_scan_results':
                             # Batch update scan results
                             results = write_task.get('results', [])
+                            updated_count = 0
+                            created_count = 0
                             
                             for result in results:
                                 file_path = result.get('file_path')
@@ -412,13 +420,24 @@ def start_db_write_thread():
                                     for key, value in result.items():
                                         if hasattr(scan_result, key) and key != 'file_path':
                                             setattr(scan_result, key, value)
+                                    updated_count += 1
                                 else:
                                     # Create new record
                                     scan_result = ScanResult(**result)
                                     db.session.add(scan_result)
+                                    created_count += 1
                             
                             db.session.commit()
-                            logger.info(f"Batch updated {len(results)} scan results")
+                            logger.info(f"Batch {task_type} complete - Updated database: {len(results)} files (updated: {updated_count}, created: {created_count})")
+                            
+                            # Log first few file paths for verification
+                            if len(results) <= 5:
+                                for r in results:
+                                    logger.debug(f"  - {r.get('file_path')}")
+                            else:
+                                for r in results[:3]:
+                                    logger.debug(f"  - {r.get('file_path')}")
+                                logger.debug(f"  ... and {len(results) - 3} more files")
                         
                         elif task_type == 'create_scan_state':
                             # Create new scan state
@@ -458,6 +477,13 @@ def start_db_write_thread():
         db_write_thread = threading.Thread(target=db_write_worker, daemon=True)
         db_write_thread.start()
         logger.info("Started database write queue thread")
+        
+        # Verify thread started successfully
+        time.sleep(0.1)
+        if db_write_thread.is_alive():
+            logger.info("Database write thread is confirmed running")
+        else:
+            logger.error("Database write thread failed to start!")
 
 def stop_db_write_thread():
     """Stop the database write thread"""
@@ -921,6 +947,9 @@ def scan_all_files():
                 # Initialize media checker and validate paths
                 checker = initialize_media_checker()
                 
+                # Ensure database write thread is running
+                start_db_write_thread()
+                
                 # Show path validation progress
                 for path in scan_paths:
                     if os.path.exists(path):
@@ -1106,7 +1135,7 @@ def scan_all_files():
                         continue
                     
                     # Process this batch of files using parallel scanning
-                    logger.info(f"Processing batch of {len(valid_files_in_batch)} files (offset {offset})")
+                    logger.info(f"Processing batch of {len(valid_files_in_batch)} files (batch {batch_start//batch_size + 1}/{(pending_count + batch_size - 1)//batch_size})")
                     
                     # Use ThreadPoolExecutor for this batch
                     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1124,6 +1153,10 @@ def scan_all_files():
                             executor.submit(checker.scan_file, file_path, file_to_deep_scan.get(file_path, False)): file_path 
                             for file_path in valid_files_in_batch
                         }
+                        
+                        # Accumulate results for batch processing
+                        batch_results = []
+                        batch_errors = []
                         
                         # Process results as they complete
                         for future in as_completed(future_to_file):
@@ -1168,11 +1201,18 @@ def scan_all_files():
                                 result['scan_date'] = datetime.now(timezone.utc)
                                 result['scan_status'] = 'completed'
                                 
-                                # Send to database write queue
-                                db_write_queue.put({
-                                    'type': 'batch_update_scan_results',
-                                    'results': [result]
-                                })
+                                # Accumulate results for batch update
+                                batch_results.append(result)
+                                logger.debug(f"Added result to batch: {file_path} (batch size: {len(batch_results)})")
+                                
+                                # Send to database in chunks of 10 to improve efficiency
+                                if len(batch_results) >= 10:
+                                    db_write_queue.put({
+                                        'type': 'batch_update_scan_results',
+                                        'results': batch_results.copy()
+                                    })
+                                    logger.info(f"Queued batch database update for {len(batch_results)} files")
+                                    batch_results = []
                                 
                             except Exception as e:
                                 logger.error(f"Error scanning {file_path}: {str(e)}")
@@ -1184,12 +1224,29 @@ def scan_all_files():
                                     'corruption_details': f"Scan error: {str(e)}",
                                     'scan_date': datetime.now(timezone.utc)
                                 }
-                                db_write_queue.put({
-                                    'type': 'batch_update_scan_results',
-                                    'results': [error_result]
-                                })
+                                batch_errors.append(error_result)
                     
-                    logger.info(f"Completed batch, processed {files_processed} files total")
+                    # Send any remaining results in the batch
+                    if batch_results:
+                        db_write_queue.put({
+                            'type': 'batch_update_scan_results',
+                            'results': batch_results
+                        })
+                        logger.info(f"Queued final batch database update for {len(batch_results)} files")
+                    
+                    # Send any error results
+                    if batch_errors:
+                        db_write_queue.put({
+                            'type': 'batch_update_scan_results',
+                            'results': batch_errors
+                        })
+                        logger.info(f"Queued error batch database update for {len(batch_errors)} files")
+                    
+                    logger.info(f"Completed batch {batch_start//batch_size + 1}, processed {files_processed} files total")
+                    
+                    # Give database writer time to process queue
+                    import time
+                    time.sleep(0.2)  # Small delay to prevent overwhelming the db write queue
                 
                 # All batches processed - verify we actually processed all pending files
                 remaining_pending = ScanResult.query.filter_by(scan_status='pending').count()
@@ -1208,6 +1265,11 @@ def scan_all_files():
                 logger.error(f"Exception type: {type(e).__name__}")
                 import traceback
                 logger.error(f"Full traceback: {traceback.format_exc()}")
+                # Update scan state to show error
+                update_scan_state(
+                    phase='error',
+                    progress_message=f'Scan failed: {str(e)}'
+                )
                 # Don't reset state here - let finally handle it
                 
             finally:
@@ -3581,6 +3643,7 @@ with app.app_context():
     
     # Start the database write queue thread
     start_db_write_thread()
+    logger.info("Database write thread initialization completed")
 
 if __name__ == '__main__':
     logger.info("Starting Flask development server")

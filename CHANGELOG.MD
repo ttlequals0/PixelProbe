@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.52] - 2025-01-19
+
+### Fixed
+- **Critical Fix**: Fixed undefined variable error (`offset`) in batch processing that prevented database updates
+- **Major Fix**: Database updates were not being recorded during scans due to NameError in logging statement
+- **Improved**: Enhanced batch processing to accumulate results before database writes for better efficiency
+- **Added**: Comprehensive logging throughout the scanning and database update pipeline
+- **Added**: Thread verification to ensure database write thread is running properly
+- **Fixed**: Improved error handling in scan thread to show errors in UI instead of failing silently
+
 ## [2.0.51] - 2025-01-20
 
 ### Fixed
