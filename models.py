@@ -86,6 +86,7 @@ class ScanSchedule(db.Model):
     name = db.Column(db.String(100), nullable=False)
     cron_expression = db.Column(db.String(50), nullable=False)
     scan_paths = db.Column(db.Text)  # JSON array of paths to scan
+    scan_type = db.Column(db.String(20), nullable=False, default='normal')  # normal, orphan, file_changes
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     last_run = db.Column(db.DateTime, nullable=True)
     next_run = db.Column(db.DateTime, nullable=True)
@@ -97,6 +98,7 @@ class ScanSchedule(db.Model):
             'name': self.name,
             'cron_expression': self.cron_expression,
             'scan_paths': self.scan_paths,
+            'scan_type': self.scan_type,
             'is_active': self.is_active,
             'last_run': self.last_run.isoformat() if self.last_run else None,
             'next_run': self.next_run.isoformat() if self.next_run else None,

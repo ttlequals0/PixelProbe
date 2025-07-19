@@ -1017,6 +1017,15 @@ class PixelProbeApp {
         return div.innerHTML;
     }
     
+    formatScanType(type) {
+        const types = {
+            'normal': 'Normal Scan',
+            'orphan': 'Orphan Cleanup',
+            'file_changes': 'File Changes Scan'
+        };
+        return types[type] || type;
+    }
+    
     handleVideoError(fileId) {
         console.error(`Video failed to load for file ${fileId}`);
         const video = document.getElementById(`video-player-${fileId}`);
@@ -1712,6 +1721,7 @@ class PixelProbeApp {
                             </div>
                             <div class="schedule-info">
                                 <p><strong>Schedule:</strong> ${this.escapeHtml(schedule.cron_expression)}</p>
+                                <p><strong>Type:</strong> ${this.formatScanType(schedule.scan_type || 'normal')}</p>
                                 <p><strong>Next Run:</strong> ${nextRun}</p>
                                 <p><strong>Last Run:</strong> ${lastRun}</p>
                                 ${schedule.scan_paths ? `<p><strong>Paths:</strong> ${this.escapeHtml(JSON.parse(schedule.scan_paths).join(', '))}</p>` : ''}
@@ -1875,6 +1885,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const name = document.querySelector('#schedule-name').value;
             const pathsText = document.querySelector('#schedule-paths').value;
             const scanPaths = pathsText.trim() ? pathsText.split('\n').filter(p => p.trim()) : [];
+            const scanType = document.querySelector('#scan-type').value;
             
             try {
                 const response = await fetch('/api/schedules', {
@@ -1883,7 +1894,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     body: JSON.stringify({
                         name: name,
                         cron_expression: cronExpression,
-                        scan_paths: scanPaths
+                        scan_paths: scanPaths,
+                        scan_type: scanType
                     })
                 });
                 

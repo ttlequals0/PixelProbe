@@ -3180,6 +3180,29 @@ def migrate_database():
             logger.info(f"Database migration complete. Found {count} existing records.")
         except Exception as e:
             logger.error(f"Failed to count records: {str(e)}")
+        
+        # Migrate scan_schedules table
+        try:
+            # Check if scan_schedules table exists
+            result = db.session.execute(db.text("SELECT name FROM sqlite_master WHERE type='table' AND name='scan_schedules'"))
+            if result.fetchone():
+                # Get existing columns for scan_schedules
+                result = db.session.execute(db.text("PRAGMA table_info(scan_schedules)"))
+                schedule_columns = {row[1] for row in result.fetchall()}
+                
+                # Add scan_type column if it doesn't exist
+                if 'scan_type' not in schedule_columns:
+                    logger.info("Adding scan_type column to scan_schedules table")
+                    db.session.execute(db.text(
+                        "ALTER TABLE scan_schedules ADD COLUMN scan_type VARCHAR(20) DEFAULT 'normal'"
+                    ))
+                    db.session.commit()
+                    logger.info("Successfully added scan_type column")
+            else:
+                logger.info("scan_schedules table doesn't exist, will be created with scan_type column")
+        except Exception as e:
+            logger.error(f"Failed to migrate scan_schedules table: {str(e)}")
+            db.session.rollback()
             
     except Exception as e:
         logger.error(f"Migration error: {str(e)}")
@@ -3204,11 +3227,16 @@ def create_schedule():
         name = data.get('name')
         cron_expression = data.get('cron_expression')
         scan_paths = data.get('scan_paths', [])
+        scan_type = data.get('scan_type', 'normal')  # normal, orphan, file_changes
         
         if not name or not cron_expression:
             return jsonify({'error': 'Name and cron_expression are required'}), 400
+        
+        # Validate scan_type
+        if scan_type not in ['normal', 'orphan', 'file_changes']:
+            return jsonify({'error': 'Invalid scan_type. Must be: normal, orphan, or file_changes'}), 400
             
-        schedule = scheduler.create_schedule(name, cron_expression, scan_paths)
+        schedule = scheduler.create_schedule(name, cron_expression, scan_paths, scan_type)
         return jsonify(schedule.to_dict())
     except Exception as e:
         logger.error(f"Failed to create schedule: {str(e)}")

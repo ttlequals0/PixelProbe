@@ -213,7 +213,10 @@ class MediaScheduler:
                 if not scan_paths:
                     scan_paths = os.environ.get('SCAN_PATHS', '/media').split(',')
                     
-                logger.info(f"Running scheduled scan '{schedule.name}' on paths: {scan_paths}")
+                logger.info(f"Running scheduled scan '{schedule.name}' (type: {getattr(schedule, 'scan_type', 'normal')}) on paths: {scan_paths}")
+                
+                # Get scan type (default to 'normal' for backward compatibility)
+                scan_type = getattr(schedule, 'scan_type', 'normal')
                 
                 # Filter out excluded paths
                 filtered_paths = []
@@ -223,11 +226,20 @@ class MediaScheduler:
                         filtered_paths.append(path)
                         
                 if filtered_paths:
-                    # Trigger scan through API endpoint instead of direct import
+                    # Trigger scan through API endpoint based on scan type
                     import requests
-                    requests.post('http://localhost:5000/api/scan-all', 
-                                json={'deep_scan': True, 'paths': filtered_paths},
-                                timeout=5)
+                    
+                    if scan_type == 'orphan':
+                        # Run orphan cleanup
+                        requests.post('http://localhost:5000/api/cleanup-orphaned', timeout=5)
+                    elif scan_type == 'file_changes':
+                        # Run file changes scan
+                        requests.post('http://localhost:5000/api/file-changes', timeout=5)
+                    else:
+                        # Default to normal scan
+                        requests.post('http://localhost:5000/api/scan-all', 
+                                    json={'deep_scan': True, 'paths': filtered_paths},
+                                    timeout=5)
                     
         except Exception as e:
             logger.error(f"Failed to run scheduled scan {schedule_id}: {e}")
@@ -252,13 +264,14 @@ class MediaScheduler:
         finally:
             self.cleanup_lock.release()
             
-    def create_schedule(self, name: str, cron_expression: str, scan_paths: List[str] = None) -> ScanSchedule:
+    def create_schedule(self, name: str, cron_expression: str, scan_paths: List[str] = None, scan_type: str = 'normal') -> ScanSchedule:
         """Create a new scan schedule"""
         # Store the original expression (could be cron or interval format)
         schedule = ScanSchedule(
             name=name,
             cron_expression=cron_expression,
             scan_paths=json.dumps(scan_paths) if scan_paths else None,
+            scan_type=scan_type,
             is_active=True
         )
         

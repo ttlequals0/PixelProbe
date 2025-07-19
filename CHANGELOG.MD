@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.44] - 2025-01-18
+
+### Added
+- **Scan Type Selection for Scheduled Scans**
+  - Added ability to specify scan type when creating scheduled scans
+  - Supported scan types: Normal Scan, Orphan Cleanup, File Changes Scan
+  - Updated UI to include scan type dropdown in schedule creation form
+  - Display scan type in schedules list
+  - Database migration to add scan_type field to existing schedules
+
 ## [2.0.43] - 2025-01-18
 
 ### Fixed

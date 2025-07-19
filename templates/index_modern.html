@@ -362,6 +362,15 @@
                         </div>
                     </div>
                     <div class="form-group">
+                        <label for="scan-type">Scan Type</label>
+                        <select id="scan-type" class="form-control">
+                            <option value="normal">Normal Scan (Scan All Files)</option>
+                            <option value="orphan">Orphan Cleanup</option>
+                            <option value="file_changes">File Changes Scan</option>
+                        </select>
+                        <small class="form-text text-muted">Choose what type of operation to perform</small>
+                    </div>
+                    <div class="form-group">
                         <label for="schedule-paths">Scan Paths (optional)</label>
                         <textarea id="schedule-paths" class="form-control" rows="3" placeholder="Leave empty to use default paths"></textarea>
                         <small class="form-text text-muted">One path per line</small>
