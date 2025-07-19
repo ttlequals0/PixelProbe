@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.43] - 2025-01-18
+
+### Fixed
+- Fixed import error in scheduler.py that was preventing the container from starting
+- Removed unused import of scan_files_parallel from media_checker module
+
+## [2.0.42] - 2025-01-18
+
+### Fixed
+- Rebuilt Docker image without cache to ensure all changes are included
+- Same features as 2.0.41 but with fresh build
+
 ## [2.0.41] - 2025-01-18
 
 ### Added

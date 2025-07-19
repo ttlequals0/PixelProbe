@@ -7,7 +7,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from models import db, ScanSchedule, ScanResult
-from media_checker import scan_files_parallel
 from sqlalchemy import text
 import threading
 

@@ -207,7 +207,7 @@ For Docker deployment, you can also configure paths in `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.41  # Specify version
+    image: ttlequals0/pixelprobe:2.0.42  # Specify version
     environment:
       - SCAN_PATHS=/media
       - DATABASE_URL=sqlite:///media_checker.db
