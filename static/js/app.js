@@ -1865,8 +1865,12 @@ class PixelProbeApp {
             if (!input || !input.value.trim()) return;
             
             const value = input.value.trim();
-            const response = await fetch(`/api/exclusions/${type}/${encodeURIComponent(value)}`, {
-                method: 'POST'
+            const response = await fetch(`/api/exclusions/${type}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ item: value })
             });
             
             if (response.ok) {
@@ -1884,8 +1888,12 @@ class PixelProbeApp {
     
     async removeExclusion(type, value) {
         try {
-            const response = await fetch(`/api/exclusions/${type}/${encodeURIComponent(value)}`, {
-                method: 'DELETE'
+            const response = await fetch(`/api/exclusions/${type}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ item: value })
             });
             
             if (response.ok) {

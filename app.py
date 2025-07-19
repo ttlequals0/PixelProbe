@@ -3293,12 +3293,18 @@ def update_exclusions():
         logger.error(f"Failed to update exclusions: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/exclusions/<exclusion_type>/<path:item>', methods=['POST'])
-def add_exclusion(exclusion_type, item):
+@app.route('/api/exclusions/<exclusion_type>', methods=['POST'])
+def add_exclusion(exclusion_type):
     """Add a single exclusion"""
     try:
         if exclusion_type not in ['path', 'extension']:
             return jsonify({'error': 'Invalid exclusion type'}), 400
+        
+        data = request.get_json()
+        if not data or 'item' not in data:
+            return jsonify({'error': 'Item is required'}), 400
+        
+        item = data['item']
         
         if exclusion_type == 'path':
             if item not in scheduler.excluded_paths:
@@ -3317,12 +3323,18 @@ def add_exclusion(exclusion_type, item):
         logger.error(f"Failed to add exclusion: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/exclusions/<exclusion_type>/<path:item>', methods=['DELETE'])
-def remove_exclusion(exclusion_type, item):
+@app.route('/api/exclusions/<exclusion_type>', methods=['DELETE'])
+def remove_exclusion(exclusion_type):
     """Remove a single exclusion"""
     try:
         if exclusion_type not in ['path', 'extension']:
             return jsonify({'error': 'Invalid exclusion type'}), 400
+        
+        data = request.get_json()
+        if not data or 'item' not in data:
+            return jsonify({'error': 'Item is required'}), 400
+        
+        item = data['item']
         
         if exclusion_type == 'path':
             if item in scheduler.excluded_paths:

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.46] - 2025-01-19
+
+### Fixed
+- Fixed 308 redirect issue when adding path exclusions starting with '/' by changing API to use request body instead of URL path parameters
+
 ## [2.0.45] - 2025-01-19
 
 ### Added
