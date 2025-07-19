@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.47] - 2025-01-19
+
+### Fixed
+- Fixed file-changes scan progress not updating - status now updates immediately when each file starts processing instead of after completion
+- Fixed file-changes scan progress percentage calculation to properly reflect files processed out of total database entries
+
 ## [2.0.46] - 2025-01-19
 
 ### Fixed

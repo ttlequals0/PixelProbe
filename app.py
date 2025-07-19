@@ -2231,6 +2231,10 @@ def check_file_changes_async():
                 stored_hash = file_data['stored_hash']
                 stored_modified = file_data['stored_modified']
                 
+                # Update current file when starting to process
+                with file_changes_state_lock:
+                    file_changes_state['current_file'] = file_path
+                
                 try:
                     # Check if file exists
                     if not os.path.exists(file_path):
@@ -2308,13 +2312,16 @@ def check_file_changes_async():
                     
                     # Process files in parallel
                     futures = []
+                    future_to_file_data = {}  # Map futures to file data
                     for file_data in file_data_list:
                         future = executor.submit(process_file_with_timeout, file_data)
                         futures.append(future)
+                        future_to_file_data[future] = file_data
                     
                     # Collect results
                     batch_changed_files = []
-                    for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                    files_completed_in_batch = 0
+                    for future in concurrent.futures.as_completed(futures):
                         # Check for cancellation during batch processing
                         with file_changes_state_lock:
                             if file_changes_state['cancel_requested']:
@@ -2327,22 +2334,24 @@ def check_file_changes_async():
                                 file_changes_state['is_running'] = False
                                 return
                         
+                        file_data = future_to_file_data[future]
+                        file_path = file_data['file_path']
+                        
                         try:
                             result = future.result(timeout=300)  # 5-minute timeout per file
                             if result:
                                 batch_changed_files.append(result)
                         except concurrent.futures.TimeoutError:
-                            file_path = file_data_list[futures.index(future)]['file_path']
                             logger.error(f"ERROR: Timeout processing file {file_path}")
                         except Exception as e:
                             logger.error(f"Error in future result: {str(e)}")
                         
                         # Update progress
+                        files_completed_in_batch += 1
                         with file_changes_state_lock:
-                            files_done = offset + i + 1
+                            files_done = offset + files_completed_in_batch
                             file_changes_state['files_processed'] = files_done
                             file_changes_state['phase_current'] = files_done
-                            file_changes_state['current_file'] = file_data_list[i]['file_path']
                             
                             # Calculate ETA
                             elapsed_time = time.time() - file_changes_state['start_time']
