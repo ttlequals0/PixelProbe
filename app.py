@@ -15,7 +15,7 @@ import csv
 import io
 
 from media_checker import PixelProbe
-from models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration, ScanState, CleanupState
+from models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration, ScanState, CleanupState, FileChangesState
 from version import __version__, __github_url__
 from scheduler import MediaScheduler
 
@@ -1931,36 +1931,73 @@ def get_cleanup_status():
 def get_file_changes_status():
     """Get current file changes check operation status"""
     try:
-        with file_changes_state_lock:
-            state = file_changes_state.copy()
+        # Get the most recent file changes state from database
+        file_changes_record = FileChangesState.query.order_by(FileChangesState.id.desc()).first()
         
-        response = {
-            'is_running': state.get('is_running', False),
-            'phase': state.get('phase', 'idle'),
-            'phase_number': state.get('phase_number', 1),
-            'total_phases': state.get('total_phases', 1),
-            'phase_current': state.get('phase_current', 0),
-            'phase_total': state.get('phase_total', 0),
-            'files_processed': state.get('files_processed', 0),
-            'total_files': state.get('total_files', 0),
-            'changes_found': state.get('changes_found', 0),
-            'current_file': state.get('current_file'),
-            'progress_message': state.get('progress_message', '')
-        }
-        
-        if state.get('start_time') and state.get('is_running'):
-            response['duration'] = time.time() - state['start_time']
-            response['start_time'] = state['start_time']
-        
-        # Calculate progress percentage
-        if state.get('total_files', 0) > 0:
-            response['progress_percentage'] = (state.get('files_processed', 0) / state['total_files']) * 100
+        if not file_changes_record:
+            # No file changes check has ever been run
+            response = {
+                'is_running': False,
+                'phase': 'idle',
+                'phase_number': 1,
+                'total_phases': 3,
+                'phase_current': 0,
+                'phase_total': 0,
+                'files_processed': 0,
+                'total_files': 0,
+                'changes_found': 0,
+                'corrupted_found': 0,
+                'current_file': None,
+                'progress_message': '',
+                'progress_percentage': 0
+            }
         else:
-            response['progress_percentage'] = 0
-        
-        # Include results if check is complete
-        if state.get('phase') == 'complete' and state.get('result'):
-            response['result'] = state['result']
+            response = {
+                'is_running': file_changes_record.is_active,
+                'phase': file_changes_record.phase,
+                'phase_number': file_changes_record.phase_number,
+                'total_phases': 3,
+                'phase_current': file_changes_record.phase_current,
+                'phase_total': file_changes_record.phase_total,
+                'files_processed': file_changes_record.files_processed,
+                'total_files': file_changes_record.total_files,
+                'changes_found': file_changes_record.changes_found,
+                'corrupted_found': file_changes_record.corrupted_found,
+                'current_file': file_changes_record.current_file,
+                'progress_message': file_changes_record.progress_message or ''
+            }
+            
+            if file_changes_record.start_time and file_changes_record.is_active:
+                # Handle both timezone-aware and timezone-naive datetimes
+                if file_changes_record.start_time.tzinfo is None:
+                    # If naive, assume UTC
+                    start_time_utc = file_changes_record.start_time.replace(tzinfo=timezone.utc)
+                else:
+                    start_time_utc = file_changes_record.start_time
+                response['duration'] = (datetime.now(timezone.utc) - start_time_utc).total_seconds()
+                response['start_time'] = start_time_utc.timestamp()
+            
+            # Calculate progress percentage based on current phase
+            if file_changes_record.phase == 'starting':
+                response['progress_percentage'] = 5
+            elif file_changes_record.phase == 'checking_hashes' and file_changes_record.total_files > 0:
+                # Phase 2 is 80% of total progress
+                response['progress_percentage'] = 5 + (file_changes_record.files_processed / file_changes_record.total_files) * 80
+            elif file_changes_record.phase == 'verifying_changes' and file_changes_record.phase_total > 0:
+                # Phase 3 is the remaining 15%
+                response['progress_percentage'] = 85 + (file_changes_record.phase_current / file_changes_record.phase_total) * 15
+            elif file_changes_record.phase == 'complete':
+                response['progress_percentage'] = 100
+            else:
+                response['progress_percentage'] = 0
+            
+            # Include results if check is complete
+            if file_changes_record.phase == 'complete' and file_changes_record.changed_files:
+                response['result'] = {
+                    'changed_files': json.loads(file_changes_record.changed_files),
+                    'total_checked': file_changes_record.total_files,
+                    'corrupted_found': file_changes_record.corrupted_found
+                }
         
         return jsonify(response)
         
@@ -2049,12 +2086,17 @@ def reset_cleanup_state():
 def cancel_file_changes():
     """Cancel running file changes check operation"""
     try:
-        with file_changes_state_lock:
-            if not file_changes_state['is_running']:
-                return jsonify({'error': 'No file changes check is currently running'}), 400
-            
-            file_changes_state['cancel_requested'] = True
-            logger.info("File changes check cancellation requested")
+        # Find active file changes operation
+        active_check = FileChangesState.query.filter_by(is_active=True).first()
+        if not active_check:
+            return jsonify({'error': 'No file changes check is currently running'}), 400
+        
+        # Mark as cancelled - the async thread will check this
+        active_check.is_active = False
+        active_check.phase = 'cancelled' 
+        active_check.progress_message = 'Cancellation requested'
+        db.session.commit()
+        logger.info(f"File changes check cancellation requested for ID: {active_check.check_id}")
         
         return jsonify({
             'message': 'File changes check cancellation requested',
@@ -2194,7 +2236,7 @@ def create_tables():
             logger.error(f"Error in database initialization: {str(e)}")
 
 
-def check_file_changes_async():
+def check_file_changes_async(check_id):
     """Async function to check file changes with progress tracking"""
     import concurrent.futures
     import signal
@@ -2202,24 +2244,32 @@ def check_file_changes_async():
     
     with app.app_context():
         try:
-            with file_changes_state_lock:
-                file_changes_state['phase'] = 'checking'
-                file_changes_state['phase_number'] = 1
-                file_changes_state['total_phases'] = 1
-                file_changes_state['progress_message'] = 'Phase 1 of 1: Counting files in database...'
+            # Get the file changes state record
+            file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+            if not file_changes_record:
+                logger.error(f"File changes state record not found for check_id: {check_id}")
+                return
+            
+            # Phase 1: Starting
+            file_changes_record.phase = 'starting'
+            file_changes_record.phase_number = 1
+            file_changes_record.progress_message = 'Phase 1 of 3: Starting file changes check...'
+            db.session.commit()
             
             # Get total count of files
             total_files = ScanResult.query.count()
             logger.info(f"File change check starting - found {total_files} total files in database")
             
+            # Phase 2: Checking hashes
+            file_changes_record.phase = 'checking_hashes'
+            file_changes_record.phase_number = 2
+            file_changes_record.total_files = total_files
+            file_changes_record.phase_total = total_files
+            file_changes_record.progress_message = f'Phase 2 of 3: Checking {total_files} files for hash changes...'
+            db.session.commit()
+            
             batch_size = 1000  # Process files in batches to handle large databases
             total_batches = (total_files + batch_size - 1) // batch_size
-            
-            with file_changes_state_lock:
-                file_changes_state['total_files'] = total_files
-                file_changes_state['phase_total'] = total_files
-                file_changes_state['total_batches'] = total_batches
-                file_changes_state['progress_message'] = f'Phase 1 of 1: Checking {total_files} files for changes...'
             
             checker = initialize_media_checker()
             changed_files = []
@@ -2232,8 +2282,11 @@ def check_file_changes_async():
                 stored_modified = file_data['stored_modified']
                 
                 # Update current file when starting to process
-                with file_changes_state_lock:
-                    file_changes_state['current_file'] = file_path
+                with app.app_context():
+                    file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                    if file_changes_record:
+                        file_changes_record.current_file = file_path
+                        db.session.commit()
                 
                 try:
                     # Check if file exists
@@ -2415,33 +2468,34 @@ def check_file_changes_async():
 def check_file_changes():
     """Start async check for file changes"""
     # Check if file changes check is already running
-    with file_changes_state_lock:
-        if file_changes_state['is_running']:
-            return jsonify({'error': 'File changes check already in progress'}), 409
-        
-        # Reset state
-        file_changes_state['is_running'] = True
-        file_changes_state['start_time'] = time.time()
-        file_changes_state['files_processed'] = 0
-        file_changes_state['total_files'] = 0
-        file_changes_state['changes_found'] = 0
-        file_changes_state['current_file'] = None
-        file_changes_state['phase'] = 'starting'
-        file_changes_state['phase_number'] = 1
-        file_changes_state['total_phases'] = 1
-        file_changes_state['phase_current'] = 0
-        file_changes_state['phase_total'] = 0
-        file_changes_state['progress_percentage'] = 0
-        file_changes_state['progress_message'] = 'Starting file changes check...'
-        file_changes_state['result'] = None
-        file_changes_state['cancel_requested'] = False  # Reset cancel flag
+    active_check = FileChangesState.query.filter_by(is_active=True).first()
+    if active_check:
+        return jsonify({'error': 'File changes check already in progress'}), 409
+    
+    # Create new file changes state record
+    import uuid
+    check_id = str(uuid.uuid4())
+    
+    file_changes_record = FileChangesState(
+        check_id=check_id,
+        is_active=True,
+        phase='starting',
+        phase_number=1,
+        start_time=datetime.now(timezone.utc),
+        progress_message='Initializing file changes check...'
+    )
+    db.session.add(file_changes_record)
+    db.session.commit()
+    
+    logger.info(f"Created file changes state with ID: {check_id}")
     
     # Start check in background thread
-    check_thread = threading.Thread(target=check_file_changes_async)
+    check_thread = threading.Thread(target=check_file_changes_async, args=(check_id,))
     check_thread.start()
     
     return jsonify({
         'message': 'File changes check started',
+        'check_id': check_id,
         'status': 'started'
     })
 

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.48] - 2025-01-19
+
+### Fixed
+- Fixed file-changes scan state persistence - state is now stored in database instead of memory
+- File-changes scan now properly maintains progress across app restarts
+- Added FileChangesState database model to track scan state persistently
+- File-changes scan now has proper 3-phase process:
+  - Phase 1: Starting scan process
+  - Phase 2: Checking all file hashes
+  - Phase 3: Verifying changed files for corruption
+
 ## [2.0.47] - 2025-01-19
 
 ### Fixed
