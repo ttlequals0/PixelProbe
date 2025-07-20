@@ -36,7 +36,7 @@ def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
     return lines
 
 class PixelProbe:
-    def __init__(self, max_workers=None):
+    def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None):
         self.supported_video_formats = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v']
         self.supported_image_formats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
         self.supported_formats = self.supported_video_formats + self.supported_image_formats
@@ -44,6 +44,8 @@ class PixelProbe:
         self.scan_lock = threading.Lock()
         self.current_scan_file = None
         self.scan_start_time = None
+        self.excluded_paths = excluded_paths or []
+        self.excluded_extensions = excluded_extensions or []
     
     def discover_files(self, directories, max_files=None, existing_files=None, progress_callback=None):
         """Phase 1: Discover all supported files and return their paths (parallel version)"""
@@ -201,6 +203,13 @@ class PixelProbe:
     def _get_files_sorted_by_age(self, directory):
         files = []
         for root, dirs, filenames in os.walk(directory):
+            # Skip excluded directories
+            dirs[:] = [d for d in dirs if not any(os.path.join(root, d).startswith(exc) for exc in self.excluded_paths)]
+            
+            # Skip if current directory is excluded
+            if any(root.startswith(exc) for exc in self.excluded_paths):
+                continue
+                
             for filename in filenames:
                 file_path = os.path.join(root, filename)
                 if os.path.isfile(file_path):
@@ -211,6 +220,16 @@ class PixelProbe:
     
     def _is_supported_file(self, file_path):
         extension = Path(file_path).suffix.lower()
+        
+        # Check if extension is excluded
+        if extension in self.excluded_extensions:
+            return False
+            
+        # Check if path is excluded
+        for excluded_path in self.excluded_paths:
+            if file_path.startswith(excluded_path):
+                return False
+                
         return extension in self.supported_formats
     
     def get_file_info(self, file_path):
@@ -244,9 +263,25 @@ class PixelProbe:
         try:
             logger.info(f"Calculating hash for: {file_path}")
             hash_sha256 = hashlib.sha256()
+            start_time = time.time()
+            bytes_processed = 0
+            
             with open(file_path, "rb") as f:
                 for chunk in iter(lambda: f.read(4096), b""):
                     hash_sha256.update(chunk)
+                    bytes_processed += len(chunk)
+                    
+                    # Log progress for large files every 100MB
+                    if bytes_processed % (100 * 1024 * 1024) == 0:
+                        elapsed = time.time() - start_time
+                        mb_processed = bytes_processed / (1024 * 1024)
+                        logger.info(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s")
+            
+            total_time = time.time() - start_time
+            if total_time > 10:  # Log completion time for files that take more than 10 seconds
+                mb_size = bytes_processed / (1024 * 1024)
+                logger.info(f"Hash complete for {file_path}: {mb_size:.1f}MB in {total_time:.1f}s")
+            
             return hash_sha256.hexdigest()
         except Exception as e:
             logger.error(f"Error calculating hash for {file_path}: {str(e)}")
@@ -802,6 +837,7 @@ class PixelProbe:
                 # NAL unit errors alone are often false positives (container/muxing issues)
                 significant_errors = []
                 has_nal_errors = False
+                has_reference_frame_warnings = False
                 has_other_errors = False
                 
                 for line in error_lines:
@@ -809,6 +845,9 @@ class PixelProbe:
                     if 'invalid nal unit' in line_lower:
                         has_nal_errors = True
                         # Don't add NAL errors to significant_errors yet
+                    elif 'number of reference frames' in line_lower and 'exceeds max' in line_lower:
+                        has_reference_frame_warnings = True
+                        # This is a common encoding issue that doesn't affect playback
                     elif (('error' in line_lower and 'duration' not in line_lower) or
                           'corrupt' in line_lower or
                           'broken' in line_lower or
@@ -824,10 +863,17 @@ class PixelProbe:
                 if significant_errors:
                     corruption_details.append(f"FFmpeg errors: {'; '.join(significant_errors[:3])}")
                     is_corrupted = True
-                elif has_nal_errors and result.returncode == 0:
-                    # NAL errors only - mark as warning instead of corrupted
-                    logger.info(f"FFmpeg found only NAL unit errors (warning) for {file_path}")
-                    warning_details = ["NAL unit errors detected (video may have playback issues)"]
+                elif (has_nal_errors or has_reference_frame_warnings) and result.returncode == 0:
+                    # NAL errors or reference frame warnings only - mark as warning instead of corrupted
+                    warnings = []
+                    if has_nal_errors:
+                        warnings.append("NAL unit errors detected")
+                    if has_reference_frame_warnings:
+                        warnings.append("H.264 reference frame count exceeds profile limit")
+                    
+                    warning_msg = " and ".join(warnings) + " (video may have minor playback issues)"
+                    logger.info(f"FFmpeg found only minor warnings for {file_path}: {warning_msg}")
+                    warning_details = [warning_msg]
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         

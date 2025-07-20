@@ -18,9 +18,9 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/css/desktop.css?v=2.0.28">
-    <link rel="stylesheet" href="/static/css/mobile.css?v=2.0.28">
-    <link rel="stylesheet" href="/static/css/logo-styles.css?v=2.0.28">
+    <link rel="stylesheet" href="/static/css/desktop.css?v=2.0.40">
+    <link rel="stylesheet" href="/static/css/mobile.css?v=2.0.40">
+    <link rel="stylesheet" href="/static/css/logo-styles.css?v=2.0.40">
 </head>
 <body>
     <div class="app-wrapper">
@@ -60,6 +60,14 @@
                     <a href="#" class="nav-item" onclick="app.checkFileChanges()" title="Check File Changes">
                         <i class="fas fa-sync"></i>
                         <span>Check File Changes</span>
+                    </a>
+                    <a href="#" class="nav-item" onclick="app.showSchedules()" title="Manage Schedules">
+                        <i class="fas fa-clock"></i>
+                        <span>Schedules</span>
+                    </a>
+                    <a href="#" class="nav-item" onclick="app.showExclusions()" title="Manage Exclusions">
+                        <i class="fas fa-ban"></i>
+                        <span>Exclusions</span>
                     </a>
                 </div>
                 
@@ -112,7 +120,12 @@
             <div class="content">
                 <!-- Progress Bar -->
                 <div class="progress-container" style="display: none;">
-                    <h3 class="progress-title">Scan Progress</h3>
+                    <div class="progress-header">
+                        <h3 class="progress-title">Scan Progress</h3>
+                        <button class="cancel-button" onclick="app.cancelCurrentOperation()" title="Cancel operation" style="display: none;">
+                            <i class="fas fa-stop"></i> Cancel
+                        </button>
+                    </div>
                     <div class="progress">
                         <div class="progress-bar" style="width: 0%">
                             <span class="progress-text">0%</span>
@@ -291,9 +304,125 @@
     <div id="api-docs-page" style="display: none;">
         <!-- API documentation content will be loaded here -->
     </div>
+
+    <!-- Schedules Modal -->
+    <div id="schedules-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Scan Schedules</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="schedules-header">
+                    <button class="btn btn-primary" onclick="app.showAddSchedule()">
+                        <i class="fas fa-plus"></i> Add Schedule
+                    </button>
+                </div>
+                <div id="schedules-list">
+                    <div class="loading">Loading schedules...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Schedule Modal -->
+    <div id="add-schedule-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Add Scan Schedule</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="add-schedule-form">
+                    <div class="form-group">
+                        <label for="schedule-name">Schedule Name</label>
+                        <input type="text" id="schedule-name" class="form-control" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="schedule-type">Schedule Type</label>
+                        <select id="schedule-type" class="form-control" onchange="app.toggleScheduleInput()">
+                            <option value="cron">Cron Expression</option>
+                            <option value="interval">Interval</option>
+                        </select>
+                    </div>
+                    <div id="cron-input" class="form-group">
+                        <label for="cron-expression">Cron Expression</label>
+                        <input type="text" id="cron-expression" class="form-control" placeholder="0 2 * * *">
+                        <small class="form-text text-muted">Format: minute hour day month day_of_week</small>
+                    </div>
+                    <div id="interval-input" class="form-group" style="display: none;">
+                        <label for="interval-value">Interval</label>
+                        <div class="input-group">
+                            <input type="number" id="interval-value" class="form-control" min="1">
+                            <select id="interval-unit" class="form-control">
+                                <option value="hours">Hours</option>
+                                <option value="days">Days</option>
+                                <option value="weeks">Weeks</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="scan-type">Scan Type</label>
+                        <select id="scan-type" class="form-control">
+                            <option value="normal">Normal Scan (Scan All Files)</option>
+                            <option value="orphan">Orphan Cleanup</option>
+                            <option value="file_changes">File Changes Scan</option>
+                        </select>
+                        <small class="form-text text-muted">Choose what type of operation to perform</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="schedule-paths">Scan Paths (optional)</label>
+                        <textarea id="schedule-paths" class="form-control" rows="3" placeholder="Leave empty to use default paths"></textarea>
+                        <small class="form-text text-muted">One path per line</small>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Create Schedule</button>
+                        <button type="button" class="btn btn-secondary" onclick="app.closeModal('add-schedule-modal')">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Exclusions Modal -->
+    <div id="exclusions-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Exclusions</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="exclusions-section">
+                    <h4>Excluded Paths</h4>
+                    <div class="exclusion-input-group">
+                        <input type="text" id="new-excluded-path" class="form-control" placeholder="/media/temp">
+                        <button class="btn btn-primary" onclick="app.addExclusion('path')">
+                            <i class="fas fa-plus"></i> Add
+                        </button>
+                    </div>
+                    <div id="excluded-paths-list" class="exclusion-list">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
+                
+                <div class="exclusions-section">
+                    <h4>Excluded Extensions</h4>
+                    <div class="exclusion-input-group">
+                        <input type="text" id="new-excluded-extension" class="form-control" placeholder=".tmp">
+                        <button class="btn btn-primary" onclick="app.addExclusion('extension')">
+                            <i class="fas fa-plus"></i> Add
+                        </button>
+                    </div>
+                    <div id="excluded-extensions-list" class="exclusion-list">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
     
     <!-- Scripts -->
-    <script src="/static/js/app.js?v=2.0.28"></script>
+    <script src="/static/js/app.js?v=2.0.40"></script>
     
     <!-- Initialize version info -->
     <script>

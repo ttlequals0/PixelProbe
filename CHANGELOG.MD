@@ -7,6 +7,329 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.53] - 2025-01-20
+
+### Fixed
+- **File Changes Scan**: Fixed progress tracking to update per-file instead of per-batch for smooth progress bar updates
+- **File Changes Scan**: Replaced direct database commits with write queue pattern for consistent async updates
+- **File Changes Scan**: Progress bar now shows real-time file processing status like the normal scan
+- **File Changes Scan**: Fixed missing start_time initialization that prevented progress calculations from working
+
+## [2.0.52] - 2025-01-19
+
+### Fixed
+- **Critical Fix**: Fixed undefined variable error (`offset`) in batch processing that prevented database updates
+- **Major Fix**: Database updates were not being recorded during scans due to NameError in logging statement
+- **Improved**: Enhanced batch processing to accumulate results before database writes for better efficiency
+- **Added**: Comprehensive logging throughout the scanning and database update pipeline
+- **Added**: Thread verification to ensure database write thread is running properly
+- **Fixed**: Improved error handling in scan thread to show errors in UI instead of failing silently
+
+## [2.0.51] - 2025-01-20
+
+### Fixed
+- Removed timeout restrictions from file-changes hash calculations
+  - Files are now checked regardless of how long they take
+  - Removed 5-minute timeout that was causing large files to be skipped
+  - Renamed process_file_with_timeout to process_file_for_changes to reflect new behavior
+
+### Added
+- Enhanced progress logging for large file hash calculations
+  - Progress updates every 100MB for large files
+  - Completion time logged for files taking more than 10 seconds
+  - Better visibility into which files are taking longer to process
+
+## [2.0.50] - 2025-01-20
+
+### Fixed
+- Fixed files_processed counter not incrementing during file-changes scans
+  - Database updates now occur more frequently (every 5 files instead of 10)
+  - Added forced database update at the end of each batch to ensure progress is saved
+  - Added logging to track when database updates occur
+  - Progress now updates correctly even when some files timeout during hash calculation
+
+## [2.0.49] - 2025-01-20
+
+### Fixed
+- Fixed missing Phase 3 implementation in file-changes scan
+  - Phase 3 now properly verifies changed files for corruption
+  - Updates corrupted_found counter correctly
+  - Shows smooth progress from 85% to 100%
+  - Handles case where no files changed with proper phase transition
+- Fixed database updates during file-changes scan
+  - files_processed counter now updates correctly in database during Phase 2
+  - phase_current is properly synchronized with files_processed
+  - Progress updates are persisted every 10 files for better tracking
+  - Final completion state and results are now saved to database
+- Fixed progress display showing 0 files_processed despite current_file changing
+
+## [2.0.48] - 2025-01-19
+
+### Fixed
+- Fixed file-changes scan state persistence - state is now stored in database instead of memory
+- File-changes scan now properly maintains progress across app restarts
+- Added FileChangesState database model to track scan state persistently
+- File-changes scan now has proper 3-phase process:
+  - Phase 1: Starting scan process
+  - Phase 2: Checking all file hashes
+  - Phase 3: Verifying changed files for corruption
+
+## [2.0.47] - 2025-01-19
+
+### Fixed
+- Fixed file-changes scan progress not updating - status now updates immediately when each file starts processing instead of after completion
+- Fixed file-changes scan progress percentage calculation to properly reflect files processed out of total database entries
+
+## [2.0.46] - 2025-01-19
+
+### Fixed
+- Fixed 308 redirect issue when adding path exclusions starting with '/' by changing API to use request body instead of URL path parameters
+
+## [2.0.45] - 2025-01-19
+
+### Added
+- **Enhanced Exclusions Management UI**
+  - Replaced textarea-based exclusions with interactive list UI
+  - Added individual remove buttons for each excluded path and extension
+  - Added ability to add exclusions one at a time with dedicated input fields
+  - Press Enter to quickly add new exclusions
+  - API endpoints for adding and removing individual exclusions
+
+### Documentation
+- Updated README with screenshots of new features
+- Added Advanced Features section showcasing scheduled scanning and exclusions
+- Updated version references throughout documentation
+
+## [2.0.44] - 2025-01-18
+
+### Added
+- **Scan Type Selection for Scheduled Scans**
+  - Added ability to specify scan type when creating scheduled scans
+  - Supported scan types: Normal Scan, Orphan Cleanup, File Changes Scan
+  - Updated UI to include scan type dropdown in schedule creation form
+  - Display scan type in schedules list
+  - Database migration to add scan_type field to existing schedules
+
+## [2.0.43] - 2025-01-18
+
+### Fixed
+- Fixed import error in scheduler.py that was preventing the container from starting
+- Removed unused import of scan_files_parallel from media_checker module
+
+## [2.0.42] - 2025-01-18
+
+### Fixed
+- Rebuilt Docker image without cache to ensure all changes are included
+- Same features as 2.0.41 but with fresh build
+
+## [2.0.41] - 2025-01-18
+
+### Added
+- **Scheduled Scanning and Cleanup**
+  - Added automatic periodic scanning with cron and interval-based scheduling
+  - Added automatic cleanup scheduling for orphaned records
+  - Configurable via environment variables (PERIODIC_SCAN_SCHEDULE, CLEANUP_SCHEDULE)
+  - Support for both cron expressions and simple intervals (e.g., "interval:hours:6")
+  - UI interface for managing scan schedules
+  - API endpoints for creating, updating, and deleting schedules
+  - File hash checking already exists and is used during deep scans
+  
+- **Path and Extension Exclusions**
+  - Added ability to exclude specific paths from scanning
+  - Added ability to exclude specific file extensions
+  - Configurable via environment variables (EXCLUDED_PATHS, EXCLUDED_EXTENSIONS)
+  - UI interface for managing exclusions
+  - API endpoints for updating exclusions (/api/exclusions)
+  - Exclusions are applied during file discovery and scanning
+
+- **Schedule Management API**
+  - GET /api/schedules - List all schedules
+  - POST /api/schedules - Create new schedule
+  - PUT /api/schedules/{id} - Update schedule
+  - DELETE /api/schedules/{id} - Delete schedule
+
+- Enhanced API documentation with comprehensive examples
+  - Added cURL examples for all major endpoints
+  - Added code examples in Python, JavaScript/Node.js, Bash, and PowerShell
+  - Added request/response examples for all endpoints
+  - Documented all query parameters and request body fields
+  - Added documentation for maintenance endpoints (cleanup, file changes, recovery)
+  - Added documentation for configuration management endpoints
+
+### Changed
+- Updated PixelProbe class to accept excluded paths and extensions
+- Modified file discovery to respect exclusions during directory traversal
+- Updated API documentation to reflect actual endpoint behavior
+  - Fixed scan-file endpoint documentation to use file_path instead of file_id
+  - Added support for both GET and POST methods on export-csv endpoint
+  - Added documentation for all status monitoring endpoints
+  - Clarified file-changes endpoint checks modification time, not hash
+
+### Fixed
+- Fixed file changes progress bar not staying active during the entire operation
+  - Added proper phase tracking to file changes state initialization
+  - Added progress percentage updates during batch processing
+  - Fixed frontend to keep showing progress during phase transitions
+  - Ensured progress bar shows 100% on completion before hiding
+
+## [2.0.40] - 2025-01-18
+
+### Fixed
+- Fixed cleanup operation progress calculation showing incorrect percentage
+  - Progress was showing ~6% when actual progress was ~12% due to incorrect phase weighting
+  - Backend now weights checking phase as 90% and deleting phase as 10% of total progress
+  - Frontend now uses progress percentage directly from backend instead of recalculating
+  - This reflects reality where checking all files is the bulk of the work
+- Fixed file-changes operation progress calculation
+  - Frontend now uses progress percentage directly from backend
+  - Prevents inconsistency between backend and frontend calculations
+
+## [2.0.39] - 2025-01-18
+
+### Fixed
+- Fixed progress bar showing incorrect "Scan completed!" message when cleanup is running
+  - UI now correctly passes operation type to progress monitoring on page load
+  - Progress completion messages now match the actual operation type (scan/cleanup/file-changes)
+- Added endpoint to reset stuck cleanup state after container restart
+  - New `/api/reset-cleanup-state` endpoint marks stuck cleanup operations as interrupted
+  - Prevents progress bar from appearing indefinitely when cleanup state is corrupted
+
+## [2.0.38] - 2025-01-18
+
+### Fixed
+- Fixed progress bar stuck at 100% after rescan completes
+  - Database write queue now properly updates scan state with correct structure
+  - is_active flag is now correctly set to False when scan completes
+  - Prevents stats update thread from continuously showing scan as active
+- Fixed "Failed to cleanup orphaned entries" error in UI
+  - Fixed timezone mismatch error in cleanup status endpoint
+  - Now handles both timezone-aware and timezone-naive datetimes from database
+  - Cleanup operations should now complete and report status correctly
+
+## [2.0.37] - 2025-01-18
+
+### Fixed
+- CSV export now properly exports filtered results when no files are selected
+  - Exports only corrupted files when "Corrupted" filter is active
+  - Exports only warning files when "Warnings" filter is active
+  - Exports only healthy files when "Healthy" filter is active
+  - Respects current search query in combination with filters
+  - Improved export notification to clearly indicate what's being exported
+- H.264 reference frame warnings are now properly handled as warnings instead of corruption
+  - Files with "number of reference frames exceeds max" errors are marked with warnings
+  - These files play normally despite the encoding issue
+  - Prevents false positives for files encoded with non-standard reference frame counts
+- Fixed cleanup orphaned records progress tracking in multi-worker environment
+  - Cleanup state is now stored in database instead of memory
+  - Progress updates work correctly across all gunicorn workers
+  - UI accurately reflects cleanup progress throughout the operation
+  - Prevents race conditions where cleanup appears complete while still running
+
+### Added
+- CleanupState database model for persistent cleanup operation tracking
+  - Tracks cleanup progress across multiple workers
+  - Maintains state even if workers restart
+
+## [2.0.36] - 2025-01-18
+
+### Added
+- Enhanced logging for cleanup orphaned records operation
+  - Now logs the file paths of orphaned records found (first 100 files)
+  - Provides better visibility into which files were removed from the database
+
+### Fixed
+- Fixed cleanup orphaned records UI showing 0 cleaned when backend actually cleaned records
+  - Backend now preserves orphaned_found count in completion state
+  - UI correctly displays the number of orphaned records removed
+
+## [2.0.35] - 2025-01-18
+
+### Fixed
+- Fixed Docker build version display issue (was showing 2.0.14 instead of actual version)
+- Updated Dockerfile ARG to properly pass APP_VERSION
+
+## [2.0.34] - 2025-01-18
+
+### Added
+- **Parallel Hash Processing for File Changes Check**:
+  - File changes check now uses parallel processing with configured MAX_SCAN_WORKERS (default: 4)
+  - Dramatically improves performance when checking large databases (1M+ files)
+  - Processes files in parallel within each batch for maximum efficiency
+
+- **Enhanced Progress Tracking**:
+  - Added batch completion logging for all long-running operations
+  - Real-time ETA calculation shows estimated time remaining
+  - Progress messages now show current batch number and total batches
+  - Detailed logging of batch processing times for performance monitoring
+
+- **Operation Cancellation Support**:
+  - Added cancel button to progress bar UI for all operations
+  - New API endpoints: `/api/cancel-scan`, `/api/cancel-cleanup`, `/api/cancel-file-changes`
+  - All operations (scan, cleanup, file changes) can now be gracefully cancelled
+  - Cancellation properly cleans up state and stops processing
+  - UI dynamically shows stop button during operations
+
+- **Timeout Handling for File Processing**:
+  - Added 5-minute timeout for individual file hash calculations
+  - Files that exceed timeout are logged as ERROR and skipped
+  - Prevents single large files from blocking entire operation
+
+### Fixed
+- **Progress Bar Persistence During App Initialization**:
+  - Fixed issue where progress bar would disappear when PixelProbe startup occurs during ongoing operations
+  - App initialization now checks for all ongoing operations (scan, cleanup, file-changes), not just scans
+  - Progress bar correctly resumes monitoring any in-progress operation after page reload or app restart
+  - Ensures file-changes and cleanup operations maintain their progress display throughout the entire process
+
+## [2.0.32] - 2025-01-17
+
+### Fixed
+- **File Changes Progress Tracking**:
+  - Added batch processing logs to show progress during file changes check
+  - Added start and completion logs for better visibility
+  - File changes check now properly logs progress for million+ file operations
+
+## [2.0.31] - 2025-01-17
+
+### Fixed
+- Force version update to ensure proper deployment
+- Same fixes as 2.0.30 but with clean rebuild
+
+## [2.0.30] - 2025-01-17
+
+### Fixed
+- **Cleanup Orphans Progress Bar**:
+  - Fixed progress bar jumping to 100% and disappearing while scan continues in background
+  - Added proper handling for cases where no orphaned files are found
+  - Progress bar now accurately reflects Phase 1 (file checking) completion
+  - Added detailed batch processing logs to track actual scan progress
+  - Progress bar remains visible until the entire operation completes, not just the deletion phase
+
+## [2.0.29] - 2025-01-17
+
+### Enhanced
+- **File Change Detection Improvements**:
+  - Now calculates hashes for ALL files, not just those with changed timestamps
+  - Detects silent file corruption and any modifications regardless of timestamp changes
+  - Processes files in batches of 1000 records to handle databases with millions of files
+  - Phase-based progress tracking with persistent progress bar throughout entire process
+  - Memory efficient processing that can handle large databases without issues
+
+- **Orphaned Files Cleanup Optimization**:
+  - Completely rewritten to use batched queries instead of loading entire database into memory
+  - Processes files in batches of 1000 records for checking file existence
+  - Stores only file IDs during detection phase to minimize memory usage
+  - Bulk deletion operations in batches of 1000 for efficient database cleanup
+  - Two-phase progress tracking: Phase 1 for detection, Phase 2 for deletion
+  - Can handle databases with millions of files without memory issues
+
+- **Unified Progress Display**:
+  - All operations (scan, file changes, cleanup) now use consistent phase-based progress tracking
+  - Progress bars persist throughout entire operation with clear phase indicators
+  - Real-time file processing updates showing current file and counts
+  - Progress percentage calculated based on current phase completion
+  - Consistent UI experience across all long-running operations
+
 ## [2.0.28] - 2025-07-16
 
 ### Fixed

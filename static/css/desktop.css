@@ -449,10 +449,47 @@ body {
     box-shadow: var(--shadow-sm);
 }
 
+.progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
 .progress-title {
-    margin: 0 0 1rem 0;
+    margin: 0;
     font-size: 1.125rem;
     font-weight: 600;
+}
+
+.cancel-button {
+    background-color: var(--danger);
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: var(--border-radius);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.2s ease;
+}
+
+.cancel-button:hover {
+    background-color: #a02f2f;
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+
+.cancel-button:active {
+    transform: translateY(0);
+    box-shadow: var(--shadow-sm);
+}
+
+.cancel-button i {
+    font-size: 0.875rem;
 }
 
 .progress-details {
@@ -854,4 +891,219 @@ input:checked + .toggle-slider:before {
 /* Hide mobile results on desktop */
 .mobile-results {
     display: none;
+}
+
+/* Schedule Management Styles */
+.schedules-header {
+    margin-bottom: 1.5rem;
+}
+
+.schedules-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.schedule-item {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 1.25rem;
+    transition: box-shadow 0.2s;
+}
+
+.schedule-item:hover {
+    box-shadow: var(--shadow-sm);
+}
+
+.schedule-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.schedule-header h4 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1.1rem;
+}
+
+.schedule-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.schedule-info {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.schedule-info p {
+    margin: 0.25rem 0;
+}
+
+.schedule-info strong {
+    color: var(--text-primary);
+}
+
+/* Exclusions styles */
+.exclusions-section {
+    margin-bottom: 2rem;
+}
+
+.exclusions-section h4 {
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
+.exclusion-input-group {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.exclusion-input-group input {
+    flex: 1;
+}
+
+.exclusion-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-primary);
+}
+
+.exclusion-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    transition: background-color 0.2s;
+}
+
+.exclusion-item:hover {
+    background-color: var(--bg-secondary);
+}
+
+.exclusion-item:last-child {
+    border-bottom: none;
+}
+
+.exclusion-item span {
+    color: var(--text-primary);
+    font-family: monospace;
+}
+
+.exclusion-item button {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+}
+
+.exclusion-list .empty-state {
+    padding: 2rem;
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+/* Form styles for modals */
+.form-group {
+    margin-bottom: 1.25rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.form-control {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 1rem;
+    transition: border-color 0.2s;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: var(--hulu-green);
+    box-shadow: 0 0 0 0.2rem rgba(28, 231, 131, 0.25);
+}
+
+.form-control[type="number"] {
+    -moz-appearance: textfield;
+}
+
+.form-control[type="number"]::-webkit-inner-spin-button,
+.form-control[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+textarea.form-control {
+    resize: vertical;
+    min-height: 100px;
+}
+
+.form-text {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.input-group {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.input-group .form-control {
+    flex: 1;
+}
+
+.form-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+    margin-top: 1.5rem;
+}
+
+/* Button variants */
+.btn-sm {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.875rem;
+}
+
+.btn-warning {
+    background-color: var(--warning-color);
+    color: #212529;
+}
+
+.btn-warning:hover {
+    background-color: #e0a800;
+}
+
+.btn-danger {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #c82333;
+}
+
+.btn-secondary {
+    background-color: #6c757d;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background-color: #5a6268;
 }

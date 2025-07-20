@@ -15,8 +15,9 @@ import csv
 import io
 
 from media_checker import PixelProbe
-from models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration, ScanState
+from models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration, ScanState, CleanupState, FileChangesState
 from version import __version__, __github_url__
+from scheduler import MediaScheduler
 
 load_dotenv()
 
@@ -70,6 +71,9 @@ CORS(app, resources={
     r"/api/*": {"origins": "*"},
     r"/": {"origins": "*"}
 })
+
+# Initialize scheduler (will be initialized after app context is ready)
+scheduler = MediaScheduler()
 
 def create_performance_indexes():
     """Create performance indexes on application startup"""
@@ -159,7 +163,11 @@ def initialize_media_checker():
         logger.info(f"Scan paths configured: {scan_paths}")
         logger.info(f"Max files to scan: {max_files_to_scan}")
         
-        media_checker = PixelProbe(max_workers=max_workers)
+        media_checker = PixelProbe(
+            max_workers=max_workers,
+            excluded_paths=scheduler.excluded_paths,
+            excluded_extensions=scheduler.excluded_extensions
+        )
         logger.info(f"PixelProbe initialized with {max_workers} max workers")
         
         # Clean up any files stuck in scanning status
@@ -203,21 +211,14 @@ scan_state = {
     'total_phases': 3,   # Total number of phases
     'discovery_count': 0,  # Files discovered in discovery phase
     'adding_progress': 0,   # Files added to database in adding phase
-    'scan_id': None  # Unique identifier for current scan
+    'scan_id': None,  # Unique identifier for current scan
+    'cancel_requested': False  # Flag to request cancellation
 }
 
-# Cleanup orphans operation state
+# Cleanup orphans operation state - NOW USING DATABASE (CleanupState model)
+# Keeping for backwards compatibility but no longer used
 cleanup_state_lock = threading.Lock()
-cleanup_state = {
-    'is_running': False,
-    'start_time': None,
-    'files_processed': 0,
-    'total_files': 0,
-    'orphaned_found': 0,
-    'current_file': None,
-    'phase': 'idle',  # idle, checking, deleting, complete
-    'progress_message': ''
-}
+cleanup_state = {}
 
 # File changes check operation state
 file_changes_state_lock = threading.Lock()
@@ -229,7 +230,11 @@ file_changes_state = {
     'changes_found': 0,
     'current_file': None,
     'phase': 'idle',  # idle, checking, complete
-    'progress_message': ''
+    'progress_message': '',
+    'cancel_requested': False,
+    'batch_start_time': None,
+    'batch_number': 0,
+    'total_batches': 0
 }
 
 # Stats update thread state
@@ -349,6 +354,11 @@ def start_db_write_thread():
     """Start the database write queue processor thread"""
     global db_write_thread
     
+    # Check if thread is already running
+    if db_write_thread and db_write_thread.is_alive():
+        logger.info("Database write thread is already running")
+        return
+    
     def db_write_worker():
         """Worker thread that processes database writes from the queue"""
         logger.info("Database write queue thread started")
@@ -365,6 +375,7 @@ def start_db_write_thread():
                     break
                 
                 task_type = write_task.get('type')
+                logger.debug(f"Processing database write task: {task_type}")
                 
                 try:
                     with app.app_context():
@@ -397,6 +408,8 @@ def start_db_write_thread():
                         elif task_type == 'batch_update_scan_results':
                             # Batch update scan results
                             results = write_task.get('results', [])
+                            updated_count = 0
+                            created_count = 0
                             
                             for result in results:
                                 file_path = result.get('file_path')
@@ -407,13 +420,24 @@ def start_db_write_thread():
                                     for key, value in result.items():
                                         if hasattr(scan_result, key) and key != 'file_path':
                                             setattr(scan_result, key, value)
+                                    updated_count += 1
                                 else:
                                     # Create new record
                                     scan_result = ScanResult(**result)
                                     db.session.add(scan_result)
+                                    created_count += 1
                             
                             db.session.commit()
-                            logger.info(f"Batch updated {len(results)} scan results")
+                            logger.info(f"Batch {task_type} complete - Updated database: {len(results)} files (updated: {updated_count}, created: {created_count})")
+                            
+                            # Log first few file paths for verification
+                            if len(results) <= 5:
+                                for r in results:
+                                    logger.debug(f"  - {r.get('file_path')}")
+                            else:
+                                for r in results[:3]:
+                                    logger.debug(f"  - {r.get('file_path')}")
+                                logger.debug(f"  ... and {len(results) - 3} more files")
                         
                         elif task_type == 'create_scan_state':
                             # Create new scan state
@@ -434,6 +458,24 @@ def start_db_write_thread():
                                 db.session.commit()
                                 logger.info(f"Marked scan {scan_id} as complete")
                         
+                        elif task_type == 'update_file_changes_progress':
+                            # Update file changes progress
+                            check_id = write_task.get('check_id')
+                            updates = {
+                                'files_processed': write_task.get('files_processed'),
+                                'phase_current': write_task.get('phase_current'),
+                                'changes_found': write_task.get('changes_found'),
+                                'progress_message': write_task.get('progress_message'),
+                                'current_file': write_task.get('current_file')
+                            }
+                            
+                            file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                            if file_changes_record:
+                                for key, value in updates.items():
+                                    if value is not None and hasattr(file_changes_record, key):
+                                        setattr(file_changes_record, key, value)
+                                db.session.commit()
+                        
                         # Mark task as done
                         db_write_queue.task_done()
                         
@@ -453,6 +495,13 @@ def start_db_write_thread():
         db_write_thread = threading.Thread(target=db_write_worker, daemon=True)
         db_write_thread.start()
         logger.info("Started database write queue thread")
+        
+        # Verify thread started successfully
+        time.sleep(0.1)
+        if db_write_thread.is_alive():
+            logger.info("Database write thread is confirmed running")
+        else:
+            logger.error("Database write thread failed to start!")
 
 def stop_db_write_thread():
     """Stop the database write thread"""
@@ -891,7 +940,8 @@ def scan_all_files():
         phase='initializing',
         current_file=None,
         progress_message='Initializing scan...',
-        scan_id=scan_id
+        scan_id=scan_id,
+        cancel_requested=False  # Reset cancel flag
     )
     
     # Start stats update thread to monitor progress
@@ -914,6 +964,9 @@ def scan_all_files():
                 
                 # Initialize media checker and validate paths
                 checker = initialize_media_checker()
+                
+                # Ensure database write thread is running
+                start_db_write_thread()
                 
                 # Show path validation progress
                 for path in scan_paths:
@@ -1062,6 +1115,18 @@ def scan_all_files():
                 
                 # Process files in batches from our ID list
                 for batch_start in range(0, pending_count, batch_size):
+                    # Check for cancellation
+                    with scan_state_lock:
+                        if scan_state.get('cancel_requested'):
+                            logger.info("Scan cancelled by user")
+                            update_scan_state(
+                                phase='cancelled',
+                                progress_message='Scan cancelled by user',
+                                is_scanning=False,
+                                scan_thread_active=False
+                            )
+                            return
+                    
                     batch_end = min(batch_start + batch_size, pending_count)
                     batch_records = pending_records[batch_start:batch_end]
                     
@@ -1088,7 +1153,7 @@ def scan_all_files():
                         continue
                     
                     # Process this batch of files using parallel scanning
-                    logger.info(f"Processing batch of {len(valid_files_in_batch)} files (offset {offset})")
+                    logger.info(f"Processing batch of {len(valid_files_in_batch)} files (batch {batch_start//batch_size + 1}/{(pending_count + batch_size - 1)//batch_size})")
                     
                     # Use ThreadPoolExecutor for this batch
                     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1107,8 +1172,27 @@ def scan_all_files():
                             for file_path in valid_files_in_batch
                         }
                         
+                        # Accumulate results for batch processing
+                        batch_results = []
+                        batch_errors = []
+                        
                         # Process results as they complete
                         for future in as_completed(future_to_file):
+                            # Check for cancellation
+                            with scan_state_lock:
+                                if scan_state.get('cancel_requested'):
+                                    logger.info("Scan cancelled during batch processing")
+                                    # Cancel remaining futures
+                                    for f in future_to_file:
+                                        f.cancel()
+                                    update_scan_state(
+                                        phase='cancelled',
+                                        progress_message='Scan cancelled by user',
+                                        is_scanning=False,
+                                        scan_thread_active=False
+                                    )
+                                    return
+                            
                             file_path = future_to_file[future]
                             try:
                                 result = future.result()
@@ -1135,11 +1219,18 @@ def scan_all_files():
                                 result['scan_date'] = datetime.now(timezone.utc)
                                 result['scan_status'] = 'completed'
                                 
-                                # Send to database write queue
-                                db_write_queue.put({
-                                    'type': 'batch_update_scan_results',
-                                    'results': [result]
-                                })
+                                # Accumulate results for batch update
+                                batch_results.append(result)
+                                logger.debug(f"Added result to batch: {file_path} (batch size: {len(batch_results)})")
+                                
+                                # Send to database in chunks of 10 to improve efficiency
+                                if len(batch_results) >= 10:
+                                    db_write_queue.put({
+                                        'type': 'batch_update_scan_results',
+                                        'results': batch_results.copy()
+                                    })
+                                    logger.info(f"Queued batch database update for {len(batch_results)} files")
+                                    batch_results = []
                                 
                             except Exception as e:
                                 logger.error(f"Error scanning {file_path}: {str(e)}")
@@ -1151,12 +1242,29 @@ def scan_all_files():
                                     'corruption_details': f"Scan error: {str(e)}",
                                     'scan_date': datetime.now(timezone.utc)
                                 }
-                                db_write_queue.put({
-                                    'type': 'batch_update_scan_results',
-                                    'results': [error_result]
-                                })
+                                batch_errors.append(error_result)
                     
-                    logger.info(f"Completed batch, processed {files_processed} files total")
+                    # Send any remaining results in the batch
+                    if batch_results:
+                        db_write_queue.put({
+                            'type': 'batch_update_scan_results',
+                            'results': batch_results
+                        })
+                        logger.info(f"Queued final batch database update for {len(batch_results)} files")
+                    
+                    # Send any error results
+                    if batch_errors:
+                        db_write_queue.put({
+                            'type': 'batch_update_scan_results',
+                            'results': batch_errors
+                        })
+                        logger.info(f"Queued error batch database update for {len(batch_errors)} files")
+                    
+                    logger.info(f"Completed batch {batch_start//batch_size + 1}, processed {files_processed} files total")
+                    
+                    # Give database writer time to process queue
+                    import time
+                    time.sleep(0.2)  # Small delay to prevent overwhelming the db write queue
                 
                 # All batches processed - verify we actually processed all pending files
                 remaining_pending = ScanResult.query.filter_by(scan_status='pending').count()
@@ -1175,6 +1283,11 @@ def scan_all_files():
                 logger.error(f"Exception type: {type(e).__name__}")
                 import traceback
                 logger.error(f"Full traceback: {traceback.format_exc()}")
+                # Update scan state to show error
+                update_scan_state(
+                    phase='error',
+                    progress_message=f'Scan failed: {str(e)}'
+                )
                 # Don't reset state here - let finally handle it
                 
             finally:
@@ -1808,40 +1921,81 @@ def get_scan_status():
 
 @app.route('/api/test-cleanup')
 def test_cleanup():
-    """Test endpoint to check cleanup state"""
-    with cleanup_state_lock:
-        state = cleanup_state.copy()
-    return jsonify({
-        'current_state': state,
-        'timestamp': datetime.now().isoformat()
-    })
+    """Test endpoint to check cleanup state from database"""
+    cleanup_record = CleanupState.query.order_by(CleanupState.id.desc()).first()
+    if cleanup_record:
+        return jsonify({
+            'current_state': cleanup_record.to_dict(),
+            'timestamp': datetime.now().isoformat()
+        })
+    else:
+        return jsonify({
+            'current_state': None,
+            'timestamp': datetime.now().isoformat(),
+            'message': 'No cleanup operations found'
+        })
 
 @app.route('/api/cleanup-status')
 def get_cleanup_status():
     """Get current cleanup orphans operation status"""
     try:
-        with cleanup_state_lock:
-            state = cleanup_state.copy()
+        # Get the most recent cleanup state from database
+        cleanup_record = CleanupState.query.order_by(CleanupState.id.desc()).first()
         
-        response = {
-            'is_running': state.get('is_running', False),
-            'phase': state.get('phase', 'idle'),
-            'files_processed': state.get('files_processed', 0),
-            'total_files': state.get('total_files', 0),
-            'orphaned_found': state.get('orphaned_found', 0),
-            'current_file': state.get('current_file'),
-            'progress_message': state.get('progress_message', '')
-        }
-        
-        if state.get('start_time') and state.get('is_running'):
-            response['duration'] = time.time() - state['start_time']
-            response['start_time'] = state['start_time']
-        
-        # Calculate progress percentage
-        if state.get('total_files', 0) > 0:
-            response['progress_percentage'] = (state.get('files_processed', 0) / state['total_files']) * 100
+        if not cleanup_record:
+            # No cleanup has ever been run
+            response = {
+                'is_running': False,
+                'phase': 'idle',
+                'phase_number': 1,
+                'total_phases': 2,
+                'phase_current': 0,
+                'phase_total': 0,
+                'files_processed': 0,
+                'total_files': 0,
+                'orphaned_found': 0,
+                'current_file': None,
+                'progress_message': '',
+                'progress_percentage': 0
+            }
         else:
-            response['progress_percentage'] = 0
+            response = {
+                'is_running': cleanup_record.is_active,
+                'phase': cleanup_record.phase,
+                'phase_number': cleanup_record.phase_number,
+                'total_phases': 2,
+                'phase_current': cleanup_record.phase_current,
+                'phase_total': cleanup_record.phase_total,
+                'files_processed': cleanup_record.files_processed,
+                'total_files': cleanup_record.total_files,
+                'orphaned_found': cleanup_record.orphaned_found,
+                'current_file': cleanup_record.current_file,
+                'progress_message': cleanup_record.progress_message or ''
+            }
+            
+            if cleanup_record.start_time and cleanup_record.is_active:
+                # Handle both timezone-aware and timezone-naive datetimes
+                if cleanup_record.start_time.tzinfo is None:
+                    # If naive, assume UTC
+                    start_time_utc = cleanup_record.start_time.replace(tzinfo=timezone.utc)
+                else:
+                    start_time_utc = cleanup_record.start_time
+                response['duration'] = (datetime.now(timezone.utc) - start_time_utc).total_seconds()
+                response['start_time'] = start_time_utc.timestamp()
+            
+            # Calculate progress percentage based on current phase
+            # For cleanup, the checking phase is the majority of the work (checking all files)
+            # The deleting phase is usually much smaller (only orphaned files)
+            if cleanup_record.phase == 'checking' and cleanup_record.total_files > 0:
+                # Checking phase is weighted as 90% of total progress
+                response['progress_percentage'] = (cleanup_record.files_processed / cleanup_record.total_files) * 90
+            elif cleanup_record.phase == 'deleting' and cleanup_record.phase_total > 0:
+                # Deleting phase is the remaining 10%
+                response['progress_percentage'] = 90 + (cleanup_record.phase_current / cleanup_record.phase_total) * 10
+            elif cleanup_record.phase == 'complete':
+                response['progress_percentage'] = 100
+            else:
+                response['progress_percentage'] = 0
         
         return jsonify(response)
         
@@ -1857,32 +2011,73 @@ def get_cleanup_status():
 def get_file_changes_status():
     """Get current file changes check operation status"""
     try:
-        with file_changes_state_lock:
-            state = file_changes_state.copy()
+        # Get the most recent file changes state from database
+        file_changes_record = FileChangesState.query.order_by(FileChangesState.id.desc()).first()
         
-        response = {
-            'is_running': state.get('is_running', False),
-            'phase': state.get('phase', 'idle'),
-            'files_processed': state.get('files_processed', 0),
-            'total_files': state.get('total_files', 0),
-            'changes_found': state.get('changes_found', 0),
-            'current_file': state.get('current_file'),
-            'progress_message': state.get('progress_message', '')
-        }
-        
-        if state.get('start_time') and state.get('is_running'):
-            response['duration'] = time.time() - state['start_time']
-            response['start_time'] = state['start_time']
-        
-        # Calculate progress percentage
-        if state.get('total_files', 0) > 0:
-            response['progress_percentage'] = (state.get('files_processed', 0) / state['total_files']) * 100
+        if not file_changes_record:
+            # No file changes check has ever been run
+            response = {
+                'is_running': False,
+                'phase': 'idle',
+                'phase_number': 1,
+                'total_phases': 3,
+                'phase_current': 0,
+                'phase_total': 0,
+                'files_processed': 0,
+                'total_files': 0,
+                'changes_found': 0,
+                'corrupted_found': 0,
+                'current_file': None,
+                'progress_message': '',
+                'progress_percentage': 0
+            }
         else:
-            response['progress_percentage'] = 0
-        
-        # Include results if check is complete
-        if state.get('phase') == 'complete' and state.get('result'):
-            response['result'] = state['result']
+            response = {
+                'is_running': file_changes_record.is_active,
+                'phase': file_changes_record.phase,
+                'phase_number': file_changes_record.phase_number,
+                'total_phases': 3,
+                'phase_current': file_changes_record.phase_current,
+                'phase_total': file_changes_record.phase_total,
+                'files_processed': file_changes_record.files_processed,
+                'total_files': file_changes_record.total_files,
+                'changes_found': file_changes_record.changes_found,
+                'corrupted_found': file_changes_record.corrupted_found,
+                'current_file': file_changes_record.current_file,
+                'progress_message': file_changes_record.progress_message or ''
+            }
+            
+            if file_changes_record.start_time and file_changes_record.is_active:
+                # Handle both timezone-aware and timezone-naive datetimes
+                if file_changes_record.start_time.tzinfo is None:
+                    # If naive, assume UTC
+                    start_time_utc = file_changes_record.start_time.replace(tzinfo=timezone.utc)
+                else:
+                    start_time_utc = file_changes_record.start_time
+                response['duration'] = (datetime.now(timezone.utc) - start_time_utc).total_seconds()
+                response['start_time'] = start_time_utc.timestamp()
+            
+            # Calculate progress percentage based on current phase
+            if file_changes_record.phase == 'starting':
+                response['progress_percentage'] = 5
+            elif file_changes_record.phase == 'checking_hashes' and file_changes_record.total_files > 0:
+                # Phase 2 is 80% of total progress
+                response['progress_percentage'] = 5 + (file_changes_record.files_processed / file_changes_record.total_files) * 80
+            elif file_changes_record.phase == 'verifying_changes' and file_changes_record.phase_total > 0:
+                # Phase 3 is the remaining 15%
+                response['progress_percentage'] = 85 + (file_changes_record.phase_current / file_changes_record.phase_total) * 15
+            elif file_changes_record.phase == 'complete':
+                response['progress_percentage'] = 100
+            else:
+                response['progress_percentage'] = 0
+            
+            # Include results if check is complete
+            if file_changes_record.phase == 'complete' and file_changes_record.changed_files:
+                response['result'] = {
+                    'changed_files': json.loads(file_changes_record.changed_files),
+                    'total_checked': file_changes_record.total_files,
+                    'corrupted_found': file_changes_record.corrupted_found
+                }
         
         return jsonify(response)
         
@@ -1893,6 +2088,104 @@ def get_file_changes_status():
             'phase': 'error',
             'error': str(e)
         })
+
+@app.route('/api/cancel-scan', methods=['POST'])
+def cancel_scan():
+    """Cancel running scan operation"""
+    try:
+        with scan_state_lock:
+            if not scan_state['is_scanning']:
+                return jsonify({'error': 'No scan operation is currently running'}), 400
+            
+            scan_state['cancel_requested'] = True
+            logger.info("Scan cancellation requested")
+        
+        return jsonify({
+            'message': 'Scan cancellation requested',
+            'status': 'cancelling'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error cancelling scan: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cancel-cleanup', methods=['POST'])
+def cancel_cleanup():
+    """Cancel running cleanup operation"""
+    try:
+        # Find active cleanup operation
+        active_cleanup = CleanupState.query.filter_by(is_active=True).first()
+        if not active_cleanup:
+            return jsonify({'error': 'No cleanup operation is currently running'}), 400
+        
+        # Mark as cancelled - the async thread will check this
+        active_cleanup.is_active = False
+        active_cleanup.phase = 'cancelled' 
+        active_cleanup.progress_message = 'Cancellation requested'
+        db.session.commit()
+        logger.info(f"Cleanup cancellation requested for ID: {active_cleanup.cleanup_id}")
+        
+        return jsonify({
+            'message': 'Cleanup cancellation requested',
+            'status': 'cancelling'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error cancelling cleanup: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reset-cleanup-state', methods=['POST'])
+def reset_cleanup_state():
+    """Reset stuck cleanup state - use when cleanup state is stuck after restart"""
+    try:
+        # Find any active cleanup operations
+        active_cleanups = CleanupState.query.filter_by(is_active=True).all()
+        
+        if not active_cleanups:
+            return jsonify({'message': 'No active cleanup operations found'}), 200
+        
+        # Mark all active cleanups as inactive
+        for cleanup in active_cleanups:
+            cleanup.is_active = False
+            cleanup.phase = 'interrupted'
+            cleanup.progress_message = 'Reset due to stuck state'
+            logger.info(f"Resetting stuck cleanup state for ID: {cleanup.cleanup_id}")
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': f'Reset {len(active_cleanups)} stuck cleanup operations',
+            'count': len(active_cleanups)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting cleanup state: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cancel-file-changes', methods=['POST'])
+def cancel_file_changes():
+    """Cancel running file changes check operation"""
+    try:
+        # Find active file changes operation
+        active_check = FileChangesState.query.filter_by(is_active=True).first()
+        if not active_check:
+            return jsonify({'error': 'No file changes check is currently running'}), 400
+        
+        # Mark as cancelled - the async thread will check this
+        active_check.is_active = False
+        active_check.phase = 'cancelled' 
+        active_check.progress_message = 'Cancellation requested'
+        db.session.commit()
+        logger.info(f"File changes check cancellation requested for ID: {active_check.check_id}")
+        
+        return jsonify({
+            'message': 'File changes check cancellation requested',
+            'status': 'cancelling'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error cancelling file changes check: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/export-csv', methods=['GET', 'POST'])
 def export_csv():
@@ -1908,10 +2201,42 @@ def export_csv():
                 export_type = "selected"
                 logger.info(f"Exporting {len(results)} selected scan results to CSV")
             else:
-                # Export all files (POST with empty file_ids)
-                results = ScanResult.query.all()
-                export_type = "all"
-                logger.info(f"Exporting {len(results)} scan results to CSV (all results via POST)")
+                # Export based on current filter and search
+                filter_type = data.get('filter', 'all')
+                search = data.get('search', '')
+                
+                query = ScanResult.query
+                
+                # Apply search filter
+                if search:
+                    query = query.filter(ScanResult.file_path.contains(search))
+                
+                # Apply corruption filter
+                if filter_type == 'corrupted':
+                    # Show only corrupted files that don't have warnings and aren't marked as good
+                    query = query.filter(
+                        (ScanResult.is_corrupted == True) & 
+                        ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None)) &
+                        (ScanResult.marked_as_good == False)
+                    )
+                elif filter_type == 'healthy':
+                    # Show only healthy files (no corruption, no warnings, or marked as good)
+                    query = query.filter(
+                        ((ScanResult.is_corrupted == False) & 
+                         ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None))) |
+                        (ScanResult.marked_as_good == True)
+                    )
+                elif filter_type == 'warning':
+                    # Show files with warnings that aren't marked as good
+                    query = query.filter(
+                        (ScanResult.has_warnings == True) &
+                        (ScanResult.marked_as_good == False)
+                    )
+                # 'all' filter - no additional filtering needed
+                
+                results = query.all()
+                export_type = filter_type if filter_type != 'all' else 'all'
+                logger.info(f"Exporting {len(results)} scan results to CSV (filter: {filter_type}, search: '{search}')")
         else:
             # GET request - export all files
             results = ScanResult.query.all()
@@ -1991,76 +2316,363 @@ def create_tables():
             logger.error(f"Error in database initialization: {str(e)}")
 
 
-def check_file_changes_async():
+def check_file_changes_async(check_id):
     """Async function to check file changes with progress tracking"""
+    import concurrent.futures
+    import signal
+    from functools import partial
+    
     with app.app_context():
         try:
+            # Get the file changes state record
+            file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+            if not file_changes_record:
+                logger.error(f"File changes state record not found for check_id: {check_id}")
+                return
+            
+            # Phase 1: Starting
+            file_changes_record.phase = 'starting'
+            file_changes_record.phase_number = 1
+            file_changes_record.progress_message = 'Phase 1 of 3: Starting file changes check...'
+            db.session.commit()
+            
+            # Initialize file_changes_state
             with file_changes_state_lock:
-                file_changes_state['phase'] = 'checking'
-                file_changes_state['progress_message'] = 'Loading files with hashes from database...'
+                file_changes_state['is_running'] = True
+                file_changes_state['start_time'] = time.time()
+                file_changes_state['files_processed'] = 0
+                file_changes_state['total_files'] = 0
+                file_changes_state['changes_found'] = 0
+                file_changes_state['phase'] = 'starting'
+                file_changes_state['phase_number'] = 1
+                file_changes_state['progress_message'] = 'Phase 1 of 3: Starting file changes check...'
+                file_changes_state['cancel_requested'] = False
             
-            # Get all records with hashes from database
-            all_results = ScanResult.query.filter(ScanResult.file_hash.isnot(None)).all()
-            total_files = len(all_results)
+            # Get total count of files
+            total_files = ScanResult.query.count()
+            logger.info(f"File change check starting - found {total_files} total files in database")
             
+            # Update total files in state
             with file_changes_state_lock:
                 file_changes_state['total_files'] = total_files
-                file_changes_state['progress_message'] = f'Checking {total_files} files for changes...'
+            
+            # Phase 2: Checking hashes
+            file_changes_record.phase = 'checking_hashes'
+            file_changes_record.phase_number = 2
+            file_changes_record.total_files = total_files
+            file_changes_record.phase_total = total_files
+            file_changes_record.progress_message = f'Phase 2 of 3: Checking {total_files} files for hash changes...'
+            db.session.commit()
+            
+            batch_size = 1000  # Process files in batches to handle large databases
+            total_batches = (total_files + batch_size - 1) // batch_size
             
             checker = initialize_media_checker()
             changed_files = []
             
-            # Check each file with progress tracking
-            for idx, result in enumerate(all_results):
-                with file_changes_state_lock:
-                    file_changes_state['files_processed'] = idx + 1
-                    file_changes_state['current_file'] = result.file_path
+            # Helper function to process a single file with timeout
+            def process_file_for_changes(file_data):
+                """Process a single file to check for changes"""
+                file_path = file_data['file_path']
+                stored_hash = file_data['stored_hash']
+                stored_modified = file_data['stored_modified']
                 
-                file_path = result.file_path
-                stored_hash = result.file_hash
-                stored_modified = result.last_modified
+                # Current file will be updated via the write queue
                 
-                if not os.path.exists(file_path):
-                    changed_files.append({
-                        'file_path': file_path,
-                        'change_type': 'deleted',
-                        'stored_hash': stored_hash,
-                        'current_hash': None
-                    })
-                    with file_changes_state_lock:
-                        file_changes_state['changes_found'] = len(changed_files)
-                    continue
-                
-                # Check if file was modified
-                current_stats = os.stat(file_path)
-                current_modified = datetime.fromtimestamp(current_stats.st_mtime)
-                
-                if stored_modified and current_modified != stored_modified:
+                try:
+                    # Check if file exists
+                    if not os.path.exists(file_path):
+                        return {
+                            'file_path': file_path,
+                            'change_type': 'deleted',
+                            'stored_hash': stored_hash,
+                            'current_hash': None
+                        }
+                    
+                    # Calculate hash - no timeout, we want to check all files
+                    start_time = time.time()
                     current_hash = checker.calculate_file_hash(file_path)
+                    hash_time = time.time() - start_time
+                    
+                    # Log if file took a long time but don't skip it
+                    if hash_time > 60:  # Log files that take more than 1 minute
+                        logger.info(f"Large file processed: {file_path} took {hash_time:.1f}s")
+                    
+                    # Get current modification time
+                    current_stats = os.stat(file_path)
+                    current_modified = datetime.fromtimestamp(current_stats.st_mtime)
+                    
+                    # Check if hash has changed
                     if current_hash != stored_hash:
-                        changed_files.append({
+                        return {
                             'file_path': file_path,
                             'change_type': 'modified',
                             'stored_hash': stored_hash,
                             'current_hash': current_hash,
                             'stored_modified': stored_modified.isoformat() if stored_modified else None,
                             'current_modified': current_modified.isoformat()
+                        }
+                    
+                    return None  # No change
+                    
+                except Exception as e:
+                    logger.error(f"Error processing file {file_path}: {str(e)}")
+                    return None
+            
+            # Process files in batches with parallel processing
+            with concurrent.futures.ThreadPoolExecutor(max_workers=checker.max_workers) as executor:
+                for batch_num in range(total_batches):
+                    # Check for cancellation
+                    with file_changes_state_lock:
+                        if file_changes_state['cancel_requested']:
+                            logger.info("File changes check cancelled by user")
+                            file_changes_state['phase'] = 'cancelled'
+                            file_changes_state['progress_message'] = 'Operation cancelled'
+                            file_changes_state['is_running'] = False
+                            return
+                        
+                        file_changes_state['batch_number'] = batch_num + 1
+                        file_changes_state['batch_start_time'] = time.time()
+                    
+                    offset = batch_num * batch_size
+                    
+                    # Get batch of records
+                    batch_results = ScanResult.query.order_by(ScanResult.id).offset(offset).limit(batch_size).all()
+                    
+                    if not batch_results:
+                        break
+                    
+                    # Log batch progress
+                    logger.info(f"Processing batch {batch_num + 1} of {total_batches} (offset: {offset}, size: {len(batch_results)})")
+                    
+                    # Prepare file data for parallel processing
+                    file_data_list = []
+                    for result in batch_results:
+                        file_data_list.append({
+                            'file_path': result.file_path,
+                            'stored_hash': result.file_hash,
+                            'stored_modified': result.last_modified
                         })
+                    
+                    # Process files in parallel
+                    futures = []
+                    future_to_file_data = {}  # Map futures to file data
+                    for file_data in file_data_list:
+                        future = executor.submit(process_file_for_changes, file_data)
+                        futures.append(future)
+                        future_to_file_data[future] = file_data
+                    
+                    # Collect results
+                    batch_changed_files = []
+                    files_completed_in_batch = 0
+                    for future in concurrent.futures.as_completed(futures):
+                        # Check for cancellation during batch processing
                         with file_changes_state_lock:
-                            file_changes_state['changes_found'] = len(changed_files)
+                            if file_changes_state['cancel_requested']:
+                                # Cancel remaining futures
+                                for f in futures:
+                                    f.cancel()
+                                logger.info("File changes check cancelled by user during batch processing")
+                                file_changes_state['phase'] = 'cancelled'
+                                file_changes_state['progress_message'] = 'Operation cancelled'
+                                file_changes_state['is_running'] = False
+                                return
+                        
+                        file_data = future_to_file_data[future]
+                        file_path = file_data['file_path']
+                        
+                        try:
+                            # Wait for result without timeout - we want to check all files
+                            result = future.result()
+                            if result:
+                                batch_changed_files.append(result)
+                        except Exception as e:
+                            logger.error(f"Error processing file {file_path}: {str(e)}")
+                        
+                        # Update progress for each file processed
+                        files_completed_in_batch += 1
+                        files_done = offset + files_completed_in_batch
+                        
+                        with file_changes_state_lock:
+                            file_changes_state['files_processed'] = files_done
+                            file_changes_state['phase_current'] = files_done
+                            
+                            # Calculate ETA
+                            elapsed_time = time.time() - file_changes_state['start_time']
+                            if files_done > 0:
+                                avg_time_per_file = elapsed_time / files_done
+                                remaining_files = total_files - files_done
+                                eta_seconds = remaining_files * avg_time_per_file
+                                eta_minutes = int(eta_seconds / 60)
+                                eta_hours = int(eta_minutes / 60)
+                                eta_minutes = eta_minutes % 60
+                                
+                                if eta_hours > 0:
+                                    eta_str = f"{eta_hours}h {eta_minutes}m"
+                                else:
+                                    eta_str = f"{eta_minutes}m"
+                                
+                                file_changes_state['progress_message'] = f'Phase 2 of 3: Checking file {files_done}/{total_files} - ETA: {eta_str}'
+                                file_changes_state['progress_percentage'] = (files_done / total_files) * 100 if total_files > 0 else 0
+                        
+                        # Use write queue to update database asynchronously
+                        db_write_queue.put({
+                            'type': 'update_file_changes_progress',
+                            'check_id': check_id,
+                            'files_processed': files_done,
+                            'phase_current': files_done,
+                            'changes_found': len(changed_files) + len(batch_changed_files),
+                            'progress_message': file_changes_state['progress_message'],
+                            'current_file': file_path
+                        })
+                    
+                    # Add batch results to overall results
+                    changed_files.extend(batch_changed_files)
+                    
+                    with file_changes_state_lock:
+                        file_changes_state['changes_found'] = len(changed_files)
+                    
+                    # Log batch completion
+                    batch_time = time.time() - file_changes_state['batch_start_time']
+                    logger.info(f"Completed batch {batch_num + 1} of {total_batches} in {batch_time:.1f}s - found {len(batch_changed_files)} changes")
+            
+            # Final check for cancellation
+            with file_changes_state_lock:
+                if file_changes_state['cancel_requested']:
+                    return
+            
+            logger.info(f"Phase 2 complete: Checked {total_files} files, found {len(changed_files)} changes")
+            
+            # Phase 3: Verify changed files for corruption
+            corrupted_count = 0
+            
+            # Update database for Phase 3
+            with app.app_context():
+                file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                if file_changes_record:
+                    file_changes_record.phase = 'verifying_changes'
+                    file_changes_record.phase_number = 3
+                    file_changes_record.phase_current = 0
+                    file_changes_record.phase_total = len(changed_files) if changed_files else 1  # At least 1 to show progress
+                    file_changes_record.changes_found = len(changed_files)
+                    file_changes_record.progress_message = f'Phase 3 of 3: Verifying {len(changed_files)} changed files for corruption...'
+                    db.session.commit()
+            
+            with file_changes_state_lock:
+                file_changes_state['phase'] = 'verifying_changes'
+                file_changes_state['phase_number'] = 3
+                file_changes_state['phase_current'] = 0
+                file_changes_state['phase_total'] = len(changed_files) if changed_files else 1
+                file_changes_state['progress_message'] = f'Phase 3 of 3: Verifying {len(changed_files)} changed files for corruption...'
+            
+            if changed_files:
+                # Verify each changed file for corruption
+                logger.info(f"Starting Phase 3: Verifying {len(changed_files)} changed files for corruption")
+                
+                for idx, changed_file in enumerate(changed_files):
+                    # Check for cancellation
+                    with file_changes_state_lock:
+                        if file_changes_state['cancel_requested']:
+                            logger.info("File changes check cancelled during verification phase")
+                            return
+                    
+                    file_path = changed_file['file_path']
+                    
+                    # Update progress
+                    with file_changes_state_lock:
+                        file_changes_state['phase_current'] = idx + 1
+                        file_changes_state['current_file'] = file_path
+                        file_changes_state['progress_message'] = f'Phase 3 of 3: Verifying file {idx + 1}/{len(changed_files)} for corruption...'
+                    
+                    # Update database progress
+                    with app.app_context():
+                        file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                        if file_changes_record:
+                            file_changes_record.phase_current = idx + 1
+                            file_changes_record.current_file = file_path
+                            file_changes_record.progress_message = f'Phase 3 of 3: Verifying file {idx + 1}/{len(changed_files)} for corruption...'
+                            db.session.commit()
+                    
+                    # Scan the changed file for corruption
+                    try:
+                        scan_result = checker.scan_file(file_path, deep_scan=False)
+                        if scan_result.get('is_corrupted'):
+                            corrupted_count += 1
+                            changed_file['is_corrupted'] = True
+                            changed_file['corruption_details'] = scan_result.get('corruption_details')
+                            logger.warning(f"Changed file is corrupted: {file_path}")
+                        else:
+                            changed_file['is_corrupted'] = False
+                    except Exception as e:
+                        logger.error(f"Error scanning changed file {file_path}: {str(e)}")
+                        changed_file['scan_error'] = str(e)
+                    
+                    # Update corrupted count in state
+                    with file_changes_state_lock:
+                        file_changes_state['corrupted_found'] = corrupted_count
+                    
+                    # Update database with corrupted count
+                    with app.app_context():
+                        file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                        if file_changes_record:
+                            file_changes_record.corrupted_found = corrupted_count
+                            db.session.commit()
+            else:
+                # No files changed - still show Phase 3 progress for smooth transition
+                logger.info("No files changed, completing Phase 3")
+                
+                # Update progress to show Phase 3 completion
+                with file_changes_state_lock:
+                    file_changes_state['phase_current'] = 1
+                    file_changes_state['phase_total'] = 1
+                    file_changes_state['progress_message'] = 'Phase 3 of 3: No changed files to verify'
+                
+                # Update database
+                with app.app_context():
+                    file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                    if file_changes_record:
+                        file_changes_record.phase_current = 1
+                        file_changes_record.phase_total = 1
+                        file_changes_record.progress_message = 'Phase 3 of 3: No changed files to verify'
+                        db.session.commit()
+                
+                # Small delay to show Phase 3 progress
+                time.sleep(0.5)
+            
+            logger.info(f"File change check complete: Checked {total_files} files, found {len(changed_files)} changes, {corrupted_count} corrupted")
             
             # Mark as complete and store results
             with file_changes_state_lock:
                 file_changes_state['phase'] = 'complete'
-                file_changes_state['progress_message'] = f'Check complete: {len(changed_files)} files changed'
-                file_changes_state['is_running'] = False
+                file_changes_state['progress_message'] = f'Check complete: {len(changed_files)} files changed, {corrupted_count} corrupted'
+                file_changes_state['progress_percentage'] = 100  # Ensure 100% on completion
+                file_changes_state['files_processed'] = total_files  # Ensure counts match
+                file_changes_state['phase_current'] = len(changed_files) if changed_files else 1
+                file_changes_state['phase_total'] = len(changed_files) if changed_files else 1
+                file_changes_state['corrupted_found'] = corrupted_count
                 # Store results for retrieval
                 file_changes_state['result'] = {
                     'changed_files': changed_files,
-                    'total_checked': total_files
+                    'total_checked': total_files,
+                    'corrupted_found': corrupted_count
                 }
+                # Set is_running to False AFTER setting all completion data
+                file_changes_state['is_running'] = False
             
-            logger.info(f"File change check found {len(changed_files)} changed files")
+            # Update database with final results
+            with app.app_context():
+                file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                if file_changes_record:
+                    file_changes_record.phase = 'complete'
+                    file_changes_record.is_active = False
+                    file_changes_record.end_time = datetime.now(timezone.utc)
+                    file_changes_record.files_processed = total_files
+                    file_changes_record.phase_current = len(changed_files) if changed_files else 1
+                    file_changes_record.phase_total = len(changed_files) if changed_files else 1
+                    file_changes_record.corrupted_found = corrupted_count
+                    file_changes_record.progress_message = f'Check complete: {len(changed_files)} files changed, {corrupted_count} corrupted'
+                    file_changes_record.changed_files = json.dumps(changed_files)
+                    db.session.commit()
             
         except Exception as e:
             logger.error(f"Error in async file changes check: {str(e)}")
@@ -2073,94 +2685,178 @@ def check_file_changes_async():
 def check_file_changes():
     """Start async check for file changes"""
     # Check if file changes check is already running
-    with file_changes_state_lock:
-        if file_changes_state['is_running']:
-            return jsonify({'error': 'File changes check already in progress'}), 409
-        
-        # Reset state
-        file_changes_state['is_running'] = True
-        file_changes_state['start_time'] = time.time()
-        file_changes_state['files_processed'] = 0
-        file_changes_state['total_files'] = 0
-        file_changes_state['changes_found'] = 0
-        file_changes_state['current_file'] = None
-        file_changes_state['phase'] = 'starting'
-        file_changes_state['progress_message'] = 'Starting file changes check...'
-        file_changes_state['result'] = None
+    active_check = FileChangesState.query.filter_by(is_active=True).first()
+    if active_check:
+        return jsonify({'error': 'File changes check already in progress'}), 409
+    
+    # Create new file changes state record
+    import uuid
+    check_id = str(uuid.uuid4())
+    
+    file_changes_record = FileChangesState(
+        check_id=check_id,
+        is_active=True,
+        phase='starting',
+        phase_number=1,
+        start_time=datetime.now(timezone.utc),
+        progress_message='Initializing file changes check...'
+    )
+    db.session.add(file_changes_record)
+    db.session.commit()
+    
+    logger.info(f"Created file changes state with ID: {check_id}")
     
     # Start check in background thread
-    check_thread = threading.Thread(target=check_file_changes_async)
+    check_thread = threading.Thread(target=check_file_changes_async, args=(check_id,))
     check_thread.start()
     
     return jsonify({
         'message': 'File changes check started',
+        'check_id': check_id,
         'status': 'started'
     })
 
-def cleanup_orphaned_async():
+def cleanup_orphaned_async(cleanup_id):
     """Async function to clean up orphaned records with progress tracking"""
-    logger.info("Cleanup async function started")
+    logger.info(f"Cleanup async function started with ID: {cleanup_id}")
     with app.app_context():
         try:
-            logger.info("Inside app context, updating state to checking")
-            with cleanup_state_lock:
-                cleanup_state['phase'] = 'checking'
-                cleanup_state['progress_message'] = 'Loading database records...'
+            # Get the cleanup state from database
+            cleanup_record = CleanupState.query.filter_by(cleanup_id=cleanup_id).first()
+            if not cleanup_record:
+                logger.error(f"Cleanup state not found for ID: {cleanup_id}")
+                return
             
-            # Get all records from database
-            logger.info("Loading all scan results from database")
-            all_results = ScanResult.query.all()
-            total_files = len(all_results)
+            logger.info("Inside app context, updating state to checking")
+            cleanup_record.phase = 'checking'
+            cleanup_record.phase_number = 1
+            cleanup_record.progress_message = 'Phase 1 of 2: Counting files in database...'
+            db.session.commit()
+            
+            # Get total count of files
+            total_files = ScanResult.query.count()
             logger.info(f"Found {total_files} total files to check")
             
-            with cleanup_state_lock:
-                cleanup_state['total_files'] = total_files
-                cleanup_state['progress_message'] = f'Checking {total_files} files for orphaned records...'
+            cleanup_record.total_files = total_files
+            cleanup_record.phase_total = total_files
+            cleanup_record.progress_message = f'Phase 1 of 2: Checking {total_files} files for orphaned records...'
+            db.session.commit()
             
             checker = initialize_media_checker()
-            orphaned_records = []
+            orphaned_ids = []  # Store IDs instead of full records to save memory
+            orphaned_files = []  # Store file paths for logging
+            batch_size = 1000  # Process files in batches to handle large databases
             
-            # Check each file with progress tracking
-            for idx, result in enumerate(all_results):
-                with cleanup_state_lock:
-                    cleanup_state['files_processed'] = idx + 1
-                    cleanup_state['current_file'] = result.file_path
+            # Process files in batches
+            for offset in range(0, total_files, batch_size):
+                # Check for cancellation by refreshing from database
+                db.session.refresh(cleanup_record)
+                if not cleanup_record.is_active:
+                    logger.info("Cleanup cancelled by user")
+                    cleanup_record.phase = 'cancelled'
+                    cleanup_record.progress_message = 'Operation cancelled'
+                    cleanup_record.end_time = datetime.now(timezone.utc)
+                    db.session.commit()
+                    return
                 
-                if not os.path.exists(result.file_path):
-                    orphaned_records.append(result)
-                    with cleanup_state_lock:
-                        cleanup_state['orphaned_found'] = len(orphaned_records)
+                # Get batch of records
+                batch_results = ScanResult.query.order_by(ScanResult.id).offset(offset).limit(batch_size).all()
+                
+                if not batch_results:
+                    break
+                
+                # Log batch progress
+                logger.info(f"Processing batch {offset//batch_size + 1} of {(total_files + batch_size - 1)//batch_size} (offset: {offset}, size: {len(batch_results)})")
+                
+                # Check each file in the batch
+                for result in batch_results:
+                    idx = offset + batch_results.index(result)
+                    
+                    cleanup_record.files_processed = idx + 1
+                    cleanup_record.phase_current = idx + 1
+                    cleanup_record.current_file = result.file_path
+                    db.session.commit()
+                    
+                    if not os.path.exists(result.file_path):
+                        orphaned_ids.append(result.id)
+                        orphaned_files.append(result.file_path)
+                        cleanup_record.orphaned_found = len(orphaned_ids)
+                        db.session.commit()
             
-            # Start deletion phase
-            with cleanup_state_lock:
-                cleanup_state['phase'] = 'deleting'
-                cleanup_state['progress_message'] = f'Deleting {len(orphaned_records)} orphaned records...'
+            logger.info(f"Phase 1 complete: Checked {total_files} files, found {len(orphaned_ids)} orphaned records")
             
-            # Delete orphaned records in batches
-            batch_size = 100
-            for i in range(0, len(orphaned_records), batch_size):
-                batch = orphaned_records[i:i + batch_size]
-                for record in batch:
-                    db.session.delete(record)
+            # Log the orphaned files
+            if len(orphaned_files) > 0:
+                logger.info("Orphaned files found:")
+                for file_path in orphaned_files[:100]:  # Log first 100 files to avoid huge logs
+                    logger.info(f"  - {file_path}")
+                if len(orphaned_files) > 100:
+                    logger.info(f"  ... and {len(orphaned_files) - 100} more orphaned files")
+            
+            # Check if we have any orphaned files to delete
+            if len(orphaned_ids) > 0:
+                # Start deletion phase
+                cleanup_record.phase = 'deleting'
+                cleanup_record.phase_number = 2
+                cleanup_record.phase_current = 0
+                cleanup_record.phase_total = len(orphaned_ids)
+                cleanup_record.progress_message = f'Phase 2 of 2: Deleting {len(orphaned_ids)} orphaned records...'
                 db.session.commit()
                 
-                with cleanup_state_lock:
-                    cleanup_state['progress_message'] = f'Deleted {min(i + batch_size, len(orphaned_records))} of {len(orphaned_records)} records...'
+                # Delete orphaned records in batches using IDs
+                deletion_batch_size = 1000
+                for i in range(0, len(orphaned_ids), deletion_batch_size):
+                    # Check for cancellation
+                    db.session.refresh(cleanup_record)
+                    if not cleanup_record.is_active:
+                        logger.info("Cleanup cancelled during deletion phase")
+                        cleanup_record.phase = 'cancelled'
+                        cleanup_record.progress_message = f'Operation cancelled (deleted {i} of {len(orphaned_ids)} records)'
+                        cleanup_record.end_time = datetime.now(timezone.utc)
+                        db.session.commit()
+                        return
+                    
+                    batch_ids = orphaned_ids[i:i + deletion_batch_size]
+                    # Use bulk delete for efficiency
+                    ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
+                    db.session.commit()
+                    
+                    deleted_so_far = min(i + deletion_batch_size, len(orphaned_ids))
+                    cleanup_record.phase_current = deleted_so_far
+                    cleanup_record.progress_message = f'Phase 2 of 2: Deleted {deleted_so_far} of {len(orphaned_ids)} records...'
+                    db.session.commit()
+            else:
+                # No orphaned files found, still show Phase 2 completion
+                cleanup_record.phase = 'deleting'
+                cleanup_record.phase_number = 2
+                cleanup_record.phase_current = 0
+                cleanup_record.phase_total = 0
+                cleanup_record.progress_message = 'Phase 2 of 2: No orphaned records to delete'
+                db.session.commit()
+                
+                # Give UI time to show Phase 2 status
+                time.sleep(1)
             
             # Mark as complete
-            with cleanup_state_lock:
-                cleanup_state['phase'] = 'complete'
-                cleanup_state['progress_message'] = f'Successfully removed {len(orphaned_records)} orphaned records'
-                cleanup_state['is_running'] = False
+            cleanup_record.phase = 'complete'
+            cleanup_record.progress_message = f'Successfully removed {len(orphaned_ids)} orphaned records'
+            cleanup_record.is_active = False
+            cleanup_record.orphaned_found = len(orphaned_ids)
+            cleanup_record.end_time = datetime.now(timezone.utc)
+            db.session.commit()
             
-            logger.info(f"Cleaned up {len(orphaned_records)} orphaned records")
+            logger.info(f"Cleaned up {len(orphaned_ids)} orphaned records")
+            logger.info(f"Total size of orphaned files cleaned: {len(orphaned_files)} files")
             
         except Exception as e:
             logger.error(f"Error in async cleanup: {str(e)}", exc_info=True)
-            with cleanup_state_lock:
-                cleanup_state['phase'] = 'error'
-                cleanup_state['progress_message'] = f'Error: {str(e)}'
-                cleanup_state['is_running'] = False
+            if cleanup_record:
+                cleanup_record.phase = 'error'
+                cleanup_record.error_message = str(e)
+                cleanup_record.progress_message = f'Error: {str(e)}'
+                cleanup_record.is_active = False
+                cleanup_record.end_time = datetime.now(timezone.utc)
+                db.session.commit()
 
 @app.route('/api/cleanup-orphaned', methods=['POST'])
 def cleanup_orphaned_records():
@@ -2168,32 +2864,40 @@ def cleanup_orphaned_records():
     logger.info("Cleanup orphaned endpoint called")
     
     # Check if cleanup is already running
-    with cleanup_state_lock:
-        if cleanup_state['is_running']:
-            logger.warning("Cleanup already in progress")
-            return jsonify({'error': 'Cleanup operation already in progress'}), 409
-        
-        # Reset state
-        cleanup_state['is_running'] = True
-        cleanup_state['start_time'] = time.time()
-        cleanup_state['files_processed'] = 0
-        cleanup_state['total_files'] = 0
-        cleanup_state['orphaned_found'] = 0
-        cleanup_state['current_file'] = None
-        cleanup_state['phase'] = 'starting'
-        cleanup_state['progress_message'] = 'Starting cleanup operation...'
+    active_cleanup = CleanupState.query.filter_by(is_active=True).first()
+    if active_cleanup:
+        logger.warning("Cleanup already in progress")
+        return jsonify({'error': 'Cleanup operation already in progress'}), 409
     
-    logger.info("Starting cleanup thread")
+    # Create new cleanup state record
+    import uuid
+    cleanup_id = str(uuid.uuid4())
+    cleanup_record = CleanupState(
+        cleanup_id=cleanup_id,
+        is_active=True,
+        phase='starting',
+        start_time=datetime.now(timezone.utc),
+        progress_message='Starting cleanup operation...',
+        files_processed=0,
+        total_files=0,
+        orphaned_found=0
+    )
+    db.session.add(cleanup_record)
+    db.session.commit()
+    
+    logger.info(f"Starting cleanup thread with ID: {cleanup_id}")
     
     # Start cleanup in background thread
     try:
-        cleanup_thread = threading.Thread(target=cleanup_orphaned_async)
+        cleanup_thread = threading.Thread(target=cleanup_orphaned_async, args=(cleanup_id,))
         cleanup_thread.start()
         logger.info("Cleanup thread started successfully")
     except Exception as e:
         logger.error(f"Failed to start cleanup thread: {str(e)}")
-        with cleanup_state_lock:
-            cleanup_state['is_running'] = False
+        cleanup_record.is_active = False
+        cleanup_record.phase = 'error'
+        cleanup_record.error_message = str(e)
+        db.session.commit()
         return jsonify({'error': f'Failed to start cleanup: {str(e)}'}), 500
     
     logger.info("Cleanup thread started, returning status=started")
@@ -2439,8 +3143,8 @@ def scan_files_parallel():
                     # Mark scan as inactive in database
                     db_write_queue.put({
                         'type': 'update_scan_state',
-                        'data': {
-                            'scan_id': scan_id,
+                        'scan_id': scan_id,
+                        'updates': {
                             'is_active': False,
                             'end_time': datetime.now(timezone.utc),
                             'phase': 'completed',
@@ -2460,8 +3164,8 @@ def scan_files_parallel():
                     # Mark scan as failed in database
                     db_write_queue.put({
                         'type': 'update_scan_state',
-                        'data': {
-                            'scan_id': scan_id,
+                        'scan_id': scan_id,
+                        'updates': {
                             'is_active': False,
                             'end_time': datetime.now(timezone.utc),
                             'phase': 'failed',
@@ -2756,16 +3460,187 @@ def migrate_database():
             logger.info(f"Database migration complete. Found {count} existing records.")
         except Exception as e:
             logger.error(f"Failed to count records: {str(e)}")
+        
+        # Migrate scan_schedules table
+        try:
+            # Check if scan_schedules table exists
+            result = db.session.execute(db.text("SELECT name FROM sqlite_master WHERE type='table' AND name='scan_schedules'"))
+            if result.fetchone():
+                # Get existing columns for scan_schedules
+                result = db.session.execute(db.text("PRAGMA table_info(scan_schedules)"))
+                schedule_columns = {row[1] for row in result.fetchall()}
+                
+                # Add scan_type column if it doesn't exist
+                if 'scan_type' not in schedule_columns:
+                    logger.info("Adding scan_type column to scan_schedules table")
+                    db.session.execute(db.text(
+                        "ALTER TABLE scan_schedules ADD COLUMN scan_type VARCHAR(20) DEFAULT 'normal'"
+                    ))
+                    db.session.commit()
+                    logger.info("Successfully added scan_type column")
+            else:
+                logger.info("scan_schedules table doesn't exist, will be created with scan_type column")
+        except Exception as e:
+            logger.error(f"Failed to migrate scan_schedules table: {str(e)}")
+            db.session.rollback()
             
     except Exception as e:
         logger.error(f"Migration error: {str(e)}")
         db.session.rollback()
+
+# Schedule Management API endpoints
+@app.route('/api/schedules', methods=['GET'])
+def get_schedules():
+    """Get all scan schedules"""
+    try:
+        status = scheduler.get_schedule_status()
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Failed to get schedules: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/schedules', methods=['POST'])
+def create_schedule():
+    """Create a new scan schedule"""
+    try:
+        data = request.get_json()
+        name = data.get('name')
+        cron_expression = data.get('cron_expression')
+        scan_paths = data.get('scan_paths', [])
+        scan_type = data.get('scan_type', 'normal')  # normal, orphan, file_changes
+        
+        if not name or not cron_expression:
+            return jsonify({'error': 'Name and cron_expression are required'}), 400
+        
+        # Validate scan_type
+        if scan_type not in ['normal', 'orphan', 'file_changes']:
+            return jsonify({'error': 'Invalid scan_type. Must be: normal, orphan, or file_changes'}), 400
+            
+        schedule = scheduler.create_schedule(name, cron_expression, scan_paths, scan_type)
+        return jsonify(schedule.to_dict())
+    except Exception as e:
+        logger.error(f"Failed to create schedule: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/schedules/<int:schedule_id>', methods=['PUT'])
+def update_schedule(schedule_id):
+    """Update an existing schedule"""
+    try:
+        data = request.get_json()
+        schedule = scheduler.update_schedule(schedule_id, **data)
+        return jsonify(schedule.to_dict())
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        logger.error(f"Failed to update schedule: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/schedules/<int:schedule_id>', methods=['DELETE'])
+def delete_schedule(schedule_id):
+    """Delete a schedule"""
+    try:
+        scheduler.delete_schedule(schedule_id)
+        return jsonify({'message': 'Schedule deleted successfully'})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        logger.error(f"Failed to delete schedule: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/exclusions', methods=['GET'])
+def get_exclusions():
+    """Get current path and extension exclusions"""
+    return jsonify({
+        'excluded_paths': scheduler.excluded_paths,
+        'excluded_extensions': scheduler.excluded_extensions
+    })
+
+@app.route('/api/exclusions', methods=['PUT'])
+def update_exclusions():
+    """Update path and extension exclusions"""
+    try:
+        data = request.get_json()
+        paths = data.get('excluded_paths')
+        extensions = data.get('excluded_extensions')
+        
+        scheduler.update_exclusions(paths=paths, extensions=extensions)
+        
+        return jsonify({
+            'excluded_paths': scheduler.excluded_paths,
+            'excluded_extensions': scheduler.excluded_extensions
+        })
+    except Exception as e:
+        logger.error(f"Failed to update exclusions: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/exclusions/<exclusion_type>', methods=['POST'])
+def add_exclusion(exclusion_type):
+    """Add a single exclusion"""
+    try:
+        if exclusion_type not in ['path', 'extension']:
+            return jsonify({'error': 'Invalid exclusion type'}), 400
+        
+        data = request.get_json()
+        if not data or 'item' not in data:
+            return jsonify({'error': 'Item is required'}), 400
+        
+        item = data['item']
+        
+        if exclusion_type == 'path':
+            if item not in scheduler.excluded_paths:
+                scheduler.excluded_paths.append(item)
+                scheduler.update_exclusions(paths=scheduler.excluded_paths)
+        else:  # extension
+            if item not in scheduler.excluded_extensions:
+                scheduler.excluded_extensions.append(item)
+                scheduler.update_exclusions(extensions=scheduler.excluded_extensions)
+        
+        return jsonify({
+            'excluded_paths': scheduler.excluded_paths,
+            'excluded_extensions': scheduler.excluded_extensions
+        })
+    except Exception as e:
+        logger.error(f"Failed to add exclusion: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/exclusions/<exclusion_type>', methods=['DELETE'])
+def remove_exclusion(exclusion_type):
+    """Remove a single exclusion"""
+    try:
+        if exclusion_type not in ['path', 'extension']:
+            return jsonify({'error': 'Invalid exclusion type'}), 400
+        
+        data = request.get_json()
+        if not data or 'item' not in data:
+            return jsonify({'error': 'Item is required'}), 400
+        
+        item = data['item']
+        
+        if exclusion_type == 'path':
+            if item in scheduler.excluded_paths:
+                scheduler.excluded_paths.remove(item)
+                scheduler.update_exclusions(paths=scheduler.excluded_paths)
+        else:  # extension
+            if item in scheduler.excluded_extensions:
+                scheduler.excluded_extensions.remove(item)
+                scheduler.update_exclusions(extensions=scheduler.excluded_extensions)
+        
+        return jsonify({
+            'excluded_paths': scheduler.excluded_paths,
+            'excluded_extensions': scheduler.excluded_extensions
+        })
+    except Exception as e:
+        logger.error(f"Failed to remove exclusion: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 # Initialize database when module is imported
 create_tables()
 
 # Start stats update thread on application startup
 with app.app_context():
+    # Initialize scheduler after app context is ready
+    scheduler.init_app(app)
+    
     # Clean up any stale active scans on startup
     try:
         stale_scans = ScanState.query.filter_by(is_active=True).all()
@@ -2784,6 +3659,7 @@ with app.app_context():
     
     # Start the database write queue thread
     start_db_write_thread()
+    logger.info("Database write thread initialization completed")
 
 if __name__ == '__main__':
     logger.info("Starting Flask development server")

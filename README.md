@@ -6,7 +6,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video and image files across your media libraries.
 
-**Version 2.0.19** introduces a completely redesigned UI with Hulu-inspired aesthetics, Pi-hole style navigation, and full mobile responsiveness.
+**Version 2.0.53** fixes file-changes scanning progress tracking with smooth per-file updates and proper async database writes.
 
 ## ✨ Features
 
@@ -22,6 +22,9 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **📊 System Statistics**: Detailed system statistics with monitored paths and file tracking
 - **🔄 Bulk Actions**: Select multiple files for rescanning, deep scanning, or marking as good
 - **📈 Phase-Based Progress**: Clear scanning phases showing discovery, database addition, and scanning stages
+- **📅 Scheduled Scanning**: Automated scans with cron or interval-based scheduling
+- **🚫 Path & Extension Exclusions**: Configure paths and file types to exclude from scanning
+- **🔍 Multiple Scan Types**: Normal scan, orphan cleanup, and file changes detection
 
 ## 📸 Screenshots
 
@@ -83,6 +86,36 @@ Detailed scan results viewer:
 - Displays which tool detected the issue
 - Provides full scan output for debugging
 
+### Advanced Features
+
+#### Scheduled Scanning
+![Scan Schedules](docs/screenshots/features/scan-schedules.png)
+
+Create and manage automated scan schedules:
+- Support for both cron expressions and simple intervals
+- Multiple scan types: Normal Scan, Orphan Cleanup, File Changes
+- View next run times and last execution status
+- Enable/disable schedules with a single click
+
+![Create Schedule](docs/screenshots/features/create-schedule.png)
+
+Flexible scheduling options:
+- Name your schedules for easy identification
+- Choose between cron expressions for advanced users or simple intervals
+- Select scan type to automate different maintenance tasks
+- Optionally specify custom scan paths
+
+#### Exclusion Management
+![Exclusions Management](docs/screenshots/features/exclusions-management.png)
+
+Interactive exclusion management with modern UI:
+- Add exclusions individually with dedicated input fields
+- Remove specific exclusions with one-click delete buttons
+- See all exclusions at a glance in a clean list format
+- Press Enter to quickly add new exclusions
+- Separate management for paths and file extensions
+- Real-time updates with no page refresh needed
+
 ## 🚀 Quick Start
 
 ### Using Docker (Recommended)
@@ -116,7 +149,8 @@ Detailed scan results viewer:
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0)
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.53)
+- **`ttlequals0/pixelprobe:2.0.53`** - Fixed file-changes progress tracking with async updates
 - **`ttlequals0/pixelprobe:2.0`** - Complete UI overhaul with modern responsive design
 - **`ttlequals0/pixelprobe:1.26`** - UI improvements and ImageMagick UTF-8 fixes
 - **`ttlequals0/pixelprobe:1.25`** - Database resilience for long-running scans
@@ -127,7 +161,7 @@ You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0  # or :latest for newest
+    image: ttlequals0/pixelprobe:2.0.53  # or :latest for newest
 ```
 
 ### Development Setup
@@ -184,6 +218,20 @@ SECRET_KEY=your-very-secret-key-here
 
 # Optional: Set to development for debugging
 FLASK_ENV=production
+
+# Scheduled Scanning (optional)
+# Cron format: "cron:minute hour day month day_of_week"
+# Interval format: "interval:unit:value" (unit: hours/days/weeks)
+PERIODIC_SCAN_SCHEDULE=cron:0 2 * * *  # Daily at 2 AM
+# PERIODIC_SCAN_SCHEDULE=interval:hours:6  # Every 6 hours
+
+# Scheduled Cleanup (optional)
+CLEANUP_SCHEDULE=cron:0 3 * * 0  # Weekly on Sunday at 3 AM
+# CLEANUP_SCHEDULE=interval:days:7  # Every 7 days
+
+# Path and Extension Exclusions (optional)
+EXCLUDED_PATHS=/media/temp,/media/cache
+EXCLUDED_EXTENSIONS=.tmp,.temp,.cache
 ```
 
 ### Docker Compose Configuration
@@ -193,7 +241,7 @@ For Docker deployment, you can also configure paths in `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0  # Specify version
+    image: ttlequals0/pixelprobe:2.0.53  # Specify version
     environment:
       - SCAN_PATHS=/media
       - DATABASE_URL=sqlite:///media_checker.db
@@ -240,6 +288,14 @@ docker-compose up -d
 5. **File Actions**: 
    - **Rescan**: Re-examine a specific file
    - **Download**: Download the file to your local machine
+6. **Schedules**: Manage automated scan schedules with multiple scan types (v2.0.44+)
+   - Create schedules for normal scans, orphan cleanup, or file changes detection
+   - Use cron expressions or simple intervals
+   - Enable/disable schedules on demand
+7. **Exclusions**: Interactive management of paths and extensions to exclude (v2.0.44+)
+   - Add exclusions individually with dedicated input fields
+   - Remove specific exclusions with one click
+   - Press Enter to quickly add new exclusions
 
 ### API Endpoints
 
@@ -250,6 +306,14 @@ The application provides REST API endpoints:
 - `POST /api/scan-all` - Start a full scan of all configured directories
 - `POST /api/scan-file` - Scan a specific file
 - `GET /api/download/<id>` - Download a file
+- `GET /api/schedules` - List all scan schedules (v2.0.41+)
+- `POST /api/schedules` - Create a new scan schedule (v2.0.41+)
+- `PUT /api/schedules/<id>` - Update a scan schedule (v2.0.41+)
+- `DELETE /api/schedules/<id>` - Delete a scan schedule (v2.0.41+)
+- `GET /api/exclusions` - Get current exclusions (v2.0.41+)
+- `PUT /api/exclusions` - Update exclusions (v2.0.41+)
+- `POST /api/exclusions/<type>/<item>` - Add individual exclusion (v2.0.44+)
+- `DELETE /api/exclusions/<type>/<item>` - Remove individual exclusion (v2.0.44+)
 
 ### Command Line Usage
 

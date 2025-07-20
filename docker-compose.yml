@@ -10,6 +10,18 @@ services:
       - MAX_FILES_TO_SCAN=100
       - MAX_SCAN_WORKERS=4  # New: Configure parallel scanning threads
       - TZ=America/New_York  # Set your desired timezone here
+      # Periodic scan schedule (examples):
+      # - PERIODIC_SCAN_SCHEDULE=cron:0 2 * * *  # Daily at 2 AM
+      # - PERIODIC_SCAN_SCHEDULE=interval:hours:6  # Every 6 hours
+      - PERIODIC_SCAN_SCHEDULE=
+      # Cleanup schedule (examples):
+      # - CLEANUP_SCHEDULE=cron:0 3 * * 0  # Weekly on Sunday at 3 AM
+      # - CLEANUP_SCHEDULE=interval:days:7  # Every 7 days
+      - CLEANUP_SCHEDULE=
+      # Path exclusions (comma-separated)
+      - EXCLUDED_PATHS=/media/temp,/media/cache
+      # Extension exclusions (comma-separated) 
+      - EXCLUDED_EXTENSIONS=.tmp,.temp,.cache
     volumes:
       - ./data:/app/instance
       - ${MEDIA_PATH}:/media

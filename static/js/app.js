@@ -230,6 +230,28 @@ class APIClient {
         return this.request('/file-changes-status');
     }
 
+    // Cancel operations
+    async cancelScan() {
+        return this.request('/cancel-scan', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+    }
+
+    async cancelCleanup() {
+        return this.request('/cancel-cleanup', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+    }
+
+    async cancelFileChanges() {
+        return this.request('/cancel-file-changes', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+    }
+
     // Export
     async exportCSV(fileIds = null) {
         return this.request('/export-csv', {
@@ -321,12 +343,24 @@ class ProgressManager {
                     progressTitle.textContent = 'File Changes Check Progress';
                 }
             }
+            
+            // Show cancel button
+            const cancelButton = this.progressContainer.querySelector('.cancel-button');
+            if (cancelButton) {
+                cancelButton.style.display = 'flex';
+            }
         }
     }
 
     hide() {
         if (this.progressContainer) {
             this.progressContainer.style.display = 'none';
+            
+            // Hide cancel button
+            const cancelButton = this.progressContainer.querySelector('.cancel-button');
+            if (cancelButton) {
+                cancelButton.style.display = 'none';
+            }
         }
     }
 
@@ -370,6 +404,8 @@ class ProgressManager {
                 } else if (operationType === 'cleanup') {
                     status = await this.api.getCleanupStatus();
                     isRunning = status.is_running;
+                    // Debug log for cleanup status
+                    console.log('Cleanup status:', status);
                 } else if (operationType === 'file-changes') {
                     status = await this.api.getFileChangesStatus();
                     isRunning = status.is_running;
@@ -378,9 +414,13 @@ class ProgressManager {
                 if (isRunning) {
                     const progress = this.calculateProgress(status, operationType);
                     this.update(progress.percentage, progress.text, progress.details);
-                } else {
-                    // Operation is complete
+                } else if (status.phase === 'complete' || status.phase === 'cancelled' || status.phase === 'error') {
+                    // Operation is complete - show completion state
                     this.complete(operationType, status);
+                } else {
+                    // Still initializing or in transition - keep showing progress
+                    const progress = this.calculateProgress(status, operationType);
+                    this.update(progress.percentage, progress.text, progress.details);
                 }
             } catch (error) {
                 console.error(`Failed to check ${operationType} status:`, error);
@@ -458,9 +498,11 @@ class ProgressManager {
             text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
             
         } else if (operationType === 'cleanup') {
-            // Progress for cleanup operation
-            percentage = status.progress_percentage || 0;
-            text = status.progress_message || 'Checking for orphaned files...';
+            // Use the progress percentage directly from the backend
+            // Backend already handles the phase weighting (90% checking, 10% deleting)
+            percentage = Math.round(status.progress_percentage || 0);
+            
+            text = status.progress_message || `Phase ${status.phase_number || 1} of ${status.total_phases || 2}`;
             
             if (status.current_file) {
                 details = `Checking: ${status.current_file.split('/').pop()}`;
@@ -470,8 +512,9 @@ class ProgressManager {
             }
             
         } else if (operationType === 'file-changes') {
-            // Progress for file changes check
-            percentage = status.progress_percentage || 0;
+            // Use the progress percentage directly from the backend
+            percentage = Math.round(status.progress_percentage || 0);
+            
             text = status.progress_message || 'Checking for file changes...';
             
             if (status.current_file) {
@@ -494,6 +537,9 @@ class ProgressManager {
     async complete(operationType = 'scan', status = null) {
         // Always show 100% when operation completes
         let completionMessage = '';
+        
+        // Debug log the status on completion
+        console.log(`${operationType} complete with status:`, status);
         
         if (operationType === 'scan') {
             completionMessage = 'Scan completed!';
@@ -971,6 +1017,15 @@ class PixelProbeApp {
         return div.innerHTML;
     }
     
+    formatScanType(type) {
+        const types = {
+            'normal': 'Normal Scan',
+            'orphan': 'Orphan Cleanup',
+            'file_changes': 'File Changes Scan'
+        };
+        return types[type] || type;
+    }
+    
     handleVideoError(fileId) {
         console.error(`Video failed to load for file ${fileId}`);
         const video = document.getElementById(`video-player-${fileId}`);
@@ -998,14 +1053,33 @@ class PixelProbeApp {
         await this.stats.init();
         await this.table.init();
         
-        // Check for ongoing scan
+        // Check for ongoing operations
         try {
-            const status = await this.api.getScanStatus();
-            if (status.is_scanning) {
-                this.progress.startMonitoring();
+            // Check for ongoing scan
+            const scanStatus = await this.api.getScanStatus();
+            if (scanStatus.is_scanning) {
+                this.progress.operationType = 'scan';
+                this.progress.startMonitoring('scan');
+                return; // Only monitor one operation at a time
+            }
+            
+            // Check for ongoing cleanup
+            const cleanupStatus = await this.api.getCleanupStatus();
+            if (cleanupStatus.is_running) {
+                this.progress.operationType = 'cleanup';
+                this.progress.startMonitoring('cleanup');
+                return; // Only monitor one operation at a time
+            }
+            
+            // Check for ongoing file changes check
+            const fileChangesStatus = await this.api.getFileChangesStatus();
+            if (fileChangesStatus.is_running) {
+                this.progress.operationType = 'file-changes';
+                this.progress.startMonitoring('file-changes');
+                return; // Only monitor one operation at a time
             }
         } catch (error) {
-            console.error('Failed to check scan status on init:', error);
+            console.error('Failed to check operation status on init:', error);
         }
     }
 
@@ -1349,10 +1423,15 @@ class PixelProbeApp {
     async exportCSV() {
         try {
             // Show loading notification
-            const itemCount = this.table.selectedFiles.size > 0 ? 
-                `${this.table.selectedFiles.size} selected files` : 
-                'all files in current view';
-            this.showNotification(`Generating CSV export for ${itemCount}...`, 'info');
+            let itemDescription;
+            if (this.table.selectedFiles.size > 0) {
+                itemDescription = `${this.table.selectedFiles.size} selected files`;
+            } else {
+                const filterText = this.table.filter !== 'all' ? `${this.table.filter} files` : 'all files';
+                const searchText = this.table.searchQuery ? ` matching "${this.table.searchQuery}"` : '';
+                itemDescription = filterText + searchText;
+            }
+            this.showNotification(`Generating CSV export for ${itemDescription}...`, 'info');
             
             let requestBody = {};
             
@@ -1571,10 +1650,362 @@ class PixelProbeApp {
         };
     }
 
+    async cancelCurrentOperation() {
+        try {
+            // Determine which operation is currently running and cancel it
+            const operationType = this.progress.operationType;
+            
+            if (operationType === 'scan') {
+                const status = await this.api.getScanStatus();
+                if (status.is_scanning) {
+                    await this.api.cancelScan();
+                    this.showNotification('Scan cancellation requested', 'info');
+                }
+            } else if (operationType === 'cleanup') {
+                const status = await this.api.getCleanupStatus();
+                if (status.is_running) {
+                    await this.api.cancelCleanup();
+                    this.showNotification('Cleanup cancellation requested', 'info');
+                }
+            } else if (operationType === 'file-changes') {
+                const status = await this.api.getFileChangesStatus();
+                if (status.is_running) {
+                    await this.api.cancelFileChanges();
+                    this.showNotification('File changes check cancellation requested', 'info');
+                }
+            } else {
+                this.showNotification('No operation is currently running', 'warning');
+            }
+        } catch (error) {
+            console.error('Failed to cancel operation:', error);
+            this.showNotification('Failed to cancel operation', 'error');
+        }
+    }
+
+    // Schedule Management
+    async showSchedules() {
+        const modal = document.querySelector('#schedules-modal');
+        if (!modal) return;
+        
+        modal.style.display = 'block';
+        await this.loadSchedules();
+    }
+
+    async loadSchedules() {
+        try {
+            const response = await fetch('/api/schedules');
+            const data = await response.json();
+            
+            const listContainer = document.querySelector('#schedules-list');
+            if (!listContainer) return;
+            
+            if (data.schedules && data.schedules.length > 0) {
+                let html = '<div class="schedules-list">';
+                data.schedules.forEach(schedule => {
+                    const nextRun = schedule.next_run ? new Date(schedule.next_run).toLocaleString() : 'Not scheduled';
+                    const lastRun = schedule.last_run ? new Date(schedule.last_run).toLocaleString() : 'Never';
+                    
+                    html += `
+                        <div class="schedule-item">
+                            <div class="schedule-header">
+                                <h4>${this.escapeHtml(schedule.name)}</h4>
+                                <div class="schedule-actions">
+                                    <button class="btn btn-sm ${schedule.is_active ? 'btn-warning' : 'btn-success'}" 
+                                            onclick="app.toggleSchedule(${schedule.id}, ${!schedule.is_active})">
+                                        ${schedule.is_active ? 'Disable' : 'Enable'}
+                                    </button>
+                                    <button class="btn btn-sm btn-danger" onclick="app.deleteSchedule(${schedule.id})">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="schedule-info">
+                                <p><strong>Schedule:</strong> ${this.escapeHtml(schedule.cron_expression)}</p>
+                                <p><strong>Type:</strong> ${this.formatScanType(schedule.scan_type || 'normal')}</p>
+                                <p><strong>Next Run:</strong> ${nextRun}</p>
+                                <p><strong>Last Run:</strong> ${lastRun}</p>
+                                ${schedule.scan_paths ? `<p><strong>Paths:</strong> ${this.escapeHtml(JSON.parse(schedule.scan_paths).join(', '))}</p>` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+                listContainer.innerHTML = html;
+            } else {
+                listContainer.innerHTML = '<p class="text-muted">No schedules configured.</p>';
+            }
+        } catch (error) {
+            console.error('Failed to load schedules:', error);
+            this.showNotification('Failed to load schedules', 'error');
+        }
+    }
+
+    showAddSchedule() {
+        const modal = document.querySelector('#add-schedule-modal');
+        if (modal) {
+            modal.style.display = 'block';
+            
+            // Reset form
+            const form = document.querySelector('#add-schedule-form');
+            if (form) form.reset();
+        }
+    }
+
+    toggleScheduleInput() {
+        const scheduleType = document.querySelector('#schedule-type').value;
+        const cronInput = document.querySelector('#cron-input');
+        const intervalInput = document.querySelector('#interval-input');
+        
+        if (scheduleType === 'cron') {
+            cronInput.style.display = 'block';
+            intervalInput.style.display = 'none';
+        } else {
+            cronInput.style.display = 'none';
+            intervalInput.style.display = 'block';
+        }
+    }
+
+    async toggleSchedule(scheduleId, activate) {
+        try {
+            const response = await fetch(`/api/schedules/${scheduleId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ is_active: activate })
+            });
+            
+            if (response.ok) {
+                this.showNotification(`Schedule ${activate ? 'enabled' : 'disabled'}`, 'success');
+                await this.loadSchedules();
+            } else {
+                throw new Error('Failed to update schedule');
+            }
+        } catch (error) {
+            console.error('Failed to toggle schedule:', error);
+            this.showNotification('Failed to update schedule', 'error');
+        }
+    }
+
+    async deleteSchedule(scheduleId) {
+        if (!confirm('Are you sure you want to delete this schedule?')) return;
+        
+        try {
+            const response = await fetch(`/api/schedules/${scheduleId}`, {
+                method: 'DELETE'
+            });
+            
+            if (response.ok) {
+                this.showNotification('Schedule deleted', 'success');
+                await this.loadSchedules();
+            } else {
+                throw new Error('Failed to delete schedule');
+            }
+        } catch (error) {
+            console.error('Failed to delete schedule:', error);
+            this.showNotification('Failed to delete schedule', 'error');
+        }
+    }
+
+    // Exclusions Management
+    async showExclusions() {
+        const modal = document.querySelector('#exclusions-modal');
+        if (!modal) return;
+        
+        modal.style.display = 'block';
+        await this.loadExclusions();
+    }
+
+    async loadExclusions() {
+        try {
+            const response = await fetch('/api/exclusions');
+            const data = await response.json();
+            
+            // Update paths list
+            const pathsList = document.querySelector('#excluded-paths-list');
+            if (pathsList) {
+                if (data.excluded_paths && data.excluded_paths.length > 0) {
+                    pathsList.innerHTML = data.excluded_paths.map(path => `
+                        <div class="exclusion-item">
+                            <span>${this.escapeHtml(path)}</span>
+                            <button class="btn btn-sm btn-danger" onclick="app.removeExclusion('path', '${this.escapeHtml(path)}')">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    `).join('');
+                } else {
+                    pathsList.innerHTML = '<div class="empty-state">No excluded paths</div>';
+                }
+            }
+            
+            // Update extensions list
+            const extensionsList = document.querySelector('#excluded-extensions-list');
+            if (extensionsList) {
+                if (data.excluded_extensions && data.excluded_extensions.length > 0) {
+                    extensionsList.innerHTML = data.excluded_extensions.map(ext => `
+                        <div class="exclusion-item">
+                            <span>${this.escapeHtml(ext)}</span>
+                            <button class="btn btn-sm btn-danger" onclick="app.removeExclusion('extension', '${this.escapeHtml(ext)}')">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    `).join('');
+                } else {
+                    extensionsList.innerHTML = '<div class="empty-state">No excluded extensions</div>';
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load exclusions:', error);
+            this.showNotification('Failed to load exclusions', 'error');
+        }
+    }
+    
+    async addExclusion(type) {
+        try {
+            const inputId = type === 'path' ? 'new-excluded-path' : 'new-excluded-extension';
+            const input = document.querySelector(`#${inputId}`);
+            if (!input || !input.value.trim()) return;
+            
+            const value = input.value.trim();
+            const response = await fetch(`/api/exclusions/${type}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ item: value })
+            });
+            
+            if (response.ok) {
+                input.value = '';
+                await this.loadExclusions();
+                this.showNotification(`${type === 'path' ? 'Path' : 'Extension'} excluded successfully`, 'success');
+            } else {
+                throw new Error('Failed to add exclusion');
+            }
+        } catch (error) {
+            console.error('Failed to add exclusion:', error);
+            this.showNotification('Failed to add exclusion', 'error');
+        }
+    }
+    
+    async removeExclusion(type, value) {
+        try {
+            const response = await fetch(`/api/exclusions/${type}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ item: value })
+            });
+            
+            if (response.ok) {
+                await this.loadExclusions();
+                this.showNotification(`${type === 'path' ? 'Path' : 'Extension'} removed from exclusions`, 'success');
+            } else {
+                throw new Error('Failed to remove exclusion');
+            }
+        } catch (error) {
+            console.error('Failed to remove exclusion:', error);
+            this.showNotification('Failed to remove exclusion', 'error');
+        }
+    }
+
+    closeModal(modalId) {
+        const modal = document.querySelector(`#${modalId}`);
+        if (modal) {
+            modal.style.display = 'none';
+        }
+    }
+
 }
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new PixelProbeApp();
     window.app.init();
+    
+    // Setup modal close buttons
+    document.querySelectorAll('.modal-close').forEach(btn => {
+        btn.addEventListener('click', function() {
+            this.closest('.modal').style.display = 'none';
+        });
+    });
+    
+    // Close modal when clicking outside
+    document.querySelectorAll('.modal').forEach(modal => {
+        modal.addEventListener('click', function(e) {
+            if (e.target === this) {
+                this.style.display = 'none';
+            }
+        });
+    });
+    
+    // Setup add schedule form
+    const addScheduleForm = document.querySelector('#add-schedule-form');
+    if (addScheduleForm) {
+        addScheduleForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const scheduleType = document.querySelector('#schedule-type').value;
+            let cronExpression = '';
+            
+            if (scheduleType === 'cron') {
+                cronExpression = document.querySelector('#cron-expression').value;
+            } else {
+                const value = document.querySelector('#interval-value').value;
+                const unit = document.querySelector('#interval-unit').value;
+                cronExpression = `interval:${unit}:${value}`;
+            }
+            
+            const name = document.querySelector('#schedule-name').value;
+            const pathsText = document.querySelector('#schedule-paths').value;
+            const scanPaths = pathsText.trim() ? pathsText.split('\n').filter(p => p.trim()) : [];
+            const scanType = document.querySelector('#scan-type').value;
+            
+            try {
+                const response = await fetch('/api/schedules', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name,
+                        cron_expression: cronExpression,
+                        scan_paths: scanPaths,
+                        scan_type: scanType
+                    })
+                });
+                
+                if (response.ok) {
+                    app.showNotification('Schedule created successfully', 'success');
+                    app.closeModal('add-schedule-modal');
+                    await app.loadSchedules();
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to create schedule');
+                }
+            } catch (error) {
+                console.error('Failed to create schedule:', error);
+                app.showNotification(error.message || 'Failed to create schedule', 'error');
+            }
+        });
+    }
+    
+    // Setup exclusion input handlers
+    const pathInput = document.querySelector('#new-excluded-path');
+    const extensionInput = document.querySelector('#new-excluded-extension');
+    
+    if (pathInput) {
+        pathInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                app.addExclusion('path');
+            }
+        });
+    }
+    
+    if (extensionInput) {
+        extensionInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                app.addExclusion('extension');
+            }
+        });
+    }
 });
