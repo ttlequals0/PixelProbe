@@ -6,7 +6,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video and image files across your media libraries.
 
-**Version 2.0.51** improves file-changes scanning reliability and performance, ensuring all files are checked regardless of size.
+**Version 2.0.53** fixes file-changes scanning progress tracking with smooth per-file updates and proper async database writes.
 
 ## ✨ Features
 
@@ -149,8 +149,8 @@ Interactive exclusion management with modern UI:
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.44)
-- **`ttlequals0/pixelprobe:2.0.44`** - Scheduled scanning with scan types and enhanced exclusions
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.53)
+- **`ttlequals0/pixelprobe:2.0.53`** - Fixed file-changes progress tracking with async updates
 - **`ttlequals0/pixelprobe:2.0`** - Complete UI overhaul with modern responsive design
 - **`ttlequals0/pixelprobe:1.26`** - UI improvements and ImageMagick UTF-8 fixes
 - **`ttlequals0/pixelprobe:1.25`** - Database resilience for long-running scans
@@ -161,7 +161,7 @@ You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.44  # or :latest for newest
+    image: ttlequals0/pixelprobe:2.0.53  # or :latest for newest
 ```
 
 ### Development Setup
@@ -241,7 +241,7 @@ For Docker deployment, you can also configure paths in `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.44  # Specify version
+    image: ttlequals0/pixelprobe:2.0.53  # Specify version
     environment:
       - SCAN_PATHS=/media
       - DATABASE_URL=sqlite:///media_checker.db

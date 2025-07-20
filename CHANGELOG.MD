@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.53] - 2025-01-20
+
+### Fixed
+- **File Changes Scan**: Fixed progress tracking to update per-file instead of per-batch for smooth progress bar updates
+- **File Changes Scan**: Replaced direct database commits with write queue pattern for consistent async updates
+- **File Changes Scan**: Progress bar now shows real-time file processing status like the normal scan
+- **File Changes Scan**: Fixed missing start_time initialization that prevented progress calculations from working
+
 ## [2.0.52] - 2025-01-19
 
 ### Fixed

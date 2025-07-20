@@ -458,6 +458,24 @@ def start_db_write_thread():
                                 db.session.commit()
                                 logger.info(f"Marked scan {scan_id} as complete")
                         
+                        elif task_type == 'update_file_changes_progress':
+                            # Update file changes progress
+                            check_id = write_task.get('check_id')
+                            updates = {
+                                'files_processed': write_task.get('files_processed'),
+                                'phase_current': write_task.get('phase_current'),
+                                'changes_found': write_task.get('changes_found'),
+                                'progress_message': write_task.get('progress_message'),
+                                'current_file': write_task.get('current_file')
+                            }
+                            
+                            file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                            if file_changes_record:
+                                for key, value in updates.items():
+                                    if value is not None and hasattr(file_changes_record, key):
+                                        setattr(file_changes_record, key, value)
+                                db.session.commit()
+                        
                         # Mark task as done
                         db_write_queue.task_done()
                         
@@ -2318,9 +2336,25 @@ def check_file_changes_async(check_id):
             file_changes_record.progress_message = 'Phase 1 of 3: Starting file changes check...'
             db.session.commit()
             
+            # Initialize file_changes_state
+            with file_changes_state_lock:
+                file_changes_state['is_running'] = True
+                file_changes_state['start_time'] = time.time()
+                file_changes_state['files_processed'] = 0
+                file_changes_state['total_files'] = 0
+                file_changes_state['changes_found'] = 0
+                file_changes_state['phase'] = 'starting'
+                file_changes_state['phase_number'] = 1
+                file_changes_state['progress_message'] = 'Phase 1 of 3: Starting file changes check...'
+                file_changes_state['cancel_requested'] = False
+            
             # Get total count of files
             total_files = ScanResult.query.count()
             logger.info(f"File change check starting - found {total_files} total files in database")
+            
+            # Update total files in state
+            with file_changes_state_lock:
+                file_changes_state['total_files'] = total_files
             
             # Phase 2: Checking hashes
             file_changes_record.phase = 'checking_hashes'
@@ -2343,12 +2377,7 @@ def check_file_changes_async(check_id):
                 stored_hash = file_data['stored_hash']
                 stored_modified = file_data['stored_modified']
                 
-                # Update current file when starting to process
-                with app.app_context():
-                    file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
-                    if file_changes_record:
-                        file_changes_record.current_file = file_path
-                        db.session.commit()
+                # Current file will be updated via the write queue
                 
                 try:
                     # Check if file exists
@@ -2460,10 +2489,11 @@ def check_file_changes_async(check_id):
                         except Exception as e:
                             logger.error(f"Error processing file {file_path}: {str(e)}")
                         
-                        # Update progress
+                        # Update progress for each file processed
                         files_completed_in_batch += 1
+                        files_done = offset + files_completed_in_batch
+                        
                         with file_changes_state_lock:
-                            files_done = offset + files_completed_in_batch
                             file_changes_state['files_processed'] = files_done
                             file_changes_state['phase_current'] = files_done
                             
@@ -2482,39 +2512,25 @@ def check_file_changes_async(check_id):
                                 else:
                                     eta_str = f"{eta_minutes}m"
                                 
-                                file_changes_state['progress_message'] = f'Batch {batch_num + 1}/{total_batches}: Checking files... ETA: {eta_str}'
+                                file_changes_state['progress_message'] = f'Phase 2 of 3: Checking file {files_done}/{total_files} - ETA: {eta_str}'
                                 file_changes_state['progress_percentage'] = (files_done / total_files) * 100 if total_files > 0 else 0
                         
-                        # Update database progress more frequently (every 5 files or at end of batch)
-                        # This ensures progress is visible even if some files timeout
-                        if files_completed_in_batch % 5 == 0 or files_completed_in_batch == len(batch_results):
-                            with app.app_context():
-                                file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
-                                if file_changes_record:
-                                    file_changes_record.files_processed = files_done
-                                    file_changes_record.phase_current = files_done
-                                    file_changes_record.changes_found = len(changed_files)
-                                    file_changes_record.progress_message = file_changes_state['progress_message']
-                                    db.session.commit()
-                                    logger.info(f"Updated database: files_processed={files_done}, batch={batch_num + 1}, files_in_batch={files_completed_in_batch}")
+                        # Use write queue to update database asynchronously
+                        db_write_queue.put({
+                            'type': 'update_file_changes_progress',
+                            'check_id': check_id,
+                            'files_processed': files_done,
+                            'phase_current': files_done,
+                            'changes_found': len(changed_files) + len(batch_changed_files),
+                            'progress_message': file_changes_state['progress_message'],
+                            'current_file': file_path
+                        })
                     
                     # Add batch results to overall results
                     changed_files.extend(batch_changed_files)
                     
                     with file_changes_state_lock:
                         file_changes_state['changes_found'] = len(changed_files)
-                    
-                    # Force database update at end of each batch to ensure progress is saved
-                    with app.app_context():
-                        file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
-                        if file_changes_record:
-                            files_done = offset + files_completed_in_batch
-                            file_changes_record.files_processed = files_done
-                            file_changes_record.phase_current = files_done
-                            file_changes_record.changes_found = len(changed_files)
-                            file_changes_record.progress_message = file_changes_state.get('progress_message', '')
-                            db.session.commit()
-                            logger.info(f"Batch {batch_num + 1} complete - Updated database: files_processed={files_done}")
                     
                     # Log batch completion
                     batch_time = time.time() - file_changes_state['batch_start_time']
