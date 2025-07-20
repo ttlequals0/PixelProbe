@@ -5,6 +5,9 @@ import uuid
 
 db = SQLAlchemy()
 
+# Import shared utilities after models are loaded
+# This will be imported in app.py to avoid circular imports
+
 class ScanResult(db.Model):
     __tablename__ = 'scan_results'
     
@@ -137,23 +140,9 @@ class ScanState(db.Model):
     error_message = db.Column(db.String(500), nullable=True)
     
     def to_dict(self):
-        return {
-            'id': self.id,
-            'scan_id': self.scan_id,
-            'is_active': self.is_active,
-            'phase': self.phase,
-            'phase_number': self.phase_number,
-            'phase_current': self.phase_current,
-            'phase_total': self.phase_total,
-            'files_processed': self.files_processed,
-            'estimated_total': self.estimated_total,
-            'discovery_count': self.discovery_count,
-            'start_time': self.start_time.isoformat() if self.start_time else None,
-            'end_time': self.end_time.isoformat() if self.end_time else None,
-            'current_file': self.current_file,
-            'progress_message': self.progress_message,
-            'error_message': self.error_message
-        }
+        # Import here to avoid circular imports
+        from utils import create_state_dict
+        return create_state_dict(self, extra_fields=['estimated_total', 'discovery_count'])
 
 class CleanupState(db.Model):
     __tablename__ = 'cleanup_state'
@@ -175,23 +164,9 @@ class CleanupState(db.Model):
     error_message = db.Column(db.String(500), nullable=True)
     
     def to_dict(self):
-        return {
-            'id': self.id,
-            'cleanup_id': self.cleanup_id,
-            'is_active': self.is_active,
-            'phase': self.phase,
-            'phase_number': self.phase_number,
-            'phase_current': self.phase_current,
-            'phase_total': self.phase_total,
-            'files_processed': self.files_processed,
-            'total_files': self.total_files,
-            'orphaned_found': self.orphaned_found,
-            'start_time': self.start_time.isoformat() if self.start_time else None,
-            'end_time': self.end_time.isoformat() if self.end_time else None,
-            'current_file': self.current_file,
-            'progress_message': self.progress_message,
-            'error_message': self.error_message
-        }
+        # Import here to avoid circular imports
+        from utils import create_state_dict
+        return create_state_dict(self, extra_fields=['orphaned_found'])
 
 class FileChangesState(db.Model):
     __tablename__ = 'file_changes_state'
@@ -215,22 +190,9 @@ class FileChangesState(db.Model):
     changed_files = db.Column(db.Text, nullable=True)  # JSON list of changed files
     
     def to_dict(self):
-        return {
-            'id': self.id,
-            'check_id': self.check_id,
-            'is_active': self.is_active,
-            'phase': self.phase,
-            'phase_number': self.phase_number,
-            'phase_current': self.phase_current,
-            'phase_total': self.phase_total,
-            'files_processed': self.files_processed,
-            'total_files': self.total_files,
-            'changes_found': self.changes_found,
-            'corrupted_found': self.corrupted_found,
-            'start_time': self.start_time.isoformat() if self.start_time else None,
-            'end_time': self.end_time.isoformat() if self.end_time else None,
-            'current_file': self.current_file,
-            'progress_message': self.progress_message,
-            'error_message': self.error_message,
-            'changed_files': json.loads(self.changed_files) if self.changed_files else []
-        }
+        # Import here to avoid circular imports
+        from utils import create_state_dict
+        result = create_state_dict(self, extra_fields=['changes_found', 'corrupted_found'])
+        # Handle special case for changed_files JSON field
+        result['changed_files'] = json.loads(self.changed_files) if self.changed_files else []
+        return result

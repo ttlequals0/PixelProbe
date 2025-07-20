@@ -54,10 +54,13 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production
 # Use environment variable or default to local database
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# Configure SQLAlchemy for better SQLite handling
+# Configure SQLAlchemy for better SQLite handling with optimized settings
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_pre_ping': True,  # Test connections before using them
     'pool_recycle': 300,  # Recycle connections after 5 minutes
+    'pool_size': 10,  # Increase pool size for better concurrency
+    'max_overflow': 20,  # Allow more connections when needed
+    'pool_timeout': 30,  # Wait up to 30 seconds for a connection
     'connect_args': {
         'timeout': 30,  # Increased timeout to 30 seconds for long operations
         'check_same_thread': False,
@@ -360,130 +363,157 @@ def start_db_write_thread():
         return
     
     def db_write_worker():
-        """Worker thread that processes database writes from the queue"""
-        logger.info("Database write queue thread started")
+        """Optimized worker thread that processes database writes from the queue in batches"""
+        logger.info("Database write queue thread started with batch processing")
+        
+        batch_timeout = 0.1  # 100ms - collect items for batching
+        max_batch_size = 100  # Process up to 100 items at once for better efficiency
         
         while not db_write_stop_event.is_set():
             try:
-                # Wait for writes with timeout
+                # Collect multiple tasks from the queue
+                batch_tasks = []
+                
+                # Get first task with longer timeout
                 try:
-                    write_task = db_write_queue.get(timeout=1.0)
+                    first_task = db_write_queue.get(timeout=1.0)
+                    if first_task is None:  # Poison pill
+                        break
+                    batch_tasks.append(first_task)
                 except queue.Empty:
                     continue
                 
-                if write_task is None:  # Poison pill to stop thread
-                    break
+                # Try to collect more tasks quickly
+                deadline = time.time() + batch_timeout
+                while len(batch_tasks) < max_batch_size and time.time() < deadline:
+                    try:
+                        task = db_write_queue.get_nowait()
+                        if task is None:  # Poison pill
+                            db_write_stop_event.set()
+                            break
+                        batch_tasks.append(task)
+                    except queue.Empty:
+                        break
                 
-                task_type = write_task.get('type')
-                logger.debug(f"Processing database write task: {task_type}")
-                
-                try:
-                    with app.app_context():
-                        if task_type == 'update_scan_state':
-                            # Update scan state in database
-                            scan_id = write_task.get('scan_id')
-                            updates = write_task.get('updates', {})
-                            
-                            scan_record = ScanState.query.filter_by(scan_id=scan_id).first()
-                            if scan_record:
-                                for key, value in updates.items():
-                                    if hasattr(scan_record, key):
-                                        setattr(scan_record, key, value)
-                                db.session.commit()
-                                logger.debug(f"Updated scan state in DB: {updates.keys()}")
-                        
-                        elif task_type == 'update_scan_result':
-                            # Update scan result
-                            file_path = write_task.get('file_path')
-                            updates = write_task.get('updates', {})
-                            
-                            scan_result = ScanResult.query.filter_by(file_path=file_path).first()
-                            if scan_result:
-                                for key, value in updates.items():
-                                    if hasattr(scan_result, key):
-                                        setattr(scan_result, key, value)
-                                db.session.commit()
-                                logger.debug(f"Updated scan result for {file_path}")
-                        
-                        elif task_type == 'batch_update_scan_results':
-                            # Batch update scan results
-                            results = write_task.get('results', [])
-                            updated_count = 0
-                            created_count = 0
-                            
-                            for result in results:
-                                file_path = result.get('file_path')
-                                scan_result = ScanResult.query.filter_by(file_path=file_path).first()
-                                
-                                if scan_result:
-                                    # Update existing record
-                                    for key, value in result.items():
-                                        if hasattr(scan_result, key) and key != 'file_path':
-                                            setattr(scan_result, key, value)
-                                    updated_count += 1
-                                else:
-                                    # Create new record
-                                    scan_result = ScanResult(**result)
-                                    db.session.add(scan_result)
-                                    created_count += 1
-                            
-                            db.session.commit()
-                            logger.info(f"Batch {task_type} complete - Updated database: {len(results)} files (updated: {updated_count}, created: {created_count})")
-                            
-                            # Log first few file paths for verification
-                            if len(results) <= 5:
-                                for r in results:
-                                    logger.debug(f"  - {r.get('file_path')}")
-                            else:
-                                for r in results[:3]:
-                                    logger.debug(f"  - {r.get('file_path')}")
-                                logger.debug(f"  ... and {len(results) - 3} more files")
-                        
-                        elif task_type == 'create_scan_state':
-                            # Create new scan state
-                            scan_state_data = write_task.get('data', {})
-                            scan_state_record = ScanState(**scan_state_data)
-                            db.session.add(scan_state_record)
-                            db.session.commit()
-                            logger.info(f"Created scan state record: {scan_state_record.scan_id}")
-                        
-                        elif task_type == 'complete_scan' or task_type == 'update_scan_state_complete':
-                            # Mark scan as complete
-                            scan_id = write_task.get('scan_id')
-                            scan_record = ScanState.query.filter_by(scan_id=scan_id).first()
-                            if scan_record:
-                                scan_record.is_active = False
-                                scan_record.phase = 'completed'
-                                scan_record.end_time = datetime.now(timezone.utc)
-                                db.session.commit()
-                                logger.info(f"Marked scan {scan_id} as complete")
-                        
-                        elif task_type == 'update_file_changes_progress':
-                            # Update file changes progress
-                            check_id = write_task.get('check_id')
-                            updates = {
-                                'files_processed': write_task.get('files_processed'),
-                                'phase_current': write_task.get('phase_current'),
-                                'changes_found': write_task.get('changes_found'),
-                                'progress_message': write_task.get('progress_message'),
-                                'current_file': write_task.get('current_file')
-                            }
-                            
-                            file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
-                            if file_changes_record:
-                                for key, value in updates.items():
-                                    if value is not None and hasattr(file_changes_record, key):
-                                        setattr(file_changes_record, key, value)
-                                db.session.commit()
-                        
-                        # Mark task as done
-                        db_write_queue.task_done()
-                        
-                except Exception as e:
-                    logger.error(f"Error processing database write task: {str(e)}")
-                    db.session.rollback()
-                    db_write_queue.task_done()
+                # Process all collected tasks in a single database transaction
+                if batch_tasks:
+                    logger.debug(f"Processing batch of {len(batch_tasks)} database write tasks")
                     
+                    try:
+                        with app.app_context():
+                            # Group similar tasks for more efficient processing
+                            scan_results_batch = []
+                            other_tasks = []
+                            
+                            # Separate batch_update_scan_results for efficient processing
+                            for task in batch_tasks:
+                                if task.get('type') == 'batch_update_scan_results':
+                                    scan_results_batch.extend(task.get('results', []))
+                                else:
+                                    other_tasks.append(task)
+                            
+                            # Process scan results in one go if we have any
+                            if scan_results_batch:
+                                updated_count = 0
+                                created_count = 0
+                                
+                                # Get all file paths for batch query
+                                file_paths = [r.get('file_path') for r in scan_results_batch]
+                                existing_results = {r.file_path: r for r in 
+                                                  ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()}
+                                
+                                for result in scan_results_batch:
+                                    file_path = result.get('file_path')
+                                    if file_path in existing_results:
+                                        # Update existing record
+                                        scan_result = existing_results[file_path]
+                                        for key, value in result.items():
+                                            if hasattr(scan_result, key) and key != 'file_path':
+                                                setattr(scan_result, key, value)
+                                        updated_count += 1
+                                    else:
+                                        # Create new record
+                                        scan_result = ScanResult(**result)
+                                        db.session.add(scan_result)
+                                        created_count += 1
+                                
+                                logger.info(f"Batch scan results update: {len(scan_results_batch)} files (updated: {updated_count}, created: {created_count})")
+                            
+                            # Process other tasks
+                            for write_task in other_tasks:
+                                task_type = write_task.get('type')
+                                
+                                if task_type == 'update_scan_state':
+                                    # Update scan state in database
+                                    scan_id = write_task.get('scan_id')
+                                    updates = write_task.get('updates', {})
+                                    
+                                    scan_record = ScanState.query.filter_by(scan_id=scan_id).first()
+                                    if scan_record:
+                                        for key, value in updates.items():
+                                            if hasattr(scan_record, key):
+                                                setattr(scan_record, key, value)
+                                        logger.debug(f"Updated scan state in DB: {updates.keys()}")
+                                
+                                elif task_type == 'update_scan_result':
+                                    # Update scan result
+                                    file_path = write_task.get('file_path')
+                                    updates = write_task.get('updates', {})
+                                    
+                                    scan_result = ScanResult.query.filter_by(file_path=file_path).first()
+                                    if scan_result:
+                                        for key, value in updates.items():
+                                            if hasattr(scan_result, key):
+                                                setattr(scan_result, key, value)
+                                        logger.debug(f"Updated scan result for {file_path}")
+                                
+                                elif task_type == 'create_scan_state':
+                                    # Create new scan state
+                                    scan_state_data = write_task.get('data', {})
+                                    scan_state_record = ScanState(**scan_state_data)
+                                    db.session.add(scan_state_record)
+                                    logger.info(f"Created scan state record: {scan_state_data.get('scan_id')}")
+                                
+                                elif task_type == 'complete_scan' or task_type == 'update_scan_state_complete':
+                                    # Mark scan as complete
+                                    scan_id = write_task.get('scan_id')
+                                    scan_record = ScanState.query.filter_by(scan_id=scan_id).first()
+                                    if scan_record:
+                                        scan_record.is_active = False
+                                        scan_record.phase = 'completed'
+                                        scan_record.end_time = datetime.now(timezone.utc)
+                                        logger.info(f"Marked scan {scan_id} as complete")
+                                
+                                elif task_type == 'update_file_changes_progress':
+                                    # Update file changes progress
+                                    check_id = write_task.get('check_id')
+                                    file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                                    if file_changes_record:
+                                        updates = {
+                                            'files_processed': write_task.get('files_processed'),
+                                            'phase_current': write_task.get('phase_current'),
+                                            'changes_found': write_task.get('changes_found'),
+                                            'progress_message': write_task.get('progress_message'),
+                                            'current_file': write_task.get('current_file')
+                                        }
+                                        for key, value in updates.items():
+                                            if value is not None and hasattr(file_changes_record, key):
+                                                setattr(file_changes_record, key, value)
+                            
+                            # Commit all changes at once
+                            db.session.commit()
+                            
+                            # Mark all tasks as done
+                            for _ in batch_tasks:
+                                db_write_queue.task_done()
+                                
+                    except Exception as e:
+                        logger.error(f"Error processing database write batch: {str(e)}")
+                        db.session.rollback()
+                        # Still mark tasks as done to prevent queue blocking
+                        for _ in batch_tasks:
+                            db_write_queue.task_done()
+                            
             except Exception as e:
                 logger.error(f"Error in database write thread: {str(e)}")
         
@@ -950,9 +980,11 @@ def scan_all_files():
     def run_scan():
         with app.app_context():
             try:
-                logger.info(f"=== FULL SCAN STARTED ===")
-                logger.info(f"Scan paths: {scan_paths}")
-                logger.info(f"Max files limit: {max_files_to_scan}")
+                from utils import log_operation_status
+                log_operation_status('full scan', 'start', {
+                    'Scan paths': scan_paths,
+                    'Max files limit': max_files_to_scan
+                })
                 
                 # Update progress for path validation
                 update_scan_state(
@@ -1272,11 +1304,13 @@ def scan_all_files():
                     logger.warning(f"SCAN INCOMPLETE: {remaining_pending} files still pending after processing {files_processed} files")
                     logger.warning(f"This may indicate a pagination issue. Consider running scan again.")
                 
-                logger.info(f"=== FULL SCAN COMPLETED ===")
-                logger.info(f"Files processed: {files_processed}")
-                logger.info(f"Files scanned: {files_scanned}")
-                logger.info(f"Corrupted files found: {corrupted_found}")
-                logger.info(f"Files still pending: {remaining_pending}")
+                from utils import log_operation_status
+                log_operation_status('full scan', 'complete', {
+                    'Files processed': files_processed,
+                    'Files scanned': files_scanned,
+                    'Corrupted files found': corrupted_found,
+                    'Files still pending': remaining_pending
+                })
                 
             except Exception as e:
                 logger.error(f"CRITICAL ERROR in scan thread: {str(e)}")
@@ -1983,19 +2017,19 @@ def get_cleanup_status():
                 response['duration'] = (datetime.now(timezone.utc) - start_time_utc).total_seconds()
                 response['start_time'] = start_time_utc.timestamp()
             
-            # Calculate progress percentage based on current phase
-            # For cleanup, the checking phase is the majority of the work (checking all files)
-            # The deleting phase is usually much smaller (only orphaned files)
-            if cleanup_record.phase == 'checking' and cleanup_record.total_files > 0:
-                # Checking phase is weighted as 90% of total progress
-                response['progress_percentage'] = (cleanup_record.files_processed / cleanup_record.total_files) * 90
-            elif cleanup_record.phase == 'deleting' and cleanup_record.phase_total > 0:
-                # Deleting phase is the remaining 10%
-                response['progress_percentage'] = 90 + (cleanup_record.phase_current / cleanup_record.phase_total) * 10
-            elif cleanup_record.phase == 'complete':
+            # Calculate progress percentage using unified ProgressTracker
+            from utils import ProgressTracker
+            progress_tracker = ProgressTracker('cleanup')
+            
+            if cleanup_record.phase == 'complete':
                 response['progress_percentage'] = 100
             else:
-                response['progress_percentage'] = 0
+                response['progress_percentage'] = progress_tracker.calculate_progress_percentage(
+                    cleanup_record.phase_number,
+                    cleanup_record.phase_current,
+                    cleanup_record.phase_total,
+                    total_phases=2
+                )
         
         return jsonify(response)
         
@@ -2057,19 +2091,19 @@ def get_file_changes_status():
                 response['duration'] = (datetime.now(timezone.utc) - start_time_utc).total_seconds()
                 response['start_time'] = start_time_utc.timestamp()
             
-            # Calculate progress percentage based on current phase
-            if file_changes_record.phase == 'starting':
-                response['progress_percentage'] = 5
-            elif file_changes_record.phase == 'checking_hashes' and file_changes_record.total_files > 0:
-                # Phase 2 is 80% of total progress
-                response['progress_percentage'] = 5 + (file_changes_record.files_processed / file_changes_record.total_files) * 80
-            elif file_changes_record.phase == 'verifying_changes' and file_changes_record.phase_total > 0:
-                # Phase 3 is the remaining 15%
-                response['progress_percentage'] = 85 + (file_changes_record.phase_current / file_changes_record.phase_total) * 15
-            elif file_changes_record.phase == 'complete':
+            # Calculate progress percentage using unified ProgressTracker
+            from utils import ProgressTracker
+            progress_tracker = ProgressTracker('file_changes')
+            
+            if file_changes_record.phase == 'complete':
                 response['progress_percentage'] = 100
             else:
-                response['progress_percentage'] = 0
+                response['progress_percentage'] = progress_tracker.calculate_progress_percentage(
+                    file_changes_record.phase_number,
+                    file_changes_record.phase_current,
+                    file_changes_record.phase_total,
+                    total_phases=3
+                )
             
             # Include results if check is complete
             if file_changes_record.phase == 'complete' and file_changes_record.changed_files:

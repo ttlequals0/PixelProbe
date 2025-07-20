@@ -37,9 +37,76 @@ def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
 
 class PixelProbe:
     def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None):
-        self.supported_video_formats = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v']
-        self.supported_image_formats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
-        self.supported_formats = self.supported_video_formats + self.supported_image_formats
+        # Video formats - including HEVC/H.265 and professional formats
+        self.supported_video_formats = [
+            '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
+            '.hevc', '.h265',  # HEVC/H.265 formats
+            '.mxf', '.prores',  # ProRes format
+            '.dnxhd', '.dnxhr',  # DNxHD/DNxHR formats
+            '.mts', '.m2ts', '.avchd',  # AVCHD formats
+            '.mpg', '.mpeg', '.vob',  # MPEG formats
+            '.3gp', '.3g2',  # Mobile formats
+            '.f4v', '.f4p',  # Flash formats
+            '.ogv', '.ogg',  # Ogg video
+            '.rm', '.rmvb',  # RealMedia
+            '.asf', '.amv',  # Other formats
+            '.m2v', '.svi', '.mpe', '.mpv', '.m4p'
+        ]
+        
+        # Image formats - including HEIC/HEIF and RAW formats
+        self.supported_image_formats = [
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
+            '.heic', '.heif',  # Apple HEIC/HEIF formats
+            '.cr2', '.cr3',  # Canon RAW
+            '.nef', '.nrw',  # Nikon RAW
+            '.arw', '.srf', '.sr2',  # Sony RAW
+            '.dng',  # Adobe Digital Negative
+            '.orf',  # Olympus RAW
+            '.rw2',  # Panasonic RAW
+            '.pef', '.ptx',  # Pentax RAW
+            '.raf',  # Fujifilm RAW
+            '.raw',  # Generic RAW
+            '.x3f',  # Sigma RAW
+            '.dcr', '.kdc',  # Kodak RAW
+            '.mos',  # Leaf RAW
+            '.psd',  # Photoshop
+            '.ico',  # Icon files
+            '.svg',  # Scalable Vector Graphics
+            '.exr',  # OpenEXR
+            '.pbm', '.pgm', '.ppm', '.pnm',  # Netpbm formats
+            '.hdr', '.pic',  # Radiance HDR
+            '.fts', '.fits',  # FITS (astronomy)
+        ]
+        
+        # Audio formats - NEW: Complete audio support
+        self.supported_audio_formats = [
+            '.mp3',  # MPEG Audio Layer 3
+            '.flac',  # Free Lossless Audio Codec
+            '.wav', '.wave',  # Waveform Audio
+            '.aac', '.m4a',  # Advanced Audio Coding
+            '.ogg', '.oga', '.opus',  # Ogg Vorbis/Opus
+            '.wma',  # Windows Media Audio
+            '.aiff', '.aif', '.aifc',  # Audio Interchange File Format
+            '.ape',  # Monkey's Audio
+            '.wv',  # WavPack
+            '.tta',  # True Audio
+            '.m4b',  # Audiobook format
+            '.mka',  # Matroska Audio
+            '.dsf', '.dff',  # DSD formats
+            '.au', '.snd',  # Sun/NeXT audio
+            '.voc',  # Creative Voice
+            '.amr',  # Adaptive Multi-Rate
+            '.ac3',  # Dolby Digital
+            '.dts',  # DTS audio
+            '.ra', '.ram',  # RealAudio
+            '.mid', '.midi',  # MIDI (if needed)
+            '.caf',  # Core Audio Format
+            '.gsm',  # GSM audio
+        ]
+        
+        self.supported_formats = (self.supported_video_formats + 
+                                self.supported_image_formats + 
+                                self.supported_audio_formats)
         self.max_workers = max_workers or min(4, os.cpu_count() or 1)
         self.scan_lock = threading.Lock()
         self.current_scan_file = None
@@ -201,22 +268,43 @@ class PixelProbe:
         return results
     
     def _get_files_sorted_by_age(self, directory):
+        """Optimized file discovery using os.scandir for better performance"""
         files = []
-        for root, dirs, filenames in os.walk(directory):
-            # Skip excluded directories
-            dirs[:] = [d for d in dirs if not any(os.path.join(root, d).startswith(exc) for exc in self.excluded_paths)]
-            
-            # Skip if current directory is excluded
-            if any(root.startswith(exc) for exc in self.excluded_paths):
-                continue
-                
-            for filename in filenames:
-                file_path = os.path.join(root, filename)
-                if os.path.isfile(file_path):
-                    files.append(file_path)
         
-        files.sort(key=lambda x: os.path.getctime(x))
-        return files
+        # Use os.scandir for faster directory traversal
+        def scan_directory(path):
+            try:
+                with os.scandir(path) as entries:
+                    for entry in entries:
+                        full_path = entry.path
+                        
+                        if entry.is_dir(follow_symlinks=False):
+                            # Skip excluded directories
+                            if not any(full_path.startswith(exc) for exc in self.excluded_paths):
+                                # Recursively scan subdirectory
+                                scan_directory(full_path)
+                        elif entry.is_file(follow_symlinks=False):
+                            # Check if file extension is supported
+                            extension = os.path.splitext(entry.name)[1].lower()
+                            if extension in self.supported_formats and extension not in self.excluded_extensions:
+                                try:
+                                    # Use DirEntry.stat() for better performance
+                                    stat = entry.stat(follow_symlinks=False)
+                                    files.append((full_path, stat.st_ctime))
+                                except OSError:
+                                    # If stat fails, skip this file
+                                    continue
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Cannot access directory {path}: {e}")
+        
+        # Start scanning from root directory
+        scan_directory(directory)
+        
+        # Sort by creation time (already have the ctime from stat)
+        files.sort(key=lambda x: x[1])
+        
+        # Return just the file paths
+        return [f[0] for f in files]
     
     def _is_supported_file(self, file_path):
         extension = Path(file_path).suffix.lower()
@@ -259,15 +347,29 @@ class PixelProbe:
             }
     
     def calculate_file_hash(self, file_path):
-        """Calculate SHA-256 hash of a file"""
+        """Calculate SHA-256 hash of a file with optimized chunk size"""
         try:
             logger.info(f"Calculating hash for: {file_path}")
             hash_sha256 = hashlib.sha256()
             start_time = time.time()
             bytes_processed = 0
             
+            # Get file size to determine optimal chunk size
+            file_size = os.path.getsize(file_path)
+            
+            # Use larger chunks for better performance (1MB instead of 4KB)
+            # This reduces the number of read operations significantly
+            chunk_size = 1024 * 1024  # 1MB chunks
+            
+            # For very large files (>1GB), use even larger chunks
+            if file_size > 1024 * 1024 * 1024:
+                chunk_size = 4 * 1024 * 1024  # 4MB chunks
+            
             with open(file_path, "rb") as f:
-                for chunk in iter(lambda: f.read(4096), b""):
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
                     hash_sha256.update(chunk)
                     bytes_processed += len(chunk)
                     
@@ -275,12 +377,14 @@ class PixelProbe:
                     if bytes_processed % (100 * 1024 * 1024) == 0:
                         elapsed = time.time() - start_time
                         mb_processed = bytes_processed / (1024 * 1024)
-                        logger.info(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s")
+                        mb_per_sec = mb_processed / elapsed if elapsed > 0 else 0
+                        logger.info(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s ({mb_per_sec:.1f}MB/s)")
             
             total_time = time.time() - start_time
             if total_time > 10:  # Log completion time for files that take more than 10 seconds
                 mb_size = bytes_processed / (1024 * 1024)
-                logger.info(f"Hash complete for {file_path}: {mb_size:.1f}MB in {total_time:.1f}s")
+                mb_per_sec = mb_size / total_time if total_time > 0 else 0
+                logger.info(f"Hash complete for {file_path}: {mb_size:.1f}MB in {total_time:.1f}s ({mb_per_sec:.1f}MB/s)")
             
             return hash_sha256.hexdigest()
         except Exception as e:
@@ -489,6 +593,13 @@ class PixelProbe:
             elif extension in self.supported_video_formats:
                 logger.info(f"Checking video corruption for: {file_path}")
                 is_corrupted, details, tool, output, warnings = self._check_video_corruption(file_path, deep_scan)
+                corruption_details.extend(details)
+                scan_tool = tool
+                scan_output.extend(output)
+                warning_details = warnings
+            elif extension in self.supported_audio_formats:
+                logger.info(f"Checking audio corruption for: {file_path}")
+                is_corrupted, details, tool, output, warnings = self._check_audio_corruption(file_path, deep_scan)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
@@ -916,6 +1027,175 @@ class PixelProbe:
                 scan_output.extend(enhanced_output)
         
         # Return warning details as well
+        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+    
+    def _check_audio_corruption(self, file_path, deep_scan=False):
+        """Check audio files for corruption using FFmpeg and format-specific tools"""
+        corruption_details = []
+        is_corrupted = False
+        scan_tool = "ffmpeg"
+        scan_output = []
+        warning_details = []
+        
+        # Step 1: Basic FFprobe analysis
+        logger.info(f"Running FFprobe on audio file: {file_path}")
+        try:
+            probe = ffmpeg.probe(file_path)
+            scan_output.append("FFprobe: PASSED")
+            
+            # Check for audio streams
+            if 'streams' not in probe or len(probe['streams']) == 0:
+                corruption_details.append("No audio streams found")
+                is_corrupted = True
+                scan_output.append("FFmpeg probe: No streams found")
+                logger.warning(f"No streams found in {file_path}")
+                return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+            
+            audio_stream = next((s for s in probe['streams'] if s['codec_type'] == 'audio'), None)
+            if not audio_stream:
+                corruption_details.append("No audio stream found")
+                is_corrupted = True
+                scan_output.append("FFmpeg probe: No audio stream")
+                logger.warning(f"No audio stream found in {file_path}")
+                return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+                
+            # Check audio stream properties
+            codec_name = audio_stream.get('codec_name', 'unknown')
+            sample_rate = audio_stream.get('sample_rate', 'unknown')
+            channels = audio_stream.get('channels', 'unknown')
+            bit_rate = audio_stream.get('bit_rate', 'unknown')
+            duration = audio_stream.get('duration', 'unknown')
+            
+            logger.info(f"Audio details - Codec: {codec_name}, Sample rate: {sample_rate}, Channels: {channels}, Bitrate: {bit_rate}")
+            scan_output.append(f"Audio stream: {codec_name}, {sample_rate}Hz, {channels}ch")
+            
+        except ffmpeg.Error as e:
+            stderr = e.stderr.decode('utf-8') if e.stderr else ''
+            if 'Invalid data found when processing input' in stderr:
+                corruption_details.append("Invalid data found in audio file")
+                is_corrupted = True
+                scan_tool = "ffmpeg"
+            elif 'moov atom not found' in stderr:
+                corruption_details.append("Missing moov atom (audio metadata)")
+                is_corrupted = True
+                scan_tool = "ffmpeg"
+            else:
+                corruption_details.append(f"FFprobe error: {stderr[:100]}")
+                is_corrupted = True
+                scan_tool = "ffmpeg"
+            scan_output.append(f"FFprobe: FAILED - {stderr[:200]}")
+            logger.error(f"FFprobe error on audio {file_path}: {stderr[:200]}")
+            return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+        
+        # Step 2: Attempt to decode audio to check for corruption
+        logger.info(f"Attempting audio decode test for: {file_path}")
+        try:
+            # Use ffmpeg to decode a portion of the audio
+            decode_duration = 10 if not deep_scan else 30  # Decode first 10s (or 30s for deep scan)
+            
+            result = subprocess.run([
+                'ffmpeg', '-v', 'error',
+                '-i', file_path,
+                '-t', str(decode_duration),
+                '-f', 'null', '-'
+            ], capture_output=True, text=True, timeout=60)
+            
+            if result.returncode != 0:
+                stderr = result.stderr
+                scan_output.append(f"Audio decode: FAILED - {stderr[:200]}")
+                
+                # Analyze specific audio errors
+                if 'Error while decoding stream' in stderr:
+                    corruption_details.append("Audio stream decoding errors detected")
+                    is_corrupted = True
+                elif 'Invalid frame size' in stderr:
+                    corruption_details.append("Invalid audio frame size")
+                    is_corrupted = True
+                elif 'Header missing' in stderr:
+                    corruption_details.append("Audio header missing or corrupted")
+                    is_corrupted = True
+                elif 'Truncated' in stderr:
+                    corruption_details.append("Truncated audio file")
+                    is_corrupted = True
+                else:
+                    # Check for specific codec errors
+                    if 'mp3' in codec_name.lower() and 'Header missing' in stderr:
+                        corruption_details.append("MP3 header corruption")
+                        is_corrupted = True
+                    elif 'flac' in codec_name.lower() and 'crc mismatch' in stderr:
+                        corruption_details.append("FLAC CRC mismatch - data corruption")
+                        is_corrupted = True
+                    else:
+                        corruption_details.append("Audio decoding failed")
+                        is_corrupted = True
+                        
+                logger.warning(f"Audio decode failed for {file_path}: {stderr[:100]}")
+            else:
+                scan_output.append(f"Audio decode ({decode_duration}s): PASSED")
+                logger.info(f"Audio decode test passed for {file_path}")
+                
+        except subprocess.TimeoutExpired:
+            warning_details.append("Audio decode test timeout (file may be very large)")
+            scan_output.append("Audio decode: TIMEOUT")
+            logger.warning(f"Audio decode timeout for {file_path}")
+        except Exception as e:
+            scan_output.append(f"Audio decode: ERROR - {str(e)}")
+            logger.error(f"Error during audio decode test for {file_path}: {str(e)}")
+        
+        # Step 3: Deep scan - check entire file if requested
+        if deep_scan and not is_corrupted:
+            logger.info(f"Running deep audio scan for: {file_path}")
+            try:
+                # Scan entire file for errors
+                result = subprocess.run([
+                    'ffmpeg', '-v', 'error',
+                    '-i', file_path,
+                    '-f', 'null', '-'
+                ], capture_output=True, text=True, timeout=300)  # 5 minute timeout for deep scan
+                
+                if result.stderr:
+                    # Look for non-fatal warnings that might indicate issues
+                    stderr_lower = result.stderr.lower()
+                    if 'non-monotonous dts' in stderr_lower:
+                        warning_details.append("Non-monotonous timestamps detected")
+                    if 'queue input is backward in time' in stderr_lower:
+                        warning_details.append("Timestamp inconsistencies detected")
+                    if 'invalid packet size' in stderr_lower:
+                        warning_details.append("Invalid packet sizes detected")
+                        
+                    scan_output.append(f"Deep scan warnings: {result.stderr[:200]}")
+                else:
+                    scan_output.append("Deep audio scan: PASSED")
+                    
+            except subprocess.TimeoutExpired:
+                warning_details.append("Deep scan timeout")
+                scan_output.append("Deep scan: TIMEOUT")
+            except Exception as e:
+                scan_output.append(f"Deep scan: ERROR - {str(e)}")
+                logger.error(f"Error during deep audio scan for {file_path}: {str(e)}")
+        
+        # Step 4: Format-specific validation for lossless formats
+        extension = Path(file_path).suffix.lower()
+        if extension == '.flac':
+            # FLAC has built-in error detection
+            logger.info(f"Running FLAC-specific validation for: {file_path}")
+            try:
+                result = subprocess.run([
+                    'flac', '-t', file_path
+                ], capture_output=True, text=True, timeout=60)
+                
+                if result.returncode != 0:
+                    corruption_details.append("FLAC validation failed")
+                    is_corrupted = True
+                    scan_output.append(f"FLAC test: FAILED - {result.stderr[:200]}")
+                else:
+                    scan_output.append("FLAC test: PASSED")
+            except FileNotFoundError:
+                # flac command not available, skip this test
+                logger.debug("FLAC command not found, skipping FLAC-specific test")
+            except Exception as e:
+                logger.debug(f"FLAC test error: {str(e)}")
+        
         return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
     
     def _enhanced_corruption_check(self, file_path, file_size_gb):

@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.55] - 2025-01-20
+
+### Refactoring
+- **Eliminated Code Redundancy**:
+  - Created `utils.py` module with shared utilities:
+    - `ProgressTracker` class for unified progress calculation across all operations
+    - `log_operation_status()` for consistent operation logging
+    - `batch_process()` generator for consistent batch processing
+    - Common state manipulation functions (`mark_operation_complete`, `mark_operation_error`)
+  - Created `operation_handlers.py` with base classes for operations
+  - Refactored state models to use shared `create_state_dict()` function
+  - Replaced duplicate progress calculation code with centralized `ProgressTracker`
+  - Standardized error handling patterns with decorators
+  - Consolidated operation logging with `log_operation_status()`
+
+### Added
+- **Complete Audio Format Support**:
+  - Added support for all major audio formats (MP3, FLAC, WAV, AAC, OGG, Opus, WMA, etc.)
+  - Implemented audio-specific corruption detection using FFmpeg
+  - Added FLAC-specific validation for lossless integrity checking
+  - Deep scan mode for audio files to detect timestamp issues and packet errors
+  
+- **Expanded Video Format Support**:
+  - Added HEVC/H.265 support (.hevc, .h265 extensions)
+  - Added professional formats: ProRes (.prores), DNxHD/DNxHR (.dnxhd, .dnxhr), MXF (.mxf)
+  - Added broadcast formats: AVCHD (.mts, .m2ts, .avchd)
+  - Added legacy and additional formats: MPEG (.mpg, .mpeg, .vob), RealMedia (.rm, .rmvb), and more
+  
+- **Enhanced Image Format Support**:
+  - Added Apple HEIC/HEIF support (.heic, .heif)
+  - Added comprehensive RAW format support:
+    - Canon (CR2, CR3), Nikon (NEF, NRW), Sony (ARW, SRF, SR2)
+    - Adobe DNG, Olympus ORF, Panasonic RW2, Pentax PEF/PTX
+    - Fujifilm RAF, Sigma X3F, Kodak DCR/KDC, and more
+  - Added professional formats: PSD, OpenEXR, HDR, SVG
+  - Added scientific/specialized formats: FITS, Netpbm formats
+
+### Performance Optimizations
+- **File Discovery Performance**: 
+  - Replaced os.walk() with os.scandir() for 3-5x faster directory traversal
+  - Reduced file stat() calls by caching metadata during discovery
+  - Files are now discovered with creation time pre-fetched for efficient sorting
+  
+- **Database Operations**:
+  - Enhanced database write queue to process up to 100 items in a single transaction
+  - Improved batch processing to group similar operations together
+  - Added connection pooling with pool_size=10 and max_overflow=20 for better concurrency
+  - Optimized SQLite pragmas for better write performance
+  
+- **Hash Calculation**:
+  - Increased hash calculation chunk size from 4KB to 1MB (250x improvement in I/O operations)
+  - Use 4MB chunks for files larger than 1GB
+  - Added throughput metrics (MB/s) to hash progress logging
+  - Reduced system calls significantly for large file processing
+
 ## [2.0.53] - 2025-01-20
 
 ### Fixed

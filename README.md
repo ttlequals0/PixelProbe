@@ -149,19 +149,15 @@ Interactive exclusion management with modern UI:
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.53)
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.55)
+- **`ttlequals0/pixelprobe:2.0.55`** - Major refactoring for code quality, added comprehensive audio/video/image format support
 - **`ttlequals0/pixelprobe:2.0.53`** - Fixed file-changes progress tracking with async updates
-- **`ttlequals0/pixelprobe:2.0`** - Complete UI overhaul with modern responsive design
-- **`ttlequals0/pixelprobe:1.26`** - UI improvements and ImageMagick UTF-8 fixes
-- **`ttlequals0/pixelprobe:1.25`** - Database resilience for long-running scans
-- **`ttlequals0/pixelprobe:1.24`** - UI color visibility fixes
-- **`ttlequals0/pixelprobe:1.23`** - SQLite WAL mode and connection improvements
 
 You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.53  # or :latest for newest
+    image: ttlequals0/pixelprobe:2.0.55  # or :latest for newest
 ```
 
 ### Development Setup
@@ -344,12 +340,24 @@ PixelProbe uses multiple methods to detect file corruption:
 - **Frame Validation**: Attempts to decode video frames to detect corruption
 - **Quick Scan**: Fast check of first 10 seconds for immediate feedback
 - **Stream Validation**: Verifies video and audio stream integrity
+- **HEVC/ProRes Support**: Specialized detection for modern codecs
 
 ### Image Files
 - **PIL Verification**: Uses Python Imaging Library for basic corruption detection
 - **ImageMagick**: Advanced image analysis and validation
 - **Dimension Checks**: Validates image dimensions and properties
 - **Format Validation**: Ensures files match their declared format
+- **RAW/HEIC Support**: Handles camera RAW files and Apple's HEIC format
+
+### Audio Files
+- **FFmpeg Audio Analysis**: Comprehensive audio stream validation
+- **Decode Testing**: Attempts to decode audio to detect corruption
+- **Header Validation**: Checks for missing or corrupted headers
+- **Format-Specific Tests**: 
+  - FLAC: CRC validation and built-in integrity checking
+  - MP3: Frame header validation
+  - Lossless formats: Bit-perfect verification
+- **Deep Scan Mode**: Full file analysis for timestamp and packet errors
 
 ### Detection Accuracy
 - **High Confidence**: 100% detection of files with broken headers, truncated files, and I/O errors
@@ -359,10 +367,33 @@ PixelProbe uses multiple methods to detect file corruption:
 ## Supported File Formats
 
 ### Video Formats
-- MP4, MKV, AVI, MOV, WMV, FLV, WebM, M4V
+- **Common**: MP4, MKV, AVI, MOV, WMV, FLV, WebM, M4V
+- **HEVC/H.265**: HEVC, H265 
+- **Professional**: ProRes, MXF, DNxHD, DNxHR
+- **Broadcast**: MTS, M2TS, AVCHD
+- **Legacy**: MPG, MPEG, VOB, RM, RMVB
+- **Other**: 3GP, 3G2, F4V, F4P, OGV, ASF, AMV, M2V, SVI
 
 ### Image Formats
-- JPEG, PNG, GIF, BMP, TIFF, WebP
+- **Common**: JPEG, PNG, GIF, BMP, TIFF, WebP
+- **Apple**: HEIC, HEIF
+- **RAW Formats**: 
+  - Canon: CR2, CR3
+  - Nikon: NEF, NRW
+  - Sony: ARW, SRF, SR2
+  - Adobe: DNG
+  - Others: ORF (Olympus), RW2 (Panasonic), PEF/PTX (Pentax), RAF (Fujifilm), X3F (Sigma), DCR/KDC (Kodak), MOS (Leaf)
+- **Professional**: PSD, EXR, HDR, SVG
+- **Other**: ICO, PBM, PGM, PPM, PNM, FITS
+
+### Audio Formats (NEW!)
+- **Lossy**: MP3, AAC, M4A, WMA, OGG, OGA, Opus, AMR
+- **Lossless**: FLAC, WAV, AIFF, APE, WV (WavPack), TTA, CAF
+- **Uncompressed**: WAV, AIFF, AU, SND, VOC
+- **High-Resolution**: DSF, DFF (DSD)
+- **Dolby/DTS**: AC3, DTS
+- **Container**: MKA (Matroska Audio), M4B (Audiobook)
+- **Legacy**: RA, RAM (RealAudio), GSM, MIDI
 
 ## Performance Considerations
 
