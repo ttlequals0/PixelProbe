@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.59] - 2025-01-21
+
+### Changed
+- **UI Consolidation**: Simplified to single modern UI template
+  - Removed index_modern.html - now using index.html as the single UI template
+  - Updated all references to use standard index.html
+  - Cleaner project structure with no legacy UI code
+  - Modern UI is now the default and only interface
+
+### Fixed
+- **Docker Build**: Corrected Docker image to include modern UI as default
+  - Previous 2.0.58 build was using old UI template
+  - Rebuilt with proper modern UI integration
+
 ## [2.0.58] - 2025-01-21
 
 ### Fixed
