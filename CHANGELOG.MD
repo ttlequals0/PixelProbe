@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.68] - 2025-07-21
+
+### Fixed
+- **Scan Configuration**: Fixed "No directories configured for scanning" error
+  - Scan routes now properly fall back to SCAN_PATHS environment variable when no database configuration exists
+  - Added informative error message explaining configuration options
+- **Performance**: Reduced unnecessary API polling
+  - Stats refresh interval increased from 5 seconds to 30 seconds to reduce server load
+  - Eliminates log spam from excessive /api/stats requests
+
 ## [2.0.67] - 2025-07-21
 
 ### Fixed

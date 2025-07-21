@@ -16,7 +16,7 @@ version: '3.8'
 
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.67
+    image: ttlequals0/pixelprobe:2.0.68
     ports:
       - "5001:5000"
     environment:
