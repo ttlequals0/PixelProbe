@@ -120,7 +120,8 @@ class TestScanRepository:
         
         assert result is not None
         assert result.file_hash == new_hash
-        assert result.last_modified == new_modified
+        # Compare timestamps without timezone info since SQLite may not preserve it
+        assert result.last_modified.replace(tzinfo=None) == new_modified.replace(tzinfo=None)
 
 
 class TestConfigurationRepository:

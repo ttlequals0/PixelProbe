@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from flask_sqlalchemy import SQLAlchemy
 import json
 import uuid
@@ -33,6 +33,11 @@ class ScanResult(db.Model):
     warning_details = db.Column(db.Text)  # Details of any warnings found
     deep_scan = db.Column(db.Boolean, nullable=False, default=False)  # Whether deep scan is requested
     
+    # Fields expected by API but currently missing
+    error_message = db.Column(db.Text, nullable=True)  # Error message from scan
+    media_info = db.Column(db.Text, nullable=True)  # JSON string of media metadata
+    file_exists = db.Column(db.Boolean, nullable=False, default=True, index=True)  # Whether file exists on disk
+    
     def to_dict(self):
         return {
             'id': self.id,
@@ -52,7 +57,11 @@ class ScanResult(db.Model):
             'scan_output': self.scan_output,
             'has_warnings': self.has_warnings,
             'warning_details': self.warning_details,
-            'deep_scan': self.deep_scan
+            'deep_scan': self.deep_scan,
+            'discovered_date': self.discovered_date.isoformat() if self.discovered_date else None,
+            'error_message': self.error_message,
+            'media_info': self.media_info,
+            'file_exists': self.file_exists
         }
     
     def __repr__(self):
@@ -64,7 +73,8 @@ class IgnoredErrorPattern(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     pattern = db.Column(db.String(200), nullable=False, unique=True)
     description = db.Column(db.String(500))
-    created_date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)  # Keep for backward compatibility
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     
     def to_dict(self):
@@ -72,6 +82,7 @@ class IgnoredErrorPattern(db.Model):
             'id': self.id,
             'pattern': self.pattern,
             'description': self.description,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
             'created_date': self.created_date.isoformat() if self.created_date else None,
             'is_active': self.is_active
         }
@@ -84,10 +95,12 @@ class ScanSchedule(db.Model):
     cron_expression = db.Column(db.String(50), nullable=False)
     scan_paths = db.Column(db.Text)  # JSON array of paths to scan
     scan_type = db.Column(db.String(20), nullable=False, default='normal')  # normal, orphan, file_changes
+    force_rescan = db.Column(db.Boolean, nullable=False, default=False)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     last_run = db.Column(db.DateTime, nullable=True)
     next_run = db.Column(db.DateTime, nullable=True)
-    created_date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)  # Keep for backward compatibility
     
     def to_dict(self):
         return {
@@ -96,9 +109,11 @@ class ScanSchedule(db.Model):
             'cron_expression': self.cron_expression,
             'scan_paths': self.scan_paths,
             'scan_type': self.scan_type,
+            'force_rescan': self.force_rescan,
             'is_active': self.is_active,
             'last_run': self.last_run.isoformat() if self.last_run else None,
             'next_run': self.next_run.isoformat() if self.next_run else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
             'created_date': self.created_date.isoformat() if self.created_date else None
         }
 
@@ -106,19 +121,36 @@ class ScanConfiguration(db.Model):
     __tablename__ = 'scan_configurations'
     
     id = db.Column(db.Integer, primary_key=True)
-    key = db.Column(db.String(50), nullable=False, unique=True)
-    value = db.Column(db.Text, nullable=False)
+    # Old structure for backward compatibility
+    key = db.Column(db.String(50), nullable=True, unique=True)
+    value = db.Column(db.Text, nullable=True)
     description = db.Column(db.String(200))
-    updated_date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_date = db.Column(db.DateTime, nullable=True, default=datetime.utcnow)
+    
+    # New structure expected by API and repositories
+    path = db.Column(db.String(500), nullable=True, unique=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=True, default=lambda: datetime.now(timezone.utc))
     
     def to_dict(self):
-        return {
-            'id': self.id,
-            'key': self.key,
-            'value': self.value,
-            'description': self.description,
-            'updated_date': self.updated_date.isoformat() if self.updated_date else None
-        }
+        # Support both old and new structures
+        if self.path is not None:
+            # New path-based structure
+            return {
+                'id': self.id,
+                'path': self.path,
+                'is_active': self.is_active,
+                'created_at': self.created_at.isoformat() if self.created_at else None
+            }
+        else:
+            # Old key-value structure
+            return {
+                'id': self.id,
+                'key': self.key,
+                'value': self.value,
+                'description': self.description,
+                'updated_date': self.updated_date.isoformat() if self.updated_date else None
+            }
 
 class ScanState(db.Model):
     __tablename__ = 'scan_state'
@@ -138,11 +170,55 @@ class ScanState(db.Model):
     current_file = db.Column(db.String(500), nullable=True)
     progress_message = db.Column(db.String(200), nullable=True)
     error_message = db.Column(db.String(500), nullable=True)
+    directories = db.Column(db.Text, nullable=True)  # JSON array of directories being scanned
+    force_rescan = db.Column(db.Boolean, nullable=False, default=False)
     
     def to_dict(self):
         # Import here to avoid circular imports
         from utils import create_state_dict
         return create_state_dict(self, extra_fields=['estimated_total', 'discovery_count'])
+    
+    @staticmethod
+    def get_or_create():
+        """Get existing active scan state or create new one"""
+        try:
+            scan_state = ScanState.query.filter_by(is_active=True).first()
+        except Exception:
+            # Table might not exist, return a transient instance
+            scan_state = None
+            
+        if not scan_state:
+            scan_state = ScanState()
+            try:
+                db.session.add(scan_state)
+                db.session.commit()
+            except Exception:
+                # If we can't commit (e.g., in tests), just return the transient instance
+                db.session.rollback()
+        return scan_state
+    
+    def start_scan(self, directories, force_rescan=False):
+        """Start a new scan"""
+        self.phase = 'discovering'
+        self.start_time = datetime.now(timezone.utc)
+        self.directories = json.dumps(directories) if isinstance(directories, list) else directories
+        self.force_rescan = force_rescan
+        db.session.commit()
+    
+    def cancel_scan(self):
+        """Cancel the current scan"""
+        self.phase = 'cancelled'
+        self.is_active = False
+        self.end_time = datetime.now(timezone.utc)
+        db.session.commit()
+    
+    def error_scan(self, error_message):
+        """Mark scan as errored"""
+        self.phase = 'error'
+        self.error_message = error_message
+        self.is_active = False
+        self.end_time = datetime.now(timezone.utc)
+        db.session.commit()
 
 class CleanupState(db.Model):
     __tablename__ = 'cleanup_state'

@@ -41,7 +41,7 @@ mkdir -p static/images
 echo ""
 echo "=== Configuration ==="
 echo "Database: /Users/dkrachtus/Downloads/media_checker.db"
-echo "UI Mode: Modern UI (Hulu-inspired design)"
+echo "UI Mode: Modern UI"
 echo "Server: http://localhost:5001"
 echo ""
 

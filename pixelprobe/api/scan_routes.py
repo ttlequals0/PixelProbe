@@ -6,7 +6,7 @@ import threading
 import time
 import logging
 
-from media_checker import PixelProbe
+from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
 from version import __version__
 from pixelprobe.utils.security import (
@@ -151,7 +151,12 @@ def scan_file():
     # Create scan thread
     def run_single_scan():
         try:
-            checker = PixelProbe(database_path=current_app.config['SQLALCHEMY_DATABASE_URI'])
+            excluded_paths, excluded_extensions = load_exclusions()
+            checker = PixelProbe(
+                database_path=current_app.config['SQLALCHEMY_DATABASE_URI'],
+                excluded_paths=excluded_paths,
+                excluded_extensions=excluded_extensions
+            )
             result = checker.scan_file(validated_path, force_rescan=True)
             
             with progress_lock:
@@ -227,7 +232,12 @@ def scan_all():
     # Create scan thread
     def run_full_scan():
         try:
-            checker = PixelProbe(database_path=current_app.config['SQLALCHEMY_DATABASE_URI'])
+            excluded_paths, excluded_extensions = load_exclusions()
+            checker = PixelProbe(
+                database_path=current_app.config['SQLALCHEMY_DATABASE_URI'],
+                excluded_paths=excluded_paths,
+                excluded_extensions=excluded_extensions
+            )
             
             # Discovery phase
             with progress_lock:
@@ -389,7 +399,12 @@ def scan_parallel():
     # Create scan thread
     def run_parallel_scan():
         try:
-            checker = PixelProbe(database_path=current_app.config['SQLALCHEMY_DATABASE_URI'])
+            excluded_paths, excluded_extensions = load_exclusions()
+            checker = PixelProbe(
+                database_path=current_app.config['SQLALCHEMY_DATABASE_URI'],
+                excluded_paths=excluded_paths,
+                excluded_extensions=excluded_extensions
+            )
             
             # Discovery phase
             with progress_lock:

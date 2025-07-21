@@ -205,6 +205,7 @@ def migrate_database():
         
         # Add new columns if they don't exist
         with db.engine.connect() as conn:
+            # Migrate scan_results table
             result = conn.execute(text("PRAGMA table_info(scan_results)"))
             columns = [row[1] for row in result]
             
@@ -212,12 +213,69 @@ def migrate_database():
                 ('has_warnings', "ALTER TABLE scan_results ADD COLUMN has_warnings BOOLEAN DEFAULT 0"),
                 ('discovered_date', "ALTER TABLE scan_results ADD COLUMN discovered_date TIMESTAMP"),
                 ('marked_as_good', "ALTER TABLE scan_results ADD COLUMN marked_as_good BOOLEAN DEFAULT 0"),
-                ('file_exists', "ALTER TABLE scan_results ADD COLUMN file_exists BOOLEAN DEFAULT 1")
+                ('file_exists', "ALTER TABLE scan_results ADD COLUMN file_exists BOOLEAN DEFAULT 1"),
+                ('error_message', "ALTER TABLE scan_results ADD COLUMN error_message TEXT"),
+                ('media_info', "ALTER TABLE scan_results ADD COLUMN media_info TEXT")
             ]
             
             for column_name, sql in migrations:
                 if column_name not in columns:
                     logger.info(f"Adding {column_name} column to scan_results table")
+                    conn.execute(text(sql))
+                    conn.commit()
+            
+            # Migrate scan_configurations table
+            result = conn.execute(text("PRAGMA table_info(scan_configurations)"))
+            columns = [row[1] for row in result]
+            
+            config_migrations = [
+                ('path', "ALTER TABLE scan_configurations ADD COLUMN path VARCHAR(500)"),
+                ('is_active', "ALTER TABLE scan_configurations ADD COLUMN is_active BOOLEAN DEFAULT 1"),
+                ('created_at', "ALTER TABLE scan_configurations ADD COLUMN created_at TIMESTAMP")
+            ]
+            
+            for column_name, sql in config_migrations:
+                if column_name not in columns:
+                    logger.info(f"Adding {column_name} column to scan_configurations table")
+                    conn.execute(text(sql))
+                    conn.commit()
+            
+            # Migrate ignored_error_patterns table
+            result = conn.execute(text("PRAGMA table_info(ignored_error_patterns)"))
+            columns = [row[1] for row in result]
+            
+            if 'created_at' not in columns:
+                logger.info("Adding created_at column to ignored_error_patterns table")
+                conn.execute(text("ALTER TABLE ignored_error_patterns ADD COLUMN created_at TIMESTAMP"))
+                conn.commit()
+            
+            # Migrate scan_schedules table
+            result = conn.execute(text("PRAGMA table_info(scan_schedules)"))
+            columns = [row[1] for row in result]
+            
+            schedule_migrations = [
+                ('force_rescan', "ALTER TABLE scan_schedules ADD COLUMN force_rescan BOOLEAN DEFAULT 0"),
+                ('created_at', "ALTER TABLE scan_schedules ADD COLUMN created_at TIMESTAMP")
+            ]
+            
+            for column_name, sql in schedule_migrations:
+                if column_name not in columns:
+                    logger.info(f"Adding {column_name} column to scan_schedules table")
+                    conn.execute(text(sql))
+                    conn.commit()
+            
+            # Migrate scan_state table
+            result = conn.execute(text("PRAGMA table_info(scan_state)"))
+            columns = [row[1] for row in result]
+            
+            state_migrations = [
+                ('directories', "ALTER TABLE scan_state ADD COLUMN directories TEXT"),
+                ('force_rescan', "ALTER TABLE scan_state ADD COLUMN force_rescan BOOLEAN DEFAULT 0")
+            ]
+            
+            for column_name, sql in state_migrations:
+                if column_name not in columns:
+                    logger.info(f"Adding {column_name} column to scan_state table")
                     conn.execute(text(sql))
                     conn.commit()
         

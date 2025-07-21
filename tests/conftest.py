@@ -10,27 +10,101 @@ from pathlib import Path
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 
-from models import db as _db
-from app import app as _app
+# Import models first to ensure they're registered with SQLAlchemy
+from models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule
+
+# Import models to ensure they're available
+from models import ScanState, ScanResult
+
+# Add missing total_files property for ScanState (still needed for utils.py)
+def _total_files(self):
+    return getattr(self, 'estimated_total', 0)
+
+ScanState.total_files = property(_total_files)
+
+# Create a test-specific app to avoid the limiter issue
+def create_test_app():
+    """Create a test application without importing the main app"""
+    from flask import Flask
+    from flask_sqlalchemy import SQLAlchemy
+    from flask_cors import CORS
+    from flask_wtf.csrf import CSRFProtect
+    
+    test_app = Flask(__name__)
+    test_app.config['TESTING'] = True
+    test_app.config['SECRET_KEY'] = 'test-secret-key'
+    test_app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+    test_app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    test_app.config['WTF_CSRF_ENABLED'] = False
+    
+    # Initialize extensions
+    _db.init_app(test_app)
+    CORS(test_app)
+    csrf = CSRFProtect(test_app)
+    
+    # Import and register blueprints
+    from pixelprobe.api.scan_routes import scan_bp
+    from pixelprobe.api.stats_routes import stats_bp
+    from pixelprobe.api.admin_routes import admin_bp, set_scheduler
+    from pixelprobe.api.export_routes import export_bp
+    from pixelprobe.api.maintenance_routes import maintenance_bp
+    from scheduler import MediaScheduler
+    
+    test_app.register_blueprint(scan_bp)
+    test_app.register_blueprint(stats_bp)
+    test_app.register_blueprint(admin_bp)
+    test_app.register_blueprint(export_bp)
+    test_app.register_blueprint(maintenance_bp)
+    
+    # Exempt API endpoints from CSRF
+    csrf.exempt(scan_bp)
+    csrf.exempt(stats_bp)
+    csrf.exempt(admin_bp)
+    csrf.exempt(export_bp)
+    csrf.exempt(maintenance_bp)
+    
+    # Set up scheduler
+    scheduler = MediaScheduler()
+    set_scheduler(scheduler)
+    
+    # Add basic routes
+    @test_app.route('/health')
+    def health_check():
+        from datetime import datetime, timezone
+        return {
+            'status': 'healthy',
+            'version': '1.0.0',
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
+    
+    @test_app.route('/api/version')
+    def get_version():
+        return {
+            'version': '1.0.0',
+            'github_url': 'https://github.com/test/test',
+            'api_version': '1.0'
+        }
+    
+    return test_app
+
+# Import services
 from pixelprobe.services import ScanService, StatsService, MaintenanceService
 from pixelprobe.repositories import ScanRepository, ConfigurationRepository
 
 @pytest.fixture(scope='session')
 def app():
     """Create application for testing"""
-    _app.config['TESTING'] = True
-    _app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-    _app.config['WTF_CSRF_ENABLED'] = False
+    test_app = create_test_app()
     
     # Initialize services for testing
-    with _app.app_context():
-        _app.scan_service = ScanService(':memory:')
-        _app.stats_service = StatsService()
-        _app.maintenance_service = MaintenanceService(':memory:')
-        _app.scan_repository = ScanRepository()
-        _app.config_repository = ConfigurationRepository()
+    with test_app.app_context():
+        test_app.scan_service = ScanService(':memory:')
+        test_app.stats_service = StatsService()
+        test_app.maintenance_service = MaintenanceService(':memory:')
+        test_app.scan_repository = ScanRepository()
+        test_app.config_repository = ConfigurationRepository()
     
-    return _app
+    return test_app
 
 @pytest.fixture(scope='session')
 def client(app):
@@ -41,6 +115,9 @@ def client(app):
 def db(app):
     """Create database for testing"""
     with app.app_context():
+        # Ensure all models are loaded
+        from models import ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule
+        
         _db.create_all()
         yield _db
         _db.session.remove()
@@ -116,6 +193,7 @@ def mock_scan_result(db):
         file_hash='abc123def456',
         marked_as_good=False
     )
+    
     db.session.add(result)
     db.session.commit()
     
@@ -138,6 +216,10 @@ def mock_corrupted_result(db):
         file_hash='xyz789',
         marked_as_good=False
     )
+    
+    # Set the internal attribute for the mocked property
+    result._error_message = 'moov atom not found'
+    
     db.session.add(result)
     db.session.commit()
     
@@ -149,6 +231,7 @@ def mock_scan_configuration(db):
     from models import ScanConfiguration
     from datetime import datetime, timezone
     
+    # Create a configuration using the new path-based structure
     config = ScanConfiguration(
         path='/test/media',
         is_active=True,

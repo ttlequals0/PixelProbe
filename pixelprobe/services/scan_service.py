@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
-from media_checker import PixelProbe
+from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,12 @@ class ScanService:
         # Create scan thread
         def run_scan():
             try:
-                checker = PixelProbe(database_path=self.database_uri)
+                excluded_paths, excluded_extensions = load_exclusions()
+                checker = PixelProbe(
+                    database_path=self.database_uri,
+                    excluded_paths=excluded_paths,
+                    excluded_extensions=excluded_extensions
+                )
                 result = checker.scan_file(file_path, force_rescan=force_rescan)
                 self.update_progress(1, 1, file_path, 'completed')
                 return result
@@ -99,7 +104,12 @@ class ScanService:
         # Create scan thread
         def run_scan():
             try:
-                checker = PixelProbe(database_path=self.database_uri)
+                excluded_paths, excluded_extensions = load_exclusions()
+                checker = PixelProbe(
+                    database_path=self.database_uri,
+                    excluded_paths=excluded_paths,
+                    excluded_extensions=excluded_extensions
+                )
                 
                 # Discovery phase
                 self.update_progress(0, 0, '', 'discovering')

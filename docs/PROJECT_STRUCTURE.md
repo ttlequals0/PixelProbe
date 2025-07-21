@@ -18,7 +18,7 @@ PixelProbe/
 │
 ├── static/                   # Static assets
 │   ├── css/
-│   │   ├── desktop.css      # Desktop styles (Hulu-inspired)
+│   │   ├── desktop.css      # Desktop styles (Modern design)
 │   │   ├── mobile.css       # Mobile-specific styles
 │   │   └── logo-styles.css  # Logo animations
 │   ├── js/
@@ -82,7 +82,7 @@ PixelProbe/
   - TableManager - Advanced data display
   - PixelProbeApp - Main application controller
 
-- `static/css/desktop.css` - Hulu-inspired desktop styles
+- `static/css/desktop.css` - Modern desktop styles
 - `static/css/mobile.css` - Responsive mobile overrides
 - `templates/index_modern.html` - Modern UI template
 
@@ -98,8 +98,8 @@ The v2.0 UI uses a modern, modular JavaScript architecture with:
 - ES6+ classes for organization
 - CSS variables for theming
 - Separate desktop/mobile stylesheets
-- Pi-hole style sidebar navigation
-- Hulu-inspired color scheme (#1ce783)
+- Sidebar navigation layout
+- Modern color scheme (#1ce783)
 
 ### API Endpoints
 All API endpoints are prefixed with `/api/`:

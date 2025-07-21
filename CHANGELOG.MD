@@ -5,7 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.56] - 2025-01-21
+
+### Added
+- **Force Rescan Functionality**: Implemented caching mechanism for scan results
+  - Added `force_rescan` parameter to scan methods to bypass cache
+  - Scan results are now cached in the database and reused when files haven't changed
+  - Cache checks file hash and modification time to detect changes
+  - Significantly improves performance for repeated scans of unchanged files
+
+- **Exclusion Patterns Support**: Added ability to exclude paths and file extensions from scanning
+  - Exclusions are loaded from `exclusions.json` file at application root
+  - Supports both path-based exclusions (e.g., `/excluded/path`) and extension-based exclusions (e.g., `.tmp`)
+  - Exclusions are automatically applied during file discovery phase
+  - Integrated with API endpoints and services
+
+- **Ignored Error Patterns**: Implemented error pattern filtering to reduce false positives
+  - Added `_check_ignored_patterns` method to filter known non-critical errors
+  - Patterns stored in database via IgnoredErrorPattern model
+  - Error outputs are checked against active patterns before marking files as corrupted
+  - Helps reduce false positives from known tool-specific warnings
+
+### Fixed
+- **Method Naming Consistency**: Fixed `discover_files` vs `discover_media_files` naming mismatch
+  - Renamed internal method from `discover_files` to `discover_media_files` for consistency
+  - Updated all call sites throughout the codebase
+  - Ensures compatibility with existing API contracts
+
+- **Model Consistency Issues**: Fixed inconsistencies between database models and API expectations
+  - Added missing fields to ScanResult: `error_message`, `media_info`, `file_exists`
+  - Updated ScanConfiguration to support both key-value and path-based structures for backward compatibility
+  - Added `created_at` field to IgnoredErrorPattern and ScanSchedule models
+  - Added `force_rescan` field to ScanSchedule model
+  - Added `directories` and `force_rescan` fields to ScanState model
+  - Implemented missing `ScanState.get_or_create()`, `start_scan()`, `cancel_scan()`, and `error_scan()` methods
+  - Added `total_files` property to ScanState for compatibility with utils.py
+- **Database Migrations**: Added comprehensive migrations to update existing databases with new fields
+  - All migrations preserve existing data and maintain backward compatibility
+  - Migrations run automatically on startup
 
 ## [2.0.55] - 2025-01-20
 

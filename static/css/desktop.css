@@ -1,12 +1,12 @@
-/* PixelProbe Desktop CSS - Hulu-inspired design with Pi-hole layout */
+/* PixelProbe Desktop CSS - Modern design with sidebar layout */
 
 /* CSS Variables for theming */
 :root {
-    /* Hulu-inspired colors */
-    --hulu-green: #1ce783;
-    --hulu-black: #040405;
-    --hulu-gradient-start: #040405;
-    --hulu-gradient-end: #183949;
+    /* Primary colors */
+    --primary-green: #1ce783;
+    --primary-black: #040405;
+    --gradient-start: #040405;
+    --gradient-end: #183949;
     
     /* Light mode colors */
     --bg-primary: #f8f9fa;
@@ -156,7 +156,7 @@ body {
 .sidebar-title {
     font-size: 1.25rem;
     font-weight: 600;
-    color: var(--hulu-green);
+    color: var(--primary-green);
     margin: 0;
 }
 
@@ -188,12 +188,12 @@ body {
 
 .nav-item:hover {
     background-color: var(--bg-tertiary);
-    color: var(--hulu-green);
+    color: var(--primary-green);
 }
 
 .nav-item.active {
     background-color: rgba(28, 231, 131, 0.1);
-    color: var(--hulu-green);
+    color: var(--primary-green);
 }
 
 .nav-item.active::before {
@@ -203,7 +203,7 @@ body {
     top: 0;
     bottom: 0;
     width: 3px;
-    background-color: var(--hulu-green);
+    background-color: var(--primary-green);
 }
 
 .nav-item i {
@@ -328,7 +328,7 @@ body {
 .stat-value {
     font-size: 2rem;
     font-weight: 700;
-    color: var(--hulu-green);
+    color: var(--primary-green);
     margin-bottom: 0.25rem;
 }
 
@@ -356,8 +356,8 @@ body {
 }
 
 .btn-primary {
-    background-color: var(--hulu-green);
-    color: var(--hulu-black);
+    background-color: var(--primary-green);
+    color: var(--primary-black);
 }
 
 .btn-primary:hover {
@@ -376,9 +376,9 @@ body {
 }
 
 .btn-secondary.active {
-    background-color: var(--hulu-green);
-    color: var(--hulu-black);
-    border-color: var(--hulu-green);
+    background-color: var(--primary-green);
+    color: var(--primary-black);
+    border-color: var(--primary-green);
 }
 
 .btn-icon {
@@ -508,12 +508,12 @@ body {
 
 .progress-bar {
     height: 100%;
-    background: linear-gradient(135deg, var(--hulu-green) 0%, #19c572 100%);
+    background: linear-gradient(135deg, var(--primary-green) 0%, #19c572 100%);
     transition: width 0.3s ease;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--hulu-black);
+    color: var(--primary-black);
     font-weight: 600;
     font-size: 0.875rem;
     padding: 0 1rem;
@@ -584,7 +584,7 @@ body {
 .system-stats-content h4 {
     margin-top: 1.5rem;
     margin-bottom: 0.75rem;
-    color: var(--hulu-green);
+    color: var(--primary-green);
     font-size: 1.125rem;
 }
 
@@ -629,7 +629,7 @@ body {
 
 .form-control:focus {
     outline: none;
-    border-color: var(--hulu-green);
+    border-color: var(--primary-green);
 }
 
 /* Toggle switch */
@@ -671,7 +671,7 @@ body {
 }
 
 input:checked + .toggle-slider {
-    background-color: var(--hulu-green);
+    background-color: var(--primary-green);
 }
 
 input:checked + .toggle-slider:before {
@@ -760,14 +760,14 @@ input:checked + .toggle-slider:before {
 
 .page-link:hover {
     background-color: var(--bg-hover);
-    color: var(--hulu-green);
-    border-color: var(--hulu-green);
+    color: var(--primary-green);
+    border-color: var(--primary-green);
 }
 
 .page-item.active .page-link {
-    background-color: var(--hulu-green);
-    color: var(--hulu-black);
-    border-color: var(--hulu-green);
+    background-color: var(--primary-green);
+    color: var(--primary-black);
+    border-color: var(--primary-green);
 }
 
 .page-item.disabled .page-link {
@@ -829,7 +829,7 @@ input:checked + .toggle-slider:before {
 
 .notification-warning {
     background-color: var(--warning-color);
-    color: var(--hulu-black);
+    color: var(--primary-black);
 }
 
 .notification-info {
@@ -1033,7 +1033,7 @@ input:checked + .toggle-slider:before {
 
 .form-control:focus {
     outline: none;
-    border-color: var(--hulu-green);
+    border-color: var(--primary-green);
     box-shadow: 0 0 0 0.2rem rgba(28, 231, 131, 0.25);
 }
 

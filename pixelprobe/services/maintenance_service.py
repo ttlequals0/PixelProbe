@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import uuid
 
-from media_checker import PixelProbe
+from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, CleanupState, FileChangesState
 from utils import ProgressTracker
 
@@ -316,7 +316,12 @@ class MaintenanceService:
             file_changes_record.progress_message = f'Phase 2 of 3: Checking {total_files} files for hash changes...'
             db.session.commit()
             
-            checker = PixelProbe(database_path=self.database_uri)
+            excluded_paths, excluded_extensions = load_exclusions()
+            checker = PixelProbe(
+                database_path=self.database_uri,
+                excluded_paths=excluded_paths,
+                excluded_extensions=excluded_extensions
+            )
             changed_files = []
             
             # Process files in batches

@@ -34,8 +34,8 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 ![Desktop Light Mode](docs/screenshots/desktop-light.png)
 
 The modern desktop interface features:
-- Hulu-inspired design with clean, professional aesthetics
-- Pi-hole style sidebar navigation for easy access to all features
+- Modern design with clean, professional aesthetics
+- Sidebar navigation for easy access to all features
 - Real-time statistics dashboard showing file health status
 - Advanced filtering and search capabilities
 - Bulk action support for managing multiple files

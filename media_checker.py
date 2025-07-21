@@ -17,6 +17,19 @@ from pixelprobe.utils.security import safe_subprocess_run, validate_file_path
 
 logger = logging.getLogger(__name__)
 
+def load_exclusions():
+    """Load exclusion patterns from exclusions.json file"""
+    try:
+        exclusions_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'exclusions.json')
+        if os.path.exists(exclusions_file):
+            with open(exclusions_file, 'r') as f:
+                data = json.load(f)
+                return data.get('paths', []), data.get('extensions', [])
+        return [], []
+    except Exception as e:
+        logger.error(f"Error loading exclusions.json: {e}")
+        return [], []
+
 def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
     """Truncate scan output to prevent memory issues"""
     if not output_lines:
@@ -37,7 +50,7 @@ def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
     return lines
 
 class PixelProbe:
-    def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None):
+    def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None, database_path=None):
         # Video formats - including HEVC/H.265 and professional formats
         self.supported_video_formats = [
             '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
@@ -114,8 +127,9 @@ class PixelProbe:
         self.scan_start_time = None
         self.excluded_paths = excluded_paths or []
         self.excluded_extensions = excluded_extensions or []
+        self.database_path = database_path
     
-    def discover_files(self, directories, max_files=None, existing_files=None, progress_callback=None):
+    def discover_media_files(self, directories, max_files=None, existing_files=None, progress_callback=None):
         """Phase 1: Discover all supported files and return their paths (parallel version)"""
         existing_files = existing_files or set()
         
@@ -255,7 +269,7 @@ class PixelProbe:
     
     def scan_directories(self, directories, max_files=None, skip_paths=None):
         """Legacy method for backward compatibility - now uses new two-phase approach"""
-        discovered_files = self.discover_files(directories, max_files)
+        discovered_files = self.discover_media_files(directories, max_files)
         results = []
         
         skip_paths = skip_paths or set()
@@ -392,17 +406,17 @@ class PixelProbe:
             logger.error(f"Error calculating hash for {file_path}: {str(e)}")
             return None
     
-    def scan_files_parallel(self, file_paths, progress_callback=None, deep_scan=False, scan_paths=None):
+    def scan_files_parallel(self, file_paths, progress_callback=None, deep_scan=False, scan_paths=None, force_rescan=False):
         """Scan multiple files in parallel using ThreadPoolExecutor with path-based optimization"""
         
         # If scan_paths provided and multiple paths, use path-based parallel scanning
         if scan_paths and len(scan_paths) > 1:
-            return self._scan_files_by_paths_parallel(file_paths, progress_callback, deep_scan, scan_paths)
+            return self._scan_files_by_paths_parallel(file_paths, progress_callback, deep_scan, scan_paths, force_rescan)
         else:
             # Use original single-pool approach
-            return self._scan_files_single_pool(file_paths, progress_callback, deep_scan)
+            return self._scan_files_single_pool(file_paths, progress_callback, deep_scan, force_rescan)
     
-    def _scan_files_single_pool(self, file_paths, progress_callback=None, deep_scan=False):
+    def _scan_files_single_pool(self, file_paths, progress_callback=None, deep_scan=False, force_rescan=False):
         """Original single thread pool scanning approach"""
         results = []
         completed = 0
@@ -413,7 +427,7 @@ class PixelProbe:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # Submit all tasks
             future_to_file = {
-                executor.submit(self.scan_file, file_path, deep_scan): file_path 
+                executor.submit(self.scan_file, file_path, deep_scan, force_rescan): file_path 
                 for file_path in file_paths
             }
             
@@ -448,7 +462,7 @@ class PixelProbe:
         logger.info(f"Parallel scan completed: {completed}/{total} files processed")
         return results
     
-    def _scan_files_by_paths_parallel(self, file_paths, progress_callback=None, deep_scan=False, scan_paths=None):
+    def _scan_files_by_paths_parallel(self, file_paths, progress_callback=None, deep_scan=False, scan_paths=None, force_rescan=False):
         """Scan files using dedicated worker pools per path"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
@@ -490,7 +504,7 @@ class PixelProbe:
             with ThreadPoolExecutor(max_workers=workers_per_path) as executor:
                 # Submit all files in this path
                 future_to_file = {
-                    executor.submit(self.scan_file, file_path, deep_scan): file_path 
+                    executor.submit(self.scan_file, file_path, deep_scan, force_rescan): file_path 
                     for file_path in path_files
                 }
                 
@@ -550,12 +564,13 @@ class PixelProbe:
         logger.info(f"Path-based parallel scan completed: {len(all_results)} files processed across {num_paths} paths")
         return all_results
     
-    def scan_file(self, file_path, deep_scan=False):
+    def scan_file(self, file_path, deep_scan=False, force_rescan=False):
         """Scan a single file for corruption
         
         Args:
             file_path (str): Path to the file to scan
             deep_scan (bool): If True, perform enhanced corruption detection regardless of basic scan results
+            force_rescan (bool): If True, rescan the file even if already in cache
         """
         scan_start_time = time.time()
         scan_tool = None
@@ -577,6 +592,13 @@ class PixelProbe:
             
             # Calculate file hash
             file_hash = self.calculate_file_hash(file_path)
+            
+            # Check cache if not forcing rescan
+            if not force_rescan and self.database_path:
+                cached_result = self._check_cache(file_path, file_hash, file_info['last_modified'])
+                if cached_result:
+                    logger.info(f"Using cached result for {file_path}")
+                    return cached_result
             
             is_corrupted = False
             corruption_details = []
@@ -633,6 +655,9 @@ class PixelProbe:
                 'has_warnings': len(warning_details) > 0,
                 'warning_details': '; '.join(warning_details) if warning_details else None
             })
+            
+            # Save to cache
+            self._save_to_cache(file_path, result)
             
             return result
         
@@ -940,8 +965,12 @@ class PixelProbe:
             )
             
             if result.returncode != 0:
-                corruption_details.append("FFmpeg validation failed")
-                is_corrupted = True
+                # Check if the error should be ignored
+                if not self._check_ignored_patterns(result.stderr):
+                    corruption_details.append("FFmpeg validation failed")
+                    is_corrupted = True
+                else:
+                    logger.info(f"FFmpeg error ignored due to matching pattern for {file_path}")
             
             if result.stderr:
                 error_lines = result.stderr.strip().split('\n')
@@ -1073,17 +1102,20 @@ class PixelProbe:
         except ffmpeg.Error as e:
             stderr = e.stderr.decode('utf-8') if e.stderr else ''
             if 'Invalid data found when processing input' in stderr:
-                corruption_details.append("Invalid data found in audio file")
-                is_corrupted = True
-                scan_tool = "ffmpeg"
+                if not self._check_ignored_patterns(stderr):
+                    corruption_details.append("Invalid data found in audio file")
+                    is_corrupted = True
+                    scan_tool = "ffmpeg"
             elif 'moov atom not found' in stderr:
-                corruption_details.append("Missing moov atom (audio metadata)")
-                is_corrupted = True
-                scan_tool = "ffmpeg"
+                if not self._check_ignored_patterns(stderr):
+                    corruption_details.append("Missing moov atom (audio metadata)")
+                    is_corrupted = True
+                    scan_tool = "ffmpeg"
             else:
-                corruption_details.append(f"FFprobe error: {stderr[:100]}")
-                is_corrupted = True
-                scan_tool = "ffmpeg"
+                if not self._check_ignored_patterns(stderr):
+                    corruption_details.append(f"FFprobe error: {stderr[:100]}")
+                    is_corrupted = True
+                    scan_tool = "ffmpeg"
             scan_output.append(f"FFprobe: FAILED - {stderr[:200]}")
             logger.error(f"FFprobe error on audio {file_path}: {stderr[:200]}")
             return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
@@ -1546,3 +1578,126 @@ class PixelProbe:
                 'elapsed_time': 0,
                 'is_scanning': False
             }
+    
+    def _check_cache(self, file_path, file_hash, last_modified):
+        """Check if we have a valid cached scan result for this file"""
+        if not self.database_path:
+            return None
+            
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from models import ScanResult
+            
+            engine = create_engine(self.database_path)
+            Session = sessionmaker(bind=engine)
+            session = Session()
+            
+            # Check for existing scan result
+            result = session.query(ScanResult).filter_by(file_path=file_path).first()
+            
+            if result and result.scan_date:
+                # Check if file hasn't changed (same hash and modification time)
+                if (result.file_hash == file_hash and 
+                    result.last_modified and 
+                    result.last_modified.replace(tzinfo=None) == last_modified.replace(tzinfo=None)):
+                    
+                    # Convert database result to expected format
+                    cached_data = {
+                        'file_path': result.file_path,
+                        'file_size': result.file_size,
+                        'file_type': result.file_type,
+                        'creation_date': result.creation_date,
+                        'last_modified': result.last_modified,
+                        'is_corrupted': result.is_corrupted,
+                        'corruption_details': result.corruption_details,
+                        'file_hash': result.file_hash,
+                        'scan_tool': result.scan_tool,
+                        'scan_duration': result.scan_duration,
+                        'scan_output': result.scan_output,
+                        'has_warnings': result.has_warnings,
+                        'warning_details': result.warning_details
+                    }
+                    session.close()
+                    return cached_data
+            
+            session.close()
+        except Exception as e:
+            logger.error(f"Error checking cache for {file_path}: {e}")
+        
+        return None
+    
+    def _save_to_cache(self, file_path, scan_result):
+        """Save scan result to database cache"""
+        if not self.database_path:
+            return
+            
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from models import ScanResult
+            from datetime import datetime, timezone
+            
+            engine = create_engine(self.database_path)
+            Session = sessionmaker(bind=engine)
+            session = Session()
+            
+            # Check for existing record
+            db_result = session.query(ScanResult).filter_by(file_path=file_path).first()
+            
+            if not db_result:
+                db_result = ScanResult(file_path=file_path)
+                session.add(db_result)
+            
+            # Update with scan results
+            db_result.file_size = scan_result.get('file_size')
+            db_result.file_type = scan_result.get('file_type')
+            db_result.creation_date = scan_result.get('creation_date')
+            db_result.last_modified = scan_result.get('last_modified')
+            db_result.is_corrupted = scan_result.get('is_corrupted', False)
+            db_result.corruption_details = scan_result.get('corruption_details')
+            db_result.file_hash = scan_result.get('file_hash')
+            db_result.scan_tool = scan_result.get('scan_tool')
+            db_result.scan_duration = scan_result.get('scan_duration')
+            db_result.scan_output = scan_result.get('scan_output')
+            db_result.has_warnings = scan_result.get('has_warnings', False)
+            db_result.warning_details = scan_result.get('warning_details')
+            db_result.scan_date = datetime.now(timezone.utc)
+            db_result.scan_status = 'completed'
+            db_result.file_exists = True
+            
+            session.commit()
+            session.close()
+            logger.info(f"Saved scan result to cache for {file_path}")
+        except Exception as e:
+            logger.error(f"Error saving to cache for {file_path}: {e}")
+    
+    def _check_ignored_patterns(self, error_output):
+        """Check if error output contains any ignored patterns"""
+        if not self.database_path or not error_output:
+            return False
+            
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from models import IgnoredErrorPattern
+            
+            engine = create_engine(self.database_path)
+            Session = sessionmaker(bind=engine)
+            session = Session()
+            
+            # Get active ignored patterns
+            patterns = session.query(IgnoredErrorPattern).filter_by(is_active=True).all()
+            
+            # Check if any pattern matches the error output
+            for pattern in patterns:
+                if pattern.pattern.lower() in error_output.lower():
+                    logger.info(f"Error output matches ignored pattern: {pattern.pattern}")
+                    session.close()
+                    return True
+            
+            session.close()
+        except Exception as e:
+            logger.error(f"Error checking ignored patterns: {e}")
+        
+        return False

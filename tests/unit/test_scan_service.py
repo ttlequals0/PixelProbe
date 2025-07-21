@@ -49,9 +49,12 @@ class TestScanService:
         mock_probe = Mock()
         mock_probe_class.return_value = mock_probe
         
-        # Mock scan result
+        # Mock scan result with a delay to ensure thread is running
         mock_result = Mock()
-        mock_probe.scan_file.return_value = mock_result
+        def mock_scan_with_delay(*args, **kwargs):
+            time.sleep(0.2)  # Simulate scan taking time
+            return mock_result
+        mock_probe.scan_file.side_effect = mock_scan_with_delay
         
         # Start scan
         result = scan_service.scan_single_file('/test/file.mp4')
@@ -60,7 +63,7 @@ class TestScanService:
         assert result['file_path'] == '/test/file.mp4'
         
         # Wait for thread to start
-        time.sleep(0.1)
+        time.sleep(0.05)
         assert scan_service.is_scan_running() == True
         
         # Wait for scan to complete
@@ -74,9 +77,12 @@ class TestScanService:
         with pytest.raises(FileNotFoundError):
             scan_service.scan_single_file('/nonexistent/file.mp4')
     
+    @patch('os.path.exists')
     @patch('pixelprobe.services.scan_service.PixelProbe')
-    def test_scan_single_file_already_running(self, mock_probe_class, scan_service):
+    def test_scan_single_file_already_running(self, mock_probe_class, mock_exists, scan_service):
         """Test error when scan is already running"""
+        mock_exists.return_value = True
+        
         # Set up a fake running thread
         scan_service.current_scan_thread = threading.Thread(target=lambda: time.sleep(1))
         scan_service.current_scan_thread.start()
