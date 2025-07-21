@@ -1,10 +1,11 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, current_app
 from sqlalchemy import text
 import os
 import time
 import logging
 import pytz
 from datetime import datetime, timezone
+from functools import wraps
 
 from models import db, ScanResult
 from version import __version__
@@ -21,7 +22,23 @@ except pytz.exceptions.UnknownTimeZoneError:
 
 stats_bp = Blueprint('stats', __name__, url_prefix='/api')
 
+def exempt_from_rate_limit(f):
+    """Decorator to exempt a function from rate limiting"""
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        # Get the limiter from the current app
+        limiter = current_app.extensions.get('flask-limiter')
+        if limiter:
+            # Apply exemption dynamically
+            exempt_func = limiter.exempt(f)
+            return exempt_func(*args, **kwargs)
+        else:
+            # If no limiter, just call the function
+            return f(*args, **kwargs)
+    return wrapped
+
 @stats_bp.route('/stats')
+@exempt_from_rate_limit
 def get_stats():
     """Get statistics about scanned files"""
     try:

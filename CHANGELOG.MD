@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.72] - 2025-07-21
+
+### Fixed
+- **Rate Limiting 429 Errors**: Fixed 429 "Too Many Requests" errors on status endpoints
+  - Exempted /api/scan-status from rate limiting (polled every 1 second for monitoring)
+  - Exempted /api/stats from rate limiting (frequently accessed for dashboard updates)
+  - Status monitoring endpoints now work without rate limit restrictions
+  - Resolved app initialization failures due to aggressive polling
+
+## [2.0.71] - 2025-07-21
+
+### Fixed
+- **Warnings Filter Exclusion Issue**: Fixed "Warnings Only" filter showing files marked as good
+  - Updated warnings filter logic to exclude files with marked_as_good=True
+  - Now consistent with stats service and export service filtering logic
+  - Files marked as good are properly excluded from warnings-only view
+
 ## [2.0.70] - 2025-07-21
 
 ### Fixed

@@ -46,6 +46,21 @@ def rate_limit(limit_string):
         return wrapped
     return decorator
 
+def exempt_from_rate_limit(f):
+    """Decorator to exempt a function from rate limiting"""
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        # Get the limiter from the current app
+        limiter = current_app.extensions.get('flask-limiter')
+        if limiter:
+            # Apply exemption dynamically
+            exempt_func = limiter.exempt(f)
+            return exempt_func(*args, **kwargs)
+        else:
+            # If no limiter, just call the function
+            return f(*args, **kwargs)
+    return wrapped
+
 # Global state tracking - will be moved to service layer
 current_scan_thread = None
 scan_cancelled = False
@@ -90,7 +105,10 @@ def get_scan_results():
     
     # Apply warnings filter
     if has_warnings == 'true':
-        query = query.filter_by(has_warnings=True)
+        query = query.filter(
+            (ScanResult.has_warnings == True) & 
+            (ScanResult.marked_as_good == False)
+        )
     
     # Apply sorting
     # Map frontend field names to model attributes
@@ -384,6 +402,7 @@ def scan_all():
     })
 
 @scan_bp.route('/scan-status')
+@exempt_from_rate_limit
 def get_scan_status():
     """Get current scan status and progress"""
     with progress_lock:
