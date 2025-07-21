@@ -85,9 +85,7 @@ limiter = Limiter(
     app=app,
     key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"],
-    storage_uri="memory://",
-    # Exempt health check endpoint from rate limiting
-    exempt=lambda: request.endpoint == 'health_check'
+    storage_uri="memory://"
 )
 
 # Initialize CSRF protection
@@ -152,6 +150,7 @@ def api_docs():
     return render_template('api_docs.html', version=__version__)
 
 @app.route('/health')
+@limiter.exempt
 def health_check():
     """Health check endpoint"""
     logger.info("Health check requested")
