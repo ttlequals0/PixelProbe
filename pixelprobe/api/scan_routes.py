@@ -220,9 +220,15 @@ def scan_all():
         from models import ScanConfiguration
         configs = ScanConfiguration.query.filter_by(is_active=True).all()
         scan_dirs = [config.path for config in configs]
+        
+        # If no database config, fall back to environment variable
+        if not scan_dirs:
+            scan_paths_env = os.environ.get('SCAN_PATHS', '/media')
+            scan_dirs = [path.strip() for path in scan_paths_env.split(',') if path.strip()]
+            logger.info(f"Using SCAN_PATHS from environment: {scan_dirs}")
     
     if not scan_dirs:
-        return jsonify({'error': 'No directories configured for scanning'}), 400
+        return jsonify({'error': 'No directories configured for scanning. Set SCAN_PATHS environment variable or configure paths in the admin interface.'}), 400
     
     # Validate directories
     validated_dirs = []
@@ -391,9 +397,15 @@ def scan_parallel():
         from models import ScanConfiguration
         configs = ScanConfiguration.query.filter_by(is_active=True).all()
         scan_dirs = [config.path for config in configs]
+        
+        # If no database config, fall back to environment variable
+        if not scan_dirs:
+            scan_paths_env = os.environ.get('SCAN_PATHS', '/media')
+            scan_dirs = [path.strip() for path in scan_paths_env.split(',') if path.strip()]
+            logger.info(f"Using SCAN_PATHS from environment: {scan_dirs}")
     
     if not scan_dirs:
-        return jsonify({'error': 'No directories configured for scanning'}), 400
+        return jsonify({'error': 'No directories configured for scanning. Set SCAN_PATHS environment variable or configure paths in the admin interface.'}), 400
     
     # Validate directories
     validated_dirs = []

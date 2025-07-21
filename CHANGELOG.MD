@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enhanced Docker configuration with comprehensive environment variable support
   - Created .env.example with complete configuration documentation
   - Updated README.md with improved deployment instructions
+- **Scan Configuration**: Fixed "No directories configured for scanning" error
+  - Scan routes now properly fall back to SCAN_PATHS environment variable when no database configuration exists
+  - Added informative error message explaining configuration options
+- **Performance**: Reduced unnecessary API polling
+  - Stats refresh interval increased from 5 seconds to 30 seconds to reduce server load
+  - Eliminates log spam from excessive /api/stats requests
 
 ## [2.0.66] - 2025-01-21
 

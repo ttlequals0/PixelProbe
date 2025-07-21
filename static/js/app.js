@@ -305,7 +305,8 @@ class StatsDashboard {
     }
 
     startAutoRefresh() {
-        this.refreshInterval = setInterval(() => this.updateStats(), 5000);
+        // Refresh every 30 seconds instead of 5 seconds to reduce server load
+        this.refreshInterval = setInterval(() => this.updateStats(), 30000);
     }
 
     stopAutoRefresh() {
