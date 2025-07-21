@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.74] - 2025-07-21
+
+### Fixed
+- **Scan Progress Not Updating in UI**: Fixed scan status API endpoint to use unified ScanService progress tracking
+  - Updated `/api/scan-status` endpoint to read from ScanService instead of outdated global variables
+  - Unified all scan routes (`/scan-file`, `/scan-all`, `/scan-parallel`, `/cancel-scan`, `/recover-stuck-scan`) to use ScanService
+  - Removed duplicate progress tracking systems that caused status inconsistencies
+  - Scan progress now properly updates in real-time during active operations
+  - Resolves issue where scan appeared stuck at old progress values
+
 ## [2.0.73] - 2025-07-21
 
 ### Fixed
