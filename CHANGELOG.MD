@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.73] - 2025-07-21
+
+### Fixed
+- **Static Asset Version Mismatch**: Updated HTML template to reference correct static asset versions
+  - Fixed CSS and JavaScript version references from 2.0.40 to 2.0.72
+  - Resolves browser compatibility issues between frontend and backend
+  - Ensures proper cache busting for updated assets
+
 ## [2.0.72] - 2025-07-21
 
 ### Fixed
@@ -13,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Exempted /api/stats from rate limiting (frequently accessed for dashboard updates)
   - Status monitoring endpoints now work without rate limit restrictions
   - Resolved app initialization failures due to aggressive polling
+
+### Added
+- **Database Schema Fix Tool**: New comprehensive repair tool for database initialization issues
+  - Created `tools/fix_database_schema.py` for fixing "no such table" errors after upgrades
+  - Added detailed troubleshooting section to README with common solutions
+  - Updated tools documentation with usage instructions for database repairs
+  - Provides both automated script and manual one-liner solutions
+
+### Documentation
+- **Enhanced README**: Added comprehensive troubleshooting section covering:
+  - Database errors after version updates with step-by-step solutions
+  - Rate limiting issues and upgrade instructions
+  - Container startup problems and diagnostics
+  - Performance optimization tips for large media libraries
+- **Updated Tools README**: Documented new database schema fix tool with usage examples
 
 ## [2.0.71] - 2025-07-21
 

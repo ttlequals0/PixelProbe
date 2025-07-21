@@ -4,7 +4,34 @@ This directory contains utility scripts for maintenance and migration tasks. The
 
 ## Scripts
 
-### Database Migration Scripts
+### Database Schema & Migration Scripts
+
+#### `fix_database_schema.py` 🆕
+**Purpose**: Comprehensive database schema repair tool for initialization and migration issues.
+
+**When to use**: 
+- After version upgrades when you see "no such table" errors
+- When database tables weren't properly created on container startup
+- For fresh installations with database initialization problems
+
+**Usage**:
+```bash
+# Inside Docker container (recommended):
+docker exec pixelprobe python tools/fix_database_schema.py
+
+# Or inside container shell:
+python tools/fix_database_schema.py
+
+# Outside container (if environment is configured):
+SECRET_KEY=your-secret-key python tools/fix_database_schema.py
+```
+
+**What it does**:
+- Creates all missing database tables
+- Runs necessary schema migrations
+- Creates performance indexes
+- Verifies database accessibility
+- Provides detailed progress reporting
 
 #### `add_warning_columns.py`
 **Purpose**: Adds the warning state columns (`has_warnings` and `warning_details`) to the database schema.

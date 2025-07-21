@@ -6,7 +6,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.0.66** includes critical fixes for database model issues and enhanced system statistics display.
+**Version 2.0.73** includes critical fixes for static asset version compatibility, rate limiting issues, warnings filter improvements, and database schema repair tools.
 
 ## ✨ Features
 
@@ -627,6 +627,75 @@ To add support for new file formats:
 ### Logs and Debugging
 
 Enable debug logging by setting `FLASK_ENV=development` in your `.env` file.
+
+## 🛠️ Troubleshooting
+
+### Database Errors After Version Updates
+
+If you encounter **"no such table: scan_results"** errors after upgrading PixelProbe, this indicates the database schema wasn't properly initialized. This typically happens during version upgrades when the container restarts.
+
+**Quick Fix:**
+```bash
+# Run the database schema fix tool
+docker exec pixelprobe python tools/fix_database_schema.py
+```
+
+**What this does:**
+- Creates all missing database tables
+- Runs necessary schema migrations  
+- Creates performance indexes
+- Verifies database accessibility
+
+**Alternative one-liner:**
+```bash
+docker exec pixelprobe python -c "
+from models import db; from app import app; 
+ctx = app.app_context(); ctx.push(); 
+db.create_all(); 
+print('✅ Database tables created'); 
+ctx.pop()
+"
+```
+
+**Note:** New installations should not experience this issue - it's specific to existing installations being upgraded.
+
+### Rate Limiting Issues (429 Errors)
+
+If you see 429 "Too Many Requests" errors in browser console, this has been fixed in version 2.0.72+. Upgrade to the latest version:
+
+```bash
+# Update to latest version
+docker-compose pull
+docker-compose up -d
+```
+
+### Container Won't Start
+
+If the container fails to start, check:
+
+1. **SECRET_KEY is set** in your compose file
+2. **Volume mounts exist** on the host system
+3. **Port 5001 is available** (or change the port mapping)
+
+### Web Interface Not Loading
+
+1. **Check container health**: `docker ps` (should show "healthy")
+2. **Verify port mapping**: Ensure `5001:5000` matches your setup
+3. **Check logs**: `docker logs pixelprobe`
+
+### Performance Issues
+
+For large media libraries:
+- Increase `MAX_SCAN_WORKERS` (default: 4, try 8-16 for powerful systems)
+- Monitor system resources during scanning
+- Use SSD storage for the database if possible
+
+### Getting Help
+
+1. **Check logs first**: `docker logs pixelprobe` 
+2. **Try database fix**: Run the schema fix tool above
+3. **Search existing issues**: [GitHub Issues](https://github.com/ttlequals0/PixelProbe/issues)
+4. **Create new issue**: Include logs and system info
 
 ## License
 
