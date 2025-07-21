@@ -43,34 +43,35 @@ class TestScanService:
     
     @patch('os.path.exists')
     @patch('pixelprobe.services.scan_service.PixelProbe')
-    def test_scan_single_file_success(self, mock_probe_class, mock_exists, scan_service):
+    def test_scan_single_file_success(self, mock_probe_class, mock_exists, scan_service, app):
         """Test successful single file scan"""
-        mock_exists.return_value = True
-        mock_probe = Mock()
-        mock_probe_class.return_value = mock_probe
+        with app.app_context():
+            mock_exists.return_value = True
+            mock_probe = Mock()
+            mock_probe_class.return_value = mock_probe
+            
+            # Mock scan result with a delay to ensure thread is running
+            mock_result = Mock()
+            def mock_scan_with_delay(*args, **kwargs):
+                time.sleep(0.2)  # Simulate scan taking time
+                return mock_result
+            mock_probe.scan_file.side_effect = mock_scan_with_delay
+            
+            # Start scan
+            result = scan_service.scan_single_file('/test/file.mp4')
         
-        # Mock scan result with a delay to ensure thread is running
-        mock_result = Mock()
-        def mock_scan_with_delay(*args, **kwargs):
-            time.sleep(0.2)  # Simulate scan taking time
-            return mock_result
-        mock_probe.scan_file.side_effect = mock_scan_with_delay
-        
-        # Start scan
-        result = scan_service.scan_single_file('/test/file.mp4')
-        
-        assert result['message'] == 'Scan started'
-        assert result['file_path'] == '/test/file.mp4'
-        
-        # Wait for thread to start
-        time.sleep(0.05)
-        assert scan_service.is_scan_running() == True
-        
-        # Wait for scan to complete
-        scan_service.current_scan_thread.join(timeout=1)
-        
-        # Verify scan was called
-        mock_probe.scan_file.assert_called_once_with('/test/file.mp4', force_rescan=False)
+            assert result['message'] == 'Scan started'
+            assert result['file_path'] == '/test/file.mp4'
+            
+            # Wait for thread to start
+            time.sleep(0.05)
+            assert scan_service.is_scan_running() == True
+            
+            # Wait for scan to complete
+            scan_service.current_scan_thread.join(timeout=1)
+            
+            # Verify scan was called
+            mock_probe.scan_file.assert_called_once_with('/test/file.mp4', force_rescan=False)
     
     def test_scan_single_file_not_found(self, scan_service):
         """Test scanning non-existent file"""
@@ -97,33 +98,34 @@ class TestScanService:
     @patch('pixelprobe.services.scan_service.db')
     @patch('pixelprobe.services.scan_service.ScanState')
     @patch('pixelprobe.services.scan_service.PixelProbe')
-    def test_scan_directories_success(self, mock_probe_class, mock_scan_state_class, mock_db, mock_exists, scan_service):
+    def test_scan_directories_success(self, mock_probe_class, mock_scan_state_class, mock_db, mock_exists, scan_service, app):
         """Test successful directory scanning"""
-        mock_exists.return_value = True
+        with app.app_context():
+            mock_exists.return_value = True
+            
+            # Mock scan state
+            mock_scan_state = Mock()
+            mock_scan_state_class.get_or_create.return_value = mock_scan_state
+            
+            # Mock probe
+            mock_probe = Mock()
+            mock_probe_class.return_value = mock_probe
+            mock_probe.discover_media_files.return_value = ['/test/file1.mp4', '/test/file2.mp4']
+            
+            # Start scan
+            result = scan_service.scan_directories(['/test/dir'], force_rescan=True)
         
-        # Mock scan state
-        mock_scan_state = Mock()
-        mock_scan_state_class.get_or_create.return_value = mock_scan_state
-        
-        # Mock probe
-        mock_probe = Mock()
-        mock_probe_class.return_value = mock_probe
-        mock_probe.discover_media_files.return_value = ['/test/file1.mp4', '/test/file2.mp4']
-        
-        # Start scan
-        result = scan_service.scan_directories(['/test/dir'], force_rescan=True)
-        
-        assert result['message'] == 'Scan started'
-        assert result['directories'] == ['/test/dir']
-        assert result['force_rescan'] == True
-        assert result['num_workers'] == 1
-        
-        # Wait for thread to complete
-        scan_service.current_scan_thread.join(timeout=2)
-        
-        # Verify scan state was updated
-        mock_scan_state.start_scan.assert_called_once()
-        mock_scan_state.complete_scan.assert_called_once()
+            assert result['message'] == 'Scan started'
+            assert result['directories'] == ['/test/dir']
+            assert result['force_rescan'] == True
+            assert result['num_workers'] == 1
+            
+            # Wait for thread to complete
+            scan_service.current_scan_thread.join(timeout=2)
+            
+            # Verify scan state was updated
+            mock_scan_state.start_scan.assert_called_once()
+            mock_scan_state.complete_scan.assert_called_once()
     
     def test_scan_directories_no_valid_dirs(self, scan_service):
         """Test error when no valid directories provided"""
@@ -186,35 +188,36 @@ class TestScanService:
     @patch('pixelprobe.services.scan_service.db')
     @patch('pixelprobe.services.scan_service.ScanState')
     @patch('pixelprobe.services.scan_service.PixelProbe')
-    def test_parallel_scan(self, mock_probe_class, mock_scan_state_class, mock_db, mock_exists, scan_service):
+    def test_parallel_scan(self, mock_probe_class, mock_scan_state_class, mock_db, mock_exists, scan_service, app):
         """Test parallel scanning with multiple workers"""
-        mock_exists.return_value = True
+        with app.app_context():
+            mock_exists.return_value = True
+            
+            # Mock scan state
+            mock_scan_state = Mock()
+            mock_scan_state_class.get_or_create.return_value = mock_scan_state
+            
+            # Mock probe
+            mock_probe = Mock()
+            mock_probe_class.return_value = mock_probe
+            mock_probe.discover_media_files.return_value = [
+                '/test/file1.mp4', 
+                '/test/file2.mp4',
+                '/test/file3.mp4',
+                '/test/file4.mp4'
+            ]
+            mock_probe.scan_file.return_value = Mock()
+            
+            # Start parallel scan
+            result = scan_service.scan_directories(['/test/dir'], num_workers=2)
         
-        # Mock scan state
-        mock_scan_state = Mock()
-        mock_scan_state_class.get_or_create.return_value = mock_scan_state
-        
-        # Mock probe
-        mock_probe = Mock()
-        mock_probe_class.return_value = mock_probe
-        mock_probe.discover_media_files.return_value = [
-            '/test/file1.mp4', 
-            '/test/file2.mp4',
-            '/test/file3.mp4',
-            '/test/file4.mp4'
-        ]
-        mock_probe.scan_file.return_value = Mock()
-        
-        # Start parallel scan
-        result = scan_service.scan_directories(['/test/dir'], num_workers=2)
-        
-        assert result['num_workers'] == 2
-        
-        # Wait for scan to complete
-        scan_service.current_scan_thread.join(timeout=3)
-        
-        # Verify files were scanned
-        assert mock_probe.scan_file.call_count == 4
+            assert result['num_workers'] == 2
+            
+            # Wait for scan to complete
+            scan_service.current_scan_thread.join(timeout=3)
+            
+            # Verify files were scanned
+            assert mock_probe.scan_file.call_count == 4
     
     def test_progress_tracking_thread_safety(self, scan_service):
         """Test that progress tracking is thread-safe"""

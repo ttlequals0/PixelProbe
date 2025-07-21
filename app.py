@@ -91,19 +91,19 @@ def get_rate_limit_key():
     remote_addr = get_remote_address()
     # Exempt localhost and common Docker internal IPs
     if remote_addr in ['127.0.0.1', 'localhost', '::1']:
-        return f"exempt_{remote_addr}"  # Return a key instead of None
+        return None  # Returning None exempts from rate limiting
     # Exempt Docker internal networks (172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16)
     if (remote_addr.startswith('172.') or 
         remote_addr.startswith('10.') or 
         remote_addr.startswith('192.168.')):
-        return f"exempt_{remote_addr}"  # Return a key instead of None
+        return None  # Returning None exempts from rate limiting
     return remote_addr
 
 # Initialize rate limiter with proper configuration
 limiter = Limiter(
     app=app,
     key_func=get_rate_limit_key,
-    default_limits=["200 per day", "50 per hour"],
+    default_limits=["200 per day", "100 per hour"],
     storage_uri="memory://",
     headers_enabled=True,
     swallow_errors=True  # Don't fail requests if rate limiting has issues
@@ -147,6 +147,10 @@ app.register_blueprint(stats_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(export_bp)
 app.register_blueprint(maintenance_bp)
+
+# Exempt critical endpoints from rate limiting
+limiter.exempt(scan_bp.view_functions['get_scan_status'])
+limiter.exempt(stats_bp.view_functions['get_scan_stats'] if 'get_scan_stats' in stats_bp.view_functions else lambda: None)
 
 # Rate limits are now applied directly on the route functions using decorators
 

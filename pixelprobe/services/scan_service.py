@@ -140,6 +140,10 @@ class ScanService:
                     total_files = len(all_files)
                     self.update_progress(0, total_files, '', 'scanning')
                     
+                    # Update database scan state with total files discovered
+                    scan_state.update_progress(0, total_files)
+                    db.session.commit()
+                    
                     if num_workers > 1:
                         self._parallel_scan(checker, all_files, force_rescan, num_workers, scan_state)
                     else:

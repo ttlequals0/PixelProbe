@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.76] - 2025-07-21
+
+### Fixed
+- **Rate Limiting Issues on Internal Requests**: Fixed rate limiting blocking internal Docker container requests
+  - Fixed rate limit key function to properly exempt internal Docker IPs (172.x.x.x networks)
+  - Now returns `None` for exempt IPs instead of prefixed keys, which properly bypasses rate limiting
+  - Increased default rate limit from 50 to 100 per hour for external requests
+  - Explicitly exempted `/api/scan-status` endpoint from all rate limiting
+  - Resolves "50 per 1 hour exceeded" errors from frontend polling every 1 second
+
+- **Scan Status API Not Showing Progress**: Fixed scan progress not updating in API responses
+  - Modified `/api/scan-status` to prioritize database scan state values over service memory
+  - Added immediate database update when total files are discovered during scan initialization
+  - Fixed scan service to update both internal progress AND database scan state
+  - API now shows accurate current/total progress values during active scans
+  - Resolves scan appearing "idle" with 0 total items while actually processing files
+
 ## [2.0.75] - 2025-07-21
 
 ### Fixed

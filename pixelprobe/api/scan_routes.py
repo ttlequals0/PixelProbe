@@ -271,25 +271,44 @@ def scan_all():
         return jsonify({'error': str(e)}), 400
 
 @scan_bp.route('/scan-status')
-@exempt_from_rate_limit
 def get_scan_status():
     """Get current scan status and progress"""
     # Get progress from scan service
-    status = current_app.scan_service.get_scan_progress()
+    service_status = current_app.scan_service.get_scan_progress()
     
-    # Add scan state info
+    # Add scan state info from database
     scan_state = ScanState.get_or_create()
     state_dict = scan_state.to_dict()
     
-    # Merge progress info with state info
-    status.update({
-        'is_running': current_app.scan_service.is_scan_running(),
+    # Prioritize database values when available, fall back to service values
+    is_running = current_app.scan_service.is_scan_running()
+    
+    # Use database progress if scan is active and has meaningful data
+    if is_running and state_dict.get('estimated_total', 0) > 0:
+        current_progress = state_dict.get('files_processed', 0)
+        total_progress = state_dict.get('estimated_total', 0)
+        status_value = 'scanning' if current_progress < total_progress else 'completed'
+    else:
+        # Fall back to service values
+        current_progress = service_status.get('current', 0)
+        total_progress = service_status.get('total', 0)
+        status_value = service_status.get('status', 'idle')
+    
+    # Build comprehensive status response
+    status = {
+        'current': current_progress,
+        'total': total_progress,
+        'file': service_status.get('file', state_dict.get('current_file', '')),
+        'status': status_value,
+        'is_running': is_running,
+        'is_scanning': is_running,  # Legacy compatibility
         'scan_id': state_dict.get('id'),
         'start_time': state_dict.get('start_time'),
         'end_time': state_dict.get('end_time'),
         'directories': state_dict.get('directories'),
-        'force_rescan': state_dict.get('force_rescan')
-    })
+        'force_rescan': state_dict.get('force_rescan'),
+        'phase': state_dict.get('phase', 'idle')
+    }
     
     return jsonify(status)
 

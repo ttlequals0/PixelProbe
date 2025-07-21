@@ -60,24 +60,48 @@ class TestMediaChecker:
     
     def test_force_rescan(self, test_data_dir, app, db):
         """Test that force_rescan works correctly"""
-        checker = PixelProbe(database_path=app.config['SQLALCHEMY_DATABASE_URI'])
-        
-        # First scan
-        result1 = checker.scan_file(test_data_dir['valid_mp4'])
-        assert result1 is not None
-        
-        # Second scan without force_rescan should use cache
-        with patch.object(checker, '_check_video_corruption') as mock_check:
-            result2 = checker.scan_file(test_data_dir['valid_mp4'], force_rescan=False)
-            # Should not call the corruption check (using cache)
-            mock_check.assert_not_called()
-        
-        # Third scan with force_rescan should check again
-        with patch.object(checker, '_check_video_corruption') as mock_check:
-            mock_check.return_value = (False, [], 'ffmpeg', [], [])
-            result3 = checker.scan_file(test_data_dir['valid_mp4'], force_rescan=True)
-            # Should call the corruption check (forced rescan)
-            mock_check.assert_called_once()
+        with app.app_context():
+            checker = PixelProbe(database_path=app.config['SQLALCHEMY_DATABASE_URI'])
+            
+            # Mock the corruption checking methods and cache methods to control the flow
+            with patch.object(checker, '_check_video_corruption') as mock_check_video, \
+                 patch.object(checker, '_check_image_corruption') as mock_check_image, \
+                 patch.object(checker, 'get_file_info') as mock_get_info, \
+                 patch.object(checker, '_check_cache') as mock_check_cache, \
+                 patch.object(checker, '_save_to_cache') as mock_save_cache:
+                
+                # Mock file info
+                from datetime import datetime
+                mock_get_info.return_value = {
+                    'file_path': test_data_dir['valid_mp4'],
+                    'file_size': 1024,
+                    'file_type': 'video/mp4',
+                    'creation_date': datetime.fromtimestamp(1234567890),
+                    'last_modified': datetime.fromtimestamp(1234567890)
+                }
+                
+                # Mock cache and corruption check behavior
+                mock_check_cache.return_value = None  # No cache initially
+                mock_check_video.return_value = (False, [], 'ffmpeg', [], [])
+                
+                # First scan - should call corruption check (no cache)
+                result1 = checker.scan_file(test_data_dir['valid_mp4'])
+                assert result1 is not None
+                assert mock_check_video.call_count == 1
+                
+                # Reset mocks and set up cache for second scan
+                mock_check_video.reset_mock()
+                mock_check_cache.return_value = result1  # Return cached result
+                
+                # Second scan without force_rescan should use cache (not call corruption check)
+                result2 = checker.scan_file(test_data_dir['valid_mp4'], force_rescan=False)
+                mock_check_video.assert_not_called()
+                
+                # Third scan with force_rescan should check again (ignoring cache)
+                mock_check_video.reset_mock()
+                result3 = checker.scan_file(test_data_dir['valid_mp4'], force_rescan=True)
+                # Should call the corruption check (forced rescan ignores cache)
+                mock_check_video.assert_called_once()
     
     @patch('subprocess.run')
     def test_ffmpeg_timeout_handling(self, mock_run):
