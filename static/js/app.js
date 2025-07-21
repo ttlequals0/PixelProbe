@@ -1347,13 +1347,16 @@ class PixelProbeApp {
         let html = '<div class="system-stats-content">';
         
         // Database Stats
-        if (info.database_stats) {
+        if (info.database) {
             html += '<h4>Database Statistics</h4>';
             html += '<div class="stats-section">';
-            html += `<p>Total Files: ${info.database_stats.total_files?.toLocaleString() || 0}</p>`;
-            html += `<p>Corrupted Files: ${info.database_stats.corrupted_files?.toLocaleString() || 0}</p>`;
-            html += `<p>Healthy Files: ${info.database_stats.healthy_files?.toLocaleString() || 0}</p>`;
-            html += `<p>Warning Files: ${info.database_stats.warning_files?.toLocaleString() || 0}</p>`;
+            html += `<p>Total Files: ${info.database.total_files?.toLocaleString() || 0}</p>`;
+            html += `<p>Completed Files: ${info.database.completed_files?.toLocaleString() || 0}</p>`;
+            html += `<p>Corrupted Files: ${info.database.corrupted_files?.toLocaleString() || 0}</p>`;
+            html += `<p>Healthy Files: ${info.database.healthy_files?.toLocaleString() || 0}</p>`;
+            html += `<p>Warning Files: ${info.database.warning_files?.toLocaleString() || 0}</p>`;
+            html += `<p>Error Files: ${info.database.error_files?.toLocaleString() || 0}</p>`;
+            html += `<p>Marked as Good: ${info.database.marked_as_good?.toLocaleString() || 0}</p>`;
             html += '</div>';
         }
         
@@ -1369,28 +1372,60 @@ class PixelProbeApp {
             html += '</div>';
         }
         
-        // Scan Stats
-        if (info.scan_stats) {
-            html += '<h4>Scan Statistics</h4>';
+        // Performance Stats
+        if (info.database && info.database.performance) {
+            const perf = info.database.performance;
+            html += '<h4>Scan Performance</h4>';
             html += '<div class="stats-section">';
-            html += `<p>Total Scans: ${info.scan_stats.total_scans || 0}</p>`;
-            html += `<p>Average Scan Time: ${info.scan_stats.average_scan_time?.toFixed(2) || 0}s</p>`;
-            if (info.scan_stats.last_scan_date) {
-                html += `<p>Last Scan: ${new Date(info.scan_stats.last_scan_date).toLocaleString()}</p>`;
+            html += `<p>Total Scans: ${perf.total_scans?.toLocaleString() || 0}</p>`;
+            html += `<p>Average Days Since Scan: ${perf.avg_days_since_scan?.toFixed(1) || 0} days</p>`;
+            if (perf.newest_scan) {
+                html += `<p>Last Scan: ${new Date(perf.newest_scan).toLocaleString()}</p>`;
+            }
+            if (perf.oldest_scan) {
+                html += `<p>First Scan: ${new Date(perf.oldest_scan).toLocaleString()}</p>`;
             }
             html += '</div>';
         }
         
+        // System Information
+        if (info.version || info.timezone || info.features) {
+            html += '<h4>System Information</h4>';
+            html += '<div class="stats-section">';
+            if (info.version) {
+                html += `<p>Version: ${info.version}</p>`;
+            }
+            if (info.timezone) {
+                html += `<p>Timezone: ${info.timezone}</p>`;
+            }
+            if (info.current_time) {
+                html += `<p>Current Time: ${new Date(info.current_time).toLocaleString()}</p>`;
+            }
+            html += '</div>';
+        }
+        
+        // Features
+        if (info.features) {
+            html += '<h4>Features</h4>';
+            html += '<div class="stats-section">';
+            Object.entries(info.features).forEach(([key, value]) => {
+                const featureName = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                html += `<p>${featureName}: ${value ? 'Enabled' : 'Disabled'}</p>`;
+            });
+            html += '</div>';
+        }
+        
         // File System Statistics
-        if (info.total_files_found || info.database_stats) {
+        if (info.filesystem || info.database) {
             html += '<h4>File System Statistics</h4>';
             html += '<div class="stats-section">';
-            const totalFiles = info.total_files_found || info.database_stats?.total_files || 0;
-            const completedFiles = info.database_stats?.completed_files || 0;
+            const totalFiles = info.filesystem?.total_files || info.database?.total_files || 0;
+            const completedFiles = info.database?.completed_files || 0;
             const percentageTracked = totalFiles > 0 ? 100 : 0;
             const percentageChecked = totalFiles > 0 ? ((completedFiles / totalFiles) * 100).toFixed(1) : 0;
             
             html += `<p>Total Files Found: ${totalFiles.toLocaleString()}</p>`;
+            html += `<p>Paths Monitored: ${info.filesystem?.paths_monitored || 0}</p>`;
             html += `<p>Percentage Tracked: ${percentageTracked}%</p>`;
             html += `<p>Percentage Checked: ${percentageChecked}%</p>`;
             html += '</div>';

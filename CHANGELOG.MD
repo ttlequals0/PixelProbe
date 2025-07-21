@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.66] - 2025-01-21
+
+### Fixed
+- **Database Model Issues**: Fixed TypeError preventing cleanup and file-changes operations
+  - Removed invalid `total_phases` parameter from CleanupState and FileChangesState constructors
+  - Fixed maintenance_routes.py constructor calls
+  - Fixed maintenance_service.py constructor calls
+- **Missing ScanState Methods**: Fixed AttributeError in scan operations
+  - Added missing `update_progress(files_processed, total_files)` method to ScanState model
+  - Added missing `complete_scan()` method to ScanState model
+  - Fixed scan_routes.py incorrect attribute access (`scan_state.status` → `scan_state.phase`)
+- **System Statistics UI**: Fixed missing information in System Statistics page
+  - Updated JavaScript to use correct API response structure (`database` instead of `database_stats`)
+  - Added comprehensive system information display including version, timezone, features
+  - Enhanced database statistics display with completed files, error files, and marked files
+  - Added scan performance metrics with days since scan and scan history
+  - Fixed file system statistics display
+
 ## [2.0.65] - 2025-01-21
 
 ### Fixed

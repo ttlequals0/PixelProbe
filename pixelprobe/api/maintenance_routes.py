@@ -384,8 +384,7 @@ def cleanup_orphaned_files():
         start_time=datetime.now(timezone.utc),
         is_active=True,
         phase='starting',
-        phase_number=1,
-        total_phases=2
+        phase_number=1
     )
     db.session.add(cleanup_record)
     db.session.commit()
@@ -434,8 +433,7 @@ def check_file_changes():
         start_time=datetime.now(timezone.utc),
         is_active=True,
         phase='starting',
-        phase_number=1,
-        total_phases=3
+        phase_number=1
     )
     db.session.add(file_changes_record)
     db.session.commit()
