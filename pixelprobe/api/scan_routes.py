@@ -63,6 +63,7 @@ def get_scan_results():
     per_page = request.args.get('per_page', 100, type=int)
     scan_status = request.args.get('scan_status', 'all')
     is_corrupted = request.args.get('is_corrupted', 'all')
+    has_warnings = request.args.get('has_warnings', 'all')
     search_query = request.args.get('search', '').strip()
     sort_field = request.args.get('sort_field', 'scan_date')
     sort_order = request.args.get('sort_order', 'desc')
@@ -86,6 +87,10 @@ def get_scan_results():
             (ScanResult.is_corrupted == False) | 
             (ScanResult.marked_as_good == True)
         )
+    
+    # Apply warnings filter
+    if has_warnings == 'true':
+        query = query.filter_by(has_warnings=True)
     
     # Apply sorting
     # Map frontend field names to model attributes
@@ -298,7 +303,7 @@ def scan_all():
             try:
                 excluded_paths, excluded_extensions = load_exclusions()
                 checker = PixelProbe(
-                database_path=current_app.config['SQLALCHEMY_DATABASE_URI'],
+                database_path=app.config['SQLALCHEMY_DATABASE_URI'],
                 excluded_paths=excluded_paths,
                 excluded_extensions=excluded_extensions
                 )
@@ -308,12 +313,14 @@ def scan_all():
                     scan_progress['status'] = 'discovering'
                 
                 all_files = []
-                for directory in validated_dirs:
-                    if scan_cancelled:
-                        break
-                    if os.path.exists(directory):
-                        files = checker.discover_media_files(directory)
-                        all_files.extend(files)
+                logger.info(f"Starting discovery with directories: {validated_dirs} (type: {type(validated_dirs)})")
+                if not scan_cancelled:
+                    # Filter only existing directories
+                    existing_dirs = [d for d in validated_dirs if os.path.exists(d)]
+                    if existing_dirs:
+                        all_files = checker.discover_media_files(existing_dirs)
+                    else:
+                        logger.warning("No valid directories found for scanning")
                 
                 if scan_cancelled:
                     with progress_lock:
@@ -486,12 +493,13 @@ def scan_parallel():
                     scan_progress['status'] = 'discovering'
                 
                 all_files = []
-                for directory in validated_dirs:
-                    if scan_cancelled:
-                        break
-                    if os.path.exists(directory):
-                        files = checker.discover_media_files(directory)
-                        all_files.extend(files)
+                if not scan_cancelled:
+                    # Filter only existing directories
+                    existing_dirs = [d for d in validated_dirs if os.path.exists(d)]
+                    if existing_dirs:
+                        all_files = checker.discover_media_files(existing_dirs)
+                    else:
+                        logger.warning("No valid directories found for scanning")
                 
                 if scan_cancelled:
                     with progress_lock:

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.70] - 2025-07-21
+
+### Fixed
+- **Additional UI Fixes**: Fixed remaining UI functionality issues
+  - Fixed "Warnings Only" filter not working by adding has_warnings parameter support
+  - Fixed scan reading directories as individual characters by correcting media_checker API calls
+  - Improved directory validation and error handling in scan operations
+
 ## [2.0.69] - 2025-07-21
 
 ### Fixed
@@ -21,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Backend API now returns all necessary fields: corruption_details, scan_output, error_message, warning_details
   - Details button now shows for any file with scan output, error messages, or warning details
   - Enhanced scan details modal to display all available information sections
+- **Additional UI Fixes**: Fixed remaining UI functionality issues
+  - Fixed "Warnings Only" filter not working by adding has_warnings parameter support
+  - Fixed scan reading directories as individual characters by correcting media_checker API calls
+  - Improved directory validation and error handling in scan operations
 
 ## [2.0.68] - 2025-07-21
 

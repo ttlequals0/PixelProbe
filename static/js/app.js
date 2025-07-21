@@ -725,7 +725,7 @@ class TableManager {
                         params.is_corrupted = 'false';
                         break;
                     case 'warning':
-                        params.scan_status = 'warning';
+                        params.has_warnings = 'true';
                         break;
                     case 'all':
                     default:
