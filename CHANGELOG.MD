@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.56] - 2025-01-21
 
+### Fixed
+- **Critical Production Issue**: Fixed Flask-Limiter initialization error that prevented application startup
+  - Removed invalid 'exempt' parameter from Limiter constructor
+  - Added @limiter.exempt decorator to health check endpoint
+  - Resolves TypeError that caused container restart loop
+
 ### Added
 - **Force Rescan Functionality**: Implemented caching mechanism for scan results
   - Added `force_rescan` parameter to scan methods to bypass cache
