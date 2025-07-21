@@ -80,10 +80,24 @@ CORS(app, resources={
     r"/": {"origins": "*"}
 })
 
+# Custom key function that exempts internal requests
+def get_rate_limit_key():
+    """Get rate limit key, exempting internal requests"""
+    remote_addr = get_remote_address()
+    # Exempt localhost and common Docker internal IPs
+    if remote_addr in ['127.0.0.1', 'localhost', '::1']:
+        return None
+    # Exempt Docker internal networks (172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16)
+    if (remote_addr.startswith('172.') or 
+        remote_addr.startswith('10.') or 
+        remote_addr.startswith('192.168.')):
+        return None  # Returning None exempts from rate limiting
+    return remote_addr
+
 # Initialize rate limiter
 limiter = Limiter(
     app=app,
-    key_func=get_remote_address,
+    key_func=get_rate_limit_key,
     default_limits=["200 per day", "50 per hour"],
     storage_uri="memory://"
 )
@@ -127,13 +141,7 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(export_bp)
 app.register_blueprint(maintenance_bp)
 
-# Apply specific rate limits to sensitive endpoints
-limiter.limit("5 per minute")(scan_bp.view_functions['scan_file'])
-limiter.limit("2 per minute")(scan_bp.view_functions['scan_all'])
-limiter.limit("2 per minute")(scan_bp.view_functions['scan_parallel'])
-limiter.limit("10 per minute")(admin_bp.view_functions['cleanup_files'])
-limiter.limit("10 per minute")(admin_bp.view_functions['mark_as_good'])
-limiter.limit("5 per minute")(maintenance_bp.view_functions['vacuum_database'])
+# Rate limits are now applied directly on the route functions using decorators
 
 # Pass scheduler to admin blueprint
 set_scheduler(scheduler)
@@ -184,6 +192,36 @@ def logo():
         return send_file(logo_path, mimetype='image/png')
     return '', 404
 
+def cleanup_stuck_operations():
+    """Clean up any stuck operations from previous runs"""
+    try:
+        from models import FileChangesState, CleanupState
+        
+        # Mark any active file changes as failed
+        active_file_changes = FileChangesState.query.filter_by(is_active=True).all()
+        for file_change in active_file_changes:
+            file_change.is_active = False
+            file_change.phase = 'failed'
+            file_change.end_time = datetime.now(timezone.utc)
+            file_change.progress_message = 'Application restarted - operation marked as failed'
+            logger.warning(f"Marking stuck file changes operation {file_change.check_id} as failed")
+        
+        # Mark any active cleanup operations as failed
+        active_cleanups = CleanupState.query.filter_by(is_active=True).all()
+        for cleanup in active_cleanups:
+            cleanup.is_active = False
+            cleanup.phase = 'failed'
+            cleanup.end_time = datetime.now(timezone.utc)
+            cleanup.progress_message = 'Application restarted - operation marked as failed'
+            logger.warning(f"Marking stuck cleanup operation {cleanup.cleanup_id} as failed")
+        
+        if active_file_changes or active_cleanups:
+            db.session.commit()
+            logger.info(f"Cleaned up {len(active_file_changes)} stuck file changes and {len(active_cleanups)} stuck cleanup operations")
+            
+    except Exception as e:
+        logger.error(f"Error cleaning up stuck operations: {str(e)}")
+
 def create_tables():
     """Initialize database tables"""
     with app.app_context():
@@ -191,6 +229,7 @@ def create_tables():
             db.create_all()
             logger.info("Database tables created/verified successfully")
             migrate_database()
+            cleanup_stuck_operations()
         except Exception as e:
             logger.error(f"Error in database initialization: {str(e)}")
 
@@ -315,7 +354,7 @@ def create_performance_indexes():
 with app.app_context():
     create_tables()
     init_services()
-    scheduler.start()
+    scheduler.init_app(app)
 
 if __name__ == '__main__':
     # Start the application (initialization already done above)

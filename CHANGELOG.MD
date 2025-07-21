@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.63] - 2025-01-21
+
+### Added
+- **Reset File Changes State Endpoint**: Added `/api/reset-file-changes-state` endpoint to force reset stuck file changes operations
+  - Similar to the existing cleanup reset endpoint
+  - Allows users to recover from stuck file changes scans
+
+### Fixed
+- **Stuck Operations on App Restart**: Fixed issue where file changes and cleanup operations would remain stuck after app restart
+  - Added `cleanup_stuck_operations()` function that runs on startup
+  - Automatically marks any active file changes or cleanup operations as failed when app starts
+  - Prevents operations from appearing stuck indefinitely after crashes or restarts
+  - Logs warnings for any operations that were marked as failed
+
+## [2.0.62] - 2025-01-21
+
+### Fixed
+- **Critical AttributeError in scan endpoints**: Fixed 'set' object has no attribute 'limit' error
+  - Flask-Limiter stores itself as 'flask-limiter' not 'limiter' in app.extensions
+  - Fixed get_limiter() function in all route files to use correct key
+  - All scan endpoints now work correctly with rate limiting
+- **Added missing rate limits**: Added rate limiting to remaining POST endpoints
+  - cancel-scan: 10 per minute
+  - reset-stuck-scans: 5 per minute
+  - reset-for-rescan: 5 per minute
+  - recover-stuck-scan: 5 per minute
+
+## [2.0.61] - 2025-01-21
+
+### Fixed
+- **Rate Limiting Scope**: Fixed rate limiting to only apply to external requests
+  - Internal requests from localhost and Docker networks (172.x, 10.x, 192.168.x) are now exempt
+  - Prevents the app from rate limiting its own frontend when polling status endpoints
+  - External rate limits remain at 200/day, 50/hour for security
+  - Fixes "ratelimit exceeded" errors seen in production logs
+
+## [2.0.60] - 2025-01-21
+
+### Fixed
+- **Critical Application Startup Errors**: Fixed multiple issues preventing app from starting since version 2.0.55
+  - Fixed KeyError when applying rate limits to blueprint view functions - removed broken implementation that tried to access view functions before blueprint registration
+  - Fixed AttributeError with MediaScheduler - changed from scheduler.start() to scheduler.init_app(app)
+  - Rate limits are now applied directly as decorators on route functions instead of after blueprint registration
+  - Application now starts successfully and all API endpoints are functional
+  - Verified locally that the app starts without errors and responds to API requests
+
 ## [2.0.59] - 2025-01-21
 
 ### Changed

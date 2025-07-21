@@ -23,6 +23,24 @@ except pytz.exceptions.UnknownTimeZoneError:
 
 maintenance_bp = Blueprint('maintenance', __name__, url_prefix='/api')
 
+# Get limiter instance from app context
+def get_limiter():
+    from flask import current_app
+    return current_app.extensions.get('flask-limiter')
+
+# Create rate limit decorators
+def rate_limit(limit_string):
+    """Decorator to apply rate limits using the app's limiter"""
+    def decorator(f):
+        def wrapped(*args, **kwargs):
+            limiter = get_limiter()
+            if limiter:
+                return limiter.limit(limit_string)(f)(*args, **kwargs)
+            return f(*args, **kwargs)
+        wrapped.__name__ = f.__name__
+        return wrapped
+    return decorator
+
 # Global state tracking - will be moved to service layer
 cleanup_state = {
     'is_running': False,
@@ -296,6 +314,43 @@ def cancel_file_changes():
             
     except Exception as e:
         logger.error(f"Error cancelling file changes check: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@maintenance_bp.route('/reset-file-changes-state', methods=['POST'])
+def reset_file_changes_state():
+    """Force reset file changes state in case of stuck operation"""
+    try:
+        # Get any active file changes records
+        active_file_changes = FileChangesState.query.filter_by(is_active=True).all()
+        
+        # Mark them all as failed
+        for file_change in active_file_changes:
+            file_change.is_active = False
+            file_change.phase = 'failed'
+            file_change.end_time = datetime.now(timezone.utc)
+            file_change.progress_message = 'Force reset by user'
+        
+        db.session.commit()
+        
+        # Reset in-memory state
+        with file_changes_state_lock:
+            file_changes_state.update({
+                'is_running': False,
+                'phase': 'idle',
+                'files_processed': 0,
+                'total_files': 0,
+                'changes_found': 0,
+                'corrupted_found': 0,
+                'progress_percentage': 0,
+                'start_time': None,
+                'cancel_requested': False
+            })
+        
+        logger.info("File changes state force reset")
+        return jsonify({'message': 'File changes state reset successfully'})
+        
+    except Exception as e:
+        logger.error(f"Error resetting file changes state: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @maintenance_bp.route('/cleanup-orphaned', methods=['POST'])
