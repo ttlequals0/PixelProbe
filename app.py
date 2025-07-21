@@ -148,9 +148,7 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(export_bp)
 app.register_blueprint(maintenance_bp)
 
-# Exempt critical endpoints from rate limiting
-limiter.exempt(scan_bp.view_functions['get_scan_status'])
-limiter.exempt(stats_bp.view_functions['get_scan_stats'] if 'get_scan_stats' in stats_bp.view_functions else lambda: None)
+# Rate limiting exemptions are handled by the key_func returning None for internal IPs
 
 # Rate limits are now applied directly on the route functions using decorators
 

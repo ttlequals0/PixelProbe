@@ -7,6 +7,7 @@ import logging
 from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
 from version import __version__
+
 from pixelprobe.utils.security import (
     validate_file_path, validate_directory_path, 
     PathTraversalError, AuditLogger, validate_json_input
