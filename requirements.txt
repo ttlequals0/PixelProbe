@@ -1,6 +1,8 @@
 Flask==2.3.3
 Flask-SQLAlchemy==3.0.5
 Flask-CORS==4.0.0
+Flask-Limiter==3.5.0
+Flask-WTF==1.2.1
 Pillow==10.0.0
 python-magic==0.4.27
 ffmpeg-python==0.2.0

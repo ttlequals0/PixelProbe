@@ -1,0 +1,32 @@
+# Test dependencies for PixelProbe
+# Install with: pip install -r requirements-test.txt
+
+# Include base requirements
+-r requirements.txt
+
+# Testing frameworks
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-benchmark==4.0.0
+pytest-timeout==2.2.0
+pytest-mock==3.12.0
+
+# Test utilities
+factory-boy==3.3.0
+faker==20.1.0
+
+# Performance monitoring for tests
+psutil==5.9.6
+
+# Code quality tools
+flake8==6.1.0
+black==23.11.0
+isort==5.12.0
+
+# Type checking
+mypy==1.7.1
+types-requests==2.31.0.10
+
+# Documentation
+sphinx==7.2.6
+sphinx-rtd-theme==2.0.0

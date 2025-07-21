@@ -13,6 +13,7 @@ import tempfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+from pixelprobe.utils.security import safe_subprocess_run, validate_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -711,7 +712,7 @@ class PixelProbe:
         
         logger.info(f"Starting ImageMagick verification for: {file_path}")
         try:
-            result = subprocess.run(
+            result = safe_subprocess_run(
                 ['identify', '-verbose', file_path],
                 capture_output=True,
                 text=True,
@@ -776,7 +777,7 @@ class PixelProbe:
             logger.warning(f"ImageMagick error for {file_path}: {str(e)}")
         
         try:
-            result = subprocess.run(
+            result = safe_subprocess_run(
                 ['ffmpeg', '-v', 'error', '-i', file_path, '-f', 'null', '-'],
                 capture_output=True,
                 text=True,
@@ -923,7 +924,7 @@ class PixelProbe:
         
         # Use improved FFmpeg command for corruption detection
         try:
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffmpeg', 
                 '-v', 'error',           # Show only errors
                 '-err_detect', 'ignore_err',  # Continue on errors to get full error report
@@ -999,7 +1000,7 @@ class PixelProbe:
             is_corrupted = True
         
         try:
-            result = subprocess.run(
+            result = safe_subprocess_run(
                 ['ffmpeg', '-v', 'error', '-t', '10', '-i', file_path, '-f', 'null', '-'],
                 capture_output=True,
                 text=True,
@@ -1093,7 +1094,7 @@ class PixelProbe:
             # Use ffmpeg to decode a portion of the audio
             decode_duration = 10 if not deep_scan else 30  # Decode first 10s (or 30s for deep scan)
             
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffmpeg', '-v', 'error',
                 '-i', file_path,
                 '-t', str(decode_duration),
@@ -1147,7 +1148,7 @@ class PixelProbe:
             logger.info(f"Running deep audio scan for: {file_path}")
             try:
                 # Scan entire file for errors
-                result = subprocess.run([
+                result = safe_subprocess_run([
                     'ffmpeg', '-v', 'error',
                     '-i', file_path,
                     '-f', 'null', '-'
@@ -1180,7 +1181,7 @@ class PixelProbe:
             # FLAC has built-in error detection
             logger.info(f"Running FLAC-specific validation for: {file_path}")
             try:
-                result = subprocess.run([
+                result = safe_subprocess_run([
                     'flac', '-t', file_path
                 ], capture_output=True, text=True, timeout=60)
                 
@@ -1263,7 +1264,7 @@ class PixelProbe:
         
         try:
             logger.info(f"Checking frame integrity for {file_path}")
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffprobe', 
                 '-show_entries', 'stream=r_frame_rate,nb_read_frames,duration',
                 '-select_streams', 'v:0',
@@ -1321,7 +1322,7 @@ class PixelProbe:
         
         try:
             logger.info(f"Checking temporal outliers for {file_path}")
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffprobe',
                 '-f', 'lavfi',
                 '-i', f'movie={file_path},signalstats=stat=tout+vrep',
@@ -1394,7 +1395,7 @@ class PixelProbe:
             
             for start_time, sample_duration, location in sample_points:
                 try:
-                    result = subprocess.run([
+                    result = safe_subprocess_run([
                         'ffmpeg',
                         '-v', 'error',
                         '-err_detect', 'crccheck+bitstream',
@@ -1425,7 +1426,7 @@ class PixelProbe:
         
         try:
             logger.info(f"Running strict error detection for {file_path}")
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffmpeg',
                 '-v', 'error',
                 '-err_detect', 'crccheck+bitstream+buffer+explode',

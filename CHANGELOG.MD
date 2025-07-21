@@ -9,6 +9,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.55] - 2025-01-20
 
+### Security Enhancements
+- **Fixed Critical Security Vulnerabilities**:
+  - **Path Traversal Protection**: Added comprehensive path validation to prevent directory traversal attacks in file scanning endpoints
+  - **Command Injection Prevention**: Replaced all unsafe subprocess calls with validated safe_subprocess_run wrapper
+  - **Input Validation**: Added JSON schema validation to all API endpoints with type checking and length limits
+  - **Rate Limiting**: Implemented rate limiting on all API endpoints (default: 200/day, 50/hour) with stricter limits on sensitive operations
+  - **CSRF Protection**: Added Flask-WTF CSRF protection (currently exempted for API endpoints pending token-based auth)
+  - **Audit Logging**: Added comprehensive security audit logging for all sensitive operations
+  
+- **New Security Module** (`pixelprobe/utils/security.py`):
+  - `validate_file_path()`: Validates file paths against allowed directories
+  - `validate_directory_path()`: Validates directory paths for safety
+  - `sanitize_filename()`: Removes dangerous characters from filenames
+  - `validate_command_args()`: Prevents command injection in subprocess calls
+  - `safe_subprocess_run()`: Secure wrapper for subprocess execution
+  - `AuditLogger`: Security event and action logging
+  - `validate_json_input()`: Decorator for input validation
+  
+- **Updated Dependencies**:
+  - Added Flask-Limiter==3.5.0 for rate limiting
+  - Added Flask-WTF==1.2.1 for CSRF protection
+
+### Major Architecture Overhaul
+- **Separation of Concerns**: 
+  - Broke down monolithic 2,500+ line app.py into modular components
+  - Created layered architecture with clear separation between API routes, business logic, and data access
+  
+- **New Directory Structure**:
+  - `api/` - Contains route modules organized by functionality:
+    - `scan_routes.py` - Scan-related endpoints
+    - `stats_routes.py` - Statistics endpoints  
+    - `admin_routes.py` - Admin/configuration endpoints
+    - `export_routes.py` - Export functionality endpoints
+    - `maintenance_routes.py` - Cleanup and file-changes operations
+  - `services/` - Business logic layer:
+    - `scan_service.py` - Scanning business logic
+    - `stats_service.py` - Statistics calculations
+    - `export_service.py` - Export functionality
+    - `monitor_service.py` - Monitoring and alerting
+  - `repositories/` - Data access layer:
+    - `base_repository.py` - Base repository pattern
+    - `scan_repository.py` - Database access for scans
+  - `models/` - Data models:
+    - `scan_models.py` - Scan-related models
+    - `stats_models.py` - Statistics models
+  - `utils/` - Shared utilities:
+    - `validators.py` - Input validation
+    - `decorators.py` - Common decorators
+    
+- **Benefits**:
+  - Improved testability with isolated components
+  - Clear separation of concerns following SOLID principles
+  - Easier parallel development without conflicts
+  - Simplified app.py focused only on initialization
+  - Better code organization and maintainability
+
 ### Refactoring
 - **Eliminated Code Redundancy**:
   - Created `utils.py` module with shared utilities:

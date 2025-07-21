@@ -28,3 +28,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+app_old.py
+REFACTORING_SUMMARY.md
+*.backup

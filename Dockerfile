@@ -14,7 +14,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Ensure the pixelprobe package is properly installed
 RUN mkdir -p /app/instance
+
+# Set Python path to include the app directory
+ENV PYTHONPATH=/app:$PYTHONPATH
 
 EXPOSE 5000
 

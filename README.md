@@ -4,9 +4,9 @@
   <img src="static/images/pixelprobe-logo.png" alt="PixelProbe Logo" width="200" height="200">
 </div>
 
-PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video and image files across your media libraries.
+PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.0.53** fixes file-changes scanning progress tracking with smooth per-file updates and proper async database writes.
+**Version 2.0.55** introduces a major architectural refactoring with modular components, comprehensive test suite, and improved maintainability while maintaining full API compatibility.
 
 ## ✨ Features
 
@@ -404,35 +404,55 @@ PixelProbe uses multiple methods to detect file corruption:
 
 ## Architecture
 
+### Modular Architecture (v2.0.55+)
+
+PixelProbe now features a clean, modular architecture following SOLID principles:
+
 ```
 PixelProbe/
-├── app.py                 # Flask web application
-├── media_checker.py       # Core corruption detection logic
-├── models.py             # SQLAlchemy database models
-├── version.py            # Version information
-├── templates/
-│   ├── index.html        # Legacy web interface
-│   ├── index_modern.html # Modern responsive UI
-│   └── api_docs.html     # API documentation
-├── static/
-│   ├── css/             # Stylesheets
-│   │   ├── desktop.css  # Desktop responsive styles
-│   │   ├── mobile.css   # Mobile responsive styles
-│   │   └── logo-styles.css # Logo styling
-│   ├── js/              # JavaScript
-│   │   └── app.js       # Main application logic
-│   └── images/          # Images and icons
-├── tools/               # Utility scripts for maintenance
-│   ├── README.md        # Documentation for tools
-│   └── *.py             # Various fix and migration scripts
-├── docs/                # Documentation
-│   └── screenshots/     # UI screenshots
-├── scripts/             # Development and deployment scripts
-├── requirements.txt     # Python dependencies
-├── Dockerfile           # Docker container configuration
-├── docker-compose.yml   # Docker Compose setup
-└── README.md           # This file
+├── app.py                    # Application initialization (250 lines vs 2,500+)
+├── pixelprobe/              # Main package
+│   ├── api/                 # API Route Blueprints
+│   │   ├── scan_routes.py   # Scan endpoints (/api/scan-*)
+│   │   ├── stats_routes.py  # Statistics endpoints (/api/stats, /api/system-info)
+│   │   ├── admin_routes.py  # Admin endpoints (configurations, schedules)
+│   │   ├── export_routes.py # Export endpoints (CSV, view, download)
+│   │   └── maintenance_routes.py # Cleanup and file-changes operations
+│   ├── services/            # Business Logic Layer
+│   │   ├── scan_service.py  # Scanning operations and orchestration
+│   │   ├── stats_service.py # Statistics calculations
+│   │   ├── export_service.py # Export functionality
+│   │   └── maintenance_service.py # Cleanup and monitoring
+│   ├── repositories/        # Data Access Layer
+│   │   ├── base_repository.py # Generic repository pattern
+│   │   ├── scan_repository.py # Scan result data operations
+│   │   └── config_repository.py # Configuration data operations
+│   └── utils/               # Shared Utilities
+│       ├── helpers.py       # Common helper functions
+│       ├── decorators.py    # Route decorators
+│       └── validators.py    # Input validation
+├── tests/                   # Comprehensive Test Suite
+│   ├── conftest.py         # Pytest configuration and fixtures
+│   ├── test_media_checker.py # Core functionality tests
+│   ├── unit/               # Unit tests for each component
+│   │   ├── test_scan_service.py
+│   │   ├── test_stats_service.py
+│   │   └── test_repositories.py
+│   └── integration/        # API integration tests
+├── media_checker.py        # Core corruption detection engine
+├── models.py              # SQLAlchemy database models
+├── static/                # Frontend assets
+├── templates/             # HTML templates
+└── requirements.txt       # Python dependencies
 ```
+
+### Key Architectural Benefits
+
+- **Separation of Concerns**: Each module has a single, well-defined responsibility
+- **Testability**: Components can be tested in isolation with comprehensive test coverage
+- **Maintainability**: Changes to one feature don't affect others
+- **Scalability**: Easy to add new features without modifying existing code
+- **API Compatibility**: All endpoints remain unchanged, ensuring backward compatibility
 
 ## 🛠️ Utility Tools
 
@@ -444,6 +464,58 @@ The `tools/` directory contains utility scripts for database maintenance and mig
 
 See [tools/README.md](tools/README.md) for detailed documentation on each tool.
 
+## Documentation
+
+### API Documentation
+- **[API Reference](docs/api/README.md)** - Complete API documentation with endpoints, request/response examples
+- **[OpenAPI Specification](docs/api/openapi.yaml)** - OpenAPI 3.0 specification for API integration
+- **[Integration Guide](docs/examples/integration-guide.md)** - Examples for integrating PixelProbe into your workflows
+
+### Developer Documentation
+- **[Developer Guide](docs/developer/README.md)** - Setup, architecture, and contribution guidelines
+- **[Architecture Overview](docs/ARCHITECTURE.md)** - System design and component architecture
+- **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Detailed code organization and module descriptions
+- **[Performance Tuning](docs/PERFORMANCE_TUNING.md)** - Optimization guide for large-scale deployments
+
+### API Client Examples
+- **[Python Client](docs/examples/python-client.py)** - Full-featured Python client with CLI
+- **[Node.js Client](docs/examples/nodejs-client.js)** - JavaScript/Node.js client implementation
+- **[Bash Client](docs/examples/bash-client.sh)** - Shell script client using curl and jq
+
+### Quick Start Examples
+
+#### Python
+```python
+from pixelprobe_client import PixelProbeClient
+
+client = PixelProbeClient("http://localhost:5000")
+client.scan_directory(["/media/photos"])
+stats = client.get_statistics()
+print(f"Corruption rate: {stats['corruption_rate']}%")
+```
+
+#### JavaScript
+```javascript
+const PixelProbeClient = require('./pixelprobe-client');
+
+const client = new PixelProbeClient('http://localhost:5000');
+await client.scanDirectory(['/media/photos']);
+const stats = await client.getStatistics();
+console.log(`Corruption rate: ${stats.corruption_rate}%`);
+```
+
+#### Bash
+```bash
+# Scan directories
+./pixelprobe-client.sh scan /media/photos /media/videos
+
+# Get statistics
+./pixelprobe-client.sh stats
+
+# Export results
+./pixelprobe-client.sh export results.csv
+```
+
 ## Development
 
 ### Running in Development Mode
@@ -451,6 +523,62 @@ See [tools/README.md](tools/README.md) for detailed documentation on each tool.
 ```bash
 export FLASK_ENV=development
 python app.py
+```
+
+### Testing
+
+PixelProbe includes a comprehensive test suite covering core functionality, services, repositories, and API endpoints.
+
+#### Running Tests
+
+```bash
+# Install test dependencies
+pip install -r requirements-test.txt
+
+# Run all tests
+pytest
+
+# Run with coverage report
+pytest --cov=pixelprobe --cov-report=html
+
+# Run specific test categories
+pytest tests/unit/           # Unit tests only
+pytest tests/integration/    # Integration tests only
+pytest tests/test_media_checker.py  # Core functionality tests
+
+# Run with verbose output
+pytest -v
+
+# Run with benchmark tests
+pytest --benchmark-only
+```
+
+#### Test Categories
+
+- **Unit Tests**: Test individual components in isolation
+  - Service layer tests (scan, stats, export, maintenance)
+  - Repository layer tests (data access patterns)
+  - Utility function tests
+  
+- **Integration Tests**: Test API endpoints and full workflows
+  - API endpoint tests with mock data
+  - Database integration tests
+  - File system operation tests
+  
+- **Performance Tests**: Benchmark critical operations
+  - File scanning performance
+  - Database query optimization
+  - Memory usage monitoring
+
+#### Writing Tests
+
+When contributing, please include tests for new functionality:
+
+```python
+# Example test for new feature
+def test_new_feature(scan_service, mock_scan_result):
+    result = scan_service.new_feature(mock_scan_result)
+    assert result.status == 'success'
 ```
 
 ### Adding New File Formats
