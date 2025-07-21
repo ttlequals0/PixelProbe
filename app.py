@@ -27,7 +27,6 @@ from pixelprobe.api.stats_routes import stats_bp
 from pixelprobe.api.admin_routes import admin_bp, set_scheduler
 from pixelprobe.api.export_routes import export_bp
 from pixelprobe.api.maintenance_routes import maintenance_bp
-from pixelprobe.utils.rate_limiting import apply_rate_limits
 
 # Import services
 from pixelprobe.services import ScanService, StatsService, ExportService, MaintenanceService
@@ -128,8 +127,13 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(export_bp)
 app.register_blueprint(maintenance_bp)
 
-# Apply rate limits after blueprints are registered
-apply_rate_limits(app, limiter)
+# Apply specific rate limits to sensitive endpoints
+limiter.limit("5 per minute")(scan_bp.view_functions['scan_file'])
+limiter.limit("2 per minute")(scan_bp.view_functions['scan_all'])
+limiter.limit("2 per minute")(scan_bp.view_functions['scan_parallel'])
+limiter.limit("10 per minute")(admin_bp.view_functions['cleanup_files'])
+limiter.limit("10 per minute")(admin_bp.view_functions['mark_as_good'])
+limiter.limit("5 per minute")(maintenance_bp.view_functions['vacuum_database'])
 
 # Pass scheduler to admin blueprint
 set_scheduler(scheduler)
@@ -311,7 +315,7 @@ def create_performance_indexes():
 with app.app_context():
     create_tables()
     init_services()
-    scheduler.init_app(app)
+    scheduler.start()
 
 if __name__ == '__main__':
     # Start the application (initialization already done above)
