@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
+from flask import current_app
 from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
 
@@ -59,22 +60,27 @@ class ScanService:
         self.update_progress(0, 1, file_path, 'scanning')
         self.scan_cancelled = False
         
+        # Capture Flask app context for the thread
+        app = current_app._get_current_object()
+        
         # Create scan thread
         def run_scan():
-            try:
-                excluded_paths, excluded_extensions = load_exclusions()
-                checker = PixelProbe(
-                    database_path=self.database_uri,
-                    excluded_paths=excluded_paths,
-                    excluded_extensions=excluded_extensions
-                )
-                result = checker.scan_file(file_path, force_rescan=force_rescan)
-                self.update_progress(1, 1, file_path, 'completed')
-                return result
-            except Exception as e:
-                logger.error(f"Error scanning file: {e}")
-                self.update_progress(1, 1, file_path, 'error')
-                raise
+            # Set up Flask app context for the thread
+            with app.app_context():
+                try:
+                    excluded_paths, excluded_extensions = load_exclusions()
+                    checker = PixelProbe(
+                        database_path=self.database_uri,
+                        excluded_paths=excluded_paths,
+                        excluded_extensions=excluded_extensions
+                    )
+                    result = checker.scan_file(file_path, force_rescan=force_rescan)
+                    self.update_progress(1, 1, file_path, 'completed')
+                    return result
+                except Exception as e:
+                    logger.error(f"Error scanning file: {e}")
+                    self.update_progress(1, 1, file_path, 'error')
+                    raise
         
         self.current_scan_thread = threading.Thread(target=run_scan)
         self.current_scan_thread.start()
@@ -101,45 +107,50 @@ class ScanService:
         scan_state.start_scan(valid_dirs, force_rescan)
         db.session.commit()
         
+        # Capture Flask app context for the thread
+        app = current_app._get_current_object()
+        
         # Create scan thread
         def run_scan():
-            try:
-                excluded_paths, excluded_extensions = load_exclusions()
-                checker = PixelProbe(
-                    database_path=self.database_uri,
-                    excluded_paths=excluded_paths,
-                    excluded_extensions=excluded_extensions
-                )
-                
-                # Discovery phase
-                self.update_progress(0, 0, '', 'discovering')
-                all_files = []
-                
-                for directory in valid_dirs:
-                    if self.scan_cancelled:
-                        break
-                    files = checker.discover_media_files(directory)
-                    all_files.extend(files)
-                
-                if self.scan_cancelled:
-                    self._handle_scan_cancellation(scan_state)
-                    return
-                
-                # Scanning phase
-                total_files = len(all_files)
-                self.update_progress(0, total_files, '', 'scanning')
-                
-                if num_workers > 1:
-                    self._parallel_scan(checker, all_files, force_rescan, num_workers, scan_state)
-                else:
-                    self._sequential_scan(checker, all_files, force_rescan, scan_state)
+            # Set up Flask app context for the thread
+            with app.app_context():
+                try:
+                    excluded_paths, excluded_extensions = load_exclusions()
+                    checker = PixelProbe(
+                        database_path=self.database_uri,
+                        excluded_paths=excluded_paths,
+                        excluded_extensions=excluded_extensions
+                    )
                     
-            except Exception as e:
-                logger.error(f"Error during scan: {e}")
-                self.update_progress(0, 0, '', 'error')
-                scan_state.error_scan(str(e))
-                db.session.commit()
-                raise
+                    # Discovery phase
+                    self.update_progress(0, 0, '', 'discovering')
+                    
+                    if self.scan_cancelled:
+                        self._handle_scan_cancellation(scan_state)
+                        return
+                    
+                    # Pass all directories at once for efficient parallel discovery
+                    all_files = checker.discover_media_files(valid_dirs)
+                    
+                    if self.scan_cancelled:
+                        self._handle_scan_cancellation(scan_state)
+                        return
+                    
+                    # Scanning phase
+                    total_files = len(all_files)
+                    self.update_progress(0, total_files, '', 'scanning')
+                    
+                    if num_workers > 1:
+                        self._parallel_scan(checker, all_files, force_rescan, num_workers, scan_state)
+                    else:
+                        self._sequential_scan(checker, all_files, force_rescan, scan_state)
+                        
+                except Exception as e:
+                    logger.error(f"Error during scan: {e}")
+                    self.update_progress(0, 0, '', 'error')
+                    scan_state.error_scan(str(e))
+                    db.session.commit()
+                    raise
         
         self.current_scan_thread = threading.Thread(target=run_scan)
         self.current_scan_thread.start()

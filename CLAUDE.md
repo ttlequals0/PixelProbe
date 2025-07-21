@@ -1,4 +1,6 @@
-### Critical Rules - DO NOT VIOLATE
+# CLAUDE.md
+
+## CRITICAL INSTRUCTIONS -- ALWAYS READ THIS BEFORE EVERY CHANGE!!!
 - **NEVER create mock data or simplified components** unless explicitly told to do so
 - **NEVER replace existing complex components with simplified versions** - always fix the actual problem
 - **ALWAYS work with the existing codebase** - do not create new simplified alternatives

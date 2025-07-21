@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.75] - 2025-07-21
+
+### Fixed
+- **Directory Parsing Bug in ScanService**: Fixed critical bug where directory names were split into individual characters
+  - ScanService was passing single directory strings to `discover_media_files()` which expects a list
+  - This caused "movies" to be interpreted as ['m', 'o', 'v', 'i', 'e', 's'] individual directories
+  - Now passes all directories as a single list for efficient parallel discovery
+  - Resolves "Directory does not exist" warnings for each character
+
+- **Flask Application Context in ScanService Threads**: Fixed "Working outside of application context" errors
+  - ScanService threads now properly capture and use Flask application context
+  - Added `with app.app_context():` wrapper in all scan thread functions
+  - Fixes database access errors in scan operations and progress tracking
+  - Resolves thread-based scan failures and incomplete scan states
+
 ## [2.0.74] - 2025-07-21
 
 ### Fixed
