@@ -1,9 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
-from datetime import datetime, timezone
 import pytz
 import os
 import threading
-import time
 import logging
 
 from media_checker import PixelProbe, load_exclusions
@@ -13,8 +11,7 @@ from pixelprobe.utils.security import (
     validate_file_path, validate_directory_path, 
     PathTraversalError, AuditLogger, validate_json_input
 )
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
+# Remove direct limiter imports as we'll use decorators
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +25,26 @@ except pytz.exceptions.UnknownTimeZoneError:
 
 scan_bp = Blueprint('scan', __name__, url_prefix='/api')
 
-# Get limiter instance from app context
-def get_limiter():
-    from flask import current_app
-    return current_app.extensions.get('limiter')
+# Import limiter from main app
+from functools import wraps
+
+# Create rate limit decorators that work with Flask-Limiter
+def rate_limit(limit_string):
+    """Decorator to apply rate limits using the app's limiter"""
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            # Get the limiter from the current app
+            limiter = current_app.extensions.get('flask-limiter')
+            if limiter:
+                # Apply the rate limit dynamically
+                limited_func = limiter.limit(limit_string, exempt_when=lambda: False)(f)
+                return limited_func(*args, **kwargs)
+            else:
+                # If no limiter, just call the function
+                return f(*args, **kwargs)
+        return wrapped
+    return decorator
 
 # Global state tracking - will be moved to service layer
 current_scan_thread = None
@@ -121,6 +134,7 @@ def get_scan_result(result_id):
     return jsonify(result.to_dict())
 
 @scan_bp.route('/scan-file', methods=['POST'])
+@rate_limit("5 per minute")
 @validate_json_input({
     'file_path': {'required': True, 'type': str, 'max_length': 1000}
 })
@@ -150,24 +164,26 @@ def scan_file():
     
     # Create scan thread
     def run_single_scan():
-        try:
-            excluded_paths, excluded_extensions = load_exclusions()
-            checker = PixelProbe(
-                database_path=current_app.config['SQLALCHEMY_DATABASE_URI'],
-                excluded_paths=excluded_paths,
-                excluded_extensions=excluded_extensions
-            )
-            result = checker.scan_file(validated_path, force_rescan=True)
-            
-            with progress_lock:
-                scan_progress['current'] = 1
-                scan_progress['status'] = 'completed'
+        # Need app context for database operations in thread
+        with current_app.app_context():
+            try:
+                excluded_paths, excluded_extensions = load_exclusions()
+                checker = PixelProbe(
+                    database_path=current_app.config['SQLALCHEMY_DATABASE_URI'],
+                    excluded_paths=excluded_paths,
+                    excluded_extensions=excluded_extensions
+                )
+                checker.scan_file(validated_path, force_rescan=True)
                 
-        except Exception as e:
-            logger.error(f"Error scanning file: {e}")
-            with progress_lock:
-                scan_progress['status'] = 'error'
-                scan_progress['error'] = str(e)
+                with progress_lock:
+                    scan_progress['current'] = 1
+                    scan_progress['status'] = 'completed'
+                    
+            except Exception as e:
+                logger.error(f"Error scanning file: {e}")
+                with progress_lock:
+                    scan_progress['status'] = 'error'
+                    scan_progress['error'] = str(e)
     
     current_scan_thread = threading.Thread(target=run_single_scan)
     current_scan_thread.start()
@@ -178,6 +194,7 @@ def scan_file():
     })
 
 @scan_bp.route('/scan-all', methods=['POST', 'OPTIONS'])
+@rate_limit("2 per minute")
 @validate_json_input({
     'force_rescan': {'required': False, 'type': bool},
     'directories': {'required': False, 'type': list}
@@ -231,77 +248,79 @@ def scan_all():
     
     # Create scan thread
     def run_full_scan():
-        try:
-            excluded_paths, excluded_extensions = load_exclusions()
-            checker = PixelProbe(
+        # Need app context for database operations in thread
+        with current_app.app_context():
+            try:
+                excluded_paths, excluded_extensions = load_exclusions()
+                checker = PixelProbe(
                 database_path=current_app.config['SQLALCHEMY_DATABASE_URI'],
                 excluded_paths=excluded_paths,
                 excluded_extensions=excluded_extensions
-            )
-            
-            # Discovery phase
-            with progress_lock:
-                scan_progress['status'] = 'discovering'
-            
-            all_files = []
-            for directory in validated_dirs:
-                if scan_cancelled:
-                    break
-                if os.path.exists(directory):
-                    files = checker.discover_media_files(directory)
-                    all_files.extend(files)
-            
-            if scan_cancelled:
+                )
+                
+                # Discovery phase
                 with progress_lock:
-                    scan_progress['status'] = 'cancelled'
-                scan_state.cancel_scan()
-                db.session.commit()
-                return
-            
-            # Update progress
-            with progress_lock:
-                scan_progress['total'] = len(all_files)
-                scan_progress['current'] = 0
-                scan_progress['status'] = 'scanning'
-            
-            # Scanning phase
-            for i, file_path in enumerate(all_files):
+                    scan_progress['status'] = 'discovering'
+                
+                all_files = []
+                for directory in validated_dirs:
+                    if scan_cancelled:
+                        break
+                    if os.path.exists(directory):
+                        files = checker.discover_media_files(directory)
+                        all_files.extend(files)
+                
                 if scan_cancelled:
-                    break
+                    with progress_lock:
+                        scan_progress['status'] = 'cancelled'
+                    scan_state.cancel_scan()
+                    db.session.commit()
+                    return
+                
+                # Update progress
+                with progress_lock:
+                    scan_progress['total'] = len(all_files)
+                    scan_progress['current'] = 0
+                    scan_progress['status'] = 'scanning'
+                
+                # Scanning phase
+                for i, file_path in enumerate(all_files):
+                    if scan_cancelled:
+                        break
+                        
+                    with progress_lock:
+                        scan_progress['current'] = i
+                        scan_progress['file'] = file_path
                     
-                with progress_lock:
-                    scan_progress['current'] = i
-                    scan_progress['file'] = file_path
+                    try:
+                        checker.scan_file(file_path, force_rescan=force_rescan)
+                    except Exception as e:
+                        logger.error(f"Error scanning file {file_path}: {e}")
+                    
+                    # Update scan state progress
+                    scan_state.update_progress(i + 1, len(all_files))
+                    db.session.commit()
                 
-                try:
-                    checker.scan_file(file_path, force_rescan=force_rescan)
-                except Exception as e:
-                    logger.error(f"Error scanning file {file_path}: {e}")
+                # Complete scan
+                if scan_cancelled:
+                    with progress_lock:
+                        scan_progress['status'] = 'cancelled'
+                    scan_state.cancel_scan()
+                else:
+                    with progress_lock:
+                        scan_progress['status'] = 'completed'
+                        scan_progress['current'] = scan_progress['total']
+                    scan_state.complete_scan()
                 
-                # Update scan state progress
-                scan_state.update_progress(i + 1, len(all_files))
                 db.session.commit()
-            
-            # Complete scan
-            if scan_cancelled:
+                
+            except Exception as e:
+                logger.error(f"Error during scan: {e}")
                 with progress_lock:
-                    scan_progress['status'] = 'cancelled'
-                scan_state.cancel_scan()
-            else:
-                with progress_lock:
-                    scan_progress['status'] = 'completed'
-                    scan_progress['current'] = scan_progress['total']
-                scan_state.complete_scan()
-            
-            db.session.commit()
-            
-        except Exception as e:
-            logger.error(f"Error during scan: {e}")
-            with progress_lock:
-                scan_progress['status'] = 'error'
-                scan_progress['error'] = str(e)
-            scan_state.error_scan(str(e))
-            db.session.commit()
+                    scan_progress['status'] = 'error'
+                    scan_progress['error'] = str(e)
+                scan_state.error_scan(str(e))
+                db.session.commit()
     
     current_scan_thread = threading.Thread(target=run_full_scan)
     current_scan_thread.start()
@@ -335,6 +354,7 @@ def get_scan_status():
     return jsonify(status)
 
 @scan_bp.route('/cancel-scan', methods=['POST'])
+@rate_limit("10 per minute")
 def cancel_scan():
     """Cancel the current scan"""
     global scan_cancelled
@@ -352,6 +372,7 @@ def cancel_scan():
     return jsonify({'message': 'Scan cancellation requested'})
 
 @scan_bp.route('/scan-parallel', methods=['POST'])
+@rate_limit("2 per minute")
 def scan_parallel():
     """Start a parallel scan with multiple workers"""
     global current_scan_thread, scan_cancelled, scan_progress
@@ -398,93 +419,95 @@ def scan_parallel():
     
     # Create scan thread
     def run_parallel_scan():
-        try:
-            excluded_paths, excluded_extensions = load_exclusions()
-            checker = PixelProbe(
+        # Need app context for database operations in thread
+        with current_app.app_context():
+            try:
+                excluded_paths, excluded_extensions = load_exclusions()
+                checker = PixelProbe(
                 database_path=current_app.config['SQLALCHEMY_DATABASE_URI'],
                 excluded_paths=excluded_paths,
                 excluded_extensions=excluded_extensions
-            )
-            
-            # Discovery phase
-            with progress_lock:
-                scan_progress['status'] = 'discovering'
-            
-            all_files = []
-            for directory in validated_dirs:
-                if scan_cancelled:
-                    break
-                if os.path.exists(directory):
-                    files = checker.discover_media_files(directory)
-                    all_files.extend(files)
-            
-            if scan_cancelled:
-                with progress_lock:
-                    scan_progress['status'] = 'cancelled'
-                scan_state.cancel_scan()
-                db.session.commit()
-                return
-            
-            # Update progress
-            with progress_lock:
-                scan_progress['total'] = len(all_files)
-                scan_progress['current'] = 0
-                scan_progress['status'] = 'scanning'
-            
-            # Parallel scanning
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            
-            def scan_single_file(file_path):
-                if scan_cancelled:
-                    return None
-                try:
-                    return checker.scan_file(file_path, force_rescan=force_rescan)
-                except Exception as e:
-                    logger.error(f"Error scanning file {file_path}: {e}")
-                    return None
-            
-            completed = 0
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                # Submit all files for scanning
-                future_to_file = {executor.submit(scan_single_file, f): f for f in all_files}
+                )
                 
-                # Process completed scans
-                for future in as_completed(future_to_file):
+                # Discovery phase
+                with progress_lock:
+                    scan_progress['status'] = 'discovering'
+                
+                all_files = []
+                for directory in validated_dirs:
                     if scan_cancelled:
-                        executor.shutdown(wait=False)
                         break
-                    
-                    file_path = future_to_file[future]
-                    completed += 1
-                    
+                    if os.path.exists(directory):
+                        files = checker.discover_media_files(directory)
+                        all_files.extend(files)
+                
+                if scan_cancelled:
                     with progress_lock:
-                        scan_progress['current'] = completed
-                        scan_progress['file'] = file_path
-                    
-                    # Update scan state progress
-                    scan_state.update_progress(completed, len(all_files))
+                        scan_progress['status'] = 'cancelled'
+                    scan_state.cancel_scan()
                     db.session.commit()
-            
-            # Complete scan
-            if scan_cancelled:
+                    return
+                
+                # Update progress
                 with progress_lock:
-                    scan_progress['status'] = 'cancelled'
-                scan_state.cancel_scan()
-            else:
+                    scan_progress['total'] = len(all_files)
+                    scan_progress['current'] = 0
+                    scan_progress['status'] = 'scanning'
+                
+                # Parallel scanning
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                
+                def scan_single_file(file_path):
+                    if scan_cancelled:
+                        return None
+                    try:
+                        return checker.scan_file(file_path, force_rescan=force_rescan)
+                    except Exception as e:
+                        logger.error(f"Error scanning file {file_path}: {e}")
+                        return None
+                
+                completed = 0
+                with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                    # Submit all files for scanning
+                    future_to_file = {executor.submit(scan_single_file, f): f for f in all_files}
+                    
+                    # Process completed scans
+                    for future in as_completed(future_to_file):
+                        if scan_cancelled:
+                            executor.shutdown(wait=False)
+                            break
+                        
+                        file_path = future_to_file[future]
+                        completed += 1
+                        
+                        with progress_lock:
+                            scan_progress['current'] = completed
+                            scan_progress['file'] = file_path
+                        
+                        # Update scan state progress
+                        scan_state.update_progress(completed, len(all_files))
+                        db.session.commit()
+                
+                # Complete scan
+                if scan_cancelled:
+                    with progress_lock:
+                        scan_progress['status'] = 'cancelled'
+                    scan_state.cancel_scan()
+                else:
+                    with progress_lock:
+                        scan_progress['status'] = 'completed'
+                        scan_progress['current'] = scan_progress['total']
+                    scan_state.complete_scan()
+                
+                db.session.commit()
+                
+            except Exception as e:
+                logger.error(f"Error during parallel scan: {e}")
                 with progress_lock:
-                    scan_progress['status'] = 'completed'
-                    scan_progress['current'] = scan_progress['total']
-                scan_state.complete_scan()
-            
-            db.session.commit()
-            
-        except Exception as e:
-            logger.error(f"Error during parallel scan: {e}")
-            with progress_lock:
-                scan_progress['status'] = 'error'
-                scan_progress['error'] = str(e)
-            scan_state.error_scan(str(e))
-            db.session.commit()
+                    scan_progress['status'] = 'error'
+                    scan_progress['error'] = str(e)
+                scan_state.error_scan(str(e))
+                db.session.commit()
     
     current_scan_thread = threading.Thread(target=run_parallel_scan)
     current_scan_thread.start()
@@ -497,6 +520,7 @@ def scan_parallel():
     })
 
 @scan_bp.route('/reset-stuck-scans', methods=['POST'])
+@rate_limit("5 per minute")
 def reset_stuck_scans():
     """Reset files that are stuck in 'scanning' state"""
     try:
@@ -520,6 +544,7 @@ def reset_stuck_scans():
         return jsonify({'error': str(e)}), 500
 
 @scan_bp.route('/reset-for-rescan', methods=['POST'])
+@rate_limit("5 per minute")
 def reset_for_rescan():
     """Reset files for rescanning based on criteria"""
     data = request.get_json() or {}
@@ -582,6 +607,7 @@ def reset_for_rescan():
         return jsonify({'error': str(e)}), 500
 
 @scan_bp.route('/recover-stuck-scan', methods=['POST'])
+@rate_limit("5 per minute")
 def recover_stuck_scan():
     """Attempt to recover from a stuck scan state"""
     global current_scan_thread, scan_cancelled, scan_progress

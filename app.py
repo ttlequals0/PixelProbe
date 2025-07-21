@@ -86,20 +86,22 @@ def get_rate_limit_key():
     remote_addr = get_remote_address()
     # Exempt localhost and common Docker internal IPs
     if remote_addr in ['127.0.0.1', 'localhost', '::1']:
-        return None
+        return f"exempt_{remote_addr}"  # Return a key instead of None
     # Exempt Docker internal networks (172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16)
     if (remote_addr.startswith('172.') or 
         remote_addr.startswith('10.') or 
         remote_addr.startswith('192.168.')):
-        return None  # Returning None exempts from rate limiting
+        return f"exempt_{remote_addr}"  # Return a key instead of None
     return remote_addr
 
-# Initialize rate limiter
+# Initialize rate limiter with proper configuration
 limiter = Limiter(
     app=app,
     key_func=get_rate_limit_key,
     default_limits=["200 per day", "50 per hour"],
-    storage_uri="memory://"
+    storage_uri="memory://",
+    headers_enabled=True,
+    swallow_errors=True  # Don't fail requests if rate limiting has issues
 )
 
 # Initialize CSRF protection

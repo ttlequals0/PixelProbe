@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.65] - 2025-01-21
+
+### Fixed
+- **Scan Routes Indentation**: Fixed critical Python syntax errors in scan_routes.py
+  - Corrected try/except block indentation that was preventing scans from running
+  - Fixed improper indentation after if statements
+  - Removed unused imports and variables
+  - All scan types (single, full, parallel) now execute properly
+
+## [2.0.64] - 2025-01-21
+
+### Fixed
+- **Critical Scanning Issues**: Fixed multiple issues preventing scans from working
+  - Fixed Flask-Limiter "Empty value found in parameters" errors by properly handling exempt keys
+  - Changed rate limit key function to return a key instead of None for exempt IPs
+  - Added `swallow_errors=True` to limiter configuration to prevent rate limit errors from breaking requests  
+  - 
+  - Fixed ScanConfiguration model to handle legacy database schema with required 'key' field
+  - Added backward compatibility fields when creating new scan configurations
+  - Fixed indentation issues in scan_routes.py that were causing syntax errors
+  - Properly aligned try/except blocks in both full scan and parallel scan functions
+  - Removed unused imports (datetime, timezone, time) and unused variable
+  - Scans now properly start and execute when triggered from the UI
+
 ## [2.0.63] - 2025-01-21
 
 ### Added

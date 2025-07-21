@@ -23,21 +23,25 @@ except pytz.exceptions.UnknownTimeZoneError:
 
 maintenance_bp = Blueprint('maintenance', __name__, url_prefix='/api')
 
-# Get limiter instance from app context
-def get_limiter():
-    from flask import current_app
-    return current_app.extensions.get('flask-limiter')
+# Import limiter from main app
+from flask import current_app
+from functools import wraps
 
-# Create rate limit decorators
+# Create rate limit decorators that work with Flask-Limiter
 def rate_limit(limit_string):
     """Decorator to apply rate limits using the app's limiter"""
     def decorator(f):
+        @wraps(f)
         def wrapped(*args, **kwargs):
-            limiter = get_limiter()
+            # Get the limiter from the current app
+            limiter = current_app.extensions.get('flask-limiter')
             if limiter:
-                return limiter.limit(limit_string)(f)(*args, **kwargs)
-            return f(*args, **kwargs)
-        wrapped.__name__ = f.__name__
+                # Apply the rate limit dynamically
+                limited_func = limiter.limit(limit_string, exempt_when=lambda: False)(f)
+                return limited_func(*args, **kwargs)
+            else:
+                # If no limiter, just call the function
+                return f(*args, **kwargs)
         return wrapped
     return decorator
 

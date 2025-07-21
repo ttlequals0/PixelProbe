@@ -21,6 +21,28 @@ except pytz.exceptions.UnknownTimeZoneError:
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/api')
 
+# Import limiter from main app
+from flask import current_app
+from functools import wraps
+
+# Create rate limit decorators that work with Flask-Limiter
+def rate_limit(limit_string):
+    """Decorator to apply rate limits using the app's limiter"""
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            # Get the limiter from the current app
+            limiter = current_app.extensions.get('flask-limiter')
+            if limiter:
+                # Apply the rate limit dynamically
+                limited_func = limiter.limit(limit_string, exempt_when=lambda: False)(f)
+                return limited_func(*args, **kwargs)
+            else:
+                # If no limiter, just call the function
+                return f(*args, **kwargs)
+        return wrapped
+    return decorator
+
 # Get scheduler instance (will be initialized in app context)
 scheduler = None
 
@@ -30,6 +52,7 @@ def set_scheduler(sched):
     scheduler = sched
 
 @admin_bp.route('/mark-as-good', methods=['POST'])
+@rate_limit("10 per minute")
 @validate_json_input({
     'file_ids': {'required': True, 'type': list}
 })
@@ -174,11 +197,15 @@ def add_configuration():
             existing_config.is_active = True
             message = 'Configuration reactivated'
         else:
-            # Create new configuration
+            # Create new configuration with backward compatibility
             new_config = ScanConfiguration(
                 path=path,
                 is_active=True,
-                created_at=datetime.now(timezone.utc)
+                created_at=datetime.now(timezone.utc),
+                # Add legacy fields to satisfy old schema
+                key=f'scan_dir_{len(ScanConfiguration.query.all()) + 1}',
+                value=path,
+                description=f'Scan directory: {path}'
             )
             db.session.add(new_config)
             message = 'Configuration added successfully'

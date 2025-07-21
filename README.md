@@ -6,7 +6,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.0.59** consolidates the UI to a single modern template and ensures the Docker image uses the correct modern interface.
+**Version 2.0.65** includes critical fixes for scan functionality and improved error handling.
 
 ## ✨ Features
 
@@ -149,18 +149,18 @@ Interactive exclusion management with modern UI:
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.59)
-- **`ttlequals0/pixelprobe:2.0.59`** - UI consolidation with modern interface as default
-- **`ttlequals0/pixelprobe:2.0.58`** - Fixed critical production startup issues
-- **`ttlequals0/pixelprobe:2.0.57`** - Production hotfix for Flask-Limiter
-- **`ttlequals0/pixelprobe:2.0.56`** - Fixed Flask-Limiter initialization error
-- **`ttlequals0/pixelprobe:2.0.55`** - Major refactoring for code quality, added comprehensive audio/video/image format support
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.65)
+- **`ttlequals0/pixelprobe:2.0.65`** - Fixed critical Python syntax errors in scan routes
+- **`ttlequals0/pixelprobe:2.0.64`** - Fixed scan functionality with rate limiting and database compatibility
+- **`ttlequals0/pixelprobe:2.0.63`** - Added reset file changes state endpoint
+- **`ttlequals0/pixelprobe:2.0.62`** - Fixed schedule deletion and scan configuration bugs
+- **`ttlequals0/pixelprobe:2.0.61`** - Enhanced scheduled scans with configuration management
 
 You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.59  # or :latest for newest
+    image: ttlequals0/pixelprobe:2.0.65  # or :latest for newest
 ```
 
 ### Development Setup
@@ -240,7 +240,7 @@ For Docker deployment, you can also configure paths in `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.53  # Specify version
+    image: ttlequals0/pixelprobe:2.0.65  # Specify version
     environment:
       - SCAN_PATHS=/media
       - DATABASE_URL=sqlite:///media_checker.db
