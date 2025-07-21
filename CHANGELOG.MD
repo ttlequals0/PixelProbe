@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.69] - 2025-07-21
+
+### Fixed
+- **UI Scan Results Filters**: Fixed non-working filter buttons and search functionality
+  - Frontend filter parameters now correctly map to backend API parameters (is_corrupted, scan_status)
+  - Added missing search functionality to backend API with case-insensitive file path filtering
+  - "Corrupted Only", "Healthy Only", "Warnings Only", and "All Files" filters now work properly
+  - Fixed search functionality to properly handle empty queries and trim whitespace
+- **UI Table Sorting**: Fixed broken column sorting functionality
+  - Added comprehensive sorting support to backend API for all table columns
+  - Column headers now properly sort by: Status, File Path, Size, Type, Tool, Details, Scan Date
+  - Supports both ascending and descending sort orders with visual feedback
+- **UI Scan Details Button**: Fixed missing Details button for scan results
+  - Backend API now returns all necessary fields: corruption_details, scan_output, error_message, warning_details
+  - Details button now shows for any file with scan output, error messages, or warning details
+  - Enhanced scan details modal to display all available information sections
+
 ## [2.0.68] - 2025-07-21
 
 ### Fixed
@@ -14,6 +31,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Performance**: Reduced unnecessary API polling
   - Stats refresh interval increased from 5 seconds to 30 seconds to reduce server load
   - Eliminates log spam from excessive /api/stats requests
+- **Flask Application Context**: Fixed "Working outside of application context" errors in threaded operations
+  - Fixed scan_routes.py: scan_all, scan_file, and scan_parallel functions now properly capture and pass Flask app context to background threads
+  - Fixed maintenance_routes.py: cleanup_orphaned_async and check_file_changes_async functions now properly capture and pass Flask app context to background threads
+  - Resolves RuntimeError exceptions when running scan operations and maintenance tasks
+- **UI Scan Results Filters**: Fixed non-working filter buttons and search functionality
+  - Frontend filter parameters now correctly map to backend API parameters (is_corrupted, scan_status)
+  - Added missing search functionality to backend API with case-insensitive file path filtering
+  - "Corrupted Only", "Healthy Only", "Warnings Only", and "All Files" filters now work properly
+  - Fixed search functionality to properly handle empty queries and trim whitespace
+- **UI Table Sorting**: Fixed broken column sorting functionality
+  - Added comprehensive sorting support to backend API for all table columns
+  - Column headers now properly sort by: Status, File Path, Size, Type, Tool, Details, Scan Date
+  - Supports both ascending and descending sort orders with visual feedback
+- **UI Scan Details Button**: Fixed missing Details button for scan results
+  - Backend API now returns all necessary fields: corruption_details, scan_output, error_message, warning_details
+  - Details button now shows for any file with scan output, error messages, or warning details
+  - Enhanced scan details modal to display all available information sections
 
 ## [2.0.67] - 2025-07-21
 

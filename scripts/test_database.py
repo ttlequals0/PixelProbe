@@ -7,7 +7,7 @@ import sqlite3
 import os
 from datetime import datetime
 
-DB_PATH = "/Users/dkrachtus/Downloads/media_checker.db"
+DB_PATH = os.environ.get('DATABASE_PATH', './instance/media_checker.db')
 
 def test_database():
     """Test database connection and display statistics"""

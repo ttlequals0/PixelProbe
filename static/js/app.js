@@ -707,10 +707,33 @@ class TableManager {
                 page: this.currentPage,
                 per_page: this.itemsPerPage,
                 sort_field: this.sortField,
-                sort_order: this.sortOrder,
-                filter: this.filter,
-                search: this.searchQuery
+                sort_order: this.sortOrder
             };
+
+            // Only add search if it has a value
+            if (this.searchQuery && this.searchQuery.trim()) {
+                params.search = this.searchQuery.trim();
+            }
+
+            // Map frontend filter values to backend parameters
+            if (this.filter) {
+                switch (this.filter) {
+                    case 'corrupted':
+                        params.is_corrupted = 'true';
+                        break;
+                    case 'healthy':
+                        params.is_corrupted = 'false';
+                        break;
+                    case 'warning':
+                        params.scan_status = 'warning';
+                        break;
+                    case 'all':
+                    default:
+                        params.is_corrupted = 'all';
+                        params.scan_status = 'all';
+                        break;
+                }
+            }
 
             const data = await this.api.getScanResults(params);
             this.renderTable(data);
@@ -793,9 +816,9 @@ class TableManager {
                     <span class="value">${file.scan_tool || 'N/A'}</span>
                     <span class="label">Scanned:</span>
                     <span class="value">${this.formatDate(file.scan_date)}</span>
-                    ${file.corruption_details || file.scan_output ? `
+                    ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
                         <span class="label">Details:</span>
-                        <span class="value">${this.escapeHtml(file.corruption_details || file.scan_output || '')}</span>
+                        <span class="value">${this.escapeHtml(file.corruption_details || file.scan_output || file.error_message || file.warning_details || '')}</span>
                     ` : ''}
                 </div>
                 <div class="action-buttons">
@@ -805,7 +828,7 @@ class TableManager {
                     <button class="btn btn-secondary" onclick="app.rescanFile(${file.id})">
                         <i class="fas fa-sync"></i> Rescan
                     </button>
-                    ${file.corruption_details || file.scan_output ? `
+                    ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
                         <button class="btn btn-secondary" onclick="app.viewScanOutput(${file.id})">
                             <i class="fas fa-file-alt"></i> Details
                         </button>
@@ -834,7 +857,7 @@ class TableManager {
                 <td>${this.formatFileSize(file.file_size)}</td>
                 <td>${file.file_type || 'N/A'}</td>
                 <td>${file.scan_tool || 'N/A'}</td>
-                <td class="text-truncate" title="${this.escapeHtml(file.corruption_details || file.scan_output || '')}">${this.escapeHtml(file.corruption_details || file.scan_output || '')}</td>
+                <td class="text-truncate" title="${this.escapeHtml(file.corruption_details || file.scan_output || file.error_message || file.warning_details || '')}">${this.escapeHtml(file.corruption_details || file.scan_output || file.error_message || file.warning_details || '')}</td>
                 <td>${this.formatDate(file.scan_date)}</td>
                 <td class="action-buttons">
                     <button class="btn btn-sm btn-secondary" onclick="app.viewFile(${file.id})">
@@ -843,7 +866,7 @@ class TableManager {
                     <button class="btn btn-sm btn-secondary" onclick="app.rescanFile(${file.id})">
                         <i class="fas fa-sync"></i> Rescan
                     </button>
-                    ${file.corruption_details || file.scan_output ? `
+                    ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
                         <button class="btn btn-sm btn-secondary" onclick="app.viewScanOutput(${file.id})">
                             <i class="fas fa-file-alt"></i> Details
                         </button>
@@ -1656,7 +1679,20 @@ class PixelProbeApp {
         }
         
         const modalBody = modal.querySelector('.modal-body');
-        const output = file.corruption_details || file.scan_output || 'No scan output available';
+        
+        // Collect all available details
+        const details = [];
+        if (file.corruption_details) details.push({label: 'Corruption Details', content: file.corruption_details});
+        if (file.scan_output) details.push({label: 'Scan Output', content: file.scan_output});
+        if (file.error_message) details.push({label: 'Error Message', content: file.error_message});
+        if (file.warning_details) details.push({label: 'Warning Details', content: file.warning_details});
+        
+        const detailsHtml = details.length > 0 ? 
+            details.map(detail => `
+                <h4>${detail.label}:</h4>
+                <pre class="scan-output-text">${this.escapeHtml(detail.content)}</pre>
+            `).join('<hr>') :
+            '<p>No scan output available</p>';
         
         modalBody.innerHTML = `
             <div class="scan-output-details">
@@ -1665,8 +1701,7 @@ class PixelProbeApp {
                 <p><strong>Tool:</strong> ${file.scan_tool || 'N/A'}</p>
                 <p><strong>Scanned:</strong> ${file.scan_date ? new Date(file.scan_date).toLocaleString() : 'N/A'}</p>
                 <hr>
-                <h4>Scan Output:</h4>
-                <pre class="scan-output-text">${this.escapeHtml(output)}</pre>
+                ${detailsHtml}
             </div>
         `;
         

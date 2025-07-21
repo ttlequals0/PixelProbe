@@ -63,9 +63,16 @@ def get_scan_results():
     per_page = request.args.get('per_page', 100, type=int)
     scan_status = request.args.get('scan_status', 'all')
     is_corrupted = request.args.get('is_corrupted', 'all')
+    search_query = request.args.get('search', '').strip()
+    sort_field = request.args.get('sort_field', 'scan_date')
+    sort_order = request.args.get('sort_order', 'desc')
     
     # Build query
     query = ScanResult.query
+    
+    # Apply search filter
+    if search_query:
+        query = query.filter(ScanResult.file_path.ilike(f'%{search_query}%'))
     
     # Apply status filter
     if scan_status != 'all':
@@ -80,8 +87,32 @@ def get_scan_results():
             (ScanResult.marked_as_good == True)
         )
     
-    # Order by scan date descending
-    query = query.order_by(ScanResult.scan_date.desc())
+    # Apply sorting
+    # Map frontend field names to model attributes
+    field_mapping = {
+        'scan_date': ScanResult.scan_date,
+        'file_path': ScanResult.file_path,
+        'file_size': ScanResult.file_size,
+        'file_type': ScanResult.file_type,
+        'scan_status': ScanResult.scan_status,
+        'status': ScanResult.is_corrupted,  # Frontend uses "status" for corruption status
+        'is_corrupted': ScanResult.is_corrupted,
+        'marked_as_good': ScanResult.marked_as_good,
+        'scan_tool': ScanResult.scan_tool,
+        'corruption_details': ScanResult.corruption_details,
+        'discovered_date': ScanResult.discovered_date,
+        'last_modified': ScanResult.last_modified
+    }
+    
+    if sort_field in field_mapping:
+        field_attr = field_mapping[sort_field]
+        if sort_order.lower() == 'asc':
+            query = query.order_by(field_attr.asc())
+        else:
+            query = query.order_by(field_attr.desc())
+    else:
+        # Default sorting
+        query = query.order_by(ScanResult.scan_date.desc())
     
     # Paginate
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
@@ -116,7 +147,13 @@ def get_scan_results():
             'is_corrupted': result.is_corrupted,
             'marked_as_good': result.marked_as_good,
             'media_info': result.media_info,
-            'file_exists': result.file_exists
+            'file_exists': result.file_exists,
+            'corruption_details': result.corruption_details,
+            'scan_output': result.scan_output,
+            'has_warnings': result.has_warnings,
+            'warning_details': result.warning_details,
+            'file_type': result.file_type,
+            'scan_tool': result.scan_tool
         })
     
     return jsonify({
@@ -162,14 +199,15 @@ def scan_file():
         scan_progress = {'current': 0, 'total': 1, 'file': file_path, 'status': 'scanning'}
     scan_cancelled = False
     
-    # Create scan thread
+    # Create scan thread - capture app instance for thread context
+    app = current_app._get_current_object()
     def run_single_scan():
         # Need app context for database operations in thread
-        with current_app.app_context():
+        with app.app_context():
             try:
                 excluded_paths, excluded_extensions = load_exclusions()
                 checker = PixelProbe(
-                    database_path=current_app.config['SQLALCHEMY_DATABASE_URI'],
+                    database_path=app.config['SQLALCHEMY_DATABASE_URI'],
                     excluded_paths=excluded_paths,
                     excluded_extensions=excluded_extensions
                 )
@@ -252,10 +290,11 @@ def scan_all():
     scan_state.start_scan(validated_dirs, force_rescan)
     db.session.commit()
     
-    # Create scan thread
+    # Create scan thread - capture app instance for thread context
+    app = current_app._get_current_object()
     def run_full_scan():
         # Need app context for database operations in thread
-        with current_app.app_context():
+        with app.app_context():
             try:
                 excluded_paths, excluded_extensions = load_exclusions()
                 checker = PixelProbe(
@@ -429,14 +468,15 @@ def scan_parallel():
     scan_state.start_scan(validated_dirs, force_rescan)
     db.session.commit()
     
-    # Create scan thread
+    # Create scan thread - capture app instance for thread context
+    app = current_app._get_current_object()
     def run_parallel_scan():
         # Need app context for database operations in thread
-        with current_app.app_context():
+        with app.app_context():
             try:
                 excluded_paths, excluded_extensions = load_exclusions()
                 checker = PixelProbe(
-                database_path=current_app.config['SQLALCHEMY_DATABASE_URI'],
+                database_path=app.config['SQLALCHEMY_DATABASE_URI'],
                 excluded_paths=excluded_paths,
                 excluded_extensions=excluded_extensions
                 )

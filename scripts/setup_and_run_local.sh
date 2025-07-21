@@ -25,7 +25,7 @@ pip install -r requirements.txt
 
 # Set environment variables
 export USE_MODERN_UI=true
-export DATABASE_URL="sqlite:////Users/dkrachtus/Downloads/media_checker.db"
+export DATABASE_URL="sqlite:///${DATABASE_PATH:-./instance/media_checker.db}"
 export FLASK_APP=app.py
 export FLASK_ENV=development
 export FLASK_DEBUG=1
@@ -40,19 +40,19 @@ mkdir -p static/images
 # Display database info
 echo ""
 echo "=== Configuration ==="
-echo "Database: /Users/dkrachtus/Downloads/media_checker.db"
+echo "Database: ${DATABASE_PATH:-./instance/media_checker.db}"
 echo "UI Mode: Modern UI"
 echo "Server: http://localhost:5001"
 echo ""
 
 # Check if database exists
-if [ -f "/Users/dkrachtus/Downloads/media_checker.db" ]; then
+if [ -f "${DATABASE_PATH:-./instance/media_checker.db}" ]; then
     echo "✓ Database file found"
     # Get file size
-    DB_SIZE=$(ls -lh "/Users/dkrachtus/Downloads/media_checker.db" | awk '{print $5}')
+    DB_SIZE=$(ls -lh "${DATABASE_PATH:-./instance/media_checker.db}" | awk '{print $5}')
     echo "  Database size: $DB_SIZE"
 else
-    echo "✗ WARNING: Database file not found at /Users/dkrachtus/Downloads/media_checker.db"
+    echo "✗ WARNING: Database file not found at ${DATABASE_PATH:-./instance/media_checker.db}"
     echo "  Please ensure the database file exists at this location."
 fi
 

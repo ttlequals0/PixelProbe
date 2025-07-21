@@ -390,10 +390,11 @@ def cleanup_orphaned_files():
     db.session.add(cleanup_record)
     db.session.commit()
     
-    # Start cleanup in background thread
+    # Start cleanup in background thread - capture app instance for thread context
+    app = current_app._get_current_object()
     current_cleanup_thread = threading.Thread(
         target=cleanup_orphaned_async,
-        args=(cleanup_record.id,)
+        args=(app, cleanup_record.id,)
     )
     current_cleanup_thread.start()
     
@@ -439,10 +440,11 @@ def check_file_changes():
     db.session.add(file_changes_record)
     db.session.commit()
     
-    # Start file changes check in background thread
+    # Start file changes check in background thread - capture app instance for thread context
+    app = current_app._get_current_object()
     current_file_changes_thread = threading.Thread(
         target=check_file_changes_async,
-        args=(check_id,)
+        args=(app, check_id,)
     )
     current_file_changes_thread.start()
     
@@ -451,63 +453,67 @@ def check_file_changes():
         'check_id': check_id
     })
 
-def cleanup_orphaned_async(cleanup_id):
+def cleanup_orphaned_async(app, cleanup_id):
     """Async function to cleanup orphaned database entries"""
     try:
-        with db.session.get_bind().connect() as connection:
-            with db.session():
-                # Get the cleanup record
-                cleanup_record = CleanupState.query.get(cleanup_id)
-                if not cleanup_record:
-                    logger.error(f"Cleanup record {cleanup_id} not found")
-                    return
-                
-                # Create maintenance service instance
-                maintenance_service = MaintenanceService()
-                
-                # Run the cleanup using the maintenance service logic
-                maintenance_service._run_cleanup(cleanup_record.id)
+        with app.app_context():
+            with db.session.get_bind().connect() as connection:
+                with db.session():
+                    # Get the cleanup record
+                    cleanup_record = CleanupState.query.get(cleanup_id)
+                    if not cleanup_record:
+                        logger.error(f"Cleanup record {cleanup_id} not found")
+                        return
+                    
+                    # Create maintenance service instance
+                    maintenance_service = MaintenanceService()
+                    
+                    # Run the cleanup using the maintenance service logic
+                    maintenance_service._run_cleanup(cleanup_record.id)
                 
     except Exception as e:
         logger.error(f"Error in cleanup_orphaned_async: {str(e)}")
         try:
-            cleanup_record = CleanupState.query.get(cleanup_id)
-            if cleanup_record:
-                cleanup_record.phase = 'error'
-                cleanup_record.progress_message = f'Error: {str(e)}'
-                cleanup_record.is_active = False
-                cleanup_record.end_time = datetime.now(timezone.utc)
-                db.session.commit()
+            with app.app_context():
+                cleanup_record = CleanupState.query.get(cleanup_id)
+                if cleanup_record:
+                    cleanup_record.phase = 'error'
+                    cleanup_record.progress_message = f'Error: {str(e)}'
+                    cleanup_record.is_active = False
+                    cleanup_record.end_time = datetime.now(timezone.utc)
+                    db.session.commit()
         except Exception as commit_error:
             logger.error(f"Failed to update cleanup record on error: {str(commit_error)}")
 
-def check_file_changes_async(check_id):
+def check_file_changes_async(app, check_id):
     """Async function to check file changes"""
     try:
-        with db.session.get_bind().connect() as connection:
-            with db.session():
-                # Get the file changes record
-                check_record = FileChangesState.query.get(check_id)
-                if not check_record:
-                    logger.error(f"File changes record {check_id} not found")
-                    return
-                
-                # Create maintenance service instance
-                maintenance_service = MaintenanceService()
-                
-                # Run the file changes check using the maintenance service logic
-                maintenance_service._run_file_changes_check(check_record.id)
+        with app.app_context():
+            with db.session.get_bind().connect() as connection:
+                with db.session():
+                    # Get the file changes record
+                    check_record = FileChangesState.query.get(check_id)
+                    if not check_record:
+                        logger.error(f"File changes record {check_id} not found")
+                        return
+                    
+                    # Create maintenance service instance
+                    maintenance_service = MaintenanceService()
+                    
+                    # Run the file changes check using the maintenance service logic
+                    maintenance_service._run_file_changes_check(check_record.id)
                 
     except Exception as e:
         logger.error(f"Error in check_file_changes_async: {str(e)}")
         try:
-            check_record = FileChangesState.query.get(check_id)
-            if check_record:
-                check_record.phase = 'error'
-                check_record.progress_message = f'Error: {str(e)}'
-                check_record.is_active = False
-                check_record.end_time = datetime.now(timezone.utc)
-                db.session.commit()
+            with app.app_context():
+                check_record = FileChangesState.query.get(check_id)
+                if check_record:
+                    check_record.phase = 'error'
+                    check_record.progress_message = f'Error: {str(e)}'
+                    check_record.is_active = False
+                    check_record.end_time = datetime.now(timezone.utc)
+                    db.session.commit()
         except Exception as commit_error:
             logger.error(f"Failed to update file changes record on error: {str(commit_error)}")
 
