@@ -149,15 +149,17 @@ Interactive exclusion management with modern UI:
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.55)
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.58)
+- **`ttlequals0/pixelprobe:2.0.58`** - Fixed critical production startup issues with modern UI
+- **`ttlequals0/pixelprobe:2.0.57`** - Production hotfix for Flask-Limiter
+- **`ttlequals0/pixelprobe:2.0.56`** - Fixed Flask-Limiter initialization error
 - **`ttlequals0/pixelprobe:2.0.55`** - Major refactoring for code quality, added comprehensive audio/video/image format support
-- **`ttlequals0/pixelprobe:2.0.53`** - Fixed file-changes progress tracking with async updates
 
 You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.55  # or :latest for newest
+    image: ttlequals0/pixelprobe:2.0.58  # or :latest for newest
 ```
 
 ### Development Setup

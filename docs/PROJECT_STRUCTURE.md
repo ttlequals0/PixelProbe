@@ -28,8 +28,7 @@ PixelProbe/
 │       └── favicon files
 │
 ├── templates/                # Jinja2 templates
-│   ├── index_modern.html    # Modern UI template (v2.0+)
-│   ├── index.html           # Legacy UI template
+│   ├── index.html           # Modern UI template
 │   └── api_docs.html        # API documentation page
 │
 ├── docker/                   # Docker development files
@@ -84,7 +83,7 @@ PixelProbe/
 
 - `static/css/desktop.css` - Modern desktop styles
 - `static/css/mobile.css` - Responsive mobile overrides
-- `templates/index_modern.html` - Modern UI template
+- `templates/index.html` - Modern UI template
 
 ### Configuration
 - `docker-compose.yml` - Production deployment
