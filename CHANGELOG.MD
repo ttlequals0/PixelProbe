@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.58] - 2025-01-21
+
+### Fixed
+- **Critical Production Fix**: Fixed application startup errors
+  - Fixed KeyError when applying rate limits to blueprint view functions
+  - Moved rate limit initialization to a separate module with proper error handling
+  - Fixed scheduler initialization - replaced scheduler.start() with scheduler.init_app(app)
+  - Fixed AttributeError in create_state_dict for missing 'total_files' attribute
+  - Application now starts correctly without crashing
+  - Verified Docker container starts and API endpoints respond correctly
+
 ## [2.0.57] - 2025-01-21
 
 ### Fixed

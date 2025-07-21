@@ -146,7 +146,7 @@ def create_state_dict(state_obj, extra_fields=None):
         'phase_current': state_obj.phase_current,
         'phase_total': state_obj.phase_total,
         'files_processed': state_obj.files_processed,
-        'total_files': state_obj.total_files,
+        'total_files': getattr(state_obj, 'total_files', state_obj.estimated_total if hasattr(state_obj, 'estimated_total') else 0),
         'start_time': state_obj.start_time.isoformat() if state_obj.start_time else None,
         'end_time': state_obj.end_time.isoformat() if state_obj.end_time else None,
         'current_file': state_obj.current_file,
