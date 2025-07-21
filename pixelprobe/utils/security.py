@@ -292,7 +292,7 @@ def validate_json_input(schema):
                 return jsonify({'error': 'Content-Type must be application/json'}), 400
             
             data = request.get_json()
-            if not data:
+            if data is None:
                 return jsonify({'error': 'No JSON data provided'}), 400
             
             # Validate required fields

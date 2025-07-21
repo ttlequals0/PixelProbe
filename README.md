@@ -126,9 +126,19 @@ Interactive exclusion management with modern UI:
    cd PixelProbe
    ```
 
-2. **Set your media path**:
+2. **Configure environment variables**:
    ```bash
-   export MEDIA_PATH=/path/to/your/actual/media/directory
+   cp .env.example .env
+   ```
+   Edit `.env` and set required variables:
+   ```bash
+   # Generate a secure secret key
+   python -c "import secrets; print(secrets.token_hex(32))"
+   
+   # Edit .env file with your values
+   SECRET_KEY=your-generated-secret-key-here
+   MEDIA_PATH=/path/to/your/actual/media/directory
+   SCAN_PATHS=/media
    ```
 
 3. **Start the application**:
@@ -141,8 +151,6 @@ Interactive exclusion management with modern UI:
 
 5. **Start scanning**:
    Click "Scan All Files" to begin analyzing your media library
-
-**Note**: The `MEDIA_PATH` environment variable is only needed for Docker volume mounting. The application scans paths defined in `SCAN_PATHS` inside the container.
 
 ### Docker Image Versions
 
@@ -203,39 +211,34 @@ services:
 
 ### Environment Variables
 
-Configure the application by editing the `.env` file:
+PixelProbe uses environment variables for all configuration. Copy `.env.example` to `.env` and customize:
 
-```env
-# Comma-separated list of directories to scan
-SCAN_PATHS=/path/to/your/media,/another/path/to/media
-
-# Database configuration
-DATABASE_URL=sqlite:///media_checker.db
-
-# Secret key for Flask sessions
-SECRET_KEY=your-very-secret-key-here
-
-# Optional: Set to development for debugging
-FLASK_ENV=production
-
-# Scheduled Scanning (optional)
-# Cron format: "cron:minute hour day month day_of_week"
-# Interval format: "interval:unit:value" (unit: hours/days/weeks)
-PERIODIC_SCAN_SCHEDULE=cron:0 2 * * *  # Daily at 2 AM
-# PERIODIC_SCAN_SCHEDULE=interval:hours:6  # Every 6 hours
-
-# Scheduled Cleanup (optional)
-CLEANUP_SCHEDULE=cron:0 3 * * 0  # Weekly on Sunday at 3 AM
-# CLEANUP_SCHEDULE=interval:days:7  # Every 7 days
-
-# Path and Extension Exclusions (optional)
-EXCLUDED_PATHS=/media/temp,/media/cache
-EXCLUDED_EXTENSIONS=.tmp,.temp,.cache
+```bash
+cp .env.example .env
 ```
 
-### Docker Compose Configuration
+**Required Variables:**
 
-For Docker deployment, you can also configure paths in `docker-compose.yml`:
+- `SECRET_KEY` - Secure secret key for Flask sessions (generate with: `python -c "import secrets; print(secrets.token_hex(32))"`)
+- `MEDIA_PATH` - Host path to your media files (for Docker volume mounting)
+
+**Optional Variables:**
+
+- `DATABASE_URL` - Database connection string (default: SQLite)
+- `SCAN_PATHS` - Comma-separated directories to monitor inside container (default: `/media`)
+- `TZ` - Timezone (default: UTC)
+- `MAX_FILES_TO_SCAN` - Performance limit (default: 100)
+- `MAX_SCAN_WORKERS` - Parallel scanning threads (default: 4)
+- `PERIODIC_SCAN_SCHEDULE` - Automated scanning schedule
+- `CLEANUP_SCHEDULE` - Automated cleanup schedule
+- `EXCLUDED_PATHS` - Paths to ignore during scanning
+- `EXCLUDED_EXTENSIONS` - File extensions to ignore
+
+See `.env.example` for complete configuration options with examples.
+
+### Docker Configuration
+
+The docker-compose.yml is fully configured to use environment variables from your `.env` file:
 
 ```yaml
 services:

@@ -622,7 +622,7 @@ def recover_stuck_scan():
         
         # Reset database scan state
         scan_state = ScanState.get_or_create()
-        if scan_state.status == 'running':
+        if scan_state.phase == 'scanning':
             scan_state.error_scan('Scan was stuck and has been recovered')
             db.session.commit()
         

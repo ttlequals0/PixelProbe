@@ -219,6 +219,21 @@ class ScanState(db.Model):
         self.is_active = False
         self.end_time = datetime.now(timezone.utc)
         db.session.commit()
+    
+    def update_progress(self, files_processed, total_files):
+        """Update scan progress"""
+        self.files_processed = files_processed
+        self.estimated_total = total_files
+        if total_files > 0:
+            self.phase = 'scanning'
+        db.session.commit()
+    
+    def complete_scan(self):
+        """Mark scan as completed"""
+        self.phase = 'completed'
+        self.is_active = False
+        self.end_time = datetime.now(timezone.utc)
+        db.session.commit()
 
 class CleanupState(db.Model):
     __tablename__ = 'cleanup_state'

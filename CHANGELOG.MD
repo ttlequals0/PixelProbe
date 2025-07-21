@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.67] - 2025-07-21
+
+### Fixed
+- **Production Readiness**: Complete audit and fixes for production deployment
+  - All scan operations now fully functional (Start Scan, Cleanup Orphans, File Changes)
+  - Removed all placeholder implementations and empty function stubs
+  - Enhanced Docker configuration with comprehensive environment variable support
+  - Created .env.example with complete configuration documentation
+  - Updated README.md with improved deployment instructions
+
 ## [2.0.66] - 2025-01-21
 
 ### Fixed
@@ -22,6 +32,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enhanced database statistics display with completed files, error files, and marked files
   - Added scan performance metrics with days since scan and scan history
   - Fixed file system statistics display
+- **System Statistics Version**: Fixed incorrect version display in System Statistics
+  - Updated `/api/system-info` endpoint to import version from version.py instead of environment variable
+  - System Statistics now shows the correct version matching version.py (2.0.66)
+- **Scan Operations Fixed**: Resolved multiple critical scan operation failures
+  - Fixed `validate_json_input` decorator rejecting empty JSON objects `{}` for optional-only schemas
+  - This was preventing 'Start Scan' button from working (400 error: "No JSON data provided")
+  - Fixed 'Cleanup Orphans' operation that was running but doing nothing due to placeholder implementation
+  - Fixed 'File Change Scan' operation that was also a placeholder implementation
+  - All scan operations now properly use the MaintenanceService for actual functionality
+- **Production Security**: Removed insecure hardcoded SECRET_KEY fallback
+  - Application now requires SECRET_KEY environment variable to start
+  - Prevents potential security vulnerability from default 'change-me-in-production' key
+- **Database Optimization**: Added missing `/api/vacuum` endpoint for SQLite optimization
+  - Implements VACUUM operation with size reduction reporting
+  - Completes the maintenance API suite for database management
+- **Docker Configuration**: Updated docker-compose.yml and Dockerfile for production deployment
+  - Added required SECRET_KEY environment variable configuration
+  - Updated Docker image tag from `:latest` to `:2.0` for version consistency
+  - Fixed health check endpoint from `/api/stats` to `/health`
+  - Added explicit DATABASE_URL configuration
+  - Updated Dockerfile version from 2.0.59 to 2.0.66
+  - Made all critical settings configurable via docker-compose environment variables
+  - Created .env.example file with comprehensive configuration documentation
+  - Updated README.md with improved deployment instructions
 
 ## [2.0.65] - 2025-01-21
 

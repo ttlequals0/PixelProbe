@@ -57,7 +57,12 @@ except pytz.exceptions.UnknownTimeZoneError:
 app = Flask(__name__)
 
 # Configure app
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production')
+# Require SECRET_KEY in production - no insecure fallback
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    logger.error("SECRET_KEY environment variable is required for security")
+    raise ValueError("SECRET_KEY environment variable must be set")
+app.config['SECRET_KEY'] = SECRET_KEY
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {

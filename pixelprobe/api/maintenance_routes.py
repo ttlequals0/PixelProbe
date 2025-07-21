@@ -10,6 +10,7 @@ import pytz
 from models import db, ScanResult, CleanupState, FileChangesState
 from media_checker import PixelProbe
 from utils import ProgressTracker
+from pixelprobe.services.maintenance_service import MaintenanceService
 
 logger = logging.getLogger(__name__)
 
@@ -452,12 +453,103 @@ def check_file_changes():
 
 def cleanup_orphaned_async(cleanup_id):
     """Async function to cleanup orphaned database entries"""
-    # Implementation would be moved from app.py
-    # This is a placeholder for the actual implementation
-    pass
+    try:
+        with db.session.get_bind().connect() as connection:
+            with db.session():
+                # Get the cleanup record
+                cleanup_record = CleanupState.query.get(cleanup_id)
+                if not cleanup_record:
+                    logger.error(f"Cleanup record {cleanup_id} not found")
+                    return
+                
+                # Create maintenance service instance
+                maintenance_service = MaintenanceService()
+                
+                # Run the cleanup using the maintenance service logic
+                maintenance_service._run_cleanup(cleanup_record.id)
+                
+    except Exception as e:
+        logger.error(f"Error in cleanup_orphaned_async: {str(e)}")
+        try:
+            cleanup_record = CleanupState.query.get(cleanup_id)
+            if cleanup_record:
+                cleanup_record.phase = 'error'
+                cleanup_record.progress_message = f'Error: {str(e)}'
+                cleanup_record.is_active = False
+                cleanup_record.end_time = datetime.now(timezone.utc)
+                db.session.commit()
+        except Exception as commit_error:
+            logger.error(f"Failed to update cleanup record on error: {str(commit_error)}")
 
 def check_file_changes_async(check_id):
     """Async function to check file changes"""
-    # Implementation would be moved from app.py
-    # This is a placeholder for the actual implementation
-    pass
+    try:
+        with db.session.get_bind().connect() as connection:
+            with db.session():
+                # Get the file changes record
+                check_record = FileChangesState.query.get(check_id)
+                if not check_record:
+                    logger.error(f"File changes record {check_id} not found")
+                    return
+                
+                # Create maintenance service instance
+                maintenance_service = MaintenanceService()
+                
+                # Run the file changes check using the maintenance service logic
+                maintenance_service._run_file_changes_check(check_record.id)
+                
+    except Exception as e:
+        logger.error(f"Error in check_file_changes_async: {str(e)}")
+        try:
+            check_record = FileChangesState.query.get(check_id)
+            if check_record:
+                check_record.phase = 'error'
+                check_record.progress_message = f'Error: {str(e)}'
+                check_record.is_active = False
+                check_record.end_time = datetime.now(timezone.utc)
+                db.session.commit()
+        except Exception as commit_error:
+            logger.error(f"Failed to update file changes record on error: {str(commit_error)}")
+
+@maintenance_bp.route('/vacuum', methods=['POST'])
+def vacuum_database():
+    """Vacuum the SQLite database to optimize storage"""
+    try:
+        # Only works with SQLite databases
+        database_url = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
+        if not database_url.startswith('sqlite:'):
+            return jsonify({'error': 'VACUUM operation only supported for SQLite databases'}), 400
+        
+        # Get database size before vacuum
+        db_file_path = database_url.replace('sqlite:///', '')
+        if os.path.exists(db_file_path):
+            size_before = os.path.getsize(db_file_path)
+        else:
+            size_before = 0
+        
+        # Execute VACUUM command
+        from sqlalchemy import text
+        result = db.session.execute(text('VACUUM;'))
+        db.session.commit()
+        
+        # Get database size after vacuum
+        if os.path.exists(db_file_path):
+            size_after = os.path.getsize(db_file_path)
+        else:
+            size_after = 0
+        
+        bytes_freed = size_before - size_after
+        
+        logger.info(f"Database vacuum completed. Size before: {size_before} bytes, after: {size_after} bytes, freed: {bytes_freed} bytes")
+        
+        return jsonify({
+            'message': 'Database vacuum completed successfully',
+            'size_before_bytes': size_before,
+            'size_after_bytes': size_after,
+            'bytes_freed': bytes_freed,
+            'percentage_reduction': round((bytes_freed / size_before * 100), 2) if size_before > 0 else 0
+        })
+        
+    except Exception as e:
+        logger.error(f"Error vacuuming database: {str(e)}")
+        return jsonify({'error': f'Failed to vacuum database: {str(e)}'}), 500

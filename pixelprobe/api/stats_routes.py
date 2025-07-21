@@ -7,6 +7,7 @@ import pytz
 from datetime import datetime, timezone
 
 from models import db, ScanResult
+from version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,7 @@ def get_system_info():
         
         # Build response
         system_info = {
-            'version': os.environ.get('APP_VERSION', 'unknown'),
+            'version': __version__,
             'timezone': APP_TIMEZONE,
             'current_time': datetime.now(tz).isoformat(),
             'database': {
