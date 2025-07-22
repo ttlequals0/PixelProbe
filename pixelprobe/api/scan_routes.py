@@ -281,6 +281,8 @@ def get_scan_status():
     # Force fresh database read - bypass session cache for threading
     # This ensures we see updates made by worker threads
     try:
+        # Clear any cached objects to ensure fresh read
+        db.session.expunge_all()
         # Query fresh from database, not from session cache
         scan_state = db.session.query(ScanState).filter_by(is_active=True).first()
         if not scan_state:
@@ -294,8 +296,8 @@ def get_scan_status():
     
     state_dict = scan_state.to_dict()
     
-    # Debug logging
-    logger.debug(f"API scan-status: scan_id={scan_state.id}, phase={scan_state.phase}, "
+    # Debug logging - changed to INFO for visibility in production logs
+    logger.info(f"API scan-status: scan_id={scan_state.id}, phase={scan_state.phase}, "
                 f"is_active={scan_state.is_active}, files_processed={scan_state.files_processed}")
     
     # Prioritize database values when available, fall back to service values

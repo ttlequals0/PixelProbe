@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.88] - 2025-07-22
+
+### Fixed
+- **CRITICAL**: Fixed MaintenanceService initialization error - missing database_uri parameter
+- **CRITICAL**: Fixed "File changes record not found" errors by correcting query method from .get() to .filter_by()
+- **UI UPDATES**: Enhanced scan progress logging and database session handling for real-time UI updates
+- Improved scan status endpoint with better database session management using expunge_all()
+- Added comprehensive progress logging every 10 files during scanning for better debugging
+- Changed debug logging to INFO level for scan status visibility in production
+
 ## [2.0.87] - 2025-07-22
 
 ### Fixed

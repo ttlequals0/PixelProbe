@@ -329,6 +329,10 @@ class ScanService:
             # Update scan state progress
             scan_state.update_progress(i + 1, total_files, current_file=file_path)
             db.session.commit()
+            
+            # Log progress every 10 files for UI debugging
+            if (i + 1) % 10 == 0:
+                logger.info(f"Scan progress: {i + 1}/{total_files} files processed")
         
         # Complete scan
         if self.scan_cancelled:
@@ -380,6 +384,10 @@ class ScanService:
                 # Update scan state progress
                 scan_state.update_progress(completed, total_files, current_file=file_path)
                 db.session.commit()
+                
+                # Log progress every 10 files for UI debugging
+                if completed % 10 == 0:
+                    logger.info(f"Parallel scan progress: {completed}/{total_files} files processed")
         
         # Complete scan
         if self.scan_cancelled:

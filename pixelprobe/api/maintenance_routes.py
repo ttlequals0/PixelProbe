@@ -483,7 +483,8 @@ def cleanup_orphaned_async(app, cleanup_id):
                         return
                     
                     # Create maintenance service instance
-                    maintenance_service = MaintenanceService()
+                    database_url = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
+                    maintenance_service = MaintenanceService(database_url)
                     
                     # Run the cleanup using the maintenance service logic
                     maintenance_service._run_cleanup(cleanup_record.id)
@@ -509,13 +510,14 @@ def check_file_changes_async(app, check_id):
             with db.session.get_bind().connect() as connection:
                 with db.session():
                     # Get the file changes record
-                    check_record = FileChangesState.query.get(check_id)
+                    check_record = FileChangesState.query.filter_by(check_id=check_id).first()
                     if not check_record:
                         logger.error(f"File changes record {check_id} not found")
                         return
                     
                     # Create maintenance service instance
-                    maintenance_service = MaintenanceService()
+                    database_url = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
+                    maintenance_service = MaintenanceService(database_url)
                     
                     # Run the file changes check using the maintenance service logic
                     maintenance_service._run_file_changes_check(check_record.id)
