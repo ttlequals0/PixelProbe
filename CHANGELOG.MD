@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.82] - 2025-07-22
+
+### Fixed  
+- **Critical: Parameter Order Bug**: Fixed TypeError in file discovery where set was passed as max_files parameter
+  - Error: `'>' not supported between instances of 'int' and 'set'`
+  - Root cause: Wrong parameter order in discover_media_files() call (line 164)
+  - Solution: Used explicit keyword arguments to prevent parameter confusion
+
 ## [2.0.81] - 2025-07-22
 
 ### Fixed

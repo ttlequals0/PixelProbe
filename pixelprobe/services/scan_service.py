@@ -161,7 +161,7 @@ class ScanService:
                         db.session.commit()
                     
                     # Discover only new files (not already in database)
-                    all_files = checker.discover_media_files(valid_dirs, existing_files, progress_callback=discovery_progress)
+                    all_files = checker.discover_media_files(valid_dirs, existing_files=existing_files, progress_callback=discovery_progress)
                     logger.info(f"File discovery completed. Found {len(all_files)} files to process")
                     new_files_count = len(all_files)
                     
