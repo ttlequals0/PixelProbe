@@ -267,10 +267,16 @@ class ScanState(db.Model):
         """Mark scan as completed"""
         self.phase = 'completed'
         self.is_active = False  # Mark as inactive when completed
-        self.phase = 'completed'
-        self.is_active = False
         self.end_time = datetime.now(timezone.utc)
-        db.session.commit()
+        
+        # Force commit with explicit session management for threading
+        try:
+            db.session.commit()
+            logger.info(f"Scan {self.id} completed - phase set to 'completed', is_active=False")
+        except Exception as e:
+            logger.error(f"Failed to commit scan completion: {e}")
+            db.session.rollback()
+            raise
 
 class CleanupState(db.Model):
     __tablename__ = 'cleanup_state'

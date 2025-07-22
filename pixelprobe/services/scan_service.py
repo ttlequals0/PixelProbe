@@ -230,8 +230,12 @@ class ScanService:
                     if total_scan_files == 0:
                         logger.info("No files to scan - completing scan immediately")
                         self.update_progress(0, 0, '', 'completed')
-                        scan_state.complete_scan()
-                        db.session.commit()
+                        
+                        # Complete scan with proper database session handling
+                        scan_state.complete_scan()  # This includes its own commit
+                        
+                        # Force session flush to ensure data is written immediately
+                        db.session.flush()
                         logger.info("Scan completed immediately (no files to process)")
                         return {'message': 'Scan completed - no files to process', 'total_files': 0}
                     

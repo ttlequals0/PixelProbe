@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.85] - 2025-07-22
+
+### Fixed
+- **CRITICAL**: Fixed database session threading issue causing scan state updates to not persist
+- Implemented proper worker-database-API separation with fresh database reads
+- Fixed API to bypass session cache and force fresh database queries
+- Enhanced database session management for multi-threaded scan operations
+- Added comprehensive logging to scan completion process
+- Improved error handling for database commits in threaded context
+
 ## [2.0.84] - 2025-07-22
 
 ### Fixed

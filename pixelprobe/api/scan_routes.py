@@ -278,12 +278,19 @@ def get_scan_status():
     # Get progress from scan service
     service_status = current_app.scan_service.get_scan_progress()
     
-    # Add scan state info from database - refresh to get latest data
-    scan_state = ScanState.get_or_create()
+    # Force fresh database read - bypass session cache for threading
+    # This ensures we see updates made by worker threads
     try:
-        db.session.refresh(scan_state)  # Force refresh from database
+        # Query fresh from database, not from session cache
+        scan_state = db.session.query(ScanState).filter_by(is_active=True).first()
+        if not scan_state:
+            scan_state = ScanState.get_or_create()
+        else:
+            # Force refresh from database to get latest worker thread updates
+            db.session.refresh(scan_state)
     except Exception as e:
-        logger.warning(f"Could not refresh scan state: {e}")
+        logger.warning(f"Could not get fresh scan state: {e}")
+        scan_state = ScanState.get_or_create()
     
     state_dict = scan_state.to_dict()
     
