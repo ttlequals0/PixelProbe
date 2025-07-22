@@ -5,9 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.83] - 2025-07-22
+
+### Fixed
+- Fixed scan progress tracking getting stuck in 'discovering' phase
+- Improved database state synchronization between scan service and UI
+- Enhanced scan state transition logging for better debugging
+- Fixed scan phase not properly updating from 'adding' to 'scanning'
+- Improved error handling and transaction management in scan progress updates
+- Simplified scan-status API logic to prevent stale state reporting
+- Enhanced ScanState model with better phase transition logic and error handling
+- Added comprehensive logging for scan state debugging
+- Improved database transaction safety in progress updates
+
 ## [2.0.82] - 2025-07-22
 
-### Fixed  
+### Fixed
+- Fixed scan progress tracking getting stuck in 'discovering' phase
+- Improved database state synchronization between scan service and UI
+- Enhanced scan state transition logging for better debugging
+- Fixed scan phase not properly updating from 'adding' to 'scanning'
+- Improved error handling and transaction management in scan progress updates
+- Simplified scan-status API logic to prevent stale state reporting  
 - **Critical: Parameter Order Bug**: Fixed TypeError in file discovery where set was passed as max_files parameter
   - Error: `'>' not supported between instances of 'int' and 'set'`
   - Root cause: Wrong parameter order in discover_media_files() call (line 164)

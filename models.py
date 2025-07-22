@@ -2,6 +2,10 @@ from datetime import datetime, timezone
 from flask_sqlalchemy import SQLAlchemy
 import json
 import uuid
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
 
@@ -200,10 +204,18 @@ class ScanState(db.Model):
     def start_scan(self, directories, force_rescan=False):
         """Start a new scan"""
         self.phase = 'discovering'
+        self.is_active = True  # Ensure scan is marked as active
         self.start_time = datetime.now(timezone.utc)
+        self.end_time = None  # Clear any previous end time
         self.directories = json.dumps(directories) if isinstance(directories, list) else directories
         self.force_rescan = force_rescan
+        self.files_processed = 0
+        self.estimated_total = 0
+        self.current_file = None
+        self.error_message = None
         db.session.commit()
+        logger.info(f"Scan started: directories={directories}, "
+                    f"force_rescan={force_rescan}")
     
     def cancel_scan(self):
         """Cancel the current scan"""
@@ -225,18 +237,36 @@ class ScanState(db.Model):
         self.files_processed = files_processed
         self.estimated_total = total_files
         
+        # Handle phase transitions explicitly
         if phase:
             self.phase = phase
+            logger.info(f"Scan phase updated to: {phase}")
         elif total_files > 0 and self.phase in ['idle', 'discovering']:
+            # Auto-transition to scanning if we have files to process
             self.phase = 'scanning'
+            logger.info(f"Auto-transitioned scan phase to: scanning "
+                       f"(files_processed={files_processed}, total={total_files})")
             
-        if current_file:
+        if current_file is not None:  # Allow empty string to clear current file
             self.current_file = current_file
         
-        db.session.commit()
+        # Ensure the scan is marked as active when we have actual progress
+        if self.phase in ['discovering', 'adding', 'scanning'] and total_files > 0:
+            self.is_active = True
+        
+        try:
+            db.session.commit()
+            logger.debug(f"Progress updated: {files_processed}/{total_files}, "
+                        f"phase={self.phase}, file={current_file}")
+        except Exception as e:
+            logger.error(f"Failed to commit progress update: {e}")
+            db.session.rollback()
+            raise
     
     def complete_scan(self):
         """Mark scan as completed"""
+        self.phase = 'completed'
+        self.is_active = False  # Mark as inactive when completed
         self.phase = 'completed'
         self.is_active = False
         self.end_time = datetime.now(timezone.utc)

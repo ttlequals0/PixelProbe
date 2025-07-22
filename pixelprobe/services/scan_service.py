@@ -224,9 +224,16 @@ class ScanService:
                         files_to_scan = all_files  # Just the new files discovered
                     
                     total_scan_files = len(files_to_scan)
+                    logger.info(f"Starting scan phase: {total_scan_files} files to scan")
+                    
+                    # Update both service and database state
                     self.update_progress(0, total_scan_files, '', 'scanning')
-                    scan_state.update_progress(0, total_scan_files, phase='scanning')
+                    scan_state.update_progress(0, total_scan_files, phase='scanning', current_file='')
+                    
+                    # Explicit commit to ensure database state is updated
                     db.session.commit()
+                    logger.info(f"Scan state transitioned to 'scanning' phase "
+                               f"with {total_scan_files} files")
                     
                     if num_workers > 1:
                         self._parallel_scan(checker, files_to_scan, force_rescan, num_workers, scan_state)

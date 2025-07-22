@@ -285,19 +285,23 @@ def get_scan_status():
     # Prioritize database values when available, fall back to service values
     is_running = current_app.scan_service.is_scan_running()
     
-    # Use database progress if scan is active and has meaningful data
-    if is_running and state_dict.get('estimated_total', 0) > 0:
-        current_progress = state_dict.get('files_processed', 0)
-        total_progress = state_dict.get('estimated_total', 0)
-        status_value = 'scanning' if current_progress < total_progress else 'completed'
+    # Prioritize database state when scan is active, fall back to service values
+    current_phase = state_dict.get('phase', 'idle')
+    
+    # Use database values primarily, with service as fallback
+    current_progress = state_dict.get('files_processed', service_status.get('current', 0))
+    total_progress = state_dict.get('estimated_total', service_status.get('total', 0))
+    
+    # Determine status based on phase and progress
+    if is_running:
+        if current_phase in ['discovering', 'adding', 'scanning']:
+            status_value = current_phase
+        else:
+            status_value = service_status.get('status', 'scanning')
     else:
-        # Fall back to service values
-        current_progress = service_status.get('current', 0)
-        total_progress = service_status.get('total', 0)
-        status_value = service_status.get('status', 'idle')
+        status_value = 'completed' if current_phase == 'completed' else 'idle'
     
     # Map phases to frontend-expected phase numbers with proper progress calculation
-    current_phase = state_dict.get('phase', 'idle')
     phase_number = 1
     total_phases = 3
     progress_message = ""
