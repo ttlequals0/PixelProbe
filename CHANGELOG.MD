@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.78] - 2025-07-22
+
+### Changed
+- **Docker Build**: Updated Docker image build process and version bumping
+- **Version Management**: Incremented version number for new build
+
 ## [2.0.77] - 2025-07-21
 
 ### Fixed
