@@ -278,12 +278,24 @@ def get_scan_status():
     # Get progress from scan service
     service_status = current_app.scan_service.get_scan_progress()
     
-    # Add scan state info from database
+    # Add scan state info from database - refresh to get latest data
     scan_state = ScanState.get_or_create()
+    try:
+        db.session.refresh(scan_state)  # Force refresh from database
+    except Exception as e:
+        logger.warning(f"Could not refresh scan state: {e}")
+    
     state_dict = scan_state.to_dict()
+    
+    # Debug logging
+    logger.debug(f"API scan-status: scan_id={scan_state.id}, phase={scan_state.phase}, "
+                f"is_active={scan_state.is_active}, files_processed={scan_state.files_processed}")
     
     # Prioritize database values when available, fall back to service values
     is_running = current_app.scan_service.is_scan_running()
+    logger.debug(f"Service is_running: {is_running}")
+    logger.debug(f"Service status: {service_status}")
+    logger.debug(f"Database state_dict phase: {state_dict.get('phase', 'idle')}")
     
     # Prioritize database state when scan is active, fall back to service values
     current_phase = state_dict.get('phase', 'idle')

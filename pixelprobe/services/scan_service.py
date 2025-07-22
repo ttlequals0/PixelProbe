@@ -226,7 +226,16 @@ class ScanService:
                     total_scan_files = len(files_to_scan)
                     logger.info(f"Starting scan phase: {total_scan_files} files to scan")
                     
-                    # Update both service and database state
+                    # Special case: if no files to scan, complete immediately
+                    if total_scan_files == 0:
+                        logger.info("No files to scan - completing scan immediately")
+                        self.update_progress(0, 0, '', 'completed')
+                        scan_state.complete_scan()
+                        db.session.commit()
+                        logger.info("Scan completed immediately (no files to process)")
+                        return {'message': 'Scan completed - no files to process', 'total_files': 0}
+                    
+                    # Update both service and database state for actual scanning
                     self.update_progress(0, total_scan_files, '', 'scanning')
                     scan_state.update_progress(0, total_scan_files, phase='scanning', current_file='')
                     
