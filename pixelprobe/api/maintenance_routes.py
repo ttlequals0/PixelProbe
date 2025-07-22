@@ -520,13 +520,13 @@ def check_file_changes_async(app, check_id):
                     maintenance_service = MaintenanceService(database_url)
                     
                     # Run the file changes check using the maintenance service logic
-                    maintenance_service._run_file_changes_check(check_record.id)
+                    maintenance_service._run_file_changes_check(check_record.check_id)
                 
     except Exception as e:
         logger.error(f"Error in check_file_changes_async: {str(e)}")
         try:
             with app.app_context():
-                check_record = FileChangesState.query.get(check_id)
+                check_record = FileChangesState.query.filter_by(check_id=check_id).first()
                 if check_record:
                     check_record.phase = 'error'
                     check_record.progress_message = f'Error: {str(e)}'

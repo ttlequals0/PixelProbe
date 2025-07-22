@@ -184,13 +184,22 @@ class ScanState(db.Model):
     
     @staticmethod
     def get_or_create():
-        """Get existing active scan state or create new one"""
+        """Get the most recent scan state or create new one if none exists"""
         try:
+            # First check for active scan
             scan_state = ScanState.query.filter_by(is_active=True).first()
+            if scan_state:
+                return scan_state
+                
+            # If no active scan, get the most recent one
+            scan_state = ScanState.query.order_by(ScanState.id.desc()).first()
+            if scan_state:
+                return scan_state
         except Exception:
             # Table might not exist, return a transient instance
             scan_state = None
             
+        # Only create new if no scan state exists at all
         if not scan_state:
             scan_state = ScanState()
             try:
@@ -301,6 +310,7 @@ class CleanupState(db.Model):
     current_file = db.Column(db.String(500), nullable=True)
     progress_message = db.Column(db.String(200), nullable=True)
     error_message = db.Column(db.String(500), nullable=True)
+    cancel_requested = db.Column(db.Boolean, nullable=False, default=False)
     
     def to_dict(self):
         # Import here to avoid circular imports
@@ -327,6 +337,7 @@ class FileChangesState(db.Model):
     progress_message = db.Column(db.String(200), nullable=True)
     error_message = db.Column(db.String(500), nullable=True)
     changed_files = db.Column(db.Text, nullable=True)  # JSON list of changed files
+    cancel_requested = db.Column(db.Boolean, nullable=False, default=False)
     
     def to_dict(self):
         # Import here to avoid circular imports

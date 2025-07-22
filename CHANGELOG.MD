@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.89] - 2025-07-22
+
+### Fixed - CRITICAL ARCHITECTURAL FIXES
+- **DATABASE SCHEMA**: Added missing `cancel_requested` field to CleanupState and FileChangesState models
+- **ID TYPE FIX**: Fixed FileChangesState lookup using integer ID instead of UUID string
+- **STATE MANAGEMENT**: Fixed ScanState.get_or_create() creating new records instead of returning existing ones
+- **UI UPDATES**: Fixed scan status endpoint to properly retrieve active and completed scans
+- **ROOT CAUSE**: Resolved fundamental issues that prevented app from working properly since v2.0.53
+
+### Added
+- Database migration tool: `tools/add_cancel_requested_columns.py` to update existing databases
+- Better scan state management logic that handles both active and completed scans
+- Improved error handling for maintenance operations
+
+### Technical Details
+- MaintenanceService now correctly passes UUID strings for file changes operations
+- Scan status endpoint no longer creates spurious new scan records
+- UI polling now receives actual scan progress instead of empty states
+
 ## [2.0.88] - 2025-07-22
 
 ### Fixed

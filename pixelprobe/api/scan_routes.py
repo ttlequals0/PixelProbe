@@ -283,13 +283,19 @@ def get_scan_status():
     try:
         # Clear any cached objects to ensure fresh read
         db.session.expunge_all()
-        # Query fresh from database, not from session cache
+        # First try to get active scan
         scan_state = db.session.query(ScanState).filter_by(is_active=True).first()
-        if not scan_state:
-            scan_state = ScanState.get_or_create()
-        else:
+        if scan_state:
             # Force refresh from database to get latest worker thread updates
             db.session.refresh(scan_state)
+        else:
+            # No active scan, get the most recent one for status display
+            scan_state = db.session.query(ScanState).order_by(ScanState.id.desc()).first()
+            if not scan_state:
+                # No scan states at all, create initial one
+                scan_state = ScanState()
+                db.session.add(scan_state)
+                db.session.commit()
     except Exception as e:
         logger.warning(f"Could not get fresh scan state: {e}")
         scan_state = ScanState.get_or_create()
