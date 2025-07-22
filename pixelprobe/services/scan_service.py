@@ -131,14 +131,29 @@ class ScanService:
                         self._handle_scan_cancellation(scan_state)
                         return
                     
-                    # Get existing files to skip during discovery
-                    from ..models import ScanResult
-                    existing_files = set(
-                        result.file_path for result in db.session.query(ScanResult.file_path).all()
-                    )
+                    # Get existing files to skip during discovery (optimized for large databases)
+                    from models import ScanResult
+                    logger.info("Starting file discovery with on-demand database checking...")
+                    
+                    # Create a smart set that queries the database on-demand
+                    class DatabaseExistenceChecker:
+                        def __init__(self):
+                            self._cache = {}  # Simple cache to avoid repeated queries
+                        
+                        def __contains__(self, file_path):
+                            if file_path not in self._cache:
+                                exists = db.session.query(ScanResult).filter_by(file_path=file_path).first() is not None
+                                self._cache[file_path] = exists
+                            return self._cache[file_path]
+                        
+                        def __len__(self):
+                            return len(self._cache)
+                    
+                    existing_files = DatabaseExistenceChecker()
                     
                     # Discover only new files (not already in database)
                     all_files = checker.discover_media_files(valid_dirs, existing_files)
+                    logger.info(f"File discovery completed. Found {len(all_files)} files to process")
                     new_files_count = len(all_files)
                     
                     if self.scan_cancelled:
@@ -152,24 +167,30 @@ class ScanService:
                         db.session.commit()
                         
                         # Add new files to database with basic file info (no corruption check yet)
+                        added_count = 0
                         for i, file_path in enumerate(all_files):
                             if self.scan_cancelled:
                                 self._handle_scan_cancellation(scan_state)
                                 return
                                 
-                            self._add_file_to_db(file_path)
+                            was_added = self._add_file_to_db(file_path)
+                            if was_added:
+                                added_count += 1
+                            
                             self.update_progress(i + 1, new_files_count, file_path, 'adding')
                             scan_state.update_progress(i + 1, new_files_count, current_file=file_path)
                             
                             if (i + 1) % 100 == 0:  # Commit in batches for performance
                                 db.session.commit()
+                                logger.info(f"Added {added_count} new files out of {i + 1} processed")
                         
                         db.session.commit()
+                        logger.info(f"Add phase completed. Added {added_count} new files out of {new_files_count} discovered")
                     
                     # Phase 3: Scanning - Check integrity of files that need scanning
                     if force_rescan:
                         # If force_rescan, check ALL files in the directories
-                        from ..models import ScanResult
+                        from models import ScanResult
                         files_to_scan = [
                             result.file_path for result in db.session.query(ScanResult).filter(
                                 db.or_(*[ScanResult.file_path.like(f"{d}%") for d in valid_dirs])
@@ -316,13 +337,23 @@ class ScanService:
         scan_state.cancel_scan()
         db.session.commit()
     
-    def _add_file_to_db(self, file_path: str):
-        """Add a new file to the database with basic info (no corruption check)"""
+    def _add_file_to_db(self, file_path: str) -> bool:
+        """Add a new file to the database with basic info (no corruption check)
+        
+        Returns:
+            bool: True if file was added, False if it already existed
+        """
         import os
         import magic
         import hashlib
         from datetime import datetime
-        from ..models import ScanResult
+        from models import ScanResult
+        
+        # Safety check: Discovery phase should have already filtered out existing files
+        # but we keep this as a backup for edge cases
+        existing = db.session.query(ScanResult).filter_by(file_path=file_path).first()
+        if existing:
+            return False  # Skip if already exists (should be rare)
         
         try:
             # Get file stats
@@ -355,6 +386,7 @@ class ScanService:
             )
             
             db.session.add(scan_result)
+            return True
             
         except Exception as e:
             logger.error(f"Failed to add file to database: {file_path} - {e}")
@@ -368,3 +400,4 @@ class ScanService:
                 marked_as_good=False
             )
             db.session.add(scan_result)
+            return True

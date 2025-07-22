@@ -46,6 +46,21 @@ def rate_limit(limit_string):
         return wrapped
     return decorator
 
+def exempt_from_rate_limit(f):
+    """Decorator to exempt a function from rate limiting"""
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        # Get the limiter from the current app
+        limiter = current_app.extensions.get('flask-limiter')
+        if limiter:
+            # Apply exemption dynamically
+            exempt_func = limiter.exempt(f)
+            return exempt_func(*args, **kwargs)
+        else:
+            # If no limiter, just call the function
+            return f(*args, **kwargs)
+    return wrapped
+
 # Global state tracking - will be moved to service layer
 cleanup_state = {
     'is_running': False,
@@ -92,6 +107,7 @@ def test_cleanup():
         })
 
 @maintenance_bp.route('/cleanup-status')
+@exempt_from_rate_limit
 def get_cleanup_status():
     """Get current cleanup orphans operation status"""
     try:
@@ -163,6 +179,7 @@ def get_cleanup_status():
         })
 
 @maintenance_bp.route('/file-changes-status')
+@exempt_from_rate_limit
 def get_file_changes_status():
     """Get current file changes check operation status"""
     try:

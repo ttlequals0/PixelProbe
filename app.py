@@ -103,7 +103,7 @@ def get_rate_limit_key():
 limiter = Limiter(
     app=app,
     key_func=get_rate_limit_key,
-    default_limits=["200 per day", "100 per hour"],
+    default_limits=[],  # Remove default limits to prevent spam when key_func returns None
     storage_uri="memory://",
     headers_enabled=True,
     swallow_errors=True  # Don't fail requests if rate limiting has issues
@@ -170,7 +170,6 @@ def api_docs():
 @limiter.exempt
 def health_check():
     """Health check endpoint"""
-    logger.info("Health check requested")
     return jsonify({
         'status': 'healthy',
         'version': __version__,

@@ -71,11 +71,6 @@ def get_stats():
             'warning_files': stats[8] or 0
         }
         
-        logger.info(f"Stats requested - Total: {result['total_files']}, Completed: {result['completed_files']}, " +
-                   f"Pending: {result['pending_files']}, Scanning: {result['scanning_files']}, " +
-                   f"Corrupted: {result['corrupted_files']}, Healthy: {result['healthy_files']}, " +
-                   f"Marked Good: {result['marked_as_good']}")
-        
         return jsonify(result)
         
     except Exception as e:

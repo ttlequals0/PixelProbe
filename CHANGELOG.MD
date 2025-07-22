@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.80] - 2025-07-22
+
+### Changed
+- **Docker Build**: Updated Docker image build process and version management
+- **Version Management**: Incremented version number for new build
+- **Test Suite**: Comprehensive test suite executed with 68 tests passing, 2 skipped
+
 ## [2.0.79] - 2025-07-22
 
 ### Added
@@ -12,6 +19,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Regular Scan: 3-phase optimized scanning (discover → add → check) with new file discovery optimization
   - Orphaned Files: 3-phase cleanup (scan → check → delete) that now actually removes database entries
   - Changed Files: 3-phase verification (start → check → rescan) for detecting and rescanning modified files
+
+### Fixed
+- **Critical Scan Performance Issue**: Fixed scan operations getting stuck at "Discovering files..." phase
+  - Root cause: Loading 1M+ existing file paths into memory caused application hang
+  - Solution: Implemented `DatabaseExistenceChecker` class that queries database on-demand during discovery
+  - Discovery phase now properly skips existing files without loading all paths into memory
+  - Added caching to prevent repeated database queries for the same file
+  - Added progress logging to track discovery and add phases
+  - Scan operations now complete successfully even with large databases (1M+ records)
+- **Flask-Limiter Log Spam**: Fixed critical log spam issue causing thousands of ERROR messages per second
+  - Removed default rate limits from limiter configuration to prevent errors when `key_func` returns `None` for internal requests
+  - Added `@exempt_from_rate_limit` decorator to frequently polled status endpoints:
+    - `/api/scan-status` (polled every 1 second during operations)
+    - `/api/cleanup-status` (polled every 1 second during cleanup)
+    - `/api/file-changes-status` (polled every 1 second during file change checks)
+  - Resolves "Skipping limit: 200 per 1 day. Empty value found in parameters" error spam
+- **Excessive INFO Logging**: Reduced log noise from frequently called endpoints
+  - Removed verbose stats logging from `/api/stats` endpoint (called every 30 seconds)
+  - Removed health check logging from `/health` endpoint (frequently called by monitoring systems)
+  - Eliminates repetitive INFO messages like "Stats requested - Total: X, Completed: Y..."
 
 ### Changed
 - **Docker Build**: Updated Docker image build process and version management

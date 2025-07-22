@@ -272,6 +272,7 @@ def scan_all():
         return jsonify({'error': str(e)}), 400
 
 @scan_bp.route('/scan-status')
+@exempt_from_rate_limit
 def get_scan_status():
     """Get current scan status and progress"""
     # Get progress from scan service
