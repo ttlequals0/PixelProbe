@@ -102,10 +102,13 @@ class ScanService:
         self.update_progress(0, 0, '', 'initializing')
         self.scan_cancelled = False
         
-        # Save scan state
+        # Save scan state and capture ID before threading
         scan_state = ScanState.get_or_create()
         scan_state.start_scan(valid_dirs, force_rescan)
         db.session.commit()
+        
+        # Capture scan ID while the object is still bound to the session
+        scan_state_id = scan_state.id
         
         # Capture Flask app context for the thread
         app = current_app._get_current_object()
@@ -115,6 +118,12 @@ class ScanService:
             # Set up Flask app context for the thread
             with app.app_context():
                 try:
+                    # Get fresh ScanState object in worker thread to avoid detached instance
+                    scan_state = db.session.get(ScanState, scan_state_id)
+                    if not scan_state:
+                        logger.error(f"Could not find scan state with ID {scan_state_id}")
+                        return
+                    
                     excluded_paths, excluded_extensions = load_exclusions()
                     checker = PixelProbe(
                         database_path=self.database_uri,
@@ -232,18 +241,15 @@ class ScanService:
                         self.update_progress(0, 0, '', 'completed')
                         
                         # Complete scan using thread-safe database update
-                        # Get scan_id before the object becomes detached
-                        scan_id = scan_state.id
-                        
-                        # Use direct SQL update to avoid detached instance issues
+                        # Use the scan_state_id we captured before threading
                         from sqlalchemy import text
                         db.session.execute(
                             text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                            {'end_time': datetime.now(timezone.utc), 'id': scan_id}
+                            {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
                         )
                         db.session.commit()
                         
-                        logger.info(f"Scan {scan_id} completed immediately (no files to process)")
+                        logger.info(f"Scan {scan_state_id} completed immediately (no files to process)")
                         return {'message': 'Scan completed - no files to process', 'total_files': 0}
                     
                     # Update both service and database state for actual scanning
@@ -331,11 +337,11 @@ class ScanService:
             self.update_progress(total_files, total_files, '', 'completed')
             
             # Thread-safe completion using direct SQL update
-            scan_id = scan_state.id
+            # Use scan_state_id which is accessible in this closure
             from sqlalchemy import text
             db.session.execute(
                 text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': datetime.now(timezone.utc), 'id': scan_id}
+                {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
             )
             db.session.commit()
     
@@ -382,11 +388,11 @@ class ScanService:
             self.update_progress(total_files, total_files, '', 'completed')
             
             # Thread-safe completion using direct SQL update
-            scan_id = scan_state.id
+            # Use scan_state_id which is accessible in this closure
             from sqlalchemy import text
             db.session.execute(
                 text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': datetime.now(timezone.utc), 'id': scan_id}
+                {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
             )
             db.session.commit()
     

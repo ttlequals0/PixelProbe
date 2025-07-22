@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.87] - 2025-07-22
+
+### Fixed
+- **CRITICAL**: Completely fixed SQLAlchemy DetachedInstanceError by capturing scan ID before threading
+- Fixed remaining DetachedInstanceError when accessing scan_state.id in worker thread
+- Implemented proper scan state object retrieval within worker thread context
+- Worker thread now gets fresh ScanState object using db.session.get() instead of detached object
+- Enhanced thread safety by capturing scan_state_id before thread creation
+- All database operations in worker thread now use fresh session-bound objects
+
 ## [2.0.86] - 2025-07-22
 
 ### Fixed
