@@ -231,12 +231,19 @@ class ScanService:
                         logger.info("No files to scan - completing scan immediately")
                         self.update_progress(0, 0, '', 'completed')
                         
-                        # Complete scan with proper database session handling
-                        scan_state.complete_scan()  # This includes its own commit
+                        # Complete scan using thread-safe database update
+                        # Get scan_id before the object becomes detached
+                        scan_id = scan_state.id
                         
-                        # Force session flush to ensure data is written immediately
-                        db.session.flush()
-                        logger.info("Scan completed immediately (no files to process)")
+                        # Use direct SQL update to avoid detached instance issues
+                        from sqlalchemy import text
+                        db.session.execute(
+                            text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
+                            {'end_time': datetime.now(timezone.utc), 'id': scan_id}
+                        )
+                        db.session.commit()
+                        
+                        logger.info(f"Scan {scan_id} completed immediately (no files to process)")
                         return {'message': 'Scan completed - no files to process', 'total_files': 0}
                     
                     # Update both service and database state for actual scanning
@@ -322,7 +329,14 @@ class ScanService:
             self._handle_scan_cancellation(scan_state)
         else:
             self.update_progress(total_files, total_files, '', 'completed')
-            scan_state.complete_scan()
+            
+            # Thread-safe completion using direct SQL update
+            scan_id = scan_state.id
+            from sqlalchemy import text
+            db.session.execute(
+                text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
+                {'end_time': datetime.now(timezone.utc), 'id': scan_id}
+            )
             db.session.commit()
     
     def _parallel_scan(self, checker: PixelProbe, files: List[str], 
@@ -366,7 +380,14 @@ class ScanService:
             self._handle_scan_cancellation(scan_state)
         else:
             self.update_progress(total_files, total_files, '', 'completed')
-            scan_state.complete_scan()
+            
+            # Thread-safe completion using direct SQL update
+            scan_id = scan_state.id
+            from sqlalchemy import text
+            db.session.execute(
+                text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
+                {'end_time': datetime.now(timezone.utc), 'id': scan_id}
+            )
             db.session.commit()
     
     def _handle_scan_cancellation(self, scan_state: ScanState):

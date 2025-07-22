@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.86] - 2025-07-22
+
+### Fixed
+- **CRITICAL**: Fixed SQLAlchemy DetachedInstanceError in multi-threaded scan operations
+- Replaced ORM-based updates with direct SQL updates to avoid session binding issues
+- Implemented thread-safe database operations using raw SQL queries
+- Fixed "Instance is not bound to a Session" errors in worker threads
+- Enhanced scan completion process to work correctly across thread boundaries
+- Added proper error handling for detached database instances
+
 ## [2.0.85] - 2025-07-22
 
 ### Fixed

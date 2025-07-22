@@ -264,15 +264,20 @@ class ScanState(db.Model):
             raise
     
     def complete_scan(self):
-        """Mark scan as completed"""
-        self.phase = 'completed'
-        self.is_active = False  # Mark as inactive when completed
-        self.end_time = datetime.now(timezone.utc)
-        
-        # Force commit with explicit session management for threading
+        """Mark scan as completed - thread-safe version"""
         try:
+            # Get the scan ID before we lose session binding
+            scan_id = self.id if hasattr(self, 'id') and self.id else 'unknown'
+            
+            # Update the database record directly using thread-safe query
+            # This avoids the detached instance problem
+            from sqlalchemy import text
+            db.session.execute(
+                text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
+                {'end_time': datetime.now(timezone.utc), 'id': scan_id}
+            )
             db.session.commit()
-            logger.info(f"Scan {self.id} completed - phase set to 'completed', is_active=False")
+            logger.info(f"Scan {scan_id} completed - phase set to 'completed', is_active=False")
         except Exception as e:
             logger.error(f"Failed to commit scan completion: {e}")
             db.session.rollback()
