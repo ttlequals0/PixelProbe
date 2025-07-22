@@ -122,32 +122,72 @@ class ScanService:
                         excluded_extensions=excluded_extensions
                     )
                     
-                    # Discovery phase
+                    # Phase 1: Discovery - Find only new files
                     self.update_progress(0, 0, '', 'discovering')
+                    scan_state.update_progress(0, 0, phase='discovering')
+                    db.session.commit()
                     
                     if self.scan_cancelled:
                         self._handle_scan_cancellation(scan_state)
                         return
                     
-                    # Pass all directories at once for efficient parallel discovery
-                    all_files = checker.discover_media_files(valid_dirs)
+                    # Get existing files to skip during discovery
+                    from ..models import ScanResult
+                    existing_files = set(
+                        result.file_path for result in db.session.query(ScanResult.file_path).all()
+                    )
+                    
+                    # Discover only new files (not already in database)
+                    all_files = checker.discover_media_files(valid_dirs, existing_files)
+                    new_files_count = len(all_files)
                     
                     if self.scan_cancelled:
                         self._handle_scan_cancellation(scan_state)
                         return
                     
-                    # Scanning phase
-                    total_files = len(all_files)
-                    self.update_progress(0, total_files, '', 'scanning')
+                    # Phase 2: Adding - Add new files to database with basic info
+                    if new_files_count > 0:
+                        self.update_progress(0, new_files_count, '', 'adding')
+                        scan_state.update_progress(0, new_files_count, phase='adding')
+                        db.session.commit()
+                        
+                        # Add new files to database with basic file info (no corruption check yet)
+                        for i, file_path in enumerate(all_files):
+                            if self.scan_cancelled:
+                                self._handle_scan_cancellation(scan_state)
+                                return
+                                
+                            self._add_file_to_db(file_path)
+                            self.update_progress(i + 1, new_files_count, file_path, 'adding')
+                            scan_state.update_progress(i + 1, new_files_count, current_file=file_path)
+                            
+                            if (i + 1) % 100 == 0:  # Commit in batches for performance
+                                db.session.commit()
+                        
+                        db.session.commit()
                     
-                    # Update database scan state with total files discovered
-                    scan_state.update_progress(0, total_files)
+                    # Phase 3: Scanning - Check integrity of files that need scanning
+                    if force_rescan:
+                        # If force_rescan, check ALL files in the directories
+                        from ..models import ScanResult
+                        files_to_scan = [
+                            result.file_path for result in db.session.query(ScanResult).filter(
+                                db.or_(*[ScanResult.file_path.like(f"{d}%") for d in valid_dirs])
+                            ).all()
+                        ]
+                    else:
+                        # Only scan new files and files that haven't been scanned
+                        files_to_scan = all_files  # Just the new files discovered
+                    
+                    total_scan_files = len(files_to_scan)
+                    self.update_progress(0, total_scan_files, '', 'scanning')
+                    scan_state.update_progress(0, total_scan_files, phase='scanning')
                     db.session.commit()
                     
                     if num_workers > 1:
-                        self._parallel_scan(checker, all_files, force_rescan, num_workers, scan_state)
+                        self._parallel_scan(checker, files_to_scan, force_rescan, num_workers, scan_state)
                     else:
-                        self._sequential_scan(checker, all_files, force_rescan, scan_state)
+                        self._sequential_scan(checker, files_to_scan, force_rescan, scan_state)
                         
                 except Exception as e:
                     logger.error(f"Error during scan: {e}")
@@ -275,3 +315,56 @@ class ScanService:
         )
         scan_state.cancel_scan()
         db.session.commit()
+    
+    def _add_file_to_db(self, file_path: str):
+        """Add a new file to the database with basic info (no corruption check)"""
+        import os
+        import magic
+        import hashlib
+        from datetime import datetime
+        from ..models import ScanResult
+        
+        try:
+            # Get file stats
+            stat = os.stat(file_path)
+            file_size = stat.st_size
+            mod_time = datetime.fromtimestamp(stat.st_mtime)
+            
+            # Detect MIME type
+            mime_type = magic.from_file(file_path, mime=True)
+            
+            # Calculate MD5 hash for quick duplicate detection
+            hasher = hashlib.md5()
+            with open(file_path, 'rb') as f:
+                # Read in chunks for large files
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hasher.update(chunk)
+            file_hash = hasher.hexdigest()
+            
+            # Create ScanResult entry with basic info, no corruption check yet
+            scan_result = ScanResult(
+                file_path=file_path,
+                file_size=file_size,
+                file_hash=file_hash,
+                mime_type=mime_type,
+                last_modified=mod_time,
+                scan_date=datetime.utcnow(),
+                scan_status='pending',  # Mark as pending corruption check
+                is_corrupted=False,
+                marked_as_good=False
+            )
+            
+            db.session.add(scan_result)
+            
+        except Exception as e:
+            logger.error(f"Failed to add file to database: {file_path} - {e}")
+            # Create minimal entry if basic info fails
+            scan_result = ScanResult(
+                file_path=file_path,
+                scan_date=datetime.utcnow(),
+                scan_status='error',
+                error_message=str(e),
+                is_corrupted=False,
+                marked_as_good=False
+            )
+            db.session.add(scan_result)

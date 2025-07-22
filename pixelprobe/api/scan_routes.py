@@ -295,7 +295,42 @@ def get_scan_status():
         total_progress = service_status.get('total', 0)
         status_value = service_status.get('status', 'idle')
     
-    # Build comprehensive status response
+    # Map phases to frontend-expected phase numbers with proper progress calculation
+    current_phase = state_dict.get('phase', 'idle')
+    phase_number = 1
+    total_phases = 3
+    progress_message = ""
+    phase_current = 0
+    phase_total = 0
+    
+    if current_phase == 'discovering':
+        phase_number = 1
+        progress_message = "Discovering files..."
+        # For discovery, we don't know total files yet, so show indeterminate progress
+        phase_current = 0
+        phase_total = 0  # Will show base phase progress (0-33%)
+        
+    elif current_phase == 'adding':
+        phase_number = 2  
+        progress_message = "Adding new files to database..."
+        # Use current/total from database for adding phase
+        phase_current = current_progress
+        phase_total = total_progress
+        
+    elif current_phase == 'scanning':
+        phase_number = 3
+        progress_message = "Checking file integrity..."
+        # Use current/total from database for scanning phase  
+        phase_current = current_progress
+        phase_total = total_progress
+        
+    elif current_phase == 'completed':
+        phase_number = 3
+        progress_message = "Scan completed"
+        phase_current = total_progress
+        phase_total = total_progress
+        
+    # Build comprehensive status response with frontend-expected fields
     status = {
         'current': current_progress,
         'total': total_progress,
@@ -308,7 +343,14 @@ def get_scan_status():
         'end_time': state_dict.get('end_time'),
         'directories': state_dict.get('directories'),
         'force_rescan': state_dict.get('force_rescan'),
-        'phase': state_dict.get('phase', 'idle')
+        'phase': current_phase,
+        
+        # Frontend-expected progress fields for proper 33% per phase calculation
+        'phase_number': phase_number,
+        'total_phases': total_phases,
+        'phase_current': phase_current,
+        'phase_total': phase_total,
+        'progress_message': progress_message
     }
     
     return jsonify(status)

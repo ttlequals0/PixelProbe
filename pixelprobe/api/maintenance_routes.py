@@ -104,7 +104,7 @@ def get_cleanup_status():
                 'is_running': False,
                 'phase': 'idle',
                 'phase_number': 1,
-                'total_phases': 2,
+                'total_phases': 3,
                 'phase_current': 0,
                 'phase_total': 0,
                 'files_processed': 0,
@@ -119,7 +119,7 @@ def get_cleanup_status():
                 'is_running': cleanup_record.is_active,
                 'phase': cleanup_record.phase,
                 'phase_number': cleanup_record.phase_number,
-                'total_phases': 2,
+                'total_phases': 3,
                 'phase_current': cleanup_record.phase_current,
                 'phase_total': cleanup_record.phase_total,
                 'files_processed': cleanup_record.files_processed,
@@ -149,7 +149,7 @@ def get_cleanup_status():
                     cleanup_record.phase_number,
                     cleanup_record.phase_current,
                     cleanup_record.phase_total,
-                    total_phases=2
+                    total_phases=3
                 )
         
         return jsonify(response)

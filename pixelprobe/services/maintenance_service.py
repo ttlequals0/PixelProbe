@@ -232,13 +232,15 @@ class MaintenanceService:
                 self.cleanup_state['total_files'] = total_files
                 self.cleanup_state['phase'] = 'scanning_database'
             
-            # Phase 2: Checking filesystem
+            # Phase 2: Checking and collecting orphaned files
             cleanup_record.phase = 'checking_files'
             cleanup_record.phase_number = 2
-            cleanup_record.progress_message = f'Phase 2 of 2: Checking {total_files} files on filesystem...'
+            cleanup_record.progress_message = f'Phase 2 of 3: Checking {total_files} files on filesystem...'
             db.session.commit()
             
+            orphaned_entries = []
             orphaned_count = 0
+            
             for i, result in enumerate(all_results):
                 if self._is_cancelled(cleanup_record):
                     break
@@ -250,20 +252,59 @@ class MaintenanceService:
                 
                 # Check if file exists
                 if not os.path.exists(result.file_path):
-                    result.file_exists = False
+                    orphaned_entries.append(result)
                     orphaned_count += 1
                     cleanup_record.orphaned_found = orphaned_count
                     logger.info(f"Found orphaned entry: {result.file_path}")
-                else:
-                    result.file_exists = True
                 
-                # Commit periodically
+                # Update progress periodically
                 if i % 100 == 0:
+                    cleanup_record.files_processed = i + 1
                     db.session.commit()
                     
                 with self.cleanup_lock:
                     self.cleanup_state['files_processed'] = i + 1
                     self.cleanup_state['orphaned_found'] = orphaned_count
+            
+            # Phase 3: Delete orphaned entries from database
+            if orphaned_entries and not self._is_cancelled(cleanup_record):
+                cleanup_record.phase = 'deleting_entries'
+                cleanup_record.phase_number = 3
+                cleanup_record.progress_message = f'Phase 3 of 3: Removing {orphaned_count} orphaned entries from database...'
+                cleanup_record.total_files = len(orphaned_entries)
+                cleanup_record.phase_total = len(orphaned_entries)
+                cleanup_record.files_processed = 0
+                cleanup_record.phase_current = 0
+                db.session.commit()
+                
+                # Delete orphaned entries in batches for performance
+                deleted_count = 0
+                batch_size = 50
+                
+                for i in range(0, len(orphaned_entries), batch_size):
+                    if self._is_cancelled(cleanup_record):
+                        break
+                        
+                    batch = orphaned_entries[i:i + batch_size]
+                    
+                    for entry in batch:
+                        db.session.delete(entry)
+                        deleted_count += 1
+                        logger.info(f"Deleted orphaned entry: {entry.file_path}")
+                    
+                    # Commit batch
+                    db.session.commit()
+                    
+                    # Update progress
+                    cleanup_record.files_processed = deleted_count
+                    cleanup_record.phase_current = deleted_count
+                    cleanup_record.current_file = f"Deleted {deleted_count}/{orphaned_count} entries"
+                    db.session.commit()
+                    
+                    with self.cleanup_lock:
+                        self.cleanup_state['files_processed'] = deleted_count
+                
+                logger.info(f"Successfully deleted {deleted_count} orphaned database entries")
             
             # Final commit
             db.session.commit()
@@ -274,7 +315,11 @@ class MaintenanceService:
                 cleanup_record.progress_message = 'Cleanup cancelled by user'
             else:
                 cleanup_record.phase = 'complete'
-                cleanup_record.progress_message = f'Cleanup complete. Found {orphaned_count} orphaned entries.'
+                if orphaned_count > 0:
+                    deleted_count = len(orphaned_entries) if orphaned_entries else orphaned_count
+                    cleanup_record.progress_message = f'Cleanup complete. Deleted {deleted_count} orphaned database entries.'
+                else:
+                    cleanup_record.progress_message = 'Cleanup complete. No orphaned entries found.'
             
             cleanup_record.is_active = False
             cleanup_record.end_time = datetime.now(timezone.utc)

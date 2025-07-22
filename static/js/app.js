@@ -500,16 +500,24 @@ class ProgressManager {
             
         } else if (operationType === 'cleanup') {
             // Use the progress percentage directly from the backend
-            // Backend already handles the phase weighting (90% checking, 10% deleting)
+            // Backend handles 3-phase weighting: scanning → checking → deleting
             percentage = Math.round(status.progress_percentage || 0);
             
-            text = status.progress_message || `Phase ${status.phase_number || 1} of ${status.total_phases || 2}`;
+            text = status.progress_message || `Phase ${status.phase_number || 1} of ${status.total_phases || 3}`;
             
             if (status.current_file) {
-                details = `Checking: ${status.current_file.split('/').pop()}`;
+                if (status.phase === 'deleting_entries') {
+                    details = status.current_file;
+                } else {
+                    details = `Checking: ${status.current_file.split('/').pop()}`;
+                }
             }
             if (status.orphaned_found > 0) {
-                details += ` - Found ${status.orphaned_found} orphaned files`;
+                if (status.phase === 'deleting_entries') {
+                    details += ` - Deleting ${status.orphaned_found} orphaned entries`;
+                } else {
+                    details += ` - Found ${status.orphaned_found} orphaned files`;
+                }
             }
             
         } else if (operationType === 'file-changes') {
@@ -1311,6 +1319,7 @@ class PixelProbeApp {
             await this.api.markAsGood([fileId]);
             this.showNotification('File marked as good', 'success');
             await this.table.loadData();
+            await this.stats.updateStats(); // Fix: Update stats after marking file as good
         } catch (error) {
             this.showNotification('Failed to mark file as good', 'error');
         }

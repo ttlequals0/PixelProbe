@@ -5,11 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.79] - 2025-07-22
+
+### Added
+- **Complete Scan Analysis Documentation**: Added comprehensive documentation for all three scan types
+  - Regular Scan: 3-phase optimized scanning (discover → add → check) with new file discovery optimization
+  - Orphaned Files: 3-phase cleanup (scan → check → delete) that now actually removes database entries
+  - Changed Files: 3-phase verification (start → check → rescan) for detecting and rescanning modified files
+
+### Changed
+- **Docker Build**: Updated Docker image build process and version management
+- **Version Management**: Incremented to version 2.0.79
+
 ## [2.0.78] - 2025-07-22
+
+### Fixed
+- **Progress Bar 0% Issue**: Fixed scan progress bar showing 0% during active scans
+  - Added missing `phase_number`, `total_phases`, `phase_current`, `phase_total` fields to `/api/scan-status` response
+  - Frontend now properly calculates progress percentage based on 3-phase system with 33% per phase:
+    - **Phase 1 (0-33%)**: Discovery - Finding new files not in database
+    - **Phase 2 (33-66%)**: Adding - Adding new files with basic metadata 
+    - **Phase 3 (66-100%)**: Scanning - Integrity checking based on actual files to scan
+  - Progress bar now shows meaningful percentages during all scan phases
+
+- **"Mark as Good" UI Count Bug**: Fixed UI statistics not updating after marking single file as good
+  - Added missing `await this.stats.updateStats()` call in `markFileAsGood()` method in app.js:1314
+  - UI dashboard counts now immediately reflect changes when marking files as good
+  - Bulk "mark as good" operation already worked correctly, now single-file operation matches
+
+- **Scan Performance Optimization**: Implemented optimized 3-phase scan system
+  - **Phase 1 (Discovery)**: Now only discovers NEW files not already in database, skipping known files
+  - **Phase 2 (Adding)**: Adds new files to database with basic metadata before integrity checking
+  - **Phase 3 (Scanning)**: Only performs corruption checks on new/changed files (unless force_rescan=true)
+  - Dramatically improves scan performance for large libraries with few changes between scans
+
+- **Orphaned Files Cleanup Now Deletes Database Entries**: Changed orphaned files scan behavior to actually remove database entries
+  - **Phase 1**: Scanning database entries for all known files
+  - **Phase 2**: Checking filesystem existence for each database entry
+  - **Phase 3**: **NEW** - Deleting orphaned database entries in batches of 50 for performance
+  - Updated progress tracking to show 3 phases instead of 2 (33.3% each phase)
+  - Completion message now shows "Deleted X orphaned database entries" instead of "Found X orphaned entries"
+  - **BREAKING CHANGE**: Previously only marked entries as `file_exists = False`, now actually removes them from database
 
 ### Changed
 - **Docker Build**: Updated Docker image build process and version bumping
 - **Version Management**: Incremented version number for new build
+- **Scan Service**: Enhanced `ScanState.update_progress()` to support `phase` and `current_file` parameters
+- **Database Schema**: Improved scan progress tracking with proper phase management
 
 ## [2.0.77] - 2025-07-21
 
@@ -27,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Now returns `None` for exempt IPs instead of prefixed keys, which properly bypasses rate limiting
   - Increased default rate limit from 50 to 100 per hour for external requests
   - Explicitly exempted `/api/scan-status` endpoint from all rate limiting
+  - 
   - Resolves "50 per 1 hour exceeded" errors from frontend polling every 1 second
 
 - **Scan Status API Not Showing Progress**: Fixed scan progress not updating in API responses

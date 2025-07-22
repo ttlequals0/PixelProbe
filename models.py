@@ -220,12 +220,19 @@ class ScanState(db.Model):
         self.end_time = datetime.now(timezone.utc)
         db.session.commit()
     
-    def update_progress(self, files_processed, total_files):
+    def update_progress(self, files_processed, total_files, phase=None, current_file=None):
         """Update scan progress"""
         self.files_processed = files_processed
         self.estimated_total = total_files
-        if total_files > 0:
+        
+        if phase:
+            self.phase = phase
+        elif total_files > 0 and self.phase in ['idle', 'discovering']:
             self.phase = 'scanning'
+            
+        if current_file:
+            self.current_file = current_file
+        
         db.session.commit()
     
     def complete_scan(self):
