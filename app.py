@@ -244,8 +244,12 @@ def create_tables():
 def migrate_database():
     """Run database migrations"""
     from sqlalchemy import text
+    from app_startup_migration import run_startup_migrations
     
     try:
+        # Run startup migrations for v2.0.89
+        run_startup_migrations(db)
+        
         # Create performance indexes
         create_performance_indexes()
         

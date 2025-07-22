@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.90] - 2025-07-22
+
+### Fixed
+- **UI**: Fixed progress bar showing 67% for completed scans instead of 100%
+- **DATABASE**: Added automatic migration on startup for missing cancel_requested columns
+- **VERSION**: Fixed Docker image not showing correct version number
+
+### Added
+- Automatic database migration runs on every startup to add missing columns
+- Better handling of completed scan states in UI progress calculation
+
 ## [2.0.89] - 2025-07-22
 
 ### Fixed - CRITICAL ARCHITECTURAL FIXES

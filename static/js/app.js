@@ -485,19 +485,24 @@ class ProgressManager {
             const phaseCurrent = status.phase_current || 0;
             const phaseTotal = status.phase_total || 0;
             
-            // Calculate percentage based on phase
-            const phasePercentage = 100 / totalPhases;
-            const phaseStart = (phaseNumber - 1) * phasePercentage;
-            
-            if (phaseTotal > 0) {
-                const phaseProgress = (phaseCurrent / phaseTotal) * phasePercentage;
-                percentage = Math.round(phaseStart + phaseProgress);
+            // Special handling for completed scans
+            if (status.phase === 'completed' || status.status === 'completed') {
+                percentage = 100;
+                text = status.progress_message || 'Scan completed';
             } else {
-                percentage = Math.round(phaseStart);
+                // Calculate percentage based on phase
+                const phasePercentage = 100 / totalPhases;
+                const phaseStart = (phaseNumber - 1) * phasePercentage;
+                
+                if (phaseTotal > 0) {
+                    const phaseProgress = (phaseCurrent / phaseTotal) * phasePercentage;
+                    percentage = Math.round(phaseStart + phaseProgress);
+                } else {
+                    percentage = Math.round(phaseStart);
+                }
+                
+                text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
             }
-            
-            text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
-            
         } else if (operationType === 'cleanup') {
             // Use the progress percentage directly from the backend
             // Backend handles 3-phase weighting: scanning → checking → deleting
