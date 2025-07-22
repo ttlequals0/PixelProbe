@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.81] - 2025-07-22
+
+### Fixed
+- **ScanResult Model**: Fixed `mime_type` parameter error by changing to `file_type` in scan_service.py:380
+- **Progress Tracking**: Restored missing progress callbacks in file discovery phase (lines 155-159 in scan_service.py)
+- **Current File Display**: Fixed current_file parameter not being passed in both sequential and parallel scan methods
+- **Critical: Infinite Loop Bug**: Fixed infinite loop in file discovery/adding phase that was processing 800k+ duplicate files
+  - Replaced problematic `DatabaseExistenceChecker` with efficient set-based lookup (lines 138-154)
+  - Added safety checks to prevent infinite loops when >95% duplicates detected (lines 187-191)
+  - Added duplicate tracking and early warnings (lines 180, 196-197, 204-208)
+
+### Changed
+- **Docker Build**: Updated Docker image build process and version management
+- **Version Management**: Incremented version number to 2.0.81 for critical bug fixes
+
 ## [2.0.80] - 2025-07-22
 
 ### Changed

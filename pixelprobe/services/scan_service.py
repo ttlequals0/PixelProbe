@@ -135,24 +135,33 @@ class ScanService:
                     from models import ScanResult
                     logger.info("Starting file discovery with on-demand database checking...")
                     
-                    # Create a smart set that queries the database on-demand
-                    class DatabaseExistenceChecker:
-                        def __init__(self):
-                            self._cache = {}  # Simple cache to avoid repeated queries
-                        
-                        def __contains__(self, file_path):
-                            if file_path not in self._cache:
-                                exists = db.session.query(ScanResult).filter_by(file_path=file_path).first() is not None
-                                self._cache[file_path] = exists
-                            return self._cache[file_path]
-                        
-                        def __len__(self):
-                            return len(self._cache)
+                    # Get all existing file paths from database for faster lookup
+                    logger.info("Loading existing file paths from database...")
+                    existing_file_paths = set()
+                    batch_size = 50000
+                    offset = 0
                     
-                    existing_files = DatabaseExistenceChecker()
+                    while True:
+                        batch = db.session.query(ScanResult.file_path).offset(offset).limit(batch_size).all()
+                        if not batch:
+                            break
+                        existing_file_paths.update(result.file_path for result in batch)
+                        offset += batch_size
+                        if offset % 100000 == 0:
+                            logger.info(f"Loaded {offset} existing file paths...")
+                    
+                    logger.info(f"Loaded {len(existing_file_paths)} existing file paths from database")
+                    existing_files = existing_file_paths
+                    
+                    # Define progress callback for discovery
+                    def discovery_progress(files_checked, files_discovered):
+                        self.update_progress(files_checked, files_checked, '', 'discovering')
+                        scan_state.update_progress(files_checked, files_checked, phase='discovering', current_file='')
+                        scan_state.discovery_count = files_discovered
+                        db.session.commit()
                     
                     # Discover only new files (not already in database)
-                    all_files = checker.discover_media_files(valid_dirs, existing_files)
+                    all_files = checker.discover_media_files(valid_dirs, existing_files, progress_callback=discovery_progress)
                     logger.info(f"File discovery completed. Found {len(all_files)} files to process")
                     new_files_count = len(all_files)
                     
@@ -168,21 +177,35 @@ class ScanService:
                         
                         # Add new files to database with basic file info (no corruption check yet)
                         added_count = 0
+                        duplicate_count = 0
+                        
                         for i, file_path in enumerate(all_files):
                             if self.scan_cancelled:
                                 self._handle_scan_cancellation(scan_state)
                                 return
+                            
+                            # Safety check: if too many duplicates, something is wrong with discovery
+                            if i > 1000 and duplicate_count > (i * 0.95):  # More than 95% duplicates
+                                logger.error(f"Too many duplicate files detected ({duplicate_count}/{i}). Discovery phase may have failed.")
+                                logger.error("Aborting add phase to prevent infinite loop.")
+                                break
                                 
                             was_added = self._add_file_to_db(file_path)
                             if was_added:
                                 added_count += 1
+                            else:
+                                duplicate_count += 1
                             
                             self.update_progress(i + 1, new_files_count, file_path, 'adding')
                             scan_state.update_progress(i + 1, new_files_count, current_file=file_path)
                             
                             if (i + 1) % 100 == 0:  # Commit in batches for performance
                                 db.session.commit()
-                                logger.info(f"Added {added_count} new files out of {i + 1} processed")
+                                logger.info(f"Added {added_count} new files out of {i + 1} processed ({duplicate_count} duplicates)")
+                                
+                                # Early warning if too many duplicates
+                                if duplicate_count > (i * 0.8):  # More than 80% duplicates
+                                    logger.warning(f"High duplicate rate detected: {duplicate_count}/{i} files already existed")
                         
                         db.session.commit()
                         logger.info(f"Add phase completed. Added {added_count} new files out of {new_files_count} discovered")
@@ -271,7 +294,7 @@ class ScanService:
                 logger.error(f"Error scanning file {file_path}: {e}")
             
             # Update scan state progress
-            scan_state.update_progress(i + 1, total_files)
+            scan_state.update_progress(i + 1, total_files, current_file=file_path)
             db.session.commit()
         
         # Complete scan
@@ -315,7 +338,7 @@ class ScanService:
                 self.update_progress(completed, total_files, file_path, 'scanning')
                 
                 # Update scan state progress
-                scan_state.update_progress(completed, total_files)
+                scan_state.update_progress(completed, total_files, current_file=file_path)
                 db.session.commit()
         
         # Complete scan
@@ -377,7 +400,7 @@ class ScanService:
                 file_path=file_path,
                 file_size=file_size,
                 file_hash=file_hash,
-                mime_type=mime_type,
+                file_type=mime_type,
                 last_modified=mod_time,
                 scan_date=datetime.utcnow(),
                 scan_status='pending',  # Mark as pending corruption check
