@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.97] - 2025-07-23
+
+### Added
+- **OPENAPI/SWAGGER**: Added interactive API documentation using flask-restx
+- **API DOCS**: Swagger UI now available at `/api/v1/docs` with "Try it out" functionality
+- **API VERSIONING**: All API endpoints now under `/api/v1/` namespace
+
+### Changed
+- **API DOCUMENTATION**: `/api-docs` now redirects to Swagger UI (falls back to old docs if flask-restx not installed)
+
+### Technical Details
+- Added flask-restx==1.3.0 to requirements.txt
+- Created comprehensive OpenAPI models for all API endpoints
+- Swagger UI includes all endpoints with proper request/response documentation
+- Interactive testing available directly from the documentation page
+
+## [2.0.96] - 2025-07-23
+
+### Fixed
+- **PROGRESS DISPLAY**: Progress messages now show current file and ETA like in version 2.0.53 for ALL scan types
+- **MEDIA SCAN**: Progress bar now shows current file and ETA during corruption scanning
+- **FILE CHANGES**: Progress bar now updates dynamically during file processing  
+- **CLEANUP OPERATION**: Progress bar now shows current file being checked with ETA
+
+### Technical Details
+- Added ProgressTracker usage to both scan service and maintenance service
+- Progress messages now follow format: "Phase X of Y: Action N files - current_file - ETA: Xm Ys"
+- All operations (media scan, cleanup, file changes) now show real-time progress with ETA calculations
+- Both sequential and parallel scan modes properly update progress messages
+
 ## [2.0.95] - 2025-07-23
 
 ### Fixed

@@ -11,6 +11,7 @@ from typing import List, Dict, Optional, Tuple
 from flask import current_app
 from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
+from utils import ProgressTracker
 
 logger = logging.getLogger(__name__)
 
@@ -131,9 +132,13 @@ class ScanService:
                         excluded_extensions=excluded_extensions
                     )
                     
+                    # Create progress tracker for scan operations
+                    progress_tracker = ProgressTracker('scan')
+                    
                     # Phase 1: Discovery - Find only new files
                     self.update_progress(0, 0, '', 'discovering')
                     scan_state.update_progress(0, 0, phase='discovering')
+                    scan_state.progress_message = 'Phase 1 of 3: Discovering media files...'
                     db.session.commit()
                     
                     if self.scan_cancelled:
@@ -182,6 +187,7 @@ class ScanService:
                     if new_files_count > 0:
                         self.update_progress(0, new_files_count, '', 'adding')
                         scan_state.update_progress(0, new_files_count, phase='adding')
+                        scan_state.progress_message = f'Phase 2 of 3: Adding {new_files_count} new files to database...'
                         db.session.commit()
                         
                         # Add new files to database with basic file info (no corruption check yet)
@@ -255,6 +261,7 @@ class ScanService:
                     # Update both service and database state for actual scanning
                     self.update_progress(0, total_scan_files, '', 'scanning')
                     scan_state.update_progress(0, total_scan_files, phase='scanning', current_file='')
+                    scan_state.progress_message = f'Phase 3 of 3: Scanning {total_scan_files} files for corruption...'
                     
                     # Explicit commit to ensure database state is updated
                     db.session.commit()
@@ -316,6 +323,9 @@ class ScanService:
         """Perform sequential scan of files"""
         total_files = len(files)
         
+        # Create progress tracker for scan
+        progress_tracker = ProgressTracker('scan')
+        
         for i, file_path in enumerate(files):
             if self.scan_cancelled:
                 break
@@ -329,6 +339,14 @@ class ScanService:
             
             # Update scan state progress
             scan_state.update_progress(i + 1, total_files, current_file=file_path)
+            
+            # Update progress message with current file and ETA
+            scan_state.progress_message = progress_tracker.get_progress_message(
+                f'Phase 3 of 3: Scanning {total_files} files for corruption',
+                i + 1,
+                total_files,
+                os.path.basename(file_path)
+            )
             db.session.commit()
             
             # Log progress every 10 files for UI debugging
@@ -358,6 +376,9 @@ class ScanService:
         total_files = len(files)
         completed = 0
         
+        # Create progress tracker for scan
+        progress_tracker = ProgressTracker('scan')
+        
         def scan_file(file_path):
             if self.scan_cancelled:
                 return None
@@ -384,6 +405,14 @@ class ScanService:
                 
                 # Update scan state progress
                 scan_state.update_progress(completed, total_files, current_file=file_path)
+                
+                # Update progress message with current file and ETA
+                scan_state.progress_message = progress_tracker.get_progress_message(
+                    f'Phase 3 of 3: Scanning {total_files} files for corruption',
+                    completed,
+                    total_files,
+                    os.path.basename(file_path)
+                )
                 db.session.commit()
                 
                 # Log progress every 10 files for UI debugging

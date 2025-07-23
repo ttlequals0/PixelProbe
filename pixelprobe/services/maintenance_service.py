@@ -240,6 +240,9 @@ class MaintenanceService:
             cleanup_record.progress_message = f'Phase 2 of 3: Checking {total_files} files on filesystem...'
             db.session.commit()
             
+            # Create progress tracker for cleanup
+            progress_tracker = ProgressTracker('cleanup')
+            
             orphaned_entries = []
             orphaned_count = 0
             
@@ -251,6 +254,14 @@ class MaintenanceService:
                 cleanup_record.files_processed = i + 1
                 cleanup_record.phase_current = i + 1
                 cleanup_record.current_file = result.file_path
+                
+                # Update progress message with current file and ETA
+                cleanup_record.progress_message = progress_tracker.get_progress_message(
+                    f'Phase 2 of 3: Checking {total_files} files on filesystem',
+                    i + 1,
+                    total_files,
+                    os.path.basename(result.file_path)
+                )
                 
                 # Check if file exists
                 if not os.path.exists(result.file_path):
@@ -368,6 +379,9 @@ class MaintenanceService:
             
             logger.info(f"Starting file changes check for {total_files} files")
             
+            # Create progress tracker for file changes
+            progress_tracker = ProgressTracker('file_changes')
+            
             excluded_paths, excluded_extensions = load_exclusions()
             checker = PixelProbe(
                 database_path=self.database_uri,
@@ -412,6 +426,14 @@ class MaintenanceService:
                     file_changes_record.files_processed = files_processed
                     file_changes_record.phase_current = files_processed
                     file_changes_record.current_file = result.file_path
+                    
+                    # Update progress message with current file and ETA
+                    file_changes_record.progress_message = progress_tracker.get_progress_message(
+                        f'Phase 2 of 3: Checking {total_files} files for hash changes',
+                        files_processed,
+                        total_files,
+                        os.path.basename(result.file_path)
+                    )
                     
                     # Check for changes
                     try:

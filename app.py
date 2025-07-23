@@ -28,6 +28,14 @@ from pixelprobe.api.admin_routes import admin_bp, set_scheduler
 from pixelprobe.api.export_routes import export_bp
 from pixelprobe.api.maintenance_routes import maintenance_bp
 
+# Import OpenAPI/Swagger documentation
+try:
+    from pixelprobe.api.swagger import api_bp as swagger_bp
+    SWAGGER_AVAILABLE = True
+except ImportError:
+    SWAGGER_AVAILABLE = False
+    logger.warning("flask-restx not installed, Swagger documentation unavailable")
+
 # Import services
 from pixelprobe.services import ScanService, StatsService, ExportService, MaintenanceService
 
@@ -148,6 +156,13 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(export_bp)
 app.register_blueprint(maintenance_bp)
 
+# Register Swagger blueprint if available
+if SWAGGER_AVAILABLE:
+    app.register_blueprint(swagger_bp)
+    # Import swagger routes after blueprint registration to avoid circular imports
+    import pixelprobe.api.swagger_routes
+    logger.info("Swagger API documentation available at /api/v1/docs")
+
 # Rate limiting exemptions are handled by the key_func returning None for internal IPs
 
 # Rate limits are now applied directly on the route functions using decorators
@@ -163,8 +178,13 @@ def index():
 
 @app.route('/api-docs')
 def api_docs():
-    """Serve the API documentation page"""
-    return render_template('api_docs.html', version=__version__)
+    """Redirect to Swagger UI documentation"""
+    if SWAGGER_AVAILABLE:
+        from flask import redirect
+        return redirect('/api/v1/docs')
+    else:
+        # Fallback to old documentation if Swagger not available
+        return render_template('api_docs.html', version=__version__)
 
 @app.route('/health')
 @limiter.exempt
