@@ -1107,3 +1107,53 @@ textarea.form-control {
 .btn-secondary:hover {
     background-color: #5a6268;
 }
+/* Export dropdown styles */
+.export-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.export-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    min-width: 180px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    margin-top: 4px;
+}
+
+.export-dropdown-menu.show {
+    display: block;
+}
+
+.export-dropdown-menu a {
+    display: block;
+    padding: 8px 16px;
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: background-color 0.15s ease-in-out;
+}
+
+.export-dropdown-menu a:hover {
+    background-color: var(--bg-tertiary);
+}
+
+.export-dropdown-menu a:first-child {
+    border-radius: 4px 4px 0 0;
+}
+
+.export-dropdown-menu a:last-child {
+    border-radius: 0 0 4px 4px;
+}
+
+.export-dropdown-menu a i {
+    margin-right: 8px;
+    width: 16px;
+    text-align: center;
+}
+EOF < /dev/null

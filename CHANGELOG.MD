@@ -5,6 +5,215 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.113] - 2025-07-23
+
+### Summary of Changes Since v2.0.100
+
+This release consolidates multiple improvements and fixes from versions 2.0.101 through 2.0.112:
+
+#### Major Features Added
+- **Multi-format Export System**: Complete overhaul of export functionality
+  - Added Export dropdown menu replacing single CSV button
+  - Support for CSV, JSON, and PDF export formats
+  - Added details column showing corruption, warning, and error information
+  - PDF exports use landscape orientation with PixelProbe branding
+
+#### Scan Reports Enhancements
+- **PDF Report Generation**: Full implementation with reportlab
+  - Added PixelProbe logo with correct aspect ratio
+  - Applied UI color scheme (#1ce783 primary green)
+  - Fixed directory and file path display issues
+  - Added file lists to reports (up to 500 files)
+  
+- **Report Management**: 
+  - Added delete functionality with confirmation dialog
+  - Fixed CSRF token issues for report operations
+  - Fixed JavaScript errors when viewing reports
+
+#### Bug Fixes
+- Fixed scan completion auto-refresh
+- Fixed SQLAlchemy syntax errors
+- Fixed timezone handling in duration calculations
+- Fixed logger scope errors in PDF generation
+- Fixed directory parsing issues (character-by-character split)
+- Fixed dropdown menu display (custom CSS/JS implementation)
+
+#### Technical Improvements
+- Removed Bootstrap dependency for dropdowns
+- Improved error handling throughout
+- Better progress tracking and display
+- Consistent timezone handling (UTC-aware datetimes)
+
+## [2.0.112] - 2025-07-23
+
+### Added
+- **DETAILS COLUMN**: Added details column to all export formats (CSV, JSON, PDF)
+- **CSV EXPORT**: Added "Has Warnings" column and combined details (corruption, warning, error)
+- **JSON EXPORT**: Added error_message field and structured details object
+- **PDF EXPORT**: Added Details column with truncated text for readability
+
+### Changed
+- **PDF LAYOUT**: Adjusted column widths to accommodate details column
+- **CSV FORMAT**: Now includes Has Warnings as separate column
+- **DETAILS FORMAT**: Combined corruption_details, warning_details, and error_message with prefixes
+
+### Technical Details
+- CSV combines all details with format: "Corruption: ...; Warning: ...; Error: ..."
+- JSON includes both individual fields and combined details object
+- PDF truncates details to 40 characters to fit in landscape layout
+- PDF already uses landscape orientation for better space utilization
+
+## [2.0.111] - 2025-07-23
+
+### Fixed
+- **EXPORT DROPDOWN**: Fixed dropdown menu not displaying properly due to missing Bootstrap
+- **UI**: Replaced Bootstrap dropdown with custom CSS/JS implementation
+
+### Technical Details
+- Added custom dropdown CSS to desktop.css with proper styling
+- Added toggleExportMenu() function to handle dropdown show/hide
+- Dropdown now closes when clicking outside or selecting an option
+- Uses PixelProbe's existing color scheme variables
+
+## [2.0.110] - 2025-07-23
+
+### Added
+- **EXPORT OPTIONS**: Changed "Export CSV" button to "Export" dropdown with multiple format options
+- **JSON EXPORT**: Added ability to export scan results as JSON with all metadata
+- **PDF EXPORT**: Added ability to export scan results as PDF with branded styling
+- **FORMAT PARAMETER**: API endpoint /api/export-csv now accepts format parameter (csv, json, pdf)
+
+### Changed
+- **UI**: Export button is now a dropdown menu with CSV, JSON, and PDF options
+- **JAVASCRIPT**: Renamed exportCSV() to exportData(format) to support multiple formats
+
+### Technical Details
+- Export dropdown uses Bootstrap dropdown component with inline-block display
+- JSON export includes all fields including warnings and metadata
+- PDF export uses landscape orientation with PixelProbe color scheme
+- PDF limits display to 500 records to maintain reasonable file size
+- All exports maintain consistent filename format: pixelprobe_{type}_{timestamp}.{ext}
+
+## [2.0.109] - 2025-07-23
+
+### Fixed
+- **PDF REPORTS**: Fixed logger scope error causing "cannot access local variable 'logger'" error
+- **ERROR HANDLING**: Removed duplicate logger imports in exception handlers
+
+### Technical Details
+- Removed local logger imports in exception handlers that were shadowing module-level logger
+- Now consistently uses the module-level logger throughout the file
+
+## [2.0.108] - 2025-07-23
+
+### Fixed
+- **PDF REPORTS**: Fixed directories parsing issue where paths were split character by character
+- **PDF REPORTS**: Added robust handling for different directory data formats (JSON list, string, comma-separated)
+
+### Technical Details
+- Added type checking for directories_scanned field after JSON parsing
+- Added fallback handling for comma-separated directory strings
+- Added debug logging to help diagnose future parsing issues
+- Improved error handling for malformed JSON data
+
+## [2.0.107] - 2025-07-23
+
+### Fixed
+- **PDF REPORTS**: Fixed logo aspect ratio - now properly maintains 670x729 pixel ratio
+- **PDF REPORTS**: Fixed directories field formatting - directories now display on separate lines for readability
+
+### Technical Details
+- Logo dimensions adjusted from 2x0.5 inches to 1.5x1.63 inches to maintain proper aspect ratio
+- Directories field now uses line breaks instead of comma separation
+- Added Paragraph formatting for multi-line text in PDF tables
+
+## [2.0.106] - 2025-07-23
+
+### Fixed
+- **REPORT DELETION**: Fixed CSRF token error when deleting reports - added reports_bp to CSRF exemption
+- **REPORT VIEWING**: Fixed JavaScript error when viewing report details - directories_scanned array handling
+- **PDF REPORTS**: Fixed directory truncation issue - now shows all scanned directories without truncation
+- **PDF REPORTS**: Fixed file path truncation - now shows complete file paths in report tables
+
+### Added
+- **PDF REPORTS**: Added PixelProbe logo to PDF reports
+- **PDF REPORTS**: Applied UI color scheme to PDF reports - using primary green (#1ce783) and brand colors
+- **HTML REPORTS**: Updated HTML fallback reports to use same color scheme as UI
+
+### Technical Details
+- Added reports_bp to CSRF exempt list in app.py
+- Fixed JavaScript array type check for directories_scanned in viewScanReport()
+- Removed directory limit (was showing only first 3 directories)
+- Removed file path truncation (was limiting to 60 characters)
+- Added logo import and placement in PDF header
+- Updated all PDF colors to match UI theme
+
+## [2.0.105] - 2025-07-23
+
+### Added
+- **DELETE REPORTS**: Added ability to delete scan reports through UI and API
+- Delete button (trash icon) in scan reports table
+- Confirmation dialog before deleting reports
+- API endpoint: DELETE /api/scan-reports/<report_id>
+
+### Fixed
+- **PDF GENERATION**: Fixed invalid PDF files by adding reportlab to requirements
+- Added proper error logging for PDF generation failures
+- Improved error handling with specific error messages
+
+### Technical Details
+- Added reportlab==4.0.7 to requirements.txt
+- Added delete confirmation to prevent accidental deletions
+- Reports list automatically refreshes after deletion
+
+## [2.0.104] - 2025-07-23
+
+### Fixed
+- **SCAN PROGRESS**: Fixed scan progress display to show current file and X of Y files
+- **SCAN REPORTS**: Added scanned files list to PDF and HTML reports (similar to main table)
+- **UI**: Fixed progress details display to show both status message and file details
+
+### Added
+- Scan reports now include a detailed list of all scanned files (up to 500 files in PDF, 1000 in HTML)
+- File list includes path, status, size, type, and scan date for each file
+
+### Technical Details
+- Updated ProgressManager.update() to properly display details parameter
+- Added file details to calculateProgress() for scan operations
+- Modified PDF and HTML report generation to query and include ScanResult data
+- Reports now show actual scanned files, not just summary statistics
+
+## [2.0.103] - 2025-07-23
+
+### Fixed
+- **SCAN REPORTS**: Fixed timezone mismatch error when calculating scan duration
+- **SCAN REPORTS**: Properly handle scans with 0 files to process
+
+### Technical Details
+- Added timezone handling to convert naive datetimes to UTC-aware datetimes
+- Ensures both start_time and end_time are timezone-aware before calculating duration
+- Fixes "can't subtract offset-naive and offset-aware datetimes" error
+
+## [2.0.102] - 2025-07-23
+
+### Fixed
+- **SCAN REPORTS**: Fixed SQLAlchemy case() syntax error preventing scan report creation
+
+### Technical Details
+- Updated case() function calls to use positional arguments instead of list of tuples
+- Changed from `case([(condition, value)], else_=0)` to `case((condition, value), else_=0)`
+
+## [2.0.101] - 2025-07-23
+
+### Fixed
+- **AUTO-REFRESH**: Fixed scan completion auto-refresh not working due to phase name mismatch
+- **SCAN REPORTS**: Fixed missing scan reports for scans that complete with 0 files to process
+
+### Technical Details
+- Frontend was checking for phase='complete' but backend returns phase='completed'
+- Added scan report generation for empty scans that complete immediately
+- Scan completion now properly triggers page reload after 2 seconds
+
 ## [2.0.100] - 2025-07-23
 
 ### Fixed

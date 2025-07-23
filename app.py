@@ -126,6 +126,7 @@ csrf.exempt(stats_bp)
 csrf.exempt(admin_bp)
 csrf.exempt(export_bp)
 csrf.exempt(maintenance_bp)
+csrf.exempt(reports_bp)
 
 # Initialize scheduler
 scheduler = MediaScheduler()

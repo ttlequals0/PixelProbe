@@ -256,6 +256,11 @@ class ScanService:
                         )
                         db.session.commit()
                         
+                        # Create scan report even for empty scans
+                        completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                        if completed_scan_state:
+                            self._create_scan_report(completed_scan_state, scan_type='full_scan' if not force_rescan else 'rescan')
+                        
                         logger.info(f"Scan {scan_state_id} completed immediately (no files to process)")
                         return {'message': 'Scan completed - no files to process', 'total_files': 0}
                     
@@ -456,16 +461,28 @@ class ScanService:
             # Count files by status
             stats = db.session.query(
                 func.count(ScanResult.id).label('total'),
-                func.sum(db.case([(ScanResult.is_corrupted == True, 1)], else_=0)).label('corrupted'),
-                func.sum(db.case([(ScanResult.has_warnings == True, 1)], else_=0)).label('warnings'),
-                func.sum(db.case([(ScanResult.scan_status == 'error', 1)], else_=0)).label('errors'),
-                func.sum(db.case([(ScanResult.scan_status == 'completed', 1)], else_=0)).label('completed')
+                func.sum(db.case((ScanResult.is_corrupted == True, 1), else_=0)).label('corrupted'),
+                func.sum(db.case((ScanResult.has_warnings == True, 1), else_=0)).label('warnings'),
+                func.sum(db.case((ScanResult.scan_status == 'error', 1), else_=0)).label('errors'),
+                func.sum(db.case((ScanResult.scan_status == 'completed', 1), else_=0)).label('completed')
             ).first()
             
-            # Calculate duration
+            # Calculate duration - handle both timezone-aware and naive datetimes
             duration = None
             if scan_state.start_time and scan_state.end_time:
-                duration = (scan_state.end_time - scan_state.start_time).total_seconds()
+                # Ensure both times are timezone-aware for comparison
+                start_time = scan_state.start_time
+                end_time = scan_state.end_time
+                
+                # If start_time is naive, make it UTC aware
+                if start_time.tzinfo is None:
+                    start_time = start_time.replace(tzinfo=timezone.utc)
+                
+                # If end_time is naive, make it UTC aware
+                if end_time.tzinfo is None:
+                    end_time = end_time.replace(tzinfo=timezone.utc)
+                
+                duration = (end_time - start_time).total_seconds()
             
             # Create scan report
             report = ScanReport(

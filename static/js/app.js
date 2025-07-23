@@ -374,9 +374,13 @@ class ProgressManager {
             this.progressText.textContent = `${percentage}%`;
         }
         const progressDetails = document.querySelector('.progress-details');
-        if (progressDetails && text) {
-            // Show the current file or status message below the progress bar
-            progressDetails.textContent = text;
+        if (progressDetails) {
+            // Show both the main text and details if available
+            if (details) {
+                progressDetails.textContent = `${text} - ${details}`;
+            } else if (text) {
+                progressDetails.textContent = text;
+            }
         }
     }
 
@@ -415,7 +419,7 @@ class ProgressManager {
                 if (isRunning) {
                     const progress = this.calculateProgress(status, operationType);
                     this.update(progress.percentage, progress.text, progress.details);
-                } else if (status.phase === 'complete' || status.phase === 'cancelled' || status.phase === 'error') {
+                } else if (status.phase === 'completed' || status.phase === 'cancelled' || status.phase === 'error') {
                     // Operation is complete - show completion state
                     this.complete(operationType, status);
                 } else {
@@ -502,6 +506,19 @@ class ProgressManager {
                 }
                 
                 text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
+                
+                // Add file details for scan operations
+                if (status.file || status.current_file) {
+                    const currentFile = status.file || status.current_file;
+                    details = `Scanning: ${currentFile.split('/').pop()}`;
+                }
+                if (status.current > 0 && status.total > 0) {
+                    details = `${status.current} of ${status.total} files`;
+                    if (status.file || status.current_file) {
+                        const currentFile = status.file || status.current_file;
+                        details += ` - ${currentFile.split('/').pop()}`;
+                    }
+                }
             }
         } else if (operationType === 'cleanup') {
             // Use the progress percentage directly from the backend
@@ -1635,6 +1652,9 @@ class PixelProbeApp {
                         <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'pdf')" title="Export PDF">
                             <i class="fas fa-file-pdf"></i>
                         </button>
+                        <button class="btn btn-sm btn-danger" onclick="app.deleteScanReport('${report.report_id}')" title="Delete Report">
+                            <i class="fas fa-trash"></i>
+                        </button>
                     </td>
                 `;
                 
@@ -1701,7 +1721,7 @@ class PixelProbeApp {
             detailsHtml += `<tr><th>End Time:</th><td>${report.end_time ? new Date(report.end_time).toLocaleString() : 'N/A'}</td></tr>`;
             detailsHtml += `<tr><th>Duration:</th><td>${report.duration_formatted || 'N/A'}</td></tr>`;
             
-            if (report.directories_scanned && report.directories_scanned.length > 0) {
+            if (report.directories_scanned && Array.isArray(report.directories_scanned) && report.directories_scanned.length > 0) {
                 detailsHtml += `<tr><th>Directories:</th><td>${report.directories_scanned.join('<br>')}</td></tr>`;
             }
             
@@ -1769,8 +1789,58 @@ class PixelProbeApp {
             this.showNotification('Failed to export report', 'error');
         }
     }
+    async deleteScanReport(reportId) {
+        if (!confirm('Are you sure you want to delete this report? This action cannot be undone.')) {
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/scan-reports/${reportId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) throw new Error('Failed to delete report');
+            
+            const result = await response.json();
+            this.showNotification('Report deleted successfully', 'success');
+            
+            // Reload the reports list
+            await this.loadScanReports();
+            
+        } catch (error) {
+            console.error('Failed to delete report:', error);
+            this.showNotification('Failed to delete report', 'error');
+        }
+    }
 
-    async exportCSV() {
+    toggleExportMenu(event) {
+        event.stopPropagation();
+        const menu = document.getElementById('exportDropdownMenu');
+        menu.classList.toggle('show');
+        
+        // Close menu when clicking outside
+        const closeMenu = (e) => {
+            if (!e.target.closest('.export-dropdown')) {
+                menu.classList.remove('show');
+                document.removeEventListener('click', closeMenu);
+            }
+        };
+        
+        if (menu.classList.contains('show')) {
+            document.addEventListener('click', closeMenu);
+        }
+    }
+
+    async exportData(format = 'csv') {
+        // Close the dropdown menu
+        const menu = document.getElementById('exportDropdownMenu');
+        if (menu) {
+            menu.classList.remove('show');
+        }
+        
         try {
             // Show loading notification
             let itemDescription;
@@ -1781,9 +1851,13 @@ class PixelProbeApp {
                 const searchText = this.table.searchQuery ? ` matching "${this.table.searchQuery}"` : '';
                 itemDescription = filterText + searchText;
             }
-            this.showNotification(`Generating CSV export for ${itemDescription}...`, 'info');
             
-            let requestBody = {};
+            const formatUpper = format.toUpperCase();
+            this.showNotification(`Generating ${formatUpper} export for ${itemDescription}...`, 'info');
+            
+            let requestBody = {
+                format: format
+            };
             
             if (this.table.selectedFiles.size > 0) {
                 // Export selected files
@@ -1807,18 +1881,30 @@ class PixelProbeApp {
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `pixelprobe_export_${new Date().toISOString().split('T')[0]}.csv`;
+                
+                // Set appropriate filename based on format
+                const date = new Date().toISOString().split('T')[0];
+                let filename = `pixelprobe_export_${date}`;
+                if (format === 'json') {
+                    filename += '.json';
+                } else if (format === 'pdf') {
+                    filename += '.pdf';
+                } else {
+                    filename += '.csv';
+                }
+                
+                a.download = filename;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
                 
-                this.showNotification('CSV export completed successfully', 'success');
+                this.showNotification(`${formatUpper} export completed successfully`, 'success');
             } else {
                 throw new Error('Export failed');
             }
         } catch (error) {
-            this.showNotification('Failed to export CSV', 'error');
+            this.showNotification(`Failed to export ${format.toUpperCase()}`, 'error');
         }
     }
 

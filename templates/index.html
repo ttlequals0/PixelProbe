@@ -215,9 +215,22 @@
                                         id="download-btn" disabled>
                                     <i class="fas fa-download"></i> Download
                                 </button>
-                                <button class="btn btn-secondary" onclick="app.exportCSV()">
-                                    <i class="fas fa-file-csv"></i> Export CSV
-                                </button>
+                                <div class="export-dropdown">
+                                    <button class="btn btn-secondary" onclick="app.toggleExportMenu(event)">
+                                        <i class="fas fa-file-export"></i> Export <i class="fas fa-caret-down"></i>
+                                    </button>
+                                    <div class="export-dropdown-menu" id="exportDropdownMenu">
+                                        <a href="#" onclick="app.exportData('csv'); return false;">
+                                            <i class="fas fa-file-csv"></i> Export as CSV
+                                        </a>
+                                        <a href="#" onclick="app.exportData('json'); return false;">
+                                            <i class="fas fa-file-code"></i> Export as JSON
+                                        </a>
+                                        <a href="#" onclick="app.exportData('pdf'); return false;">
+                                            <i class="fas fa-file-pdf"></i> Export as PDF
+                                        </a>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         

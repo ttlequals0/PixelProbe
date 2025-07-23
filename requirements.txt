@@ -14,3 +14,4 @@ gunicorn==21.2.0
 pytz==2023.3
 APScheduler==3.10.4
 requests==2.31.0
+reportlab==4.0.7

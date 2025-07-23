@@ -31,3 +31,9 @@
 
 ### Known Issues to Address
 - **Table Text Overlap Issue**: The current CSS has fixed widths for table cells which might be causing text overlap on certain screen sizes. The CSS uses fixed width of 350px for file-path-cell which may not be responsive. This needs investigation by looking at the specific overlap issue in the browser and potentially implementing responsive table design.
+
+### Docker Tagging Notes
+- dont tage  - ttlequals0/pixelprobe:2.0
+
+### Workspace Guidelines
+- only work in /Users/dkrachtus/repos/PixelProbe

@@ -156,7 +156,7 @@ def export_scan_report_pdf(report_id):
         # Import reportlab for PDF generation
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import letter, A4
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import inch
         from reportlab.lib.enums import TA_CENTER, TA_RIGHT
@@ -168,13 +168,18 @@ def export_scan_report_pdf(report_id):
         # Container for the 'Flowable' objects
         elements = []
         
-        # Define styles
+        # Define styles with PixelProbe color scheme
         styles = getSampleStyleSheet()
+        # Primary green color
+        primary_green = colors.HexColor('#1ce783')
+        primary_black = colors.HexColor('#040405')
+        gradient_end = colors.HexColor('#183949')
+        
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
             fontSize=24,
-            textColor=colors.HexColor('#2c3e50'),
+            textColor=primary_black,
             spaceAfter=30,
             alignment=TA_CENTER
         )
@@ -183,9 +188,23 @@ def export_scan_report_pdf(report_id):
             'CustomHeading',
             parent=styles['Heading2'],
             fontSize=16,
-            textColor=colors.HexColor('#34495e'),
+            textColor=gradient_end,
             spaceAfter=12
         )
+        
+        # Add logo and title
+        try:
+            logo_path = os.path.join(os.path.dirname(__file__), '../../static/images/pixelprobe-logo.png')
+            if os.path.exists(logo_path):
+                # Logo is 670x729 pixels, maintain aspect ratio
+                logo_width = 1.5*inch
+                logo_height = logo_width * (729.0/670.0)  # Maintain aspect ratio
+                logo = Image(logo_path, width=logo_width, height=logo_height)
+                logo.hAlign = 'CENTER'
+                elements.append(logo)
+                elements.append(Spacer(1, 0.2*inch))
+        except Exception as e:
+            logger.debug(f"Could not add logo to PDF: {e}")
         
         # Add title
         elements.append(Paragraph("PixelProbe Scan Report", title_style))
@@ -205,10 +224,46 @@ def export_scan_report_pdf(report_id):
         ]
         
         if report.directories_scanned:
-            dirs = json.loads(report.directories_scanned)
-            report_info.append(['Directories:', ', '.join(dirs[:3]) + ('...' if len(dirs) > 3 else '')])
+            try:
+                # Log the raw value for debugging
+                logger.debug(f"Raw directories_scanned: {report.directories_scanned}")
+                
+                dirs = json.loads(report.directories_scanned)
+                logger.debug(f"Parsed dirs type: {type(dirs)}, value: {dirs}")
+                
+                # Handle case where dirs might be a string instead of list
+                if isinstance(dirs, str):
+                    # Check if it looks like a comma-separated string
+                    if ',' in dirs:
+                        # Split by comma and clean up
+                        dirs_list = [d.strip() for d in dirs.split(',')]
+                        dirs_text = '\n'.join(dirs_list)
+                    else:
+                        dirs_text = dirs
+                elif isinstance(dirs, list):
+                    # If it's a list, join with newlines
+                    dirs_text = '\n'.join(str(d) for d in dirs)
+                else:
+                    # Fallback for other types
+                    dirs_text = str(dirs)
+                
+                report_info.append(['Directories:', dirs_text])
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(f"Failed to parse directories_scanned: {e}")
+                # If JSON parsing fails, use the raw value
+                report_info.append(['Directories:', report.directories_scanned])
         
-        info_table = Table(report_info, colWidths=[2*inch, 4*inch])
+        # Convert text fields to Paragraph objects for better formatting
+        formatted_info = []
+        for row in report_info:
+            label = row[0]
+            value = row[1]
+            # Use Paragraph for multi-line text (directories)
+            if '\n' in str(value):
+                value = Paragraph(value.replace('\n', '<br/>'), styles['Normal'])
+            formatted_info.append([label, value])
+        
+        info_table = Table(formatted_info, colWidths=[2*inch, 4*inch])
         info_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
@@ -217,7 +272,7 @@ def export_scan_report_pdf(report_id):
             ('ALIGN', (1, 0), (1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#ecf0f1')),
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f8f9fa')),
             ('PADDING', (0, 0), (-1, -1), 8),
         ]))
         
@@ -270,9 +325,9 @@ def export_scan_report_pdf(report_id):
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3498db')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#ecf0f1')]),
+            ('BACKGROUND', (0, 0), (-1, 0), primary_green),
+            ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
             ('PADDING', (0, 0), (-1, -1), 8),
         ]))
         
@@ -289,6 +344,60 @@ def export_scan_report_pdf(report_id):
             alignment=TA_CENTER
         )
         
+        # Add scanned files list
+        if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+            elements.append(PageBreak())
+            elements.append(Paragraph("Scanned Files", heading_style))
+            
+            # Query files scanned during this scan period
+            from models import ScanResult
+            scanned_files = ScanResult.query.filter(
+                ScanResult.scan_date >= report.start_time,
+                ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
+            ).order_by(ScanResult.file_path).all()
+            
+            if scanned_files:
+                # Create files table header
+                files_data = [['File Path', 'Status', 'Size', 'Type', 'Scan Date']]
+                
+                # Add file rows (limit to first 500 for PDF size)
+                for file in scanned_files[:500]:
+                    status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
+                    size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
+                    file_type = file.file_type or 'Unknown'
+                    scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+                    
+                    files_data.append([
+                        file.file_path,  # Show full path without truncation
+                        status,
+                        size,
+                        file_type,
+                        scan_date
+                    ])
+                
+                # Create files table
+                files_table = Table(files_data, colWidths=[3.5*inch, 0.8*inch, 0.8*inch, 1.2*inch, 1.2*inch])
+                files_table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 8),
+                    ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                    ('BACKGROUND', (0, 0), (-1, 0), gradient_end),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                    ('PADDING', (0, 0), (-1, -1), 4),
+                ]))
+                
+                elements.append(files_table)
+                
+                if len(scanned_files) > 500:
+                    elements.append(Spacer(1, 0.1*inch))
+                    elements.append(Paragraph(f"Note: Showing first 500 of {len(scanned_files)} total files", footer_style))
+            else:
+                elements.append(Paragraph("No files were scanned during this scan.", styles['Normal']))
+        
+        elements.append(Spacer(1, 0.5*inch))
         elements.append(Paragraph(f"Generated on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}", footer_style))
         elements.append(Paragraph("This report is for compliance and auditing purposes", footer_style))
         
@@ -306,7 +415,9 @@ def export_scan_report_pdf(report_id):
         
         return response
         
-    except ImportError:
+    except ImportError as e:
+        # Log the import error (use module-level logger)
+        logger.error(f"Failed to import reportlab: {e}")
         # If reportlab is not installed, return a simple HTML version that can be printed to PDF
         html_content = f"""
         <!DOCTYPE html>
@@ -314,14 +425,15 @@ def export_scan_report_pdf(report_id):
         <head>
             <title>Scan Report {report.report_id}</title>
             <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; }}
-                h1 {{ color: #2c3e50; text-align: center; }}
-                h2 {{ color: #34495e; margin-top: 30px; }}
+                body {{ font-family: Arial, sans-serif; margin: 40px; background-color: #f8f9fa; }}
+                h1 {{ color: #040405; text-align: center; }}
+                h2 {{ color: #183949; margin-top: 30px; }}
                 table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                th {{ background-color: #3498db; color: white; }}
-                tr:nth-child(even) {{ background-color: #f2f2f2; }}
-                .footer {{ text-align: center; margin-top: 50px; font-size: 12px; color: #7f8c8d; }}
+                th, td {{ border: 1px solid #dee2e6; padding: 8px; text-align: left; }}
+                th {{ background-color: #1ce783; color: #040405; }}
+                tr:nth-child(even) {{ background-color: #f8f9fa; }}
+                .footer {{ text-align: center; margin-top: 50px; font-size: 12px; color: #6c757d; }}
+                .logo {{ text-align: center; margin-bottom: 20px; }}
             </style>
         </head>
         <body>
@@ -359,7 +471,51 @@ def export_scan_report_pdf(report_id):
         
         html_content += f"""
             </table>
+            """
+        
+        # Add scanned files list for scan reports
+        if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+            from models import ScanResult
+            scanned_files = ScanResult.query.filter(
+                ScanResult.scan_date >= report.start_time,
+                ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
+            ).order_by(ScanResult.file_path).limit(1000).all()
             
+            html_content += f"""
+                <h2>Scanned Files ({len(scanned_files)} files)</h2>
+                <table>
+                    <tr>
+                        <th>File Path</th>
+                        <th>Status</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Scan Date</th>
+                    </tr>
+            """
+            
+            for file in scanned_files[:500]:  # Limit display to 500 files
+                status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
+                size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
+                file_type = file.file_type or 'Unknown'
+                scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+                status_class = 'corrupted' if status == 'Corrupted' else 'healthy'
+                
+                html_content += f"""
+                    <tr>
+                        <td style="max-width: 400px; overflow: hidden; text-overflow: ellipsis;">{file.file_path}</td>
+                        <td><span class="{status_class}">{status}</span></td>
+                        <td>{size}</td>
+                        <td>{file_type}</td>
+                        <td>{scan_date}</td>
+                    </tr>
+                """
+            
+            html_content += "</table>"
+            
+            if len(scanned_files) > 500:
+                html_content += f"<p><em>Note: Showing first 500 of {len(scanned_files)} total files</em></p>"
+        
+        html_content += f"""
             <div class="footer">
                 <p>Generated on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
                 <p>This report is for compliance and auditing purposes</p>
@@ -372,6 +528,11 @@ def export_scan_report_pdf(report_id):
         response.headers['Content-Type'] = 'text/html'
         
         return response
+    
+    except Exception as e:
+        # Log any other errors (use module-level logger)
+        logger.error(f"Failed to generate PDF report: {e}")
+        return jsonify({'error': f'Failed to generate PDF: {str(e)}'}), 500
 
 @reports_bp.route('/scan-reports/latest')
 def get_latest_scan_reports():
@@ -402,3 +563,18 @@ def get_latest_scan_reports():
             latest_reports[scan_type] = report_dict
     
     return jsonify(latest_reports)
+
+@reports_bp.route('/scan-reports/<report_id>', methods=['DELETE'])
+def delete_scan_report(report_id):
+    """Delete a scan report by ID"""
+    report = ScanReport.query.filter_by(report_id=report_id).first()
+    if not report:
+        return jsonify({'error': 'Report not found'}), 404
+    
+    try:
+        db.session.delete(report)
+        db.session.commit()
+        return jsonify({'message': 'Report deleted successfully', 'report_id': report_id})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to delete report: {str(e)}'}), 500
