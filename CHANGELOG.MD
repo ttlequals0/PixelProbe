@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.93] - 2025-07-22
+
+### Fixed
+- **VERSION NUMBER**: Updated version.py to correct version number
+
+## [2.0.92] - 2025-07-22
+
+### Fixed
+- **FILE CHANGES CHECK**: Fixed timezone comparison error that prevented file changes scan from working
+- **PROGRESS BARS**: Confirmed progress bars are properly implemented for both orphan cleanup and file changes operations
+- **ORPHAN CLEANUP PROGRESS**: Fixed phase 2 progress to show actual percentage based on files_processed/total_files instead of stuck at 90%
+- **SCAN COMPLETION**: Page now auto-refreshes after scan completes instead of showing 100% indefinitely
+- **CANCELLED OPERATIONS**: Progress bar now hides immediately when operations are cancelled
+- **PROGRESS BAR VISIBILITY**: Fixed progress bar not appearing when starting operations without page refresh
+- **FILE CHANGES PROGRESS**: Fixed phase 2 progress to show actual percentage based on files_processed/total_files instead of stuck at 5%
+
+### Technical Details
+- Added timezone-aware datetime handling in MaintenanceService._check_file_changes()
+- Converts naive datetime objects to UTC timezone-aware before comparison
+- Fixed cleanup phase weights from 2 phases [0.9, 0.1] to proper 3 phases [0.1, 0.8, 0.1]
+- Fixed phase 1 message to correctly say "Phase 1 of 3" instead of "Phase 1 of 2"
+- Progress bars already exist in UI and update dynamically based on operation type
+- Added auto-refresh with 2-second delay after scan completion
+- Fixed scan service API response to include 'status': 'started' field
+- Improved cancelled operation handling to immediately hide progress bar
+- Fixed file changes phase initialization to properly set phase_current and phase_total values
+
+## [2.0.91] - 2025-07-22
+
+### Fixed
+- **DATABASE**: Made cancel_requested field handling more robust - works even if column exists but SQLAlchemy doesn't see it
+- **COMPATIBILITY**: Added defensive programming for cancel_requested field access
+- **MIGRATION**: Better handling of duplicate column errors
+
+### Technical Details
+- Uses getattr() for safe field access
+- Gracefully handles missing cancel_requested attributes
+- Migration logs info instead of error for existing columns
+
 ## [2.0.90] - 2025-07-22
 
 ### Fixed

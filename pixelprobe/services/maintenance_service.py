@@ -152,7 +152,8 @@ class MaintenanceService:
         cleanup_record = CleanupState.query.order_by(CleanupState.id.desc()).first()
         
         if cleanup_record and cleanup_record.is_active:
-            cleanup_record.cancel_requested = True
+            if hasattr(cleanup_record, 'cancel_requested'):
+                cleanup_record.cancel_requested = True
             cleanup_record.progress_message = 'Cancellation requested...'
             db.session.commit()
             
@@ -168,7 +169,8 @@ class MaintenanceService:
         file_changes_record = FileChangesState.query.order_by(FileChangesState.id.desc()).first()
         
         if file_changes_record and file_changes_record.is_active:
-            file_changes_record.cancel_requested = True
+            if hasattr(file_changes_record, 'cancel_requested'):
+                file_changes_record.cancel_requested = True
             file_changes_record.progress_message = 'Cancellation requested...'
             db.session.commit()
             
@@ -217,7 +219,7 @@ class MaintenanceService:
             # Phase 1: Scanning database
             cleanup_record.phase = 'scanning_database'
             cleanup_record.phase_number = 1
-            cleanup_record.progress_message = 'Phase 1 of 2: Scanning database entries...'
+            cleanup_record.progress_message = 'Phase 1 of 3: Scanning database entries...'
             db.session.commit()
             
             # Get all database entries
@@ -344,18 +346,23 @@ class MaintenanceService:
             # Phase 1: Starting
             file_changes_record.phase = 'starting'
             file_changes_record.phase_number = 1
+            file_changes_record.phase_total = 1
+            file_changes_record.phase_current = 0
             file_changes_record.progress_message = 'Phase 1 of 3: Starting file changes check...'
             db.session.commit()
             
             # Get total count
             total_files = ScanResult.query.count()
             file_changes_record.total_files = total_files
+            file_changes_record.phase_current = 1
             db.session.commit()
             
             # Phase 2: Checking hashes
             file_changes_record.phase = 'checking_hashes'
             file_changes_record.phase_number = 2
             file_changes_record.phase_total = total_files
+            file_changes_record.phase_current = 0
+            file_changes_record.files_processed = 0
             file_changes_record.progress_message = f'Phase 2 of 3: Checking {total_files} files for hash changes...'
             db.session.commit()
             
@@ -398,6 +405,7 @@ class MaintenanceService:
                 file_changes_record.phase = 'rescanning'
                 file_changes_record.phase_number = 3
                 file_changes_record.phase_total = len(changed_files)
+                file_changes_record.phase_current = 0
                 file_changes_record.progress_message = f'Phase 3 of 3: Rescanning {len(changed_files)} changed files...'
                 db.session.commit()
                 
@@ -459,7 +467,13 @@ class MaintenanceService:
             current_modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
             
             # Check modification time
-            if result.last_modified and current_modified > result.last_modified:
+            # Ensure timezone-aware comparison
+            stored_modified = result.last_modified
+            if stored_modified and stored_modified.tzinfo is None:
+                # If stored datetime is naive, assume UTC
+                stored_modified = stored_modified.replace(tzinfo=timezone.utc)
+            
+            if stored_modified and current_modified > stored_modified:
                 # File has been modified, calculate new hash
                 current_hash = self._calculate_file_hash(result.file_path)
                 
@@ -469,7 +483,7 @@ class MaintenanceService:
                         'change_type': 'modified',
                         'stored_hash': result.file_hash,
                         'current_hash': current_hash,
-                        'stored_modified': result.last_modified,
+                        'stored_modified': stored_modified,
                         'current_modified': current_modified
                     }
         except Exception as e:
@@ -487,13 +501,19 @@ class MaintenanceService:
     
     def _is_cancelled(self, cleanup_record: CleanupState) -> bool:
         """Check if cleanup has been cancelled"""
-        db.session.refresh(cleanup_record)
-        return cleanup_record.cancel_requested or self.cleanup_state.get('cancel_requested', False)
+        try:
+            db.session.refresh(cleanup_record)
+            return getattr(cleanup_record, 'cancel_requested', False) or self.cleanup_state.get('cancel_requested', False)
+        except:
+            return self.cleanup_state.get('cancel_requested', False)
     
     def _is_cancelled_file_changes(self, record: FileChangesState) -> bool:
         """Check if file changes check has been cancelled"""
-        db.session.refresh(record)
-        return record.cancel_requested or self.file_changes_state.get('cancel_requested', False)
+        try:
+            db.session.refresh(record)
+            return getattr(record, 'cancel_requested', False) or self.file_changes_state.get('cancel_requested', False)
+        except:
+            return self.file_changes_state.get('cancel_requested', False)
     
     def _handle_cleanup_error(self, cleanup_id: int, error_msg: str):
         """Handle cleanup error"""

@@ -23,7 +23,7 @@ class ProgressTracker:
         # Define phase weights for different operation types
         self.phase_weights = {
             'scan': [0.2, 0.1, 0.7],  # Discovery: 20%, Adding: 10%, Scanning: 70%
-            'cleanup': [0.9, 0.1],     # Checking: 90%, Deleting: 10%
+            'cleanup': [0.1, 0.8, 0.1],     # Scanning DB: 10%, Checking files: 80%, Deleting: 10%
             'file_changes': [0.05, 0.8, 0.15]  # Starting: 5%, Checking: 80%, Verifying: 15%
         }
         

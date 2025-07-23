@@ -40,6 +40,12 @@ def run_startup_migrations(db):
                 db.session.execute(text(migration['migration_sql']))
                 db.session.commit()
                 logger.info(f"Migration successful: {migration['description']}")
+            except OperationalError as e:
+                if "duplicate column name" in str(e).lower():
+                    logger.info(f"Column already exists, skipping: {migration['description']}")
+                else:
+                    logger.error(f"Failed to run migration {migration['description']}: {e}")
+                db.session.rollback()
             except Exception as e:
                 logger.error(f"Failed to run migration {migration['description']}: {e}")
                 db.session.rollback()

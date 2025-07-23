@@ -85,7 +85,7 @@ class ScanService:
         self.current_scan_thread = threading.Thread(target=run_scan)
         self.current_scan_thread.start()
         
-        return {'message': 'Scan started', 'file_path': file_path}
+        return {'status': 'started', 'message': 'Scan started', 'file_path': file_path}
     
     def scan_directories(self, directories: List[str], force_rescan: bool = False, 
                         num_workers: int = 1) -> Dict:
@@ -277,6 +277,7 @@ class ScanService:
         self.current_scan_thread.start()
         
         return {
+            'status': 'started',
             'message': 'Scan started',
             'directories': valid_dirs,
             'force_rescan': force_rescan,

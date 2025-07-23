@@ -555,6 +555,30 @@ class ProgressManager {
         // Debug log the status on completion
         console.log(`${operationType} complete with status:`, status);
         
+        // Handle cancelled operations
+        if (status?.phase === 'cancelled') {
+            this.stopMonitoring();
+            this.hide();
+            
+            if (operationType === 'scan') {
+                this.updateScanButtons(false);
+                this.app.showNotification('Scan cancelled', 'info');
+            } else if (operationType === 'cleanup') {
+                this.updateCleanupButton(false);
+                this.app.showNotification('Cleanup cancelled', 'info');
+            } else if (operationType === 'file-changes') {
+                this.updateFileChangesButton(false);
+                this.app.showNotification('File changes check cancelled', 'info');
+            }
+            
+            // Refresh stats to update UI
+            if (this.app) {
+                await this.app.stats.updateStats();
+            }
+            return;
+        }
+        
+        // Handle completed operations
         if (operationType === 'scan') {
             completionMessage = 'Scan completed!';
             this.updateScanButtons(false); // Re-enable scan buttons
@@ -576,17 +600,24 @@ class ProgressManager {
         this.update(100, completionMessage);
         this.stopMonitoring();
         
-        // Refresh the stats and table to show updated results
-        if (this.app) {
-            await this.app.stats.updateStats();
-            
-            // Only reload table for scan and cleanup operations
-            if (operationType === 'scan' || operationType === 'cleanup') {
-                await this.app.table.loadData();
+        // For scan completion, reload the page after a short delay
+        if (operationType === 'scan') {
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            // For other operations, refresh data and hide progress bar
+            if (this.app) {
+                await this.app.stats.updateStats();
+                
+                // Only reload table for cleanup operations
+                if (operationType === 'cleanup') {
+                    await this.app.table.loadData();
+                }
             }
+            
+            setTimeout(() => this.hide(), 5000);
         }
-        
-        setTimeout(() => this.hide(), 5000);
     }
     
     showFileChangesResults(result) {
@@ -1131,7 +1162,8 @@ class PixelProbeApp {
             }
             
             await this.api.startScan();
-            this.progress.startMonitoring();
+            this.progress.operationType = 'scan';
+            this.progress.startMonitoring('scan');
             this.showNotification('Scan started', 'success');
         } catch (error) {
             this.showNotification('Failed to start scan', 'error');
@@ -1151,6 +1183,7 @@ class PixelProbeApp {
                 console.log('Starting progress monitoring for cleanup');
                 this.showNotification('Cleanup started...', 'info');
                 // Start monitoring cleanup progress
+                this.progress.operationType = 'cleanup';
                 this.progress.startMonitoring('cleanup');
                 
                 // Also do a manual check after 1 second to debug
@@ -1183,6 +1216,7 @@ class PixelProbeApp {
             if (result.status === 'started') {
                 this.showNotification('File changes check started...', 'info');
                 // Start monitoring file changes progress
+                this.progress.operationType = 'file-changes';
                 this.progress.startMonitoring('file-changes');
             } else {
                 // This is the old synchronous response - still handle it

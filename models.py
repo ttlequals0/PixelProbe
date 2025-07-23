@@ -310,7 +310,7 @@ class CleanupState(db.Model):
     current_file = db.Column(db.String(500), nullable=True)
     progress_message = db.Column(db.String(200), nullable=True)
     error_message = db.Column(db.String(500), nullable=True)
-    cancel_requested = db.Column(db.Boolean, nullable=False, default=False)
+    cancel_requested = db.Column(db.Boolean, nullable=True, default=False)
     
     def to_dict(self):
         # Import here to avoid circular imports
@@ -337,7 +337,7 @@ class FileChangesState(db.Model):
     progress_message = db.Column(db.String(200), nullable=True)
     error_message = db.Column(db.String(500), nullable=True)
     changed_files = db.Column(db.Text, nullable=True)  # JSON list of changed files
-    cancel_requested = db.Column(db.Boolean, nullable=False, default=False)
+    cancel_requested = db.Column(db.Boolean, nullable=True, default=False)
     
     def to_dict(self):
         # Import here to avoid circular imports
