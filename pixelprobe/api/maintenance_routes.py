@@ -416,6 +416,7 @@ def cleanup_orphaned_files():
     current_cleanup_thread.start()
     
     return jsonify({
+        'status': 'started',
         'message': 'Cleanup operation started',
         'cleanup_id': cleanup_record.id
     })
@@ -466,6 +467,7 @@ def check_file_changes():
     current_file_changes_thread.start()
     
     return jsonify({
+        'status': 'started',
         'message': 'File changes check started',
         'check_id': check_id
     })

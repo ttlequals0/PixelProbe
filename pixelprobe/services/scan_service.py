@@ -3,6 +3,7 @@ Scan service for handling media scanning operations
 """
 
 import os
+import json
 import threading
 import logging
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from typing import List, Dict, Optional, Tuple
 
 from flask import current_app
 from media_checker import PixelProbe, load_exclusions
-from models import db, ScanResult, ScanState
+from models import db, ScanResult, ScanState, ScanReport
 from utils import ProgressTracker
 
 logger = logging.getLogger(__name__)
@@ -367,6 +368,12 @@ class ScanService:
                 {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
             )
             db.session.commit()
+            
+            # Create scan report
+            # Re-fetch scan state to get updated values
+            completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+            if completed_scan_state:
+                self._create_scan_report(completed_scan_state, scan_type='full_scan' if not force_rescan else 'rescan')
     
     def _parallel_scan(self, checker: PixelProbe, files: List[str], 
                       force_rescan: bool, num_workers: int, scan_state: ScanState):
@@ -433,6 +440,61 @@ class ScanService:
                 {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
             )
             db.session.commit()
+            
+            # Create scan report
+            # Re-fetch scan state to get updated values
+            completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+            if completed_scan_state:
+                self._create_scan_report(completed_scan_state, scan_type='full_scan' if not force_rescan else 'rescan')
+    
+    def _create_scan_report(self, scan_state: ScanState, scan_type: str = 'full_scan'):
+        """Create a scan report from the completed scan state"""
+        try:
+            # Get statistics from the database
+            from sqlalchemy import func
+            
+            # Count files by status
+            stats = db.session.query(
+                func.count(ScanResult.id).label('total'),
+                func.sum(db.case([(ScanResult.is_corrupted == True, 1)], else_=0)).label('corrupted'),
+                func.sum(db.case([(ScanResult.has_warnings == True, 1)], else_=0)).label('warnings'),
+                func.sum(db.case([(ScanResult.scan_status == 'error', 1)], else_=0)).label('errors'),
+                func.sum(db.case([(ScanResult.scan_status == 'completed', 1)], else_=0)).label('completed')
+            ).first()
+            
+            # Calculate duration
+            duration = None
+            if scan_state.start_time and scan_state.end_time:
+                duration = (scan_state.end_time - scan_state.start_time).total_seconds()
+            
+            # Create scan report
+            report = ScanReport(
+                scan_type=scan_type,
+                start_time=scan_state.start_time,
+                end_time=scan_state.end_time,
+                duration_seconds=duration,
+                directories_scanned=json.dumps(scan_state.directories) if scan_state.directories else None,
+                force_rescan=scan_state.force_rescan,
+                num_workers=1,  # TODO: Get from scan state
+                total_files_discovered=scan_state.estimated_total,
+                files_scanned=stats.completed or 0,
+                files_added=0,  # TODO: Track new files added
+                files_updated=0,  # TODO: Track files updated
+                files_corrupted=stats.corrupted or 0,
+                files_with_warnings=stats.warnings or 0,
+                files_error=stats.errors or 0,
+                status='completed' if scan_state.phase == 'completed' else scan_state.phase,
+                error_message=scan_state.error_message,
+                scan_id=scan_state.scan_id
+            )
+            
+            db.session.add(report)
+            db.session.commit()
+            
+            logger.info(f"Created scan report {report.report_id} for scan {scan_state.scan_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to create scan report: {e}")
     
     def _handle_scan_cancellation(self, scan_state: ScanState):
         """Handle scan cancellation"""

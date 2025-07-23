@@ -77,6 +77,10 @@
                         <i class="fas fa-chart-line"></i>
                         <span>System Stats</span>
                     </a>
+                    <a href="#" class="nav-item" onclick="app.showScanReports()" title="Scan Reports">
+                        <i class="fas fa-file-alt"></i>
+                        <span>Scan Reports</span>
+                    </a>
                     <a href="https://github.com/ttlequals0/PixelProbe" target="_blank" class="nav-item" title="Build Info">
                         <i class="fas fa-info-circle"></i>
                         <span>Build Info</span>
@@ -283,6 +287,72 @@
             </div>
             <div class="modal-body">
                 <!-- System stats will be loaded here -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Scan Reports Modal -->
+    <div id="scan-reports-modal" class="modal">
+        <div class="modal-content" style="max-width: 90%; width: 90%;">
+            <div class="modal-header">
+                <h3 class="modal-title">Scan Reports</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="scan-reports-container">
+                    <!-- Filter Controls -->
+                    <div class="filter-controls mb-3">
+                        <div class="filter-group">
+                            <label for="report-type-filter">Scan Type:</label>
+                            <select id="report-type-filter" class="form-control">
+                                <option value="all">All Types</option>
+                                <option value="full_scan">Full Scan</option>
+                                <option value="rescan">Rescan</option>
+                                <option value="deep_scan">Deep Scan</option>
+                                <option value="cleanup">Cleanup</option>
+                                <option value="file_changes">File Changes</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="report-status-filter">Status:</label>
+                            <select id="report-status-filter" class="form-control">
+                                <option value="all">All</option>
+                                <option value="completed">Completed</option>
+                                <option value="running">Running</option>
+                                <option value="error">Error</option>
+                                <option value="cancelled">Cancelled</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" onclick="app.loadScanReports()">
+                            <i class="fas fa-sync"></i> Refresh
+                        </button>
+                    </div>
+                    
+                    <!-- Reports Table -->
+                    <div class="table-container">
+                        <table class="table" id="scan-reports-table">
+                            <thead>
+                                <tr>
+                                    <th>Start Time</th>
+                                    <th>Type</th>
+                                    <th>Status</th>
+                                    <th>Duration</th>
+                                    <th>Files</th>
+                                    <th>Issues</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Reports will be loaded here -->
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Pagination -->
+                    <div class="pagination-container">
+                        <div id="scan-reports-pagination"></div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 import uuid
 
 from media_checker import PixelProbe, load_exclusions
-from models import db, ScanResult, CleanupState, FileChangesState
+from models import db, ScanResult, CleanupState, FileChangesState, ScanReport
 from utils import ProgressTracker
 
 logger = logging.getLogger(__name__)
@@ -338,6 +338,10 @@ class MaintenanceService:
             cleanup_record.end_time = datetime.now(timezone.utc)
             db.session.commit()
             
+            # Create scan report for cleanup operation
+            if cleanup_record.phase == 'complete':
+                self._create_cleanup_report(cleanup_record)
+            
             with self.cleanup_lock:
                 self.cleanup_state['is_running'] = False
                 self.cleanup_state['phase'] = cleanup_record.phase
@@ -510,6 +514,10 @@ class MaintenanceService:
             file_changes_record.end_time = datetime.now(timezone.utc)
             db.session.commit()
             
+            # Create scan report for file changes operation
+            if file_changes_record.phase == 'complete':
+                self._create_file_changes_report(file_changes_record)
+            
             with self.file_changes_lock:
                 self.file_changes_state['is_running'] = False
                 self.file_changes_state['phase'] = file_changes_record.phase
@@ -615,3 +623,63 @@ class MaintenanceService:
         with self.file_changes_lock:
             self.file_changes_state['is_running'] = False
             self.file_changes_state['phase'] = 'error'
+    
+    def _create_cleanup_report(self, cleanup_record: CleanupState):
+        """Create a scan report for cleanup operation"""
+        try:
+            # Calculate duration
+            duration = None
+            if cleanup_record.start_time and cleanup_record.end_time:
+                duration = (cleanup_record.end_time - cleanup_record.start_time).total_seconds()
+            
+            # Create scan report
+            report = ScanReport(
+                scan_type='cleanup',
+                start_time=cleanup_record.start_time,
+                end_time=cleanup_record.end_time,
+                duration_seconds=duration,
+                total_files_discovered=cleanup_record.total_files,
+                files_scanned=cleanup_record.files_processed,
+                orphaned_records_found=cleanup_record.orphaned_found,
+                orphaned_records_deleted=cleanup_record.orphaned_found,  # Assuming all found were deleted
+                status='completed' if cleanup_record.phase == 'complete' else cleanup_record.phase,
+                error_message=cleanup_record.error_message
+            )
+            
+            db.session.add(report)
+            db.session.commit()
+            
+            logger.info(f"Created cleanup report {report.report_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to create cleanup report: {e}")
+    
+    def _create_file_changes_report(self, file_changes_record: FileChangesState):
+        """Create a scan report for file changes operation"""
+        try:
+            # Calculate duration
+            duration = None
+            if file_changes_record.start_time and file_changes_record.end_time:
+                duration = (file_changes_record.end_time - file_changes_record.start_time).total_seconds()
+            
+            # Create scan report
+            report = ScanReport(
+                scan_type='file_changes',
+                start_time=file_changes_record.start_time,
+                end_time=file_changes_record.end_time,
+                duration_seconds=duration,
+                total_files_discovered=file_changes_record.total_files,
+                files_scanned=file_changes_record.files_processed,
+                files_changed=file_changes_record.changes_found,
+                files_corrupted_new=file_changes_record.corrupted_found,
+                status='completed' if file_changes_record.phase == 'complete' else file_changes_record.phase,
+                error_message=file_changes_record.error_message
+            )
+            
+            db.session.add(report)
+            db.session.commit()
+            
+            logger.info(f"Created file changes report {report.report_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to create file changes report: {e}")

@@ -346,3 +346,71 @@ class FileChangesState(db.Model):
         # Handle special case for changed_files JSON field
         result['changed_files'] = json.loads(self.changed_files) if self.changed_files else []
         return result
+
+class ScanReport(db.Model):
+    __tablename__ = 'scan_reports'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    report_id = db.Column(db.String(36), nullable=False, unique=True, default=lambda: str(uuid.uuid4()))
+    scan_type = db.Column(db.String(50), nullable=False)  # full_scan, rescan, deep_scan, cleanup, file_changes
+    start_time = db.Column(db.DateTime(timezone=True), nullable=False)
+    end_time = db.Column(db.DateTime(timezone=True), nullable=True)
+    duration_seconds = db.Column(db.Float, nullable=True)
+    
+    # Scan parameters
+    directories_scanned = db.Column(db.Text, nullable=True)  # JSON list of directories
+    force_rescan = db.Column(db.Boolean, nullable=False, default=False)
+    num_workers = db.Column(db.Integer, nullable=False, default=1)
+    
+    # File statistics
+    total_files_discovered = db.Column(db.Integer, nullable=False, default=0)
+    files_scanned = db.Column(db.Integer, nullable=False, default=0)
+    files_added = db.Column(db.Integer, nullable=False, default=0)
+    files_updated = db.Column(db.Integer, nullable=False, default=0)
+    files_corrupted = db.Column(db.Integer, nullable=False, default=0)
+    files_with_warnings = db.Column(db.Integer, nullable=False, default=0)
+    files_error = db.Column(db.Integer, nullable=False, default=0)
+    
+    # Cleanup statistics (for cleanup operations)
+    orphaned_records_found = db.Column(db.Integer, nullable=False, default=0)
+    orphaned_records_deleted = db.Column(db.Integer, nullable=False, default=0)
+    
+    # File changes statistics (for file_changes operations)
+    files_changed = db.Column(db.Integer, nullable=False, default=0)
+    files_corrupted_new = db.Column(db.Integer, nullable=False, default=0)
+    
+    # Scan status
+    status = db.Column(db.String(20), nullable=False, default='running')  # running, completed, error, cancelled
+    error_message = db.Column(db.Text, nullable=True)
+    
+    # Additional metadata
+    scan_id = db.Column(db.String(36), nullable=True)  # Link to ScanState scan_id
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'report_id': self.report_id,
+            'scan_type': self.scan_type,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'duration_seconds': self.duration_seconds,
+            'directories_scanned': json.loads(self.directories_scanned) if self.directories_scanned else [],
+            'force_rescan': self.force_rescan,
+            'num_workers': self.num_workers,
+            'total_files_discovered': self.total_files_discovered,
+            'files_scanned': self.files_scanned,
+            'files_added': self.files_added,
+            'files_updated': self.files_updated,
+            'files_corrupted': self.files_corrupted,
+            'files_with_warnings': self.files_with_warnings,
+            'files_error': self.files_error,
+            'orphaned_records_found': self.orphaned_records_found,
+            'orphaned_records_deleted': self.orphaned_records_deleted,
+            'files_changed': self.files_changed,
+            'files_corrupted_new': self.files_corrupted_new,
+            'status': self.status,
+            'error_message': self.error_message,
+            'scan_id': self.scan_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }

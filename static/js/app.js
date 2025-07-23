@@ -1527,6 +1527,249 @@ class PixelProbeApp {
         window.location.href = '/api-docs';
     }
 
+    async showScanReports() {
+        const modal = document.querySelector('#scan-reports-modal');
+        if (!modal) return;
+        
+        // Show modal
+        modal.style.display = 'block';
+        
+        // Load reports
+        await this.loadScanReports();
+        
+        // Setup modal close handlers
+        const closeBtn = modal.querySelector('.modal-close');
+        if (closeBtn) {
+            closeBtn.onclick = () => {
+                modal.style.display = 'none';
+            };
+        }
+        
+        // Close on outside click
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.style.display = 'none';
+            }
+        };
+    }
+
+    async loadScanReports(page = 1) {
+        try {
+            // Get filter values
+            const typeFilter = document.querySelector('#report-type-filter')?.value || 'all';
+            const statusFilter = document.querySelector('#report-status-filter')?.value || 'all';
+            
+            // Build query params
+            const params = new URLSearchParams({
+                page: page,
+                per_page: 20,
+                scan_type: typeFilter,
+                status: statusFilter,
+                sort_order: 'desc'
+            });
+            
+            const response = await fetch(`/api/scan-reports?${params}`);
+            if (!response.ok) throw new Error('Failed to load reports');
+            
+            const data = await response.json();
+            
+            // Update table
+            const tbody = document.querySelector('#scan-reports-table tbody');
+            if (!tbody) return;
+            
+            tbody.innerHTML = '';
+            
+            if (data.reports.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center">No reports found</td></tr>';
+                return;
+            }
+            
+            // Render reports
+            data.reports.forEach(report => {
+                const row = document.createElement('tr');
+                
+                // Format scan type
+                const scanType = report.scan_type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+                
+                // Format status with color
+                let statusClass = '';
+                switch (report.status) {
+                    case 'completed': statusClass = 'text-success'; break;
+                    case 'running': statusClass = 'text-info'; break;
+                    case 'error': statusClass = 'text-danger'; break;
+                    case 'cancelled': statusClass = 'text-warning'; break;
+                }
+                
+                // Calculate files processed based on scan type
+                let filesInfo = '';
+                let issuesInfo = '';
+                
+                if (report.scan_type === 'cleanup') {
+                    filesInfo = `${report.orphaned_records_found} orphaned`;
+                    issuesInfo = `${report.orphaned_records_deleted} deleted`;
+                } else if (report.scan_type === 'file_changes') {
+                    filesInfo = `${report.files_scanned} checked`;
+                    issuesInfo = `${report.files_changed} changed`;
+                } else {
+                    filesInfo = `${report.files_scanned}`;
+                    issuesInfo = `${report.files_corrupted} corrupted`;
+                    if (report.files_with_warnings > 0) {
+                        issuesInfo += `, ${report.files_with_warnings} warnings`;
+                    }
+                }
+                
+                row.innerHTML = `
+                    <td>${new Date(report.start_time).toLocaleString()}</td>
+                    <td>${scanType}</td>
+                    <td><span class="${statusClass}">${report.status}</span></td>
+                    <td>${report.duration_formatted || 'N/A'}</td>
+                    <td>${filesInfo}</td>
+                    <td>${issuesInfo}</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" onclick="app.viewScanReport('${report.report_id}')" title="View Details">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'json')" title="Export JSON">
+                            <i class="fas fa-file-export"></i>
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'pdf')" title="Export PDF">
+                            <i class="fas fa-file-pdf"></i>
+                        </button>
+                    </td>
+                `;
+                
+                tbody.appendChild(row);
+            });
+            
+            // Update pagination
+            this.updateScanReportsPagination(data.page, data.pages, data.total);
+            
+        } catch (error) {
+            console.error('Failed to load scan reports:', error);
+            this.showNotification('Failed to load scan reports', 'error');
+        }
+    }
+
+    updateScanReportsPagination(currentPage, totalPages, totalItems) {
+        const paginationContainer = document.querySelector('#scan-reports-pagination');
+        if (!paginationContainer) return;
+        
+        let paginationHtml = '<div class="pagination">';
+        
+        // Previous button
+        if (currentPage > 1) {
+            paginationHtml += `<button class="pagination-btn" onclick="app.loadScanReports(${currentPage - 1})">Previous</button>`;
+        }
+        
+        // Page numbers
+        for (let i = 1; i <= totalPages; i++) {
+            if (i === currentPage) {
+                paginationHtml += `<span class="pagination-current">${i}</span>`;
+            } else if (i === 1 || i === totalPages || (i >= currentPage - 2 && i <= currentPage + 2)) {
+                paginationHtml += `<button class="pagination-btn" onclick="app.loadScanReports(${i})">${i}</button>`;
+            } else if (i === currentPage - 3 || i === currentPage + 3) {
+                paginationHtml += '<span>...</span>';
+            }
+        }
+        
+        // Next button
+        if (currentPage < totalPages) {
+            paginationHtml += `<button class="pagination-btn" onclick="app.loadScanReports(${currentPage + 1})">Next</button>`;
+        }
+        
+        paginationHtml += `<span class="pagination-info">Total: ${totalItems} reports</span>`;
+        paginationHtml += '</div>';
+        
+        paginationContainer.innerHTML = paginationHtml;
+    }
+
+    async viewScanReport(reportId) {
+        try {
+            const response = await fetch(`/api/scan-reports/${reportId}`);
+            if (!response.ok) throw new Error('Failed to load report');
+            
+            const report = await response.json();
+            
+            // Create a detailed view modal
+            let detailsHtml = '<div class="scan-report-details">';
+            detailsHtml += '<h4>Report Details</h4>';
+            detailsHtml += '<table class="table">';
+            detailsHtml += `<tr><th>Report ID:</th><td>${report.report_id}</td></tr>`;
+            detailsHtml += `<tr><th>Scan Type:</th><td>${report.scan_type.replace('_', ' ').toUpperCase()}</td></tr>`;
+            detailsHtml += `<tr><th>Status:</th><td>${report.status}</td></tr>`;
+            detailsHtml += `<tr><th>Start Time:</th><td>${new Date(report.start_time).toLocaleString()}</td></tr>`;
+            detailsHtml += `<tr><th>End Time:</th><td>${report.end_time ? new Date(report.end_time).toLocaleString() : 'N/A'}</td></tr>`;
+            detailsHtml += `<tr><th>Duration:</th><td>${report.duration_formatted || 'N/A'}</td></tr>`;
+            
+            if (report.directories_scanned && report.directories_scanned.length > 0) {
+                detailsHtml += `<tr><th>Directories:</th><td>${report.directories_scanned.join('<br>')}</td></tr>`;
+            }
+            
+            detailsHtml += '</table>';
+            
+            if (report.summary) {
+                detailsHtml += '<h4>Summary Statistics</h4>';
+                detailsHtml += '<table class="table">';
+                Object.entries(report.summary).forEach(([key, value]) => {
+                    const label = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                    detailsHtml += `<tr><th>${label}:</th><td>${value}</td></tr>`;
+                });
+                detailsHtml += '</table>';
+            }
+            
+            detailsHtml += '</div>';
+            
+            // Show in a simple alert for now (could be improved with a modal)
+            const detailModal = document.createElement('div');
+            detailModal.className = 'modal';
+            detailModal.style.display = 'block';
+            detailModal.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3 class="modal-title">Scan Report Details</h3>
+                        <button class="modal-close">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        ${detailsHtml}
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(detailModal);
+            
+            // Setup close handlers
+            const closeBtn = detailModal.querySelector('.modal-close');
+            closeBtn.onclick = () => detailModal.remove();
+            detailModal.onclick = (e) => {
+                if (e.target === detailModal) detailModal.remove();
+            };
+            
+        } catch (error) {
+            console.error('Failed to view report:', error);
+            this.showNotification('Failed to load report details', 'error');
+        }
+    }
+
+    async exportScanReport(reportId, format) {
+        try {
+            const endpoint = format === 'pdf' ? `/api/scan-reports/${reportId}/pdf` : `/api/scan-reports/${reportId}/export`;
+            
+            // Create a temporary link and click it to download
+            const link = document.createElement('a');
+            link.href = endpoint;
+            link.download = `scan_report_${reportId}.${format}`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            this.showNotification(`Exporting report as ${format.toUpperCase()}...`, 'info');
+            
+        } catch (error) {
+            console.error('Failed to export report:', error);
+            this.showNotification('Failed to export report', 'error');
+        }
+    }
+
     async exportCSV() {
         try {
             // Show loading notification
@@ -1587,30 +1830,51 @@ class PixelProbeApp {
 
         try {
             const fileIds = Array.from(this.table.selectedFiles);
-            // Get file paths for deep scan
-            const filePaths = [];
-            for (const fileId of fileIds) {
-                const response = await fetch(`/api/scan-results/${fileId}`);
-                if (response.ok) {
-                    const result = await response.json();
-                    filePaths.push(result.file_path);
-                }
-            }
-
-            const response = await fetch('/api/scan-parallel', {
+            
+            // First, reset the selected files for deep scanning
+            const resetResponse = await fetch('/api/reset-for-rescan', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ 
-                    file_paths: filePaths,
-                    deep_scan: true
+                    type: 'selected',
+                    file_ids: fileIds
                 })
             });
 
-            if (response.ok) {
+            if (!resetResponse.ok) {
+                throw new Error('Failed to reset files for deep scan');
+            }
+
+            // Get directories containing the selected files
+            const directories = new Set();
+            for (const fileId of fileIds) {
+                const response = await fetch(`/api/scan-results/${fileId}`);
+                if (response.ok) {
+                    const result = await response.json();
+                    // Extract directory from file path
+                    const dir = result.file_path.substring(0, result.file_path.lastIndexOf('/'));
+                    if (dir) directories.add(dir);
+                }
+            }
+
+            // Start deep scan on the directories containing the selected files
+            const scanResponse = await fetch('/api/scan-all', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 
+                    directories: Array.from(directories),
+                    force_rescan: true  // Force rescan for deep scan
+                })
+            });
+
+            if (scanResponse.ok) {
                 this.showNotification(`Deep scan started for ${fileIds.length} files`, 'success');
-                this.progress.startMonitoring();
+                // Start monitoring with 'scan' operation type to ensure auto-refresh
+                this.progress.startMonitoring('scan');
             } else {
                 throw new Error('Deep scan failed');
             }
@@ -1660,30 +1924,51 @@ class PixelProbeApp {
 
         try {
             const fileIds = Array.from(this.table.selectedFiles);
-            // Get file paths for rescan
-            const filePaths = [];
-            for (const fileId of fileIds) {
-                const response = await fetch(`/api/scan-results/${fileId}`);
-                if (response.ok) {
-                    const result = await response.json();
-                    filePaths.push(result.file_path);
-                }
-            }
-
-            const response = await fetch('/api/scan-parallel', {
+            
+            // First, reset the selected files for rescanning
+            const resetResponse = await fetch('/api/reset-for-rescan', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ 
-                    file_paths: filePaths,
-                    deep_scan: false
+                    type: 'selected',
+                    file_ids: fileIds
                 })
             });
 
-            if (response.ok) {
+            if (!resetResponse.ok) {
+                throw new Error('Failed to reset files for rescan');
+            }
+
+            // Get directories containing the selected files
+            const directories = new Set();
+            for (const fileId of fileIds) {
+                const response = await fetch(`/api/scan-results/${fileId}`);
+                if (response.ok) {
+                    const result = await response.json();
+                    // Extract directory from file path
+                    const dir = result.file_path.substring(0, result.file_path.lastIndexOf('/'));
+                    if (dir) directories.add(dir);
+                }
+            }
+
+            // Start scan on the directories containing the selected files
+            const scanResponse = await fetch('/api/scan-all', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 
+                    directories: Array.from(directories),
+                    force_rescan: false  // Files are already reset, no need to force
+                })
+            });
+
+            if (scanResponse.ok) {
                 this.showNotification(`Rescan started for ${fileIds.length} files`, 'success');
-                this.progress.startMonitoring();
+                // Start monitoring with 'scan' operation type to ensure auto-refresh
+                this.progress.startMonitoring('scan');
             } else {
                 throw new Error('Rescan failed');
             }

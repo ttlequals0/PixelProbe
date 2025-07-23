@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.98] - 2025-07-23
+
+### Added
+- **SCAN REPORTS**: New scan reports page under System section in sidebar
+  - View history of all scan operations with detailed statistics
+  - Filter by scan type (full scan, rescan, deep scan, cleanup, file changes)
+  - Filter by status (completed, running, error, cancelled)
+  - Export reports as JSON for data analysis
+  - Export reports as PDF for compliance/management reporting
+  - Shows duration, files processed, issues found for each scan
+- **SCAN REPORTS API**: New API endpoints for scan reports
+  - GET /api/scan-reports - List all scan reports with pagination
+  - GET /api/scan-reports/<report_id> - Get detailed report
+  - GET /api/scan-reports/<report_id>/export - Export as JSON
+  - GET /api/scan-reports/<report_id>/pdf - Export as PDF
+  - GET /api/scan-reports/latest - Get latest report for each scan type
+
+### Fixed
+- **MANUAL RESCAN**: Fixed progress bar getting stuck at 100% when rescanning selected files
+- **DEEP SCAN**: Fixed progress bar getting stuck at 100% when deep scanning selected files
+- **AUTO-REFRESH**: Page now properly refreshes after manual rescan and deep scan complete, matching behavior of other scan types
+- **CLEANUP PROGRESS**: Fixed cleanup orphan progress bar not appearing automatically when operation starts
+- **FILE CHANGES PROGRESS**: Fixed file changes check progress bar not appearing automatically
+
+### Technical Details
+- Added new ScanReport model to track scan history and statistics
+- Created reports_routes.py blueprint for scan reports functionality
+- Updated rescanSelected() and deepScanSelected() functions to properly reset files and start tracked scan operations
+- Changed from using non-existent file_paths parameter to proper directory-based scanning
+- Both manual rescans and deep scans now use the 'scan' operation type to trigger auto-refresh on completion
+- Deep scans use force_rescan=true to ensure thorough re-analysis
+- Fixed cleanup-orphaned and file-changes endpoints to return 'status': 'started' for proper progress bar display
+- Integrated automatic scan report generation for all operation types (scan, cleanup, file changes)
+- Reports include duration tracking, file statistics, and error information
+- PDF export supports both reportlab library and fallback HTML format
+
 ## [2.0.97] - 2025-07-23
 
 ### Added
