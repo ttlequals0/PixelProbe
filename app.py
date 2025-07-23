@@ -256,12 +256,40 @@ def create_tables():
     """Initialize database tables"""
     with app.app_context():
         try:
-            db.create_all()
-            logger.info("Database tables created/verified successfully")
+            # Use inspector to check existing tables
+            from sqlalchemy import inspect, exc
+            
+            try:
+                inspector = inspect(db.engine)
+                existing_tables = inspector.get_table_names()
+                
+                # Only create tables that don't exist
+                for table_name, table in db.metadata.tables.items():
+                    if table_name not in existing_tables:
+                        try:
+                            table.create(db.engine)
+                            logger.info(f"Created table: {table_name}")
+                        except exc.OperationalError as e:
+                            # Table might have been created by another worker
+                            if "already exists" not in str(e):
+                                logger.error(f"Error creating table {table_name}: {str(e)}")
+                
+                logger.info("Database tables verified successfully")
+                
+            except exc.OperationalError as e:
+                # This might happen if the database is locked or another worker created tables
+                if "already exists" not in str(e):
+                    logger.error(f"Database operation error: {str(e)}")
+                else:
+                    logger.info("Tables already exist (created by another worker)")
+                    
             migrate_database()
             cleanup_stuck_operations()
+            
         except Exception as e:
             logger.error(f"Error in database initialization: {str(e)}")
+            # Don't stop the application for table creation errors
+            # The tables might already exist and be functional
 
 def migrate_database():
     """Run database migrations"""

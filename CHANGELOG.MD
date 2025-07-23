@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.99] - 2025-07-23
+
+### Fixed
+- **DATABASE INITIALIZATION**: Fixed "table already exists" errors when running with multiple workers
+- **STARTUP**: Improved database table creation to handle concurrent worker initialization gracefully
+
+### Technical Details
+- Modified create_tables() to check for existing tables before creation
+- Added proper exception handling for concurrent table creation attempts
+- Application no longer fails when tables already exist
+
 ## [2.0.98] - 2025-07-23
 
 ### Added
