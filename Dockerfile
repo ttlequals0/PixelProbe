@@ -19,14 +19,15 @@ RUN mkdir -p /app/instance
 
 # Set Python path to include the app directory
 ENV PYTHONPATH=/app:$PYTHONPATH
+# Ensure Python output is unbuffered for proper logging
+ENV PYTHONUNBUFFERED=1
 
 EXPOSE 5000
 
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
 
-# Set version as build argument
-ARG APP_VERSION=2.0.91
-ENV APP_VERSION=$APP_VERSION
+# Don't set APP_VERSION here - let version.py be the single source of truth
+# The app will read the version from version.py directly
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "300", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "300", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info", "app:app"]

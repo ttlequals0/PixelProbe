@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.95] - 2025-07-23
+
+### Fixed
+- **FILE CHANGES SCAN**: Fixed stuck scan showing 0 files processed by optimizing database queries
+- **PERFORMANCE**: Replaced slow offset-based pagination with ID-based pagination for million+ file scans
+- **PROGRESS PERSISTENCE**: Progress now saved every 5 files to prevent data loss on interruption
+- **ERROR RESILIENCE**: Added per-file error handling to continue processing even if individual files fail
+
+### Technical Details
+- Changed from `query.offset().limit()` to `query.filter(id > last_id).limit()` for O(1) vs O(n) performance
+- Reduced batch size from 1000 to 100 for more responsive progress updates
+- Progress committed to database every 5 files (was every 100)
+- Added try/catch around individual file processing to prevent single file errors from stopping the scan
+- Added batch-end commits to ensure progress is saved
+- Added session recovery on commit failures
+
+## [2.0.94] - 2025-07-23
+
+### Fixed
+- **VERSION**: Removed hardcoded version from Dockerfile to prevent version mismatches
+- **LOGGING**: Fixed console logging in Docker by adding PYTHONUNBUFFERED=1 and gunicorn logging flags
+- **FILE CHANGES**: Confirmed stuck file changes warnings on startup are expected behavior
+
+### Added
+- **VERSION MANAGEMENT**: Created update_version.py script for easy version updates
+- **SINGLE SOURCE OF TRUTH**: version.py now contains the authoritative version number
+
+### Technical Details
+- Removed APP_VERSION from Dockerfile - version.py is now the single source of truth
+- Added `--access-logfile -` and `--error-logfile -` to gunicorn to ensure logs go to stdout/stderr
+- Added `PYTHONUNBUFFERED=1` environment variable to prevent Python from buffering output
+- Version can still be overridden via APP_VERSION env var for CI/CD if needed
+
 ## [2.0.93] - 2025-07-22
 
 ### Fixed

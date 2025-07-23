@@ -366,6 +366,8 @@ class MaintenanceService:
             file_changes_record.progress_message = f'Phase 2 of 3: Checking {total_files} files for hash changes...'
             db.session.commit()
             
+            logger.info(f"Starting file changes check for {total_files} files")
+            
             excluded_paths, excluded_extensions = load_exclusions()
             checker = PixelProbe(
                 database_path=self.database_uri,
@@ -374,31 +376,74 @@ class MaintenanceService:
             )
             changed_files = []
             
-            # Process files in batches
-            batch_size = 1000
-            for offset in range(0, total_files, batch_size):
+            # Process files in smaller batches for better performance
+            batch_size = 100  # Reduced from 1000 for better responsiveness
+            last_id = 0
+            files_processed = 0
+            
+            while files_processed < total_files:
                 if self._is_cancelled_file_changes(file_changes_record):
                     break
                 
-                batch = ScanResult.query.offset(offset).limit(batch_size).all()
+                # Use ID-based pagination instead of offset for better performance
+                try:
+                    batch = ScanResult.query.filter(ScanResult.id > last_id).order_by(ScanResult.id).limit(batch_size).all()
+                    
+                    if not batch:
+                        logger.info(f"No more files to process after ID {last_id}")
+                        break
+                        
+                    if files_processed % 1000 == 0:
+                        logger.info(f"Progress: {files_processed}/{total_files} files processed")
+                except Exception as e:
+                    logger.error(f"Error querying batch after ID {last_id}: {e}")
+                    file_changes_record.progress_message = f"Error querying database: {str(e)}"
+                    db.session.commit()
+                    raise
                 
                 for result in batch:
                     if self._is_cancelled_file_changes(file_changes_record):
                         break
                     
-                    file_changes_record.files_processed += 1
-                    file_changes_record.phase_current = file_changes_record.files_processed
+                    files_processed += 1
+                    last_id = result.id
+                    
+                    # Update progress in database immediately for each file
+                    file_changes_record.files_processed = files_processed
+                    file_changes_record.phase_current = files_processed
                     file_changes_record.current_file = result.file_path
                     
                     # Check for changes
-                    change_info = self._check_file_changes(result, checker)
-                    if change_info:
-                        changed_files.append(change_info)
-                        file_changes_record.changes_found = len(changed_files)
+                    try:
+                        change_info = self._check_file_changes(result, checker)
+                        if change_info:
+                            changed_files.append(change_info)
+                            file_changes_record.changes_found = len(changed_files)
+                    except Exception as e:
+                        logger.error(f"Error checking file {result.file_path}: {e}")
+                        # Continue processing other files even if one fails
                     
-                    # Update periodically
-                    if file_changes_record.files_processed % 100 == 0:
-                        db.session.commit()
+                    # Commit every few files to balance performance and reliability
+                    if files_processed % 5 == 0:
+                        try:
+                            db.session.commit()
+                        except Exception as e:
+                            logger.error(f"Error committing progress at file {files_processed}: {e}")
+                            # Try to refresh the session and continue
+                            db.session.rollback()
+                            file_changes_record = db.session.merge(file_changes_record)
+                    
+                    # Update in-memory state
+                    with self.file_changes_lock:
+                        self.file_changes_state['files_processed'] = files_processed
+                        self.file_changes_state['changes_found'] = len(changed_files)
+                
+                # Ensure we commit at the end of each batch
+                try:
+                    db.session.commit()
+                except Exception as e:
+                    logger.error(f"Error committing batch progress: {e}")
+                    db.session.rollback()
             
             # Phase 3: Rescanning changed files
             if changed_files and not self._is_cancelled_file_changes(file_changes_record):
