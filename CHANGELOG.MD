@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.100] - 2025-07-23
+
+### Fixed
+- **SCAN SERVICE**: Fixed NameError for undefined scan_state_id variable in sequential scan
+- **SCAN REPORTS**: Scans now properly complete and generate reports
+
+### Technical Details
+- Fixed scan_state_id not being passed to _sequential_scan and _parallel_scan methods
+- Both scan methods now receive scan_state_id as a parameter
+
 ## [2.0.99] - 2025-07-23
 
 ### Fixed

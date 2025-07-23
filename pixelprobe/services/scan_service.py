@@ -270,9 +270,9 @@ class ScanService:
                                f"with {total_scan_files} files")
                     
                     if num_workers > 1:
-                        self._parallel_scan(checker, files_to_scan, force_rescan, num_workers, scan_state)
+                        self._parallel_scan(checker, files_to_scan, force_rescan, num_workers, scan_state, scan_state_id)
                     else:
-                        self._sequential_scan(checker, files_to_scan, force_rescan, scan_state)
+                        self._sequential_scan(checker, files_to_scan, force_rescan, scan_state, scan_state_id)
                         
                 except Exception as e:
                     logger.error(f"Error during scan: {e}")
@@ -320,7 +320,7 @@ class ScanService:
         return {'message': f'Reset {count} stuck files', 'count': count}
     
     def _sequential_scan(self, checker: PixelProbe, files: List[str], 
-                        force_rescan: bool, scan_state: ScanState):
+                        force_rescan: bool, scan_state: ScanState, scan_state_id: int):
         """Perform sequential scan of files"""
         total_files = len(files)
         
@@ -376,7 +376,7 @@ class ScanService:
                 self._create_scan_report(completed_scan_state, scan_type='full_scan' if not force_rescan else 'rescan')
     
     def _parallel_scan(self, checker: PixelProbe, files: List[str], 
-                      force_rescan: bool, num_workers: int, scan_state: ScanState):
+                      force_rescan: bool, num_workers: int, scan_state: ScanState, scan_state_id: int):
         """Perform parallel scan of files"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         
