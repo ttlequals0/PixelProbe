@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.114] - 2025-07-24
+
+### Added
+- **Major Feature**: Comprehensive report generation for ALL scan types
+  - Full scans generate reports with complete statistics
+  - Parallel/rescan operations generate reports with scan results
+  - File changes scans generate reports with changed files and verification results
+  - Single file scans generate reports with individual file results
+  - Orphan cleanup operations generate reports with cleanup results
+  - All reports saved to `instance/reports/` directory in JSON format
+  - Unified report format with scan ID, timestamps, statistics, and results
+
+- **Feature**: Report management API endpoints
+  - `GET /api/reports` - List all reports (scan and cleanup) with metadata
+  - `GET /api/reports/download-multiple` - Download multiple reports as ZIP or combined PDF
+  - `POST /api/reports/delete` - Delete one or more reports
+  - `GET /api/cleanup-reports` - List cleanup reports (legacy endpoint)
+  - `GET /api/cleanup-reports/<filename>` - Download specific cleanup report
+
+- **Feature**: Multi-format report export
+  - Download multiple reports as a single ZIP file
+  - Generate combined PDF from multiple reports (requires reportlab)
+  - PDF reports include statistics tables and formatted output
+
+### Fixed
+- **Critical**: Improved error handling in orphan cleanup deletion phase
+  - Fixed "Instance has been deleted" error by using fresh queries instead of refresh
+  - Added batch-level error handling to continue processing even if individual batches fail
+  - Database rollback on batch errors to maintain consistency
+
+### Enhanced
+- **Reporting**: All scan operations now generate detailed reports
+  - Reports include scan type, duration, statistics, and results
+  - Error reports generated even when scans fail
+  - Reports contain comprehensive metadata for analysis
+- **Logging**: Added comprehensive logging throughout all operations
+  - Log when each orphaned file is found with full path
+  - Log batch deletion progress and counts
+  - Log report generation status and location
+  - Enhanced scan completion logging
+
 ## [2.0.53] - 2025-01-20
 
 ### Fixed

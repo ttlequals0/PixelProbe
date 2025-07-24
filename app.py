@@ -457,6 +457,39 @@ def start_db_write_thread():
                                 scan_record.end_time = datetime.now(timezone.utc)
                                 db.session.commit()
                                 logger.info(f"Marked scan {scan_id} as complete")
+                                
+                                # Generate scan report
+                                try:
+                                    # Gather scan statistics
+                                    total_files = ScanResult.query.count()
+                                    corrupted_files = ScanResult.query.filter_by(is_corrupted=True).count()
+                                    healthy_files = ScanResult.query.filter_by(is_corrupted=False).count()
+                                    warning_files = ScanResult.query.filter_by(has_warnings=True).count()
+                                    
+                                    stats = {
+                                        'total_files_scanned': scan_record.files_processed or 0,
+                                        'total_files_in_db': total_files,
+                                        'corrupted_files': corrupted_files,
+                                        'healthy_files': healthy_files,
+                                        'warning_files': warning_files,
+                                        'errors': 0  # TODO: track scan errors
+                                    }
+                                    
+                                    # Get scan type from write_task or default to 'full'
+                                    scan_type = write_task.get('scan_type', 'full')
+                                    
+                                    report_filename = generate_scan_report(
+                                        scan_id=scan_id,
+                                        scan_type=scan_type,
+                                        start_time=scan_record.start_time,
+                                        end_time=scan_record.end_time,
+                                        stats=stats
+                                    )
+                                    
+                                    if report_filename:
+                                        logger.info(f"Scan report generated: {report_filename}")
+                                except Exception as report_error:
+                                    logger.error(f"Failed to generate scan report: {str(report_error)}")
                         
                         elif task_type == 'update_file_changes_progress':
                             # Update file changes progress
@@ -564,6 +597,12 @@ def api_docs():
     except Exception as e:
         logger.error(f"Error rendering API docs template: {str(e)}")
         return f"Error loading API documentation: {str(e)}", 500
+
+@app.route('/reports')
+def reports_page():
+    """Reports management page"""
+    logger.info("Reports page requested")
+    return render_template('reports.html')
 
 @app.route('/favicon.ico')
 def favicon():
@@ -875,6 +914,42 @@ def scan_single_file():
     db.session.commit()
     
     logger.info(f"Scan result saved to database for {file_path}")
+    
+    # Generate single file scan report
+    try:
+        import uuid
+        scan_id = str(uuid.uuid4())
+        
+        stats = {
+            'total_files_scanned': 1,
+            'corrupted_files': 1 if result['is_corrupted'] else 0,
+            'healthy_files': 0 if result['is_corrupted'] else 1,
+            'warning_files': 1 if result.get('has_warnings') else 0,
+            'deep_scan': deep_scan
+        }
+        
+        # Include detailed results
+        results = {
+            'file_path': file_path,
+            'scan_result': result
+        }
+        
+        report_filename = generate_scan_report(
+            scan_id=scan_id,
+            scan_type='single_file',
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            stats=stats,
+            results=results
+        )
+        
+        if report_filename:
+            logger.info(f"Single file scan report generated: {report_filename}")
+            scan_result_dict = scan_result.to_dict()
+            scan_result_dict['report_filename'] = report_filename
+            return jsonify(scan_result_dict)
+    except Exception as report_error:
+        logger.error(f"Failed to generate single file scan report: {str(report_error)}")
     
     return jsonify(scan_result.to_dict())
 
@@ -1295,7 +1370,8 @@ def scan_all_files():
                 if scan_state.get('scan_id'):
                     db_write_queue.put({
                         'type': 'update_scan_state_complete',
-                        'scan_id': scan_state.get('scan_id')
+                        'scan_id': scan_state.get('scan_id'),
+                        'scan_type': 'full'  # Full scan type
                     })
                     logger.info(f"Queued scan completion for {scan_state.get('scan_id')}")
                 
@@ -2641,6 +2717,36 @@ def check_file_changes_async(check_id):
             
             logger.info(f"File change check complete: Checked {total_files} files, found {len(changed_files)} changes, {corrupted_count} corrupted")
             
+            # Generate file changes report
+            try:
+                stats = {
+                    'total_files_checked': total_files,
+                    'files_changed': len(changed_files),
+                    'corrupted_files': corrupted_count,
+                    'files_rescanned': len(changed_files)
+                }
+                
+                # Include detailed results
+                results = {
+                    'changed_files': changed_files,
+                    'total_checked': total_files,
+                    'corrupted_count': corrupted_count
+                }
+                
+                report_filename = generate_scan_report(
+                    scan_id=check_id,
+                    scan_type='file_changes',
+                    start_time=file_changes_record.start_time,
+                    end_time=datetime.now(timezone.utc),
+                    stats=stats,
+                    results=results
+                )
+                
+                if report_filename:
+                    logger.info(f"File changes report generated: {report_filename}")
+            except Exception as report_error:
+                logger.error(f"Failed to generate file changes report: {str(report_error)}")
+            
             # Mark as complete and store results
             with file_changes_state_lock:
                 file_changes_state['phase'] = 'complete'
@@ -2716,6 +2822,44 @@ def check_file_changes():
         'status': 'started'
     })
 
+def generate_scan_report(scan_id, scan_type, start_time, end_time, stats, results=None, error=None):
+    """Generate a unified scan report for any scan type"""
+    try:
+        report_data = {
+            'scan_id': scan_id,
+            'scan_type': scan_type,
+            'start_time': start_time.isoformat() if start_time else None,
+            'end_time': end_time.isoformat() if end_time else None,
+            'duration_seconds': (end_time - start_time).total_seconds() if start_time and end_time else None,
+            'stats': stats,
+            'status': 'error' if error else 'completed',
+            'error': error
+        }
+        
+        # Add scan results if provided
+        if results:
+            report_data['results'] = results
+        
+        # Save report to file
+        import json
+        report_dir = os.path.join(app.instance_path, 'reports')
+        os.makedirs(report_dir, exist_ok=True)
+        
+        report_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        status_suffix = '_error' if error else ''
+        report_filename = f"scan_report_{scan_type}_{scan_id}_{report_timestamp}{status_suffix}.json"
+        report_path = os.path.join(report_dir, report_filename)
+        
+        with open(report_path, 'w') as f:
+            json.dump(report_data, f, indent=2)
+        
+        logger.info(f"Generated {scan_type} scan report: {report_filename}")
+        return report_filename
+        
+    except Exception as e:
+        logger.error(f"Failed to generate scan report: {str(e)}")
+        return None
+
 def cleanup_orphaned_async(cleanup_id):
     """Async function to clean up orphaned records with progress tracking"""
     logger.info(f"Cleanup async function started with ID: {cleanup_id}")
@@ -2778,6 +2922,7 @@ def cleanup_orphaned_async(cleanup_id):
                     db.session.commit()
                     
                     if not os.path.exists(result.file_path):
+                        logger.info(f"Found orphaned entry: {result.file_path}")
                         orphaned_ids.append(result.id)
                         orphaned_files.append(result.file_path)
                         cleanup_record.orphaned_found = len(orphaned_ids)
@@ -2806,25 +2951,33 @@ def cleanup_orphaned_async(cleanup_id):
                 # Delete orphaned records in batches using IDs
                 deletion_batch_size = 1000
                 for i in range(0, len(orphaned_ids), deletion_batch_size):
-                    # Check for cancellation
-                    db.session.refresh(cleanup_record)
-                    if not cleanup_record.is_active:
-                        logger.info("Cleanup cancelled during deletion phase")
-                        cleanup_record.phase = 'cancelled'
-                        cleanup_record.progress_message = f'Operation cancelled (deleted {i} of {len(orphaned_ids)} records)'
-                        cleanup_record.end_time = datetime.now(timezone.utc)
+                    try:
+                        # Check for cancellation - use a fresh query instead of refresh
+                        current_cleanup = CleanupState.query.filter_by(cleanup_id=cleanup_id).first()
+                        if not current_cleanup or not current_cleanup.is_active:
+                            logger.info("Cleanup cancelled during deletion phase")
+                            if current_cleanup:
+                                current_cleanup.phase = 'cancelled'
+                                current_cleanup.progress_message = f'Operation cancelled (deleted {i} of {len(orphaned_ids)} records)'
+                                current_cleanup.end_time = datetime.now(timezone.utc)
+                                db.session.commit()
+                            return
+                        
+                        batch_ids = orphaned_ids[i:i + deletion_batch_size]
+                        # Use bulk delete for efficiency
+                        deleted_count = ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
                         db.session.commit()
-                        return
-                    
-                    batch_ids = orphaned_ids[i:i + deletion_batch_size]
-                    # Use bulk delete for efficiency
-                    ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
-                    db.session.commit()
-                    
-                    deleted_so_far = min(i + deletion_batch_size, len(orphaned_ids))
-                    cleanup_record.phase_current = deleted_so_far
-                    cleanup_record.progress_message = f'Phase 2 of 2: Deleted {deleted_so_far} of {len(orphaned_ids)} records...'
-                    db.session.commit()
+                        logger.info(f"Deleted batch of {deleted_count} orphaned records")
+                        
+                        deleted_so_far = min(i + deletion_batch_size, len(orphaned_ids))
+                        current_cleanup.phase_current = deleted_so_far
+                        current_cleanup.progress_message = f'Phase 2 of 2: Deleted {deleted_so_far} of {len(orphaned_ids)} records...'
+                        db.session.commit()
+                    except Exception as batch_error:
+                        logger.error(f"Error deleting batch {i//deletion_batch_size + 1}: {str(batch_error)}")
+                        # Continue with next batch even if one fails
+                        db.session.rollback()
+                        continue
             else:
                 # No orphaned files found, still show Phase 2 completion
                 cleanup_record.phase = 'deleting'
@@ -2837,9 +2990,34 @@ def cleanup_orphaned_async(cleanup_id):
                 # Give UI time to show Phase 2 status
                 time.sleep(1)
             
+            # Generate cleanup report
+            report_data = {
+                'cleanup_id': cleanup_id,
+                'start_time': cleanup_record.start_time.isoformat(),
+                'end_time': datetime.now(timezone.utc).isoformat(),
+                'total_files_checked': total_files,
+                'orphaned_records_found': len(orphaned_ids),
+                'orphaned_files': orphaned_files,
+                'status': 'completed'
+            }
+            
+            # Save report to file
+            import json
+            report_dir = os.path.join(app.instance_path, 'reports')
+            os.makedirs(report_dir, exist_ok=True)
+            
+            report_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_filename = f"cleanup_report_{cleanup_id}_{report_timestamp}.json"
+            report_path = os.path.join(report_dir, report_filename)
+            
+            with open(report_path, 'w') as f:
+                json.dump(report_data, f, indent=2)
+            
+            logger.info(f"Generated cleanup report: {report_filename}")
+            
             # Mark as complete
             cleanup_record.phase = 'complete'
-            cleanup_record.progress_message = f'Successfully removed {len(orphaned_ids)} orphaned records'
+            cleanup_record.progress_message = f'Successfully removed {len(orphaned_ids)} orphaned records. Report: {report_filename}'
             cleanup_record.is_active = False
             cleanup_record.orphaned_found = len(orphaned_ids)
             cleanup_record.end_time = datetime.now(timezone.utc)
@@ -2850,6 +3028,36 @@ def cleanup_orphaned_async(cleanup_id):
             
         except Exception as e:
             logger.error(f"Error in async cleanup: {str(e)}", exc_info=True)
+            
+            # Generate error report
+            try:
+                report_data = {
+                    'cleanup_id': cleanup_id,
+                    'start_time': cleanup_record.start_time.isoformat() if cleanup_record else None,
+                    'end_time': datetime.now(timezone.utc).isoformat(),
+                    'total_files_checked': total_files,
+                    'orphaned_records_found': len(orphaned_ids),
+                    'orphaned_files': orphaned_files,
+                    'status': 'error',
+                    'error': str(e)
+                }
+                
+                # Save report to file
+                import json
+                report_dir = os.path.join(app.instance_path, 'reports')
+                os.makedirs(report_dir, exist_ok=True)
+                
+                report_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                report_filename = f"cleanup_report_{cleanup_id}_{report_timestamp}_error.json"
+                report_path = os.path.join(report_dir, report_filename)
+                
+                with open(report_path, 'w') as f:
+                    json.dump(report_data, f, indent=2)
+                
+                logger.info(f"Generated error cleanup report: {report_filename}")
+            except Exception as report_error:
+                logger.error(f"Failed to generate error report: {str(report_error)}")
+            
             if cleanup_record:
                 cleanup_record.phase = 'error'
                 cleanup_record.error_message = str(e)
@@ -2857,6 +3065,313 @@ def cleanup_orphaned_async(cleanup_id):
                 cleanup_record.is_active = False
                 cleanup_record.end_time = datetime.now(timezone.utc)
                 db.session.commit()
+
+@app.route('/api/cleanup-reports', methods=['GET'])
+def get_cleanup_reports():
+    """Get list of cleanup reports"""
+    try:
+        report_dir = os.path.join(app.instance_path, 'reports')
+        if not os.path.exists(report_dir):
+            return jsonify({'reports': []})
+        
+        reports = []
+        for filename in os.listdir(report_dir):
+            if filename.startswith('cleanup_report_') and filename.endswith('.json'):
+                file_path = os.path.join(report_dir, filename)
+                try:
+                    with open(file_path, 'r') as f:
+                        report_data = json.load(f)
+                        report_data['filename'] = filename
+                        reports.append(report_data)
+                except Exception as e:
+                    logger.error(f"Error reading report {filename}: {str(e)}")
+        
+        # Sort by end_time descending
+        reports.sort(key=lambda x: x.get('end_time', ''), reverse=True)
+        
+        return jsonify({'reports': reports})
+    except Exception as e:
+        logger.error(f"Error getting cleanup reports: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cleanup-reports/<filename>', methods=['GET'])
+def download_cleanup_report(filename):
+    """Download a specific cleanup report"""
+    try:
+        # Validate filename to prevent directory traversal
+        if '..' in filename or '/' in filename or '\\' in filename:
+            return jsonify({'error': 'Invalid filename'}), 400
+        
+        if not filename.startswith('cleanup_report_') or not filename.endswith('.json'):
+            return jsonify({'error': 'Invalid report filename'}), 400
+        
+        report_dir = os.path.join(app.instance_path, 'reports')
+        file_path = os.path.join(report_dir, filename)
+        
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'Report not found'}), 404
+        
+        return send_file(file_path, as_attachment=True, download_name=filename)
+    except Exception as e:
+        logger.error(f"Error downloading cleanup report: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reports', methods=['GET'])
+def get_all_reports():
+    """Get list of all reports (scan and cleanup)"""
+    try:
+        report_dir = os.path.join(app.instance_path, 'reports')
+        if not os.path.exists(report_dir):
+            return jsonify({'reports': []})
+        
+        reports = []
+        for filename in os.listdir(report_dir):
+            if filename.endswith('.json') and (filename.startswith('cleanup_report_') or filename.startswith('scan_report_')):
+                file_path = os.path.join(report_dir, filename)
+                try:
+                    # Get file stats
+                    file_stats = os.stat(file_path)
+                    file_size = file_stats.st_size
+                    
+                    # Try to read report metadata
+                    with open(file_path, 'r') as f:
+                        report_data = json.load(f)
+                        
+                    report_type = 'cleanup' if filename.startswith('cleanup_report_') else 'scan'
+                    
+                    reports.append({
+                        'filename': filename,
+                        'type': report_type,
+                        'size': file_size,
+                        'created': datetime.fromtimestamp(file_stats.st_ctime).isoformat(),
+                        'scan_type': report_data.get('scan_type', 'unknown'),
+                        'status': report_data.get('status', 'unknown'),
+                        'start_time': report_data.get('start_time'),
+                        'end_time': report_data.get('end_time'),
+                        'stats': report_data.get('stats', {})
+                    })
+                except Exception as e:
+                    logger.error(f"Error reading report {filename}: {str(e)}")
+                    # Still include the file with basic info
+                    reports.append({
+                        'filename': filename,
+                        'type': 'unknown',
+                        'size': file_size,
+                        'created': datetime.fromtimestamp(file_stats.st_ctime).isoformat(),
+                        'error': str(e)
+                    })
+        
+        # Sort by creation time descending
+        reports.sort(key=lambda x: x.get('created', ''), reverse=True)
+        
+        return jsonify({'reports': reports})
+    except Exception as e:
+        logger.error(f"Error getting reports: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reports/download-multiple', methods=['POST'])
+def download_multiple_reports():
+    """Download multiple reports as a zip file or combined PDF"""
+    try:
+        data = request.get_json()
+        filenames = data.get('filenames', [])
+        format_type = data.get('format', 'zip').lower()  # 'zip' or 'pdf'
+        
+        if not filenames:
+            return jsonify({'error': 'No filenames provided'}), 400
+        
+        report_dir = os.path.join(app.instance_path, 'reports')
+        
+        # Validate all filenames
+        for filename in filenames:
+            if '..' in filename or '/' in filename or '\\' in filename:
+                return jsonify({'error': f'Invalid filename: {filename}'}), 400
+            if not filename.endswith('.json'):
+                return jsonify({'error': f'Invalid report filename: {filename}'}), 400
+        
+        if format_type == 'pdf':
+            # Generate combined PDF
+            try:
+                from reportlab.lib import colors
+                from reportlab.lib.pagesizes import letter, landscape
+                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.lib.units import inch
+                from reportlab.lib.enums import TA_CENTER
+                
+                # Create PDF buffer
+                buffer = io.BytesIO()
+                doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+                elements = []
+                
+                styles = getSampleStyleSheet()
+                primary_green = colors.HexColor('#1ce783')
+                primary_black = colors.HexColor('#040405')
+                
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=24,
+                    textColor=primary_black,
+                    spaceAfter=30,
+                    alignment=TA_CENTER
+                )
+                
+                # Add each report
+                for idx, filename in enumerate(filenames):
+                    file_path = os.path.join(report_dir, filename)
+                    if not os.path.exists(file_path):
+                        continue
+                    
+                    with open(file_path, 'r') as f:
+                        report_data = json.load(f)
+                    
+                    # Add page break between reports
+                    if idx > 0:
+                        elements.append(PageBreak())
+                    
+                    # Report title
+                    report_type = 'Cleanup Report' if filename.startswith('cleanup_report_') else 'Scan Report'
+                    elements.append(Paragraph(f"PixelProbe {report_type}", title_style))
+                    elements.append(Spacer(1, 0.2*inch))
+                    
+                    # Report info
+                    info_text = f"Report ID: {filename}<br/>"
+                    info_text += f"Status: {report_data.get('status', 'Unknown')}<br/>"
+                    info_text += f"Start Time: {report_data.get('start_time', 'N/A')}<br/>"
+                    info_text += f"End Time: {report_data.get('end_time', 'N/A')}<br/>"
+                    elements.append(Paragraph(info_text, styles['Normal']))
+                    elements.append(Spacer(1, 0.2*inch))
+                    
+                    # Statistics
+                    if 'stats' in report_data:
+                        elements.append(Paragraph("Statistics", styles['Heading2']))
+                        stats_data = [['Metric', 'Value']]
+                        for key, value in report_data['stats'].items():
+                            stats_data.append([key.replace('_', ' ').title(), str(value)])
+                        
+                        stats_table = Table(stats_data)
+                        stats_table.setStyle(TableStyle([
+                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                            ('BACKGROUND', (0, 0), (-1, 0), primary_green),
+                            ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
+                        ]))
+                        elements.append(stats_table)
+                
+                # Build PDF
+                doc.build(elements)
+                
+                # Return PDF
+                pdf_data = buffer.getvalue()
+                buffer.close()
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                download_name = f"pixelprobe_reports_{timestamp}.pdf"
+                
+                return send_file(
+                    io.BytesIO(pdf_data),
+                    mimetype='application/pdf',
+                    as_attachment=True,
+                    download_name=download_name
+                )
+                
+            except ImportError:
+                return jsonify({'error': 'PDF generation requires reportlab'}), 500
+                
+        else:
+            # Default to ZIP format
+            import zipfile
+            
+            # Create zip buffer
+            zip_buffer = io.BytesIO()
+            
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for filename in filenames:
+                    file_path = os.path.join(report_dir, filename)
+                    if os.path.exists(file_path):
+                        zip_file.write(file_path, filename)
+            
+            zip_buffer.seek(0)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            download_name = f"pixelprobe_reports_{timestamp}.zip"
+            
+            return send_file(
+                zip_buffer,
+                mimetype='application/zip',
+                as_attachment=True,
+                download_name=download_name
+            )
+            
+    except Exception as e:
+        logger.error(f"Error downloading multiple reports: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reports/download/<filename>', methods=['GET'])
+def download_report(filename):
+    """Download a specific report (scan or cleanup)"""
+    try:
+        # Validate filename to prevent directory traversal
+        if '..' in filename or '/' in filename or '\\' in filename:
+            return jsonify({'error': 'Invalid filename'}), 400
+        
+        if not filename.endswith('.json'):
+            return jsonify({'error': 'Invalid report filename'}), 400
+        
+        report_dir = os.path.join(app.instance_path, 'reports')
+        file_path = os.path.join(report_dir, filename)
+        
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'Report not found'}), 404
+        
+        return send_file(file_path, as_attachment=True, download_name=filename)
+    except Exception as e:
+        logger.error(f"Error downloading report: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reports/delete', methods=['POST'])
+def delete_reports():
+    """Delete one or more reports"""
+    try:
+        data = request.get_json()
+        filenames = data.get('filenames', [])
+        
+        if not filenames:
+            return jsonify({'error': 'No filenames provided'}), 400
+        
+        report_dir = os.path.join(app.instance_path, 'reports')
+        deleted = []
+        errors = []
+        
+        for filename in filenames:
+            # Validate filename
+            if '..' in filename or '/' in filename or '\\' in filename:
+                errors.append({'filename': filename, 'error': 'Invalid filename'})
+                continue
+            
+            file_path = os.path.join(report_dir, filename)
+            
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    deleted.append(filename)
+                    logger.info(f"Deleted report: {filename}")
+                else:
+                    errors.append({'filename': filename, 'error': 'File not found'})
+            except Exception as e:
+                errors.append({'filename': filename, 'error': str(e)})
+                logger.error(f"Error deleting report {filename}: {str(e)}")
+        
+        return jsonify({
+            'deleted': deleted,
+            'errors': errors,
+            'message': f'Deleted {len(deleted)} reports'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error deleting reports: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/cleanup-orphaned', methods=['POST'])
 def cleanup_orphaned_records():
@@ -3140,16 +3655,11 @@ def scan_files_parallel():
                         files_processed=files_processed
                     )
                     
-                    # Mark scan as inactive in database
+                    # Mark scan as inactive in database and generate report
                     db_write_queue.put({
-                        'type': 'update_scan_state',
+                        'type': 'complete_scan',
                         'scan_id': scan_id,
-                        'updates': {
-                            'is_active': False,
-                            'end_time': datetime.now(timezone.utc),
-                            'phase': 'completed',
-                            'progress_message': f'{scan_type.title()} completed - {files_scanned} files processed, {corrupted_found} corrupted'
-                        }
+                        'scan_type': scan_type.replace(' ', '_')  # e.g. 'deep_scan' or 'rescan'
                     })
                     
                 except Exception as e:

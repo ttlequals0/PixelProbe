@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PixelProbe - Reports Management</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/desktop.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .reports-container {
+            padding: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .reports-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        
+        .reports-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .reports-table {
+            width: 100%;
+            background: var(--bg-secondary);
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .reports-table th {
+            padding: 15px;
+            text-align: left;
+            background: var(--bg-tertiary);
+            font-weight: 600;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .reports-table td {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .reports-table tr:hover {
+            background: var(--bg-tertiary);
+        }
+        
+        .report-checkbox {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        
+        .report-type {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .report-type.scan {
+            background: rgba(28, 231, 131, 0.2);
+            color: var(--primary-green);
+        }
+        
+        .report-type.cleanup {
+            background: rgba(23, 162, 184, 0.2);
+            color: #17a2b8;
+        }
+        
+        .report-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .report-status.completed {
+            background: rgba(40, 167, 69, 0.2);
+            color: #28a745;
+        }
+        
+        .report-status.error {
+            background: rgba(220, 53, 69, 0.2);
+            color: #dc3545;
+        }
+        
+        .report-actions {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .btn-sm {
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 50px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 48px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="reports-container">
+        <div class="reports-header">
+            <h1>Reports Management</h1>
+            <div class="reports-actions">
+                <button class="btn btn-secondary" onclick="refreshReports()">
+                    <i class="fas fa-sync"></i> Refresh
+                </button>
+                <button class="btn btn-primary" onclick="downloadSelected()" disabled id="downloadBtn">
+                    <i class="fas fa-download"></i> Download Selected
+                </button>
+                <button class="btn btn-danger" onclick="deleteSelected()" disabled id="deleteBtn">
+                    <i class="fas fa-trash"></i> Delete Selected
+                </button>
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <table class="reports-table">
+                <thead>
+                    <tr>
+                        <th style="width: 50px;">
+                            <input type="checkbox" id="selectAll" onchange="toggleSelectAll()">
+                        </th>
+                        <th>Report Name</th>
+                        <th style="width: 100px;">Type</th>
+                        <th style="width: 120px;">Scan Type</th>
+                        <th style="width: 100px;">Status</th>
+                        <th style="width: 100px;">Size</th>
+                        <th style="width: 180px;">Created</th>
+                        <th style="width: 150px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="reportsTableBody">
+                    <tr>
+                        <td colspan="8" class="loading">
+                            <i class="fas fa-spinner fa-spin"></i> Loading reports...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <script>
+        let reports = [];
+        let selectedReports = new Set();
+        
+        // Load reports on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadReports();
+        });
+        
+        function loadReports() {
+            fetch('/api/reports')
+                .then(response => response.json())
+                .then(data => {
+                    reports = data.reports;
+                    renderReports();
+                })
+                .catch(error => {
+                    console.error('Error loading reports:', error);
+                    showError('Failed to load reports');
+                });
+        }
+        
+        function refreshReports() {
+            selectedReports.clear();
+            updateActionButtons();
+            loadReports();
+        }
+        
+        function renderReports() {
+            const tbody = document.getElementById('reportsTableBody');
+            
+            if (reports.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="8" class="empty-state">
+                            <i class="fas fa-file-alt"></i>
+                            <p>No reports found</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = reports.map(report => {
+                const created = new Date(report.created);
+                const formattedDate = created.toLocaleString();
+                const sizeKB = (report.size / 1024).toFixed(2);
+                
+                return `
+                    <tr>
+                        <td>
+                            <input type="checkbox" class="report-checkbox" value="${report.filename}" 
+                                   onchange="toggleSelection('${report.filename}')">
+                        </td>
+                        <td>${report.filename}</td>
+                        <td><span class="report-type ${report.type}">${report.type}</span></td>
+                        <td>${report.scan_type || '-'}</td>
+                        <td><span class="report-status ${report.status}">${report.status}</span></td>
+                        <td>${sizeKB} KB</td>
+                        <td>${formattedDate}</td>
+                        <td class="report-actions">
+                            <button class="btn btn-sm btn-primary" onclick="downloadReport('${report.filename}')">
+                                <i class="fas fa-download"></i>
+                            </button>
+                            <button class="btn btn-sm btn-secondary" onclick="viewReport('${report.filename}')">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteReport('${report.filename}')">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+        
+        function toggleSelectAll() {
+            const selectAll = document.getElementById('selectAll').checked;
+            const checkboxes = document.querySelectorAll('.report-checkbox');
+            
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = selectAll;
+                if (selectAll) {
+                    selectedReports.add(checkbox.value);
+                } else {
+                    selectedReports.delete(checkbox.value);
+                }
+            });
+            
+            updateActionButtons();
+        }
+        
+        function toggleSelection(filename) {
+            if (selectedReports.has(filename)) {
+                selectedReports.delete(filename);
+            } else {
+                selectedReports.add(filename);
+            }
+            updateActionButtons();
+        }
+        
+        function updateActionButtons() {
+            const downloadBtn = document.getElementById('downloadBtn');
+            const deleteBtn = document.getElementById('deleteBtn');
+            
+            downloadBtn.disabled = selectedReports.size === 0;
+            deleteBtn.disabled = selectedReports.size === 0;
+            
+            if (selectedReports.size > 0) {
+                downloadBtn.innerHTML = `<i class="fas fa-download"></i> Download Selected (${selectedReports.size})`;
+                deleteBtn.innerHTML = `<i class="fas fa-trash"></i> Delete Selected (${selectedReports.size})`;
+            } else {
+                downloadBtn.innerHTML = '<i class="fas fa-download"></i> Download Selected';
+                deleteBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Selected';
+            }
+        }
+        
+        function downloadReport(filename) {
+            // Determine if it's a cleanup report or general report
+            const url = filename.startsWith('cleanup_report_') 
+                ? `/api/cleanup-reports/${filename}`
+                : `/api/reports/download/${filename}`;
+            
+            window.location.href = url;
+        }
+        
+        function viewReport(filename) {
+            // Open report in new window
+            const url = filename.startsWith('cleanup_report_') 
+                ? `/api/cleanup-reports/${filename}`
+                : `/api/reports/download/${filename}`;
+            
+            window.open(url, '_blank');
+        }
+        
+        function deleteReport(filename) {
+            if (!confirm(`Are you sure you want to delete ${filename}?`)) {
+                return;
+            }
+            
+            fetch('/api/reports/delete', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ filenames: [filename] })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.deleted.length > 0) {
+                    showSuccess(`Deleted ${filename}`);
+                    loadReports();
+                } else if (data.errors.length > 0) {
+                    showError(`Failed to delete: ${data.errors[0].error}`);
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting report:', error);
+                showError('Failed to delete report');
+            });
+        }
+        
+        function downloadSelected() {
+            if (selectedReports.size === 0) return;
+            
+            const format = selectedReports.size > 1 
+                ? prompt('Download format (zip or pdf):', 'zip') 
+                : 'json';
+            
+            if (!format) return;
+            
+            if (selectedReports.size === 1) {
+                // Single file download
+                const filename = Array.from(selectedReports)[0];
+                downloadReport(filename);
+            } else {
+                // Multiple files download
+                fetch('/api/reports/download-multiple', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filenames: Array.from(selectedReports),
+                        format: format.toLowerCase()
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Download failed');
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `pixelprobe_reports_${new Date().toISOString().slice(0,10)}.${format}`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                })
+                .catch(error => {
+                    console.error('Error downloading reports:', error);
+                    showError('Failed to download reports');
+                });
+            }
+        }
+        
+        function deleteSelected() {
+            if (selectedReports.size === 0) return;
+            
+            const count = selectedReports.size;
+            if (!confirm(`Are you sure you want to delete ${count} report(s)?`)) {
+                return;
+            }
+            
+            fetch('/api/reports/delete', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ filenames: Array.from(selectedReports) })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.deleted.length > 0) {
+                    showSuccess(`Deleted ${data.deleted.length} report(s)`);
+                    selectedReports.clear();
+                    updateActionButtons();
+                    loadReports();
+                }
+                if (data.errors.length > 0) {
+                    showError(`Failed to delete ${data.errors.length} report(s)`);
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting reports:', error);
+                showError('Failed to delete reports');
+            });
+        }
+        
+        function showSuccess(message) {
+            // Simple alert for now - could be replaced with toast notification
+            alert('Success: ' + message);
+        }
+        
+        function showError(message) {
+            // Simple alert for now - could be replaced with toast notification
+            alert('Error: ' + message);
+        }
+    </script>
+</body>
+</html>
