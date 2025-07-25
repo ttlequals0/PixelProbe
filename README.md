@@ -6,7 +6,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video and image files across your media libraries.
 
-**Version 2.0.53** fixes file-changes scanning progress tracking with smooth per-file updates and proper async database writes.
+**Version 2.0.114** adds comprehensive report generation for all scan types with multi-format export capabilities and a dedicated reports management interface.
 
 ## ✨ Features
 
@@ -25,6 +25,9 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **📅 Scheduled Scanning**: Automated scans with cron or interval-based scheduling
 - **🚫 Path & Extension Exclusions**: Configure paths and file types to exclude from scanning
 - **🔍 Multiple Scan Types**: Normal scan, orphan cleanup, and file changes detection
+- **📄 Comprehensive Reporting**: Automatic report generation for all scan operations with JSON export
+- **📊 Reports Management**: Dedicated interface for viewing, downloading, and managing scan reports
+- **📦 Multi-Format Export**: Export reports as ZIP archives or combined PDF documents
 
 ## 📸 Screenshots
 
