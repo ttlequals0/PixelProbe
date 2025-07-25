@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.116] - 2025-07-25
+
+### Changed
+- Updated Docker image version to 2.0.116
+- Rebuilt from 2.0.115 branch with all recent UI simplifications
+
 ## [2.0.115] - 2025-07-24
 
 ### Changed
