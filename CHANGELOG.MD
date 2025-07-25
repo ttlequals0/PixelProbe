@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.122] - 2025-07-25
+
+### Fixed
+- **PDF Logo Display**: Fixed logo aspect ratio to maintain square dimensions
+  - Logo now properly sized at 1.5x1.5 inches with proportional scaling
+  - No longer stretched or distorted
+- **PDF Report Table**: Enhanced table to include all required fields
+  - Added columns: Status, File Path, Size, Type, Tool, Details, Scan Date
+  - Properly sized columns to fit landscape page layout
+  - Reduced font sizes for better fit
+- **View Button Behavior**: Fixed view button to show PDF by default
+  - Clicking view button now opens PDF viewer directly
+  - Dropdown still available for choosing between PDF and Table view
+- **Main Dashboard View Button**: Fixed view button in main dashboard (index.html)
+  - Modified app.viewReport() function to display PDF in iframe instead of JSON
+  - Added dropdown menu with options for PDF or JSON view
+  - Added hover functionality for dropdown menu
+
 ## [2.0.121] - 2025-07-25
 
 ### Fixed

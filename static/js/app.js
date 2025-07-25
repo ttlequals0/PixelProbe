@@ -2046,9 +2046,19 @@ class PixelProbeApp {
                                 </a>
                             </div>
                         </div>
-                        <button class="btn btn-sm btn-secondary" onclick="app.viewReport('${report.filename}')" style="padding: 5px 10px; font-size: 12px;">
-                            <i class="fas fa-eye"></i>
-                        </button>
+                        <div class="dropdown" style="display: inline-block; position: relative;">
+                            <button class="btn btn-sm btn-secondary" onclick="app.viewReport('${report.filename}')" style="padding: 5px 10px; font-size: 12px;">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            <div class="dropdown-content" style="display: none; position: absolute; right: 0; background: var(--bg-secondary); min-width: 150px; box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2); z-index: 1; border-radius: 4px;">
+                                <a href="#" onclick="app.viewReportPDF('${report.filename}'); return false;" style="display: block; padding: 8px 12px; text-decoration: none; color: var(--text-primary);">
+                                    <i class="fas fa-file-pdf"></i> View as PDF
+                                </a>
+                                <a href="#" onclick="app.viewReportJSON('${report.filename}'); return false;" style="display: block; padding: 8px 12px; text-decoration: none; color: var(--text-primary);">
+                                    <i class="fas fa-file-code"></i> View as JSON
+                                </a>
+                            </div>
+                        </div>
                         <button class="btn btn-sm btn-danger" onclick="app.deleteReport('${report.filename}')" style="padding: 5px 10px; font-size: 12px;">
                             <i class="fas fa-trash"></i>
                         </button>
@@ -2168,7 +2178,96 @@ class PixelProbeApp {
         }
     }
 
+    // Alias for viewReportPDF - default behavior
     async viewReport(filename) {
+        return this.viewReportPDF(filename);
+    }
+    
+    async viewReportPDF(filename) {
+        try {
+            // Generate PDF from the report
+            const response = await fetch('/api/reports/download-multiple', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    filenames: [filename],
+                    format: 'pdf'
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error('Failed to generate PDF');
+            }
+            
+            const blob = await response.blob();
+            const pdfUrl = URL.createObjectURL(blob);
+            
+            // Create or get the PDF viewer modal
+            let modal = document.querySelector('#pdf-viewer-modal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'pdf-viewer-modal';
+                modal.className = 'modal';
+                modal.innerHTML = `
+                    <div class="modal-content" style="max-width: 90%; width: 90%; height: 90vh;">
+                        <div class="modal-header">
+                            <h3 class="modal-title">PDF Report Viewer</h3>
+                            <div style="display: flex; gap: 10px;">
+                                <button class="btn btn-secondary btn-sm" id="download-pdf-btn">
+                                    <i class="fas fa-download"></i> Download
+                                </button>
+                                <button class="modal-close">&times;</button>
+                            </div>
+                        </div>
+                        <div class="modal-body" style="height: calc(100% - 60px); padding: 0;">
+                            <iframe id="pdf-iframe" style="width: 100%; height: 100%; border: none;"></iframe>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                
+                // Setup close button
+                modal.querySelector('.modal-close').addEventListener('click', () => {
+                    modal.style.display = 'none';
+                    URL.revokeObjectURL(pdfUrl);
+                });
+                
+                // Setup download button
+                modal.querySelector('#download-pdf-btn').addEventListener('click', () => {
+                    const a = document.createElement('a');
+                    a.href = pdfUrl;
+                    a.download = filename.replace('.json', '.pdf');
+                    a.click();
+                });
+                
+                // Close on click outside
+                modal.addEventListener('click', function(e) {
+                    if (e.target === this) {
+                        this.style.display = 'none';
+                        URL.revokeObjectURL(pdfUrl);
+                    }
+                });
+            }
+            
+            // Update modal title with filename
+            modal.querySelector('.modal-title').textContent = `PDF Report - ${filename}`;
+            
+            // Display the PDF
+            const iframe = modal.querySelector('#pdf-iframe');
+            iframe.src = pdfUrl;
+            
+            // Show the modal
+            modal.style.display = 'block';
+            
+        } catch (error) {
+            console.error('Error viewing report:', error);
+            this.showNotification('Failed to view report', 'error');
+        }
+    }
+    
+    async viewReportJSON(filename) {
         try {
             const url = filename.startsWith('cleanup_report_') 
                 ? `/api/cleanup-reports/${filename}`
@@ -2183,19 +2282,19 @@ class PixelProbeApp {
             const report = await response.json();
             
             // Create or get the report viewer modal
-            let modal = document.querySelector('#report-viewer-modal');
+            let modal = document.querySelector('#json-viewer-modal');
             if (!modal) {
                 modal = document.createElement('div');
-                modal.id = 'report-viewer-modal';
+                modal.id = 'json-viewer-modal';
                 modal.className = 'modal';
                 modal.innerHTML = `
                     <div class="modal-content" style="max-width: 90%; width: 90%; height: 80vh;">
                         <div class="modal-header">
-                            <h3 class="modal-title">Report Viewer</h3>
+                            <h3 class="modal-title">JSON Report Viewer</h3>
                             <button class="modal-close">&times;</button>
                         </div>
                         <div class="modal-body" style="height: calc(100% - 60px); overflow-y: auto; padding: 20px;">
-                            <pre id="report-content" style="white-space: pre-wrap; font-family: monospace; font-size: 12px;"></pre>
+                            <pre id="json-content" style="white-space: pre-wrap; font-family: monospace; font-size: 12px; background: var(--bg-tertiary); padding: 15px; border-radius: 4px;"></pre>
                         </div>
                     </div>
                 `;
@@ -2215,18 +2314,18 @@ class PixelProbeApp {
             }
             
             // Update modal title with filename
-            modal.querySelector('.modal-title').textContent = `Report Viewer - ${filename}`;
+            modal.querySelector('.modal-title').textContent = `JSON Report - ${filename}`;
             
             // Display the report content
-            const contentEl = modal.querySelector('#report-content');
+            const contentEl = modal.querySelector('#json-content');
             contentEl.textContent = JSON.stringify(report, null, 2);
             
             // Show the modal
             modal.style.display = 'block';
             
         } catch (error) {
-            console.error('Error viewing report:', error);
-            this.showNotification('Failed to view report', 'error');
+            console.error('Error viewing JSON report:', error);
+            this.showNotification('Failed to view JSON report', 'error');
         }
     }
 

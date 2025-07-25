@@ -3254,7 +3254,8 @@ def download_multiple_reports():
                 # Add logo at the top of the first page
                 logo_path = os.path.join(app.static_folder, 'images', 'pixelprobe-logo.png')
                 if os.path.exists(logo_path):
-                    logo = Image(logo_path, width=2*inch, height=0.5*inch)
+                    # Maintain aspect ratio for square logo (670x729 pixels)
+                    logo = Image(logo_path, width=1.5*inch, height=1.5*inch, kind='proportional')
                     logo.hAlign = 'CENTER'
                     elements.append(logo)
                     elements.append(Spacer(1, 0.3*inch))
@@ -3315,36 +3316,76 @@ def download_multiple_reports():
                             # Limit files shown in PDF to 500
                             files_to_show = results['scanned_files'][:500]
                             
-                            # Create files table
-                            files_data = [['File Path', 'Status', 'Type', 'Size']]
+                            # Create files table with all required fields
+                            files_data = [['Status', 'File Path', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
                             for file in files_to_show:
                                 status = 'Corrupted' if file.get('is_corrupted') else 'Healthy'
                                 if file.get('has_warnings'):
                                     status = 'Warning'
-                                file_type = file.get('file_type', 'N/A')
+                                
+                                file_path = file.get('file_path', '')
+                                # Truncate very long paths for PDF
+                                if len(file_path) > 50:
+                                    file_path = '...' + file_path[-47:]
+                                
                                 file_size = file.get('file_size', 0)
                                 if file_size:
                                     size_mb = file_size / (1024 * 1024)
-                                    size_str = f"{size_mb:.2f} MB"
+                                    size_str = f"{size_mb:.1f} MB"
                                 else:
                                     size_str = 'N/A'
                                 
-                                # Truncate long paths
-                                file_path = file.get('file_path', '')
-                                if len(file_path) > 60:
-                                    file_path = '...' + file_path[-57:]
+                                file_type = file.get('file_type', 'N/A')
+                                scan_tool = file.get('scan_tool', 'N/A')
                                 
-                                files_data.append([file_path, status, file_type, size_str])
+                                # Get details - corruption details or error message
+                                details = ''
+                                if file.get('corruption_details'):
+                                    details = str(file['corruption_details'])[:30] + '...' if len(str(file['corruption_details'])) > 30 else str(file['corruption_details'])
+                                elif file.get('error_message'):
+                                    details = str(file['error_message'])[:30] + '...' if len(str(file['error_message'])) > 30 else str(file['error_message'])
+                                else:
+                                    details = 'OK'
+                                
+                                scan_date = file.get('scan_date', 'N/A')
+                                if scan_date != 'N/A':
+                                    try:
+                                        # Format date to be shorter
+                                        from datetime import datetime
+                                        dt = datetime.fromisoformat(scan_date.replace('Z', '+00:00'))
+                                        scan_date = dt.strftime('%Y-%m-%d')
+                                    except:
+                                        scan_date = scan_date[:10] if len(scan_date) > 10 else scan_date
+                                
+                                files_data.append([status, file_path, size_str, file_type, scan_tool, details, scan_date])
                             
-                            files_table = Table(files_data)
+                            # Calculate column widths for landscape page
+                            # Total width available in landscape: ~10 inches = 720 points
+                            col_widths = [
+                                0.8*inch,   # Status
+                                3.5*inch,   # File Path
+                                0.8*inch,   # Size
+                                1.2*inch,   # Type
+                                1.0*inch,   # Tool
+                                2.5*inch,   # Details
+                                1.0*inch    # Scan Date
+                            ]
+                            
+                            files_table = Table(files_data, colWidths=col_widths)
                             files_table.setStyle(TableStyle([
                                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                                ('FONTSIZE', (0, 0), (-1, 0), 7),
+                                ('FONTSIZE', (0, 1), (-1, -1), 6),
                                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
                                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                                 ('BACKGROUND', (0, 0), (-1, 0), primary_green),
                                 ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
                                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+                                ('LEFTPADDING', (0, 0), (-1, -1), 3),
+                                ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+                                ('TOPPADDING', (0, 0), (-1, -1), 2),
+                                ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
                             ]))
                             elements.append(files_table)
                             
