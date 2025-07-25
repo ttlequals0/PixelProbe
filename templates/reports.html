@@ -10,8 +10,10 @@
     <style>
         .reports-container {
             padding: 20px;
-            max-width: 1400px;
+            width: 100%;
+            max-width: 100%;
             margin: 0 auto;
+            box-sizing: border-box;
         }
         
         .reports-header {
@@ -28,10 +30,12 @@
         
         .reports-table {
             width: 100%;
+            min-width: 800px;
             background: var(--bg-secondary);
             border-radius: var(--border-radius);
             overflow: hidden;
             box-shadow: var(--shadow-sm);
+            table-layout: fixed;
         }
         
         .reports-table th {
@@ -190,13 +194,162 @@
             min-width: 100px;
             text-align: center;
         }
+        
+        /* Dropdown styles */
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: var(--bg-secondary);
+            min-width: 120px;
+            box-shadow: var(--shadow-md);
+            z-index: 1;
+            border-radius: var(--border-radius-sm);
+            right: 0;
+        }
+        
+        .dropdown-content a {
+            color: var(--text-primary);
+            padding: 8px 12px;
+            text-decoration: none;
+            display: block;
+            font-size: 12px;
+        }
+        
+        .dropdown-content a:hover {
+            background-color: var(--bg-tertiary);
+        }
+        
+        .dropdown:hover .dropdown-content {
+            display: block;
+        }
+        
+        /* JSON viewer styles */
+        .report-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        
+        .report-table th {
+            background: var(--bg-tertiary);
+            padding: 10px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .report-table td {
+            padding: 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .report-section {
+            margin-bottom: 30px;
+        }
+        
+        .report-section h4 {
+            margin-bottom: 10px;
+            color: var(--primary-green);
+        }
+        
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-badge.completed {
+            background: rgba(40, 167, 69, 0.2);
+            color: #28a745;
+        }
+        
+        .status-badge.error {
+            background: rgba(220, 53, 69, 0.2);
+            color: #dc3545;
+        }
+        
+        .status-corrupted {
+            color: #dc3545;
+            font-weight: 600;
+        }
+        
+        .status-healthy {
+            color: #28a745;
+            font-weight: 600;
+        }
+        
+        .status-warning {
+            color: #ffc107;
+            font-weight: 600;
+        }
+        
+        .error-box {
+            background: rgba(220, 53, 69, 0.1);
+            border: 1px solid rgba(220, 53, 69, 0.3);
+            padding: 15px;
+            border-radius: var(--border-radius-sm);
+            color: #dc3545;
+        }
+        
+        pre {
+            background: var(--bg-tertiary);
+            padding: 10px;
+            border-radius: var(--border-radius-sm);
+            overflow-x: auto;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
     <div class="reports-container">
         <div class="reports-header">
             <h1>Reports Management</h1>
-            <div class="reports-actions">
+            <button class="btn btn-secondary" style="position: absolute; top: 20px; right: 20px;" onclick="window.close()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="filters-section" style="margin-bottom: 20px;">
+            <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+                <div>
+                    <label for="typeFilter" style="margin-right: 5px;">Type:</label>
+                    <select id="typeFilter" onchange="filterReports()" style="padding: 5px; border-radius: 4px;">
+                        <option value="">All Types</option>
+                        <option value="scan">Scan Reports</option>
+                        <option value="cleanup">Cleanup Reports</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="scanTypeFilter" style="margin-right: 5px;">Scan Type:</label>
+                    <select id="scanTypeFilter" onchange="filterReports()" style="padding: 5px; border-radius: 4px;">
+                        <option value="">All Scan Types</option>
+                        <option value="full">Full Scan</option>
+                        <option value="rescan">Rescan</option>
+                        <option value="deep_scan">Deep Scan</option>
+                        <option value="single_file">Single File</option>
+                        <option value="file_changes">File Changes</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="statusFilter" style="margin-right: 5px;">Status:</label>
+                    <select id="statusFilter" onchange="filterReports()" style="padding: 5px; border-radius: 4px;">
+                        <option value="">All Statuses</option>
+                        <option value="completed">Completed</option>
+                        <option value="error">Error</option>
+                        <option value="running">Running</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div class="reports-actions" style="margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap;">
                 <button class="btn btn-secondary" onclick="refreshReports()">
                     <i class="fas fa-sync"></i> Refresh
                 </button>
@@ -206,7 +359,6 @@
                 <button class="btn btn-danger" onclick="deleteSelected()" disabled id="deleteBtn">
                     <i class="fas fa-trash"></i> Delete Selected
                 </button>
-            </div>
         </div>
         
         <div class="table-container" style="overflow-x: auto;">
@@ -216,13 +368,13 @@
                         <th style="width: 50px;">
                             <input type="checkbox" id="selectAll" onchange="toggleSelectAll()">
                         </th>
-                        <th>Report Name</th>
-                        <th style="width: 100px;">Type</th>
-                        <th style="width: 120px;">Scan Type</th>
-                        <th style="width: 100px;">Status</th>
-                        <th style="width: 100px;">Size</th>
-                        <th style="width: 180px;">Created</th>
-                        <th style="width: 150px;">Actions</th>
+                        <th style="min-width: 200px;">Report Name</th>
+                        <th style="width: 80px;">Type</th>
+                        <th style="width: 100px;">Scan Type</th>
+                        <th style="width: 80px;">Status</th>
+                        <th style="width: 80px;">Size</th>
+                        <th style="width: 150px;">Created</th>
+                        <th style="width: 120px;">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="reportsTableBody">
@@ -233,6 +385,27 @@
                     </tr>
                 </tbody>
             </table>
+        </div>
+    </div>
+    
+    <!-- JSON Viewer Modal -->
+    <div class="modal" id="jsonModal" style="display: none;">
+        <div class="modal-content" style="max-width: 900px; max-height: 90vh;">
+            <div class="modal-header">
+                <h3 id="jsonModalTitle">Report Details</h3>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-secondary btn-sm" onclick="exportCurrentReportJSON()">
+                        <i class="fas fa-download"></i> Export JSON
+                    </button>
+                    <button class="btn btn-secondary btn-sm" onclick="exportCurrentReportPDF()">
+                        <i class="fas fa-file-pdf"></i> Export PDF
+                    </button>
+                    <button class="modal-close" onclick="closeJSONModal()">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body" style="max-height: calc(90vh - 120px); overflow-y: auto;">
+                <div id="jsonContent"></div>
+            </div>
         </div>
     </div>
     
@@ -269,7 +442,9 @@
     
     <script>
         let reports = [];
+        let filteredReports = [];
         let selectedReports = new Set();
+        let currentReportFilename = null;
         
         // Load reports on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -281,7 +456,7 @@
                 .then(response => response.json())
                 .then(data => {
                     reports = data.reports;
-                    renderReports();
+                    filterReports();
                 })
                 .catch(error => {
                     console.error('Error loading reports:', error);
@@ -295,10 +470,42 @@
             loadReports();
         }
         
+        function filterReports() {
+            const typeFilter = document.getElementById('typeFilter').value;
+            const scanTypeFilter = document.getElementById('scanTypeFilter').value;
+            const statusFilter = document.getElementById('statusFilter').value;
+            
+            filteredReports = reports.filter(report => {
+                // Filter by report type
+                if (typeFilter && report.type !== typeFilter) {
+                    return false;
+                }
+                
+                // Filter by scan type
+                if (scanTypeFilter && report.scan_type !== scanTypeFilter) {
+                    return false;
+                }
+                
+                // Filter by status
+                if (statusFilter && report.status !== statusFilter) {
+                    return false;
+                }
+                
+                return true;
+            });
+            
+            renderReports();
+        }
+        
         function renderReports() {
             const tbody = document.getElementById('reportsTableBody');
+            const reportsToRender = filteredReports.length > 0 || 
+                                   (document.getElementById('typeFilter').value || 
+                                    document.getElementById('scanTypeFilter').value || 
+                                    document.getElementById('statusFilter').value) 
+                                   ? filteredReports : reports;
             
-            if (reports.length === 0) {
+            if (reportsToRender.length === 0) {
                 tbody.innerHTML = `
                     <tr>
                         <td colspan="8" class="empty-state">
@@ -310,7 +517,7 @@
                 return;
             }
             
-            tbody.innerHTML = reports.map(report => {
+            tbody.innerHTML = reportsToRender.map(report => {
                 const created = new Date(report.created);
                 const formattedDate = created.toLocaleString();
                 const sizeKB = (report.size / 1024).toFixed(2);
@@ -331,9 +538,15 @@
                             <button class="btn btn-sm btn-primary" onclick="downloadReport('${report.filename}')">
                                 <i class="fas fa-download"></i>
                             </button>
-                            <button class="btn btn-sm btn-secondary" onclick="viewReport('${report.filename}')">
-                                <i class="fas fa-eye"></i>
-                            </button>
+                            <div class="dropdown" style="display: inline-block;">
+                                <button class="btn btn-sm btn-secondary dropdown-toggle">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                <div class="dropdown-content">
+                                    <a href="#" onclick="viewReportJSON('${report.filename}'); return false;">View as Table</a>
+                                    <a href="#" onclick="viewReportPDF('${report.filename}'); return false;">View as PDF</a>
+                                </div>
+                            </div>
                             <button class="btn btn-sm btn-danger" onclick="deleteReport('${report.filename}')">
                                 <i class="fas fa-trash"></i>
                             </button>
@@ -522,7 +735,290 @@
         // Configure PDF.js worker
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         
-        function viewReport(filename) {
+        function viewReportJSON(filename) {
+            currentReportFilename = filename;
+            // Fetch and display JSON report
+            const url = filename.startsWith('cleanup_report_') 
+                ? `/api/cleanup-reports/${filename}`
+                : `/api/reports/download/${filename}`;
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('jsonModalTitle').textContent = filename;
+                    document.getElementById('jsonContent').innerHTML = formatReportData(data);
+                    document.getElementById('jsonModal').style.display = 'block';
+                })
+                .catch(error => {
+                    console.error('Error loading report:', error);
+                    showError('Failed to load report');
+                });
+        }
+        
+        function exportCurrentReportJSON() {
+            if (!currentReportFilename) return;
+            downloadReport(currentReportFilename);
+        }
+        
+        function exportCurrentReportPDF() {
+            if (!currentReportFilename) return;
+            // Generate and download PDF for single report
+            fetch('/api/reports/download-multiple', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    filenames: [currentReportFilename],
+                    format: 'pdf'
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(data => {
+                        throw new Error(data.error || 'Failed to generate PDF');
+                    });
+                }
+                return response.blob();
+            })
+            .then(blob => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = currentReportFilename.replace('.json', '.pdf');
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            })
+            .catch(error => {
+                console.error('Error exporting PDF:', error);
+                showError('Failed to export PDF: ' + error.message);
+            });
+        }
+        
+        function formatReportData(data) {
+            let html = '<div class="report-sections">';
+            
+            // Report Info Section
+            html += '<div class="report-section">';
+            html += '<h4>Report Information</h4>';
+            html += '<table class="report-table">';
+            html += '<tr><th>Field</th><th>Value</th></tr>';
+            html += `<tr><td>Status</td><td><span class="status-badge ${data.status}">${data.status || 'N/A'}</span></td></tr>`;
+            html += `<tr><td>Scan Type</td><td>${formatScanType(data.scan_type)}</td></tr>`;
+            html += `<tr><td>Start Time</td><td>${formatDateTime(data.start_time)}</td></tr>`;
+            html += `<tr><td>End Time</td><td>${formatDateTime(data.end_time)}</td></tr>`;
+            html += `<tr><td>Duration</td><td>${formatDuration(data.duration_seconds)}</td></tr>`;
+            if (data.scan_id) {
+                html += `<tr><td>Scan ID</td><td>${data.scan_id}</td></tr>`;
+            }
+            html += '</table>';
+            html += '</div>';
+            
+            // Statistics Section
+            if (data.stats) {
+                html += '<div class="report-section">';
+                html += '<h4>Statistics</h4>';
+                html += '<table class="report-table">';
+                html += '<tr><th>Metric</th><th>Value</th></tr>';
+                
+                // Order statistics in a logical way
+                const statOrder = [
+                    'total_files_scanned', 'total_files_in_db', 'total_files_checked',
+                    'corrupted_files', 'healthy_files', 'warning_files', 
+                    'marked_as_good', 'errors', 'orphaned_records_found',
+                    'files_changed', 'files_rescanned'
+                ];
+                
+                // Show ordered stats first
+                statOrder.forEach(key => {
+                    if (data.stats.hasOwnProperty(key)) {
+                        const label = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                        const value = data.stats[key];
+                        html += `<tr><td>${label}</td><td>${formatStatValue(key, value)}</td></tr>`;
+                    }
+                });
+                
+                // Show any remaining stats
+                for (const [key, value] of Object.entries(data.stats)) {
+                    if (!statOrder.includes(key)) {
+                        const label = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                        html += `<tr><td>${label}</td><td>${formatStatValue(key, value)}</td></tr>`;
+                    }
+                }
+                
+                html += '</table>';
+                html += '</div>';
+            }
+            
+            // Scan Results Section (file-by-file results from scan)
+            if (data.results) {
+                // Single file scan
+                if (data.results.scan_result) {
+                    html += '<div class="report-section">';
+                    html += '<h4>Scan Result</h4>';
+                    html += '<table class="report-table">';
+                    html += '<tr><th>Property</th><th>Value</th></tr>';
+                    const result = data.results.scan_result;
+                    html += `<tr><td>File Path</td><td>${data.results.file_path || 'N/A'}</td></tr>`;
+                    html += `<tr><td>Status</td><td>${result.is_corrupted ? '<span class="status-corrupted">Corrupted</span>' : '<span class="status-healthy">Healthy</span>'}</td></tr>`;
+                    if (result.corruption_details) {
+                        html += `<tr><td>Details</td><td>${result.corruption_details}</td></tr>`;
+                    }
+                    if (result.scan_output) {
+                        html += `<tr><td>Scan Output</td><td><pre>${result.scan_output}</pre></td></tr>`;
+                    }
+                    html += '</table>';
+                    html += '</div>';
+                }
+                
+                // Changed files results
+                if (data.results.changed_files && data.results.changed_files.length > 0) {
+                    html += '<div class="report-section">';
+                    html += '<h4>Changed Files</h4>';
+                    html += '<table class="report-table">';
+                    html += '<tr><th>File Path</th><th>Status</th><th>Previous Status</th><th>Details</th></tr>';
+                    data.results.changed_files.forEach(file => {
+                        html += `<tr>`;
+                        html += `<td>${file.file_path || 'N/A'}</td>`;
+                        html += `<td>${file.is_corrupted ? '<span class="status-corrupted">Corrupted</span>' : '<span class="status-healthy">Healthy</span>'}</td>`;
+                        html += `<td>${file.previous_status || 'N/A'}</td>`;
+                        html += `<td>${file.corruption_details || file.scan_output || ''}</td>`;
+                        html += `</tr>`;
+                    });
+                    html += '</table>';
+                    html += '</div>';
+                }
+                
+                // Orphaned files
+                if (data.orphaned_files && data.orphaned_files.length > 0) {
+                    html += '<div class="report-section">';
+                    html += `<h4>Orphaned Files (${data.orphaned_files.length})</h4>`;
+                    html += '<div style="max-height: 300px; overflow-y: auto;">';
+                    html += '<table class="report-table">';
+                    html += '<tr><th>File Path</th></tr>';
+                    data.orphaned_files.forEach(file => {
+                        html += `<tr><td>${file}</td></tr>`;
+                    });
+                    html += '</table>';
+                    html += '</div>';
+                    html += '</div>';
+                }
+                
+                // Scanned files from full/rescan/deep scan
+                if (data.results.scanned_files && data.results.scanned_files.length > 0) {
+                    html += '<div class="report-section">';
+                    html += `<h4>Scanned Files (${data.results.total_scanned}${data.results.limited_to ? ' - Limited to ' + data.results.limited_to : ''})</h4>`;
+                    html += '<div style="max-height: 600px; overflow-y: auto;">';
+                    html += '<table class="report-table">';
+                    html += '<tr><th>File Path</th><th>Status</th><th>Type</th><th>Size</th><th>Scan Date</th><th>Details</th></tr>';
+                    data.results.scanned_files.forEach(file => {
+                        const status = file.is_corrupted ? '<span class="status-corrupted">Corrupted</span>' : 
+                                      file.has_warnings ? '<span class="status-warning">Warning</span>' : 
+                                      '<span class="status-healthy">Healthy</span>';
+                        const size = file.file_size ? formatFileSize(file.file_size) : 'N/A';
+                        const scanDate = file.scan_date ? new Date(file.scan_date).toLocaleString() : 'N/A';
+                        const details = file.corruption_details || file.scan_output || '';
+                        
+                        html += `<tr>`;
+                        html += `<td title="${file.file_path}">${truncatePath(file.file_path, 60)}</td>`;
+                        html += `<td>${status}</td>`;
+                        html += `<td>${file.file_type || 'N/A'}</td>`;
+                        html += `<td>${size}</td>`;
+                        html += `<td>${scanDate}</td>`;
+                        html += `<td title="${details}">${truncateText(details, 50)}</td>`;
+                        html += `</tr>`;
+                    });
+                    html += '</table>';
+                    html += '</div>';
+                    html += '</div>';
+                }
+            }
+            
+            // Errors Section
+            if (data.error) {
+                html += '<div class="report-section">';
+                html += '<h4>Error Details</h4>';
+                html += '<div class="error-box">';
+                html += `<p>${data.error}</p>`;
+                html += '</div>';
+                html += '</div>';
+            }
+            
+            html += '</div>';
+            return html;
+        }
+        
+        function formatScanType(type) {
+            const typeMap = {
+                'full': 'Full Scan',
+                'rescan': 'Rescan',
+                'deep_scan': 'Deep Scan',
+                'single_file': 'Single File Scan',
+                'file_changes': 'File Changes Check',
+                'cleanup': 'Orphaned Files Cleanup'
+            };
+            return typeMap[type] || type;
+        }
+        
+        function formatDateTime(dateStr) {
+            if (!dateStr) return 'N/A';
+            const date = new Date(dateStr);
+            return date.toLocaleString();
+        }
+        
+        function formatDuration(seconds) {
+            if (!seconds) return 'N/A';
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            if (hours > 0) {
+                return `${hours}h ${minutes}m ${secs}s`;
+            } else if (minutes > 0) {
+                return `${minutes}m ${secs}s`;
+            } else {
+                return `${secs}s`;
+            }
+        }
+        
+        function formatStatValue(key, value) {
+            if (key.includes('files') || key.includes('records')) {
+                return value.toLocaleString();
+            }
+            return value;
+        }
+        
+        function formatFileSize(bytes) {
+            if (!bytes) return 'N/A';
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            if (bytes === 0) return '0 B';
+            const i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)));
+            return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
+        }
+        
+        function truncatePath(path, maxLength) {
+            if (!path || path.length <= maxLength) return path;
+            const filename = path.split('/').pop();
+            if (filename.length >= maxLength) {
+                return '...' + filename.substr(filename.length - maxLength + 3);
+            }
+            const remainingLength = maxLength - filename.length - 4; // 4 for ".../""
+            const pathStart = path.substr(0, remainingLength);
+            return pathStart + '.../' + filename;
+        }
+        
+        function truncateText(text, maxLength) {
+            if (!text || text.length <= maxLength) return text;
+            return text.substr(0, maxLength) + '...';
+        }
+        
+        function closeJSONModal() {
+            document.getElementById('jsonModal').style.display = 'none';
+        }
+        
+        function viewReportPDF(filename) {
             // Check if it's a PDF report (we'll generate PDF on the fly)
             currentPDFFilename = filename;
             document.getElementById('pdfModalTitle').textContent = filename;
@@ -549,7 +1045,11 @@
             })
             .then(response => {
                 if (!response.ok) {
-                    throw new Error('Failed to generate PDF');
+                    return response.json().then(data => {
+                        throw new Error(data.error || 'Failed to generate PDF');
+                    }).catch(() => {
+                        throw new Error('Failed to generate PDF - Server error');
+                    });
                 }
                 return response.blob();
             })
@@ -571,7 +1071,12 @@
             })
             .catch(error => {
                 console.error('Error loading PDF:', error);
-                showError('Failed to load PDF. Make sure reportlab is installed.');
+                // Try to get more specific error message
+                if (error.message && error.message.includes('Failed to generate PDF')) {
+                    showError('Failed to generate PDF. The server may not have reportlab installed or there was an error in PDF generation.');
+                } else {
+                    showError('Failed to load PDF: ' + error.message);
+                }
                 closePDFModal();
             });
         }

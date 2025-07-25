@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import pytz
 from flask import Flask, request, jsonify, send_file, render_template, Response
 from flask_sqlalchemy import SQLAlchemy
@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import csv
 import io
+import json
 
 from media_checker import PixelProbe
 from models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration, ScanState, CleanupState, FileChangesState
@@ -478,12 +479,45 @@ def start_db_write_thread():
                                     # Get scan type from write_task or default to 'full'
                                     scan_type = write_task.get('scan_type', 'full')
                                     
+                                    # Get scanned files for this scan session (limit to 1000 for performance)
+                                    results = None
+                                    if scan_type in ['full', 'rescan', 'deep_scan']:
+                                        # Get files that were scanned in this session
+                                        # Filter by scan_date close to the scan end time (within the scan duration)
+                                        scan_duration = (scan_record.end_time - scan_record.start_time).total_seconds()
+                                        time_threshold = scan_record.start_time - timedelta(seconds=60)  # Add 60s buffer
+                                        
+                                        scanned_files = ScanResult.query.filter(
+                                            ScanResult.scan_date >= time_threshold,
+                                            ScanResult.scan_date <= scan_record.end_time
+                                        ).order_by(ScanResult.scan_date.desc()).limit(1000).all()
+                                        
+                                        if scanned_files:
+                                            results = {
+                                                'scanned_files': [
+                                                    {
+                                                        'file_path': f.file_path,
+                                                        'is_corrupted': f.is_corrupted,
+                                                        'has_warnings': f.has_warnings,
+                                                        'corruption_details': f.corruption_details,
+                                                        'file_size': f.file_size,
+                                                        'file_type': f.file_type,
+                                                        'scan_date': f.scan_date.isoformat() if f.scan_date else None,
+                                                        'scan_output': f.scan_output[:500] if f.scan_output else None  # Limit output size
+                                                    }
+                                                    for f in scanned_files
+                                                ],
+                                                'total_scanned': len(scanned_files),
+                                                'limited_to': 1000 if len(scanned_files) == 1000 else None
+                                            }
+                                    
                                     report_filename = generate_scan_report(
                                         scan_id=scan_id,
                                         scan_type=scan_type,
                                         start_time=scan_record.start_time,
                                         end_time=scan_record.end_time,
-                                        stats=stats
+                                        stats=stats,
+                                        results=results
                                     )
                                     
                                     if report_filename:
@@ -3258,6 +3292,56 @@ def download_multiple_reports():
                             ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
                         ]))
                         elements.append(stats_table)
+                        elements.append(Spacer(1, 0.2*inch))
+                    
+                    # Add scanned files if available
+                    if 'results' in report_data and report_data['results']:
+                        results = report_data['results']
+                        
+                        # Scanned files list
+                        if 'scanned_files' in results and results['scanned_files']:
+                            elements.append(Paragraph("Scanned Files", styles['Heading2']))
+                            elements.append(Spacer(1, 0.1*inch))
+                            
+                            # Limit files shown in PDF to 500
+                            files_to_show = results['scanned_files'][:500]
+                            
+                            # Create files table
+                            files_data = [['File Path', 'Status', 'Type', 'Size']]
+                            for file in files_to_show:
+                                status = 'Corrupted' if file.get('is_corrupted') else 'Healthy'
+                                if file.get('has_warnings'):
+                                    status = 'Warning'
+                                file_type = file.get('file_type', 'N/A')
+                                file_size = file.get('file_size', 0)
+                                if file_size:
+                                    size_mb = file_size / (1024 * 1024)
+                                    size_str = f"{size_mb:.2f} MB"
+                                else:
+                                    size_str = 'N/A'
+                                
+                                # Truncate long paths
+                                file_path = file.get('file_path', '')
+                                if len(file_path) > 60:
+                                    file_path = '...' + file_path[-57:]
+                                
+                                files_data.append([file_path, status, file_type, size_str])
+                            
+                            files_table = Table(files_data)
+                            files_table.setStyle(TableStyle([
+                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                                ('BACKGROUND', (0, 0), (-1, 0), primary_green),
+                                ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
+                                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+                            ]))
+                            elements.append(files_table)
+                            
+                            if len(results['scanned_files']) > 500:
+                                elements.append(Spacer(1, 0.1*inch))
+                                elements.append(Paragraph(f"Note: Showing first 500 of {len(results['scanned_files'])} files", styles['Normal']))
                 
                 # Build PDF
                 doc.build(elements)

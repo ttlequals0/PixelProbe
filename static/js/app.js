@@ -505,8 +505,18 @@ class ProgressManager {
             const phaseName = phaseNames[status.phase] || `Phase ${phaseNumber}`;
             text = `${phaseName} (Phase ${phaseNumber} of ${totalPhases})`;
             
-            // Add current file information for scan phase
-            if (status.phase === 'scanning' && status.current_file) {
+            // Use backend's progress_message if available
+            if (status.progress_message && status.phase === 'scanning') {
+                // Backend provides detailed progress message for scanning phase
+                const parts = status.progress_message.split(': ');
+                if (parts.length > 1) {
+                    text = parts[0]; // Phase info
+                    details = parts[1]; // File info with progress
+                } else {
+                    details = status.progress_message;
+                }
+            } else if (status.phase === 'scanning' && status.current_file) {
+                // Fallback to constructing message from current_file
                 const fileName = status.current_file.split('/').pop();
                 if (status.current_file_progress) {
                     // Use the backend's formatted progress if available

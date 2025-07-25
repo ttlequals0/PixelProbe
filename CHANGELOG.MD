@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.120] - 2025-07-25
+
+### Added
+- **Comprehensive Report Viewer**: Restored full scan report functionality from v2.0.98-2.0.104
+  - Added file-by-file scan results display showing status, type, size, and scan date
+  - Reports now include up to 1000 scanned files in JSON view and 500 in PDF
+  - Dual viewing options: formatted table view and PDF generation
+- **Report Filtering**: Added filtering capabilities to reports page
+  - Filter by report type (Scan/Cleanup)
+  - Filter by scan type (Full/Rescan/Deep Scan/Single File/File Changes)
+  - Filter by status (Completed/Error/Running/Cancelled)
+- **Export Options**: Added export buttons in report viewer
+  - Export as JSON for data analysis
+  - Export as PDF for compliance/reporting
+
+### Fixed
+- Fixed missing JSON import error preventing reports from loading
+- Fixed UI cutoff issues in reports management page with responsive design
+- Fixed rescan progress bar to show file names and progress (e.g., "file.mp4 (7/8)")
+- Restored table view for reports instead of showing raw JSON
+- Fixed PDF generation to include actual scan results
+
+### Changed
+- Enhanced scan report generation to include detailed file-by-file results from database
+- Improved report viewer with formatted sections for statistics, results, and errors
+- PDF reports now include scanned files list with proper formatting
+
 ## [2.0.119] - 2025-07-25
 
 ### Added
@@ -113,6 +140,1035 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Log batch deletion progress and counts
   - Log report generation status and location
   - Enhanced scan completion logging
+
+## [2.0.113] - 2025-07-23
+
+### Summary of Changes Since v2.0.100
+
+This release consolidates multiple improvements and fixes from versions 2.0.101 through 2.0.112:
+
+#### Major Features Added
+- **Multi-format Export System**: Complete overhaul of export functionality
+  - Added Export dropdown menu replacing single CSV button
+  - Support for CSV, JSON, and PDF export formats
+  - Added details column showing corruption, warning, and error information
+  - PDF exports use landscape orientation with PixelProbe branding
+
+#### Scan Reports Enhancements
+- **PDF Report Generation**: Full implementation with reportlab
+  - Added PixelProbe logo with correct aspect ratio
+  - Applied UI color scheme (#1ce783 primary green)
+  - Fixed directory and file path display issues
+  - Added file lists to reports (up to 500 files)
+  
+- **Report Management**: 
+  - Added delete functionality with confirmation dialog
+  - Fixed CSRF token issues for report operations
+  - Fixed JavaScript errors when viewing reports
+
+#### Bug Fixes
+- Fixed scan completion auto-refresh
+- Fixed SQLAlchemy syntax errors
+- Fixed timezone handling in duration calculations
+- Fixed logger scope errors in PDF generation
+- Fixed directory parsing issues (character-by-character split)
+- Fixed dropdown menu display (custom CSS/JS implementation)
+
+#### Technical Improvements
+- Removed Bootstrap dependency for dropdowns
+- Improved error handling throughout
+- Better progress tracking and display
+- Consistent timezone handling (UTC-aware datetimes)
+
+## [2.0.112] - 2025-07-23
+
+### Added
+- **DETAILS COLUMN**: Added details column to all export formats (CSV, JSON, PDF)
+- **CSV EXPORT**: Added "Has Warnings" column and combined details (corruption, warning, error)
+- **JSON EXPORT**: Added error_message field and structured details object
+- **PDF EXPORT**: Added Details column with truncated text for readability
+
+### Changed
+- **PDF LAYOUT**: Adjusted column widths to accommodate details column
+- **CSV FORMAT**: Now includes Has Warnings as separate column
+- **DETAILS FORMAT**: Combined corruption_details, warning_details, and error_message with prefixes
+
+### Technical Details
+- CSV combines all details with format: "Corruption: ...; Warning: ...; Error: ..."
+- JSON includes both individual fields and combined details object
+- PDF truncates details to 40 characters to fit in landscape layout
+- PDF already uses landscape orientation for better space utilization
+
+## [2.0.111] - 2025-07-23
+
+### Fixed
+- **EXPORT DROPDOWN**: Fixed dropdown menu not displaying properly due to missing Bootstrap
+- **UI**: Replaced Bootstrap dropdown with custom CSS/JS implementation
+
+### Technical Details
+- Added custom dropdown CSS to desktop.css with proper styling
+- Added toggleExportMenu() function to handle dropdown show/hide
+- Dropdown now closes when clicking outside or selecting an option
+- Uses PixelProbe's existing color scheme variables
+
+## [2.0.110] - 2025-07-23
+
+### Added
+- **EXPORT OPTIONS**: Changed "Export CSV" button to "Export" dropdown with multiple format options
+- **JSON EXPORT**: Added ability to export scan results as JSON with all metadata
+- **PDF EXPORT**: Added ability to export scan results as PDF with branded styling
+- **FORMAT PARAMETER**: API endpoint /api/export-csv now accepts format parameter (csv, json, pdf)
+
+### Changed
+- **UI**: Export button is now a dropdown menu with CSV, JSON, and PDF options
+- **JAVASCRIPT**: Renamed exportCSV() to exportData(format) to support multiple formats
+
+### Technical Details
+- Export dropdown uses Bootstrap dropdown component with inline-block display
+- JSON export includes all fields including warnings and metadata
+- PDF export uses landscape orientation with PixelProbe color scheme
+- PDF limits display to 500 records to maintain reasonable file size
+- All exports maintain consistent filename format: pixelprobe_{type}_{timestamp}.{ext}
+
+## [2.0.109] - 2025-07-23
+
+### Fixed
+- **PDF REPORTS**: Fixed logger scope error causing "cannot access local variable 'logger'" error
+- **ERROR HANDLING**: Removed duplicate logger imports in exception handlers
+
+### Technical Details
+- Removed local logger imports in exception handlers that were shadowing module-level logger
+- Now consistently uses the module-level logger throughout the file
+
+## [2.0.108] - 2025-07-23
+
+### Fixed
+- **PDF REPORTS**: Fixed directories parsing issue where paths were split character by character
+- **PDF REPORTS**: Added robust handling for different directory data formats (JSON list, string, comma-separated)
+
+### Technical Details
+- Added type checking for directories_scanned field after JSON parsing
+- Added fallback handling for comma-separated directory strings
+- Added debug logging to help diagnose future parsing issues
+- Improved error handling for malformed JSON data
+
+## [2.0.107] - 2025-07-23
+
+### Fixed
+- **PDF REPORTS**: Fixed logo aspect ratio - now properly maintains 670x729 pixel ratio
+- **PDF REPORTS**: Fixed directories field formatting - directories now display on separate lines for readability
+
+### Technical Details
+- Logo dimensions adjusted from 2x0.5 inches to 1.5x1.63 inches to maintain proper aspect ratio
+- Directories field now uses line breaks instead of comma separation
+- Added Paragraph formatting for multi-line text in PDF tables
+
+## [2.0.106] - 2025-07-23
+
+### Fixed
+- **REPORT DELETION**: Fixed CSRF token error when deleting reports - added reports_bp to CSRF exemption
+- **REPORT VIEWING**: Fixed JavaScript error when viewing report details - directories_scanned array handling
+- **PDF REPORTS**: Fixed directory truncation issue - now shows all scanned directories without truncation
+- **PDF REPORTS**: Fixed file path truncation - now shows complete file paths in report tables
+
+### Added
+- **PDF REPORTS**: Added PixelProbe logo to PDF reports
+- **PDF REPORTS**: Applied UI color scheme to PDF reports - using primary green (#1ce783) and brand colors
+- **HTML REPORTS**: Updated HTML fallback reports to use same color scheme as UI
+
+### Technical Details
+- Added reports_bp to CSRF exempt list in app.py
+- Fixed JavaScript array type check for directories_scanned in viewScanReport()
+- Removed directory limit (was showing only first 3 directories)
+- Removed file path truncation (was limiting to 60 characters)
+- Added logo import and placement in PDF header
+- Updated all PDF colors to match UI theme
+
+## [2.0.105] - 2025-07-23
+
+### Added
+- **DELETE REPORTS**: Added ability to delete scan reports through UI and API
+- Delete button (trash icon) in scan reports table
+- Confirmation dialog before deleting reports
+- API endpoint: DELETE /api/scan-reports/<report_id>
+
+### Fixed
+- **PDF GENERATION**: Fixed invalid PDF files by adding reportlab to requirements
+- Added proper error logging for PDF generation failures
+- Improved error handling with specific error messages
+
+### Technical Details
+- Added reportlab==4.0.7 to requirements.txt
+- Added delete confirmation to prevent accidental deletions
+- Reports list automatically refreshes after deletion
+
+## [2.0.104] - 2025-07-23
+
+### Fixed
+- **SCAN PROGRESS**: Fixed scan progress display to show current file and X of Y files
+- **SCAN REPORTS**: Added scanned files list to PDF and HTML reports (similar to main table)
+- **UI**: Fixed progress details display to show both status message and file details
+
+### Added
+- Scan reports now include a detailed list of all scanned files (up to 500 files in PDF, 1000 in HTML)
+- File list includes path, status, size, type, and scan date for each file
+
+### Technical Details
+- Updated ProgressManager.update() to properly display details parameter
+- Added file details to calculateProgress() for scan operations
+- Modified PDF and HTML report generation to query and include ScanResult data
+- Reports now show actual scanned files, not just summary statistics
+
+## [2.0.103] - 2025-07-23
+
+### Fixed
+- **SCAN REPORTS**: Fixed timezone mismatch error when calculating scan duration
+- **SCAN REPORTS**: Properly handle scans with 0 files to process
+
+### Technical Details
+- Added timezone handling to convert naive datetimes to UTC-aware datetimes
+- Ensures both start_time and end_time are timezone-aware before calculating duration
+- Fixes "can't subtract offset-naive and offset-aware datetimes" error
+
+## [2.0.102] - 2025-07-23
+
+### Fixed
+- **SCAN REPORTS**: Fixed SQLAlchemy case() syntax error preventing scan report creation
+
+### Technical Details
+- Updated case() function calls to use positional arguments instead of list of tuples
+- Changed from `case([(condition, value)], else_=0)` to `case((condition, value), else_=0)`
+
+## [2.0.101] - 2025-07-23
+
+### Fixed
+- **AUTO-REFRESH**: Fixed scan completion auto-refresh not working due to phase name mismatch
+- **SCAN REPORTS**: Fixed missing scan reports for scans that complete with 0 files to process
+
+### Technical Details
+- Frontend was checking for phase='complete' but backend returns phase='completed'
+- Added scan report generation for empty scans that complete immediately
+- Scan completion now properly triggers page reload after 2 seconds
+
+
+## [2.0.100] - 2025-07-23
+
+### Fixed
+- **SCAN SERVICE**: Fixed NameError for undefined scan_state_id variable in sequential scan
+- **SCAN REPORTS**: Scans now properly complete and generate reports
+
+### Technical Details
+- Fixed scan_state_id not being passed to _sequential_scan and _parallel_scan methods
+- Both scan methods now receive scan_state_id as a parameter
+
+## [2.0.99] - 2025-07-23
+
+### Fixed
+- **DATABASE INITIALIZATION**: Fixed "table already exists" errors when running with multiple workers
+- **STARTUP**: Improved database table creation to handle concurrent worker initialization gracefully
+
+### Technical Details
+- Modified create_tables() to check for existing tables before creation
+- Added proper exception handling for concurrent table creation attempts
+- Application no longer fails when tables already exist
+
+## [2.0.98] - 2025-07-23
+
+### Added
+- **SCAN REPORTS**: New scan reports page under System section in sidebar
+  - View history of all scan operations with detailed statistics
+  - Filter by scan type (full scan, rescan, deep scan, cleanup, file changes)
+  - Filter by status (completed, running, error, cancelled)
+  - Export reports as JSON for data analysis
+  - Export reports as PDF for compliance/management reporting
+  - Shows duration, files processed, issues found for each scan
+- **SCAN REPORTS API**: New API endpoints for scan reports
+  - GET /api/scan-reports - List all scan reports with pagination
+  - GET /api/scan-reports/<report_id> - Get detailed report
+  - GET /api/scan-reports/<report_id>/export - Export as JSON
+  - GET /api/scan-reports/<report_id>/pdf - Export as PDF
+  - GET /api/scan-reports/latest - Get latest report for each scan type
+
+### Fixed
+- **MANUAL RESCAN**: Fixed progress bar getting stuck at 100% when rescanning selected files
+- **DEEP SCAN**: Fixed progress bar getting stuck at 100% when deep scanning selected files
+- **AUTO-REFRESH**: Page now properly refreshes after manual rescan and deep scan complete, matching behavior of other scan types
+- **CLEANUP PROGRESS**: Fixed cleanup orphan progress bar not appearing automatically when operation starts
+- **FILE CHANGES PROGRESS**: Fixed file changes check progress bar not appearing automatically
+
+### Technical Details
+- Added new ScanReport model to track scan history and statistics
+- Created reports_routes.py blueprint for scan reports functionality
+- Updated rescanSelected() and deepScanSelected() functions to properly reset files and start tracked scan operations
+- Changed from using non-existent file_paths parameter to proper directory-based scanning
+- Both manual rescans and deep scans now use the 'scan' operation type to trigger auto-refresh on completion
+- Deep scans use force_rescan=true to ensure thorough re-analysis
+- Fixed cleanup-orphaned and file-changes endpoints to return 'status': 'started' for proper progress bar display
+- Integrated automatic scan report generation for all operation types (scan, cleanup, file changes)
+- Reports include duration tracking, file statistics, and error information
+- PDF export supports both reportlab library and fallback HTML format
+
+## [2.0.97] - 2025-07-23
+
+### Added
+- **OPENAPI/SWAGGER**: Added interactive API documentation using flask-restx
+- **API DOCS**: Swagger UI now available at `/api/v1/docs` with "Try it out" functionality
+- **API VERSIONING**: All API endpoints now under `/api/v1/` namespace
+
+### Changed
+- **API DOCUMENTATION**: `/api-docs` now redirects to Swagger UI (falls back to old docs if flask-restx not installed)
+
+### Technical Details
+- Added flask-restx==1.3.0 to requirements.txt
+- Created comprehensive OpenAPI models for all API endpoints
+- Swagger UI includes all endpoints with proper request/response documentation
+- Interactive testing available directly from the documentation page
+
+## [2.0.96] - 2025-07-23
+
+### Fixed
+- **PROGRESS DISPLAY**: Progress messages now show current file and ETA like in version 2.0.53 for ALL scan types
+- **MEDIA SCAN**: Progress bar now shows current file and ETA during corruption scanning
+- **FILE CHANGES**: Progress bar now updates dynamically during file processing  
+- **CLEANUP OPERATION**: Progress bar now shows current file being checked with ETA
+
+### Technical Details
+- Added ProgressTracker usage to both scan service and maintenance service
+- Progress messages now follow format: "Phase X of Y: Action N files - current_file - ETA: Xm Ys"
+- All operations (media scan, cleanup, file changes) now show real-time progress with ETA calculations
+- Both sequential and parallel scan modes properly update progress messages
+
+## [2.0.95] - 2025-07-23
+
+### Fixed
+- **FILE CHANGES SCAN**: Fixed stuck scan showing 0 files processed by optimizing database queries
+- **PERFORMANCE**: Replaced slow offset-based pagination with ID-based pagination for million+ file scans
+- **PROGRESS PERSISTENCE**: Progress now saved every 5 files to prevent data loss on interruption
+- **ERROR RESILIENCE**: Added per-file error handling to continue processing even if individual files fail
+
+### Technical Details
+- Changed from `query.offset().limit()` to `query.filter(id > last_id).limit()` for O(1) vs O(n) performance
+- Reduced batch size from 1000 to 100 for more responsive progress updates
+- Progress committed to database every 5 files (was every 100)
+- Added try/catch around individual file processing to prevent single file errors from stopping the scan
+- Added batch-end commits to ensure progress is saved
+- Added session recovery on commit failures
+
+## [2.0.94] - 2025-07-23
+
+### Fixed
+- **VERSION**: Removed hardcoded version from Dockerfile to prevent version mismatches
+- **LOGGING**: Fixed console logging in Docker by adding PYTHONUNBUFFERED=1 and gunicorn logging flags
+- **FILE CHANGES**: Confirmed stuck file changes warnings on startup are expected behavior
+
+### Added
+- **VERSION MANAGEMENT**: Created update_version.py script for easy version updates
+- **SINGLE SOURCE OF TRUTH**: version.py now contains the authoritative version number
+
+### Technical Details
+- Removed APP_VERSION from Dockerfile - version.py is now the single source of truth
+- Added `--access-logfile -` and `--error-logfile -` to gunicorn to ensure logs go to stdout/stderr
+- Added `PYTHONUNBUFFERED=1` environment variable to prevent Python from buffering output
+- Version can still be overridden via APP_VERSION env var for CI/CD if needed
+
+## [2.0.93] - 2025-07-22
+
+### Fixed
+- **VERSION NUMBER**: Updated version.py to correct version number
+
+## [2.0.92] - 2025-07-22
+
+### Fixed
+- **FILE CHANGES CHECK**: Fixed timezone comparison error that prevented file changes scan from working
+- **PROGRESS BARS**: Confirmed progress bars are properly implemented for both orphan cleanup and file changes operations
+- **ORPHAN CLEANUP PROGRESS**: Fixed phase 2 progress to show actual percentage based on files_processed/total_files instead of stuck at 90%
+- **SCAN COMPLETION**: Page now auto-refreshes after scan completes instead of showing 100% indefinitely
+- **CANCELLED OPERATIONS**: Progress bar now hides immediately when operations are cancelled
+- **PROGRESS BAR VISIBILITY**: Fixed progress bar not appearing when starting operations without page refresh
+- **FILE CHANGES PROGRESS**: Fixed phase 2 progress to show actual percentage based on files_processed/total_files instead of stuck at 5%
+
+### Technical Details
+- Added timezone-aware datetime handling in MaintenanceService._check_file_changes()
+- Converts naive datetime objects to UTC timezone-aware before comparison
+- Fixed cleanup phase weights from 2 phases [0.9, 0.1] to proper 3 phases [0.1, 0.8, 0.1]
+- Fixed phase 1 message to correctly say "Phase 1 of 3" instead of "Phase 1 of 2"
+- Progress bars already exist in UI and update dynamically based on operation type
+- Added auto-refresh with 2-second delay after scan completion
+- Fixed scan service API response to include 'status': 'started' field
+- Improved cancelled operation handling to immediately hide progress bar
+- Fixed file changes phase initialization to properly set phase_current and phase_total values
+
+## [2.0.91] - 2025-07-22
+
+### Fixed
+- **DATABASE**: Made cancel_requested field handling more robust - works even if column exists but SQLAlchemy doesn't see it
+- **COMPATIBILITY**: Added defensive programming for cancel_requested field access
+- **MIGRATION**: Better handling of duplicate column errors
+
+### Technical Details
+- Uses getattr() for safe field access
+- Gracefully handles missing cancel_requested attributes
+- Migration logs info instead of error for existing columns
+
+## [2.0.90] - 2025-07-22
+
+### Fixed
+- **UI**: Fixed progress bar showing 67% for completed scans instead of 100%
+- **DATABASE**: Added automatic migration on startup for missing cancel_requested columns
+- **VERSION**: Fixed Docker image not showing correct version number
+
+### Added
+- Automatic database migration runs on every startup to add missing columns
+- Better handling of completed scan states in UI progress calculation
+
+## [2.0.89] - 2025-07-22
+
+### Fixed - CRITICAL ARCHITECTURAL FIXES
+- **DATABASE SCHEMA**: Added missing `cancel_requested` field to CleanupState and FileChangesState models
+- **ID TYPE FIX**: Fixed FileChangesState lookup using integer ID instead of UUID string
+- **STATE MANAGEMENT**: Fixed ScanState.get_or_create() creating new records instead of returning existing ones
+- **UI UPDATES**: Fixed scan status endpoint to properly retrieve active and completed scans
+- **ROOT CAUSE**: Resolved fundamental issues that prevented app from working properly since v2.0.53
+
+### Added
+- Database migration tool: `tools/add_cancel_requested_columns.py` to update existing databases
+- Better scan state management logic that handles both active and completed scans
+- Improved error handling for maintenance operations
+
+### Technical Details
+- MaintenanceService now correctly passes UUID strings for file changes operations
+- Scan status endpoint no longer creates spurious new scan records
+- UI polling now receives actual scan progress instead of empty states
+
+## [2.0.88] - 2025-07-22
+
+### Fixed
+- **CRITICAL**: Fixed MaintenanceService initialization error - missing database_uri parameter
+- **CRITICAL**: Fixed "File changes record not found" errors by correcting query method from .get() to .filter_by()
+- **UI UPDATES**: Enhanced scan progress logging and database session handling for real-time UI updates
+- Improved scan status endpoint with better database session management using expunge_all()
+- Added comprehensive progress logging every 10 files during scanning for better debugging
+- Changed debug logging to INFO level for scan status visibility in production
+
+## [2.0.87] - 2025-07-22
+
+### Fixed
+- **CRITICAL**: Completely fixed SQLAlchemy DetachedInstanceError by capturing scan ID before threading
+- Fixed remaining DetachedInstanceError when accessing scan_state.id in worker thread
+- Implemented proper scan state object retrieval within worker thread context
+- Worker thread now gets fresh ScanState object using db.session.get() instead of detached object
+- Enhanced thread safety by capturing scan_state_id before thread creation
+- All database operations in worker thread now use fresh session-bound objects
+
+## [2.0.86] - 2025-07-22
+
+### Fixed
+- **CRITICAL**: Fixed SQLAlchemy DetachedInstanceError in multi-threaded scan operations
+- Replaced ORM-based updates with direct SQL updates to avoid session binding issues
+- Implemented thread-safe database operations using raw SQL queries
+- Fixed "Instance is not bound to a Session" errors in worker threads
+- Enhanced scan completion process to work correctly across thread boundaries
+- Added proper error handling for detached database instances
+
+## [2.0.85] - 2025-07-22
+
+### Fixed
+- **CRITICAL**: Fixed database session threading issue causing scan state updates to not persist
+- Implemented proper worker-database-API separation with fresh database reads
+- Fixed API to bypass session cache and force fresh database queries
+- Enhanced database session management for multi-threaded scan operations
+- Added comprehensive logging to scan completion process
+- Improved error handling for database commits in threaded context
+
+## [2.0.84] - 2025-07-22
+
+### Fixed
+- **CRITICAL**: Fixed edge case where scans with 0 files would show 'discovering' instead of 'completed'
+- Added immediate completion logic for scans with no files to process
+- Added database refresh in scan-status API to prevent stale state issues
+- Enhanced debug logging to track scan state transitions in API endpoints
+- Fixed syntax errors in debug logging statements
+
+## [2.0.83] - 2025-07-22
+
+### Fixed
+- Fixed scan progress tracking getting stuck in 'discovering' phase
+- Improved database state synchronization between scan service and UI
+- Enhanced scan state transition logging for better debugging
+- Fixed scan phase not properly updating from 'adding' to 'scanning'
+- Improved error handling and transaction management in scan progress updates
+- Simplified scan-status API logic to prevent stale state reporting
+- Enhanced ScanState model with better phase transition logic and error handling
+- Added comprehensive logging for scan state debugging
+- Improved database transaction safety in progress updates
+
+## [2.0.82] - 2025-07-22
+
+### Fixed
+- Fixed scan progress tracking getting stuck in 'discovering' phase
+- Improved database state synchronization between scan service and UI
+- Enhanced scan state transition logging for better debugging
+- Fixed scan phase not properly updating from 'adding' to 'scanning'
+- Improved error handling and transaction management in scan progress updates
+- Simplified scan-status API logic to prevent stale state reporting  
+- **Critical: Parameter Order Bug**: Fixed TypeError in file discovery where set was passed as max_files parameter
+  - Error: `'>' not supported between instances of 'int' and 'set'`
+  - Root cause: Wrong parameter order in discover_media_files() call (line 164)
+  - Solution: Used explicit keyword arguments to prevent parameter confusion
+
+## [2.0.81] - 2025-07-22
+
+### Fixed
+- **ScanResult Model**: Fixed `mime_type` parameter error by changing to `file_type` in scan_service.py:380
+- **Progress Tracking**: Restored missing progress callbacks in file discovery phase (lines 155-159 in scan_service.py)
+- **Current File Display**: Fixed current_file parameter not being passed in both sequential and parallel scan methods
+- **Critical: Infinite Loop Bug**: Fixed infinite loop in file discovery/adding phase that was processing 800k+ duplicate files
+  - Replaced problematic `DatabaseExistenceChecker` with efficient set-based lookup (lines 138-154)
+  - Added safety checks to prevent infinite loops when >95% duplicates detected (lines 187-191)
+  - Added duplicate tracking and early warnings (lines 180, 196-197, 204-208)
+
+### Changed
+- **Docker Build**: Updated Docker image build process and version management
+- **Version Management**: Incremented version number to 2.0.81 for critical bug fixes
+
+## [2.0.80] - 2025-07-22
+
+### Changed
+- **Docker Build**: Updated Docker image build process and version management
+- **Version Management**: Incremented version number for new build
+- **Test Suite**: Comprehensive test suite executed with 68 tests passing, 2 skipped
+
+## [2.0.79] - 2025-07-22
+
+### Added
+- **Complete Scan Analysis Documentation**: Added comprehensive documentation for all three scan types
+  - Regular Scan: 3-phase optimized scanning (discover → add → check) with new file discovery optimization
+  - Orphaned Files: 3-phase cleanup (scan → check → delete) that now actually removes database entries
+  - Changed Files: 3-phase verification (start → check → rescan) for detecting and rescanning modified files
+
+### Fixed
+- **Critical Scan Performance Issue**: Fixed scan operations getting stuck at "Discovering files..." phase
+  - Root cause: Loading 1M+ existing file paths into memory caused application hang
+  - Solution: Implemented `DatabaseExistenceChecker` class that queries database on-demand during discovery
+  - Discovery phase now properly skips existing files without loading all paths into memory
+  - Added caching to prevent repeated database queries for the same file
+  - Added progress logging to track discovery and add phases
+  - Scan operations now complete successfully even with large databases (1M+ records)
+- **Flask-Limiter Log Spam**: Fixed critical log spam issue causing thousands of ERROR messages per second
+  - Removed default rate limits from limiter configuration to prevent errors when `key_func` returns `None` for internal requests
+  - Added `@exempt_from_rate_limit` decorator to frequently polled status endpoints:
+    - `/api/scan-status` (polled every 1 second during operations)
+    - `/api/cleanup-status` (polled every 1 second during cleanup)
+    - `/api/file-changes-status` (polled every 1 second during file change checks)
+  - Resolves "Skipping limit: 200 per 1 day. Empty value found in parameters" error spam
+- **Excessive INFO Logging**: Reduced log noise from frequently called endpoints
+  - Removed verbose stats logging from `/api/stats` endpoint (called every 30 seconds)
+  - Removed health check logging from `/health` endpoint (frequently called by monitoring systems)
+  - Eliminates repetitive INFO messages like "Stats requested - Total: X, Completed: Y..."
+
+### Changed
+- **Docker Build**: Updated Docker image build process and version management
+- **Version Management**: Incremented to version 2.0.79
+
+## [2.0.78] - 2025-07-22
+
+### Fixed
+- **Progress Bar 0% Issue**: Fixed scan progress bar showing 0% during active scans
+  - Added missing `phase_number`, `total_phases`, `phase_current`, `phase_total` fields to `/api/scan-status` response
+  - Frontend now properly calculates progress percentage based on 3-phase system with 33% per phase:
+    - **Phase 1 (0-33%)**: Discovery - Finding new files not in database
+    - **Phase 2 (33-66%)**: Adding - Adding new files with basic metadata 
+    - **Phase 3 (66-100%)**: Scanning - Integrity checking based on actual files to scan
+  - Progress bar now shows meaningful percentages during all scan phases
+
+- **"Mark as Good" UI Count Bug**: Fixed UI statistics not updating after marking single file as good
+  - Added missing `await this.stats.updateStats()` call in `markFileAsGood()` method in app.js:1314
+  - UI dashboard counts now immediately reflect changes when marking files as good
+  - Bulk "mark as good" operation already worked correctly, now single-file operation matches
+
+- **Scan Performance Optimization**: Implemented optimized 3-phase scan system
+  - **Phase 1 (Discovery)**: Now only discovers NEW files not already in database, skipping known files
+  - **Phase 2 (Adding)**: Adds new files to database with basic metadata before integrity checking
+  - **Phase 3 (Scanning)**: Only performs corruption checks on new/changed files (unless force_rescan=true)
+  - Dramatically improves scan performance for large libraries with few changes between scans
+
+- **Orphaned Files Cleanup Now Deletes Database Entries**: Changed orphaned files scan behavior to actually remove database entries
+  - **Phase 1**: Scanning database entries for all known files
+  - **Phase 2**: Checking filesystem existence for each database entry
+  - **Phase 3**: **NEW** - Deleting orphaned database entries in batches of 50 for performance
+  - Updated progress tracking to show 3 phases instead of 2 (33.3% each phase)
+  - Completion message now shows "Deleted X orphaned database entries" instead of "Found X orphaned entries"
+  - **BREAKING CHANGE**: Previously only marked entries as `file_exists = False`, now actually removes them from database
+
+### Changed
+- **Docker Build**: Updated Docker image build process and version bumping
+- **Version Management**: Incremented version number for new build
+- **Scan Service**: Enhanced `ScanState.update_progress()` to support `phase` and `current_file` parameters
+- **Database Schema**: Improved scan progress tracking with proper phase management
+
+## [2.0.77] - 2025-07-21
+
+### Fixed
+- **Application Startup Failure**: Fixed KeyError in rate limiting exemption that prevented app from starting
+  - Removed problematic blueprint function exemption that caused startup failures
+  - Application now relies on IP-based exemption for internal Docker requests
+  - Resolves "Worker failed to boot" errors in gunicorn
+
+## [2.0.76] - 2025-07-21
+
+### Fixed
+- **Rate Limiting Issues on Internal Requests**: Fixed rate limiting blocking internal Docker container requests
+  - Fixed rate limit key function to properly exempt internal Docker IPs (172.x.x.x networks)
+  - Now returns `None` for exempt IPs instead of prefixed keys, which properly bypasses rate limiting
+  - Increased default rate limit from 50 to 100 per hour for external requests
+  - Explicitly exempted `/api/scan-status` endpoint from all rate limiting
+  - 
+  - Resolves "50 per 1 hour exceeded" errors from frontend polling every 1 second
+
+- **Scan Status API Not Showing Progress**: Fixed scan progress not updating in API responses
+  - Modified `/api/scan-status` to prioritize database scan state values over service memory
+  - Added immediate database update when total files are discovered during scan initialization
+  - Fixed scan service to update both internal progress AND database scan state
+  - API now shows accurate current/total progress values during active scans
+  - Resolves scan appearing "idle" with 0 total items while actually processing files
+
+## [2.0.75] - 2025-07-21
+
+### Fixed
+- **Directory Parsing Bug in ScanService**: Fixed critical bug where directory names were split into individual characters
+  - ScanService was passing single directory strings to `discover_media_files()` which expects a list
+  - This caused "movies" to be interpreted as ['m', 'o', 'v', 'i', 'e', 's'] individual directories
+  - Now passes all directories as a single list for efficient parallel discovery
+  - Resolves "Directory does not exist" warnings for each character
+
+- **Flask Application Context in ScanService Threads**: Fixed "Working outside of application context" errors
+  - ScanService threads now properly capture and use Flask application context
+  - Added `with app.app_context():` wrapper in all scan thread functions
+  - Fixes database access errors in scan operations and progress tracking
+  - Resolves thread-based scan failures and incomplete scan states
+
+## [2.0.74] - 2025-07-21
+
+### Fixed
+- **Scan Progress Not Updating in UI**: Fixed scan status API endpoint to use unified ScanService progress tracking
+  - Updated `/api/scan-status` endpoint to read from ScanService instead of outdated global variables
+  - Unified all scan routes (`/scan-file`, `/scan-all`, `/scan-parallel`, `/cancel-scan`, `/recover-stuck-scan`) to use ScanService
+  - Removed duplicate progress tracking systems that caused status inconsistencies
+  - Scan progress now properly updates in real-time during active operations
+  - Resolves issue where scan appeared stuck at old progress values
+
+## [2.0.73] - 2025-07-21
+
+### Fixed
+- **Static Asset Version Mismatch**: Updated HTML template to reference correct static asset versions
+  - Fixed CSS and JavaScript version references from 2.0.40 to 2.0.72
+  - Resolves browser compatibility issues between frontend and backend
+  - Ensures proper cache busting for updated assets
+
+## [2.0.72] - 2025-07-21
+
+### Fixed
+- **Rate Limiting 429 Errors**: Fixed 429 "Too Many Requests" errors on status endpoints
+  - Exempted /api/scan-status from rate limiting (polled every 1 second for monitoring)
+  - Exempted /api/stats from rate limiting (frequently accessed for dashboard updates)
+  - Status monitoring endpoints now work without rate limit restrictions
+  - Resolved app initialization failures due to aggressive polling
+
+### Added
+- **Database Schema Fix Tool**: New comprehensive repair tool for database initialization issues
+  - Created `tools/fix_database_schema.py` for fixing "no such table" errors after upgrades
+  - Added detailed troubleshooting section to README with common solutions
+  - Updated tools documentation with usage instructions for database repairs
+  - Provides both automated script and manual one-liner solutions
+
+### Documentation
+- **Enhanced README**: Added comprehensive troubleshooting section covering:
+  - Database errors after version updates with step-by-step solutions
+  - Rate limiting issues and upgrade instructions
+  - Container startup problems and diagnostics
+  - Performance optimization tips for large media libraries
+- **Updated Tools README**: Documented new database schema fix tool with usage examples
+
+## [2.0.71] - 2025-07-21
+
+### Fixed
+- **Warnings Filter Exclusion Issue**: Fixed "Warnings Only" filter showing files marked as good
+  - Updated warnings filter logic to exclude files with marked_as_good=True
+  - Now consistent with stats service and export service filtering logic
+  - Files marked as good are properly excluded from warnings-only view
+
+## [2.0.70] - 2025-07-21
+
+### Fixed
+- **Additional UI Fixes**: Fixed remaining UI functionality issues
+  - Fixed "Warnings Only" filter not working by adding has_warnings parameter support
+  - Fixed scan reading directories as individual characters by correcting media_checker API calls
+  - Improved directory validation and error handling in scan operations
+
+## [2.0.69] - 2025-07-21
+
+### Fixed
+- **UI Scan Results Filters**: Fixed non-working filter buttons and search functionality
+  - Frontend filter parameters now correctly map to backend API parameters (is_corrupted, scan_status)
+  - Added missing search functionality to backend API with case-insensitive file path filtering
+  - "Corrupted Only", "Healthy Only", "Warnings Only", and "All Files" filters now work properly
+  - Fixed search functionality to properly handle empty queries and trim whitespace
+- **UI Table Sorting**: Fixed broken column sorting functionality
+  - Added comprehensive sorting support to backend API for all table columns
+  - Column headers now properly sort by: Status, File Path, Size, Type, Tool, Details, Scan Date
+  - Supports both ascending and descending sort orders with visual feedback
+- **UI Scan Details Button**: Fixed missing Details button for scan results
+  - Backend API now returns all necessary fields: corruption_details, scan_output, error_message, warning_details
+  - Details button now shows for any file with scan output, error messages, or warning details
+  - Enhanced scan details modal to display all available information sections
+- **Additional UI Fixes**: Fixed remaining UI functionality issues
+  - Fixed "Warnings Only" filter not working by adding has_warnings parameter support
+  - Fixed scan reading directories as individual characters by correcting media_checker API calls
+  - Improved directory validation and error handling in scan operations
+
+## [2.0.68] - 2025-07-21
+
+### Fixed
+- **Scan Configuration**: Fixed "No directories configured for scanning" error
+  - Scan routes now properly fall back to SCAN_PATHS environment variable when no database configuration exists
+  - Added informative error message explaining configuration options
+- **Performance**: Reduced unnecessary API polling
+  - Stats refresh interval increased from 5 seconds to 30 seconds to reduce server load
+  - Eliminates log spam from excessive /api/stats requests
+- **Flask Application Context**: Fixed "Working outside of application context" errors in threaded operations
+  - Fixed scan_routes.py: scan_all, scan_file, and scan_parallel functions now properly capture and pass Flask app context to background threads
+  - Fixed maintenance_routes.py: cleanup_orphaned_async and check_file_changes_async functions now properly capture and pass Flask app context to background threads
+  - Resolves RuntimeError exceptions when running scan operations and maintenance tasks
+- **UI Scan Results Filters**: Fixed non-working filter buttons and search functionality
+  - Frontend filter parameters now correctly map to backend API parameters (is_corrupted, scan_status)
+  - Added missing search functionality to backend API with case-insensitive file path filtering
+  - "Corrupted Only", "Healthy Only", "Warnings Only", and "All Files" filters now work properly
+  - Fixed search functionality to properly handle empty queries and trim whitespace
+- **UI Table Sorting**: Fixed broken column sorting functionality
+  - Added comprehensive sorting support to backend API for all table columns
+  - Column headers now properly sort by: Status, File Path, Size, Type, Tool, Details, Scan Date
+  - Supports both ascending and descending sort orders with visual feedback
+- **UI Scan Details Button**: Fixed missing Details button for scan results
+  - Backend API now returns all necessary fields: corruption_details, scan_output, error_message, warning_details
+  - Details button now shows for any file with scan output, error messages, or warning details
+  - Enhanced scan details modal to display all available information sections
+
+## [2.0.67] - 2025-07-21
+
+### Fixed
+- **Production Readiness**: Complete audit and fixes for production deployment
+  - All scan operations now fully functional (Start Scan, Cleanup Orphans, File Changes)
+  - Removed all placeholder implementations and empty function stubs
+  - Enhanced Docker configuration with comprehensive environment variable support
+  - Created .env.example with complete configuration documentation
+  - Updated README.md with improved deployment instructions
+- **Scan Configuration**: Fixed "No directories configured for scanning" error
+  - Scan routes now properly fall back to SCAN_PATHS environment variable when no database configuration exists
+  - Added informative error message explaining configuration options
+- **Performance**: Reduced unnecessary API polling
+  - Stats refresh interval increased from 5 seconds to 30 seconds to reduce server load
+  - Eliminates log spam from excessive /api/stats requests
+
+## [2.0.66] - 2025-01-21
+
+### Fixed
+- **Database Model Issues**: Fixed TypeError preventing cleanup and file-changes operations
+  - Removed invalid `total_phases` parameter from CleanupState and FileChangesState constructors
+  - Fixed maintenance_routes.py constructor calls
+  - Fixed maintenance_service.py constructor calls
+- **Missing ScanState Methods**: Fixed AttributeError in scan operations
+  - Added missing `update_progress(files_processed, total_files)` method to ScanState model
+  - Added missing `complete_scan()` method to ScanState model
+  - Fixed scan_routes.py incorrect attribute access (`scan_state.status` → `scan_state.phase`)
+- **System Statistics UI**: Fixed missing information in System Statistics page
+  - Updated JavaScript to use correct API response structure (`database` instead of `database_stats`)
+  - Added comprehensive system information display including version, timezone, features
+  - Enhanced database statistics display with completed files, error files, and marked files
+  - Added scan performance metrics with days since scan and scan history
+  - Fixed file system statistics display
+- **System Statistics Version**: Fixed incorrect version display in System Statistics
+  - Updated `/api/system-info` endpoint to import version from version.py instead of environment variable
+  - System Statistics now shows the correct version matching version.py (2.0.66)
+- **Scan Operations Fixed**: Resolved multiple critical scan operation failures
+  - Fixed `validate_json_input` decorator rejecting empty JSON objects `{}` for optional-only schemas
+  - This was preventing 'Start Scan' button from working (400 error: "No JSON data provided")
+  - Fixed 'Cleanup Orphans' operation that was running but doing nothing due to placeholder implementation
+  - Fixed 'File Change Scan' operation that was also a placeholder implementation
+  - All scan operations now properly use the MaintenanceService for actual functionality
+- **Production Security**: Removed insecure hardcoded SECRET_KEY fallback
+  - Application now requires SECRET_KEY environment variable to start
+  - Prevents potential security vulnerability from default 'change-me-in-production' key
+- **Database Optimization**: Added missing `/api/vacuum` endpoint for SQLite optimization
+  - Implements VACUUM operation with size reduction reporting
+  - Completes the maintenance API suite for database management
+- **Docker Configuration**: Updated docker-compose.yml and Dockerfile for production deployment
+  - Added required SECRET_KEY environment variable configuration
+  - Updated Docker image tag from `:latest` to `:2.0` for version consistency
+  - Fixed health check endpoint from `/api/stats` to `/health`
+  - Added explicit DATABASE_URL configuration
+  - Updated Dockerfile version from 2.0.59 to 2.0.66
+  - Made all critical settings configurable via docker-compose environment variables
+  - Created .env.example file with comprehensive configuration documentation
+  - Updated README.md with improved deployment instructions
+
+## [2.0.65] - 2025-01-21
+
+### Fixed
+- **Scan Routes Indentation**: Fixed critical Python syntax errors in scan_routes.py
+  - Corrected try/except block indentation that was preventing scans from running
+  - Fixed improper indentation after if statements
+  - Removed unused imports and variables
+  - All scan types (single, full, parallel) now execute properly
+
+## [2.0.64] - 2025-01-21
+
+### Fixed
+- **Critical Scanning Issues**: Fixed multiple issues preventing scans from working
+  - Fixed Flask-Limiter "Empty value found in parameters" errors by properly handling exempt keys
+  - Changed rate limit key function to return a key instead of None for exempt IPs
+  - Added `swallow_errors=True` to limiter configuration to prevent rate limit errors from breaking requests  
+  - 
+  - Fixed ScanConfiguration model to handle legacy database schema with required 'key' field
+  - Added backward compatibility fields when creating new scan configurations
+  - Fixed indentation issues in scan_routes.py that were causing syntax errors
+  - Properly aligned try/except blocks in both full scan and parallel scan functions
+  - Removed unused imports (datetime, timezone, time) and unused variable
+  - Scans now properly start and execute when triggered from the UI
+
+## [2.0.63] - 2025-01-21
+
+### Added
+- **Reset File Changes State Endpoint**: Added `/api/reset-file-changes-state` endpoint to force reset stuck file changes operations
+  - Similar to the existing cleanup reset endpoint
+  - Allows users to recover from stuck file changes scans
+
+### Fixed
+- **Stuck Operations on App Restart**: Fixed issue where file changes and cleanup operations would remain stuck after app restart
+  - Added `cleanup_stuck_operations()` function that runs on startup
+  - Automatically marks any active file changes or cleanup operations as failed when app starts
+  - Prevents operations from appearing stuck indefinitely after crashes or restarts
+  - Logs warnings for any operations that were marked as failed
+
+## [2.0.62] - 2025-01-21
+
+### Fixed
+- **Critical AttributeError in scan endpoints**: Fixed 'set' object has no attribute 'limit' error
+  - Flask-Limiter stores itself as 'flask-limiter' not 'limiter' in app.extensions
+  - Fixed get_limiter() function in all route files to use correct key
+  - All scan endpoints now work correctly with rate limiting
+- **Added missing rate limits**: Added rate limiting to remaining POST endpoints
+  - cancel-scan: 10 per minute
+  - reset-stuck-scans: 5 per minute
+  - reset-for-rescan: 5 per minute
+  - recover-stuck-scan: 5 per minute
+
+## [2.0.61] - 2025-01-21
+
+### Fixed
+- **Rate Limiting Scope**: Fixed rate limiting to only apply to external requests
+  - Internal requests from localhost and Docker networks (172.x, 10.x, 192.168.x) are now exempt
+  - Prevents the app from rate limiting its own frontend when polling status endpoints
+  - External rate limits remain at 200/day, 50/hour for security
+  - Fixes "ratelimit exceeded" errors seen in production logs
+
+## [2.0.60] - 2025-01-21
+
+### Fixed
+- **Critical Application Startup Errors**: Fixed multiple issues preventing app from starting since version 2.0.55
+  - Fixed KeyError when applying rate limits to blueprint view functions - removed broken implementation that tried to access view functions before blueprint registration
+  - Fixed AttributeError with MediaScheduler - changed from scheduler.start() to scheduler.init_app(app)
+  - Rate limits are now applied directly as decorators on route functions instead of after blueprint registration
+  - Application now starts successfully and all API endpoints are functional
+  - Verified locally that the app starts without errors and responds to API requests
+
+## [2.0.59] - 2025-01-21
+
+### Changed
+- **UI Consolidation**: Simplified to single modern UI template
+  - Removed index_modern.html - now using index.html as the single UI template
+  - Updated all references to use standard index.html
+  - Cleaner project structure with no legacy UI code
+  - Modern UI is now the default and only interface
+
+### Fixed
+- **Docker Build**: Corrected Docker image to include modern UI as default
+  - Previous 2.0.58 build was using old UI template
+  - Rebuilt with proper modern UI integration
+
+## [2.0.58] - 2025-01-21
+
+### Fixed
+- **Critical Production Fix**: Fixed application startup errors
+  - Fixed KeyError when applying rate limits to blueprint view functions
+  - Moved rate limit initialization to a separate module with proper error handling
+  - Fixed scheduler initialization - replaced scheduler.start() with scheduler.init_app(app)
+  - Fixed AttributeError in create_state_dict for missing 'total_files' attribute
+  - Application now starts correctly without crashing
+  - Verified Docker container starts and API endpoints respond correctly
+
+## [2.0.57] - 2025-01-21
+
+### Fixed
+- **Critical Production Hotfix**: Re-deployed with Flask-Limiter fix
+  - Previous deployment (2.0.56) included the fix but needed fresh build
+  - Resolves application startup failure in production
+
+## [2.0.56] - 2025-01-21
+
+### Fixed
+- **Critical Production Issue**: Fixed Flask-Limiter initialization error that prevented application startup
+  - Removed invalid 'exempt' parameter from Limiter constructor
+  - Added @limiter.exempt decorator to health check endpoint
+  - Resolves TypeError that caused container restart loop
+
+### Added
+- **Force Rescan Functionality**: Implemented caching mechanism for scan results
+  - Added `force_rescan` parameter to scan methods to bypass cache
+  - Scan results are now cached in the database and reused when files haven't changed
+  - Cache checks file hash and modification time to detect changes
+  - Significantly improves performance for repeated scans of unchanged files
+
+- **Exclusion Patterns Support**: Added ability to exclude paths and file extensions from scanning
+  - Exclusions are loaded from `exclusions.json` file at application root
+  - Supports both path-based exclusions (e.g., `/excluded/path`) and extension-based exclusions (e.g., `.tmp`)
+  - Exclusions are automatically applied during file discovery phase
+  - Integrated with API endpoints and services
+
+- **Ignored Error Patterns**: Implemented error pattern filtering to reduce false positives
+  - Added `_check_ignored_patterns` method to filter known non-critical errors
+  - Patterns stored in database via IgnoredErrorPattern model
+  - Error outputs are checked against active patterns before marking files as corrupted
+  - Helps reduce false positives from known tool-specific warnings
+
+### Fixed
+- **Method Naming Consistency**: Fixed `discover_files` vs `discover_media_files` naming mismatch
+  - Renamed internal method from `discover_files` to `discover_media_files` for consistency
+  - Updated all call sites throughout the codebase
+  - Ensures compatibility with existing API contracts
+
+- **Model Consistency Issues**: Fixed inconsistencies between database models and API expectations
+  - Added missing fields to ScanResult: `error_message`, `media_info`, `file_exists`
+  - Updated ScanConfiguration to support both key-value and path-based structures for backward compatibility
+  - Added `created_at` field to IgnoredErrorPattern and ScanSchedule models
+  - Added `force_rescan` field to ScanSchedule model
+  - Added `directories` and `force_rescan` fields to ScanState model
+  - Implemented missing `ScanState.get_or_create()`, `start_scan()`, `cancel_scan()`, and `error_scan()` methods
+  - Added `total_files` property to ScanState for compatibility with utils.py
+- **Database Migrations**: Added comprehensive migrations to update existing databases with new fields
+  - All migrations preserve existing data and maintain backward compatibility
+  - Migrations run automatically on startup
+
+## [2.0.55] - 2025-01-20
+
+### Security Enhancements
+- **Fixed Critical Security Vulnerabilities**:
+  - **Path Traversal Protection**: Added comprehensive path validation to prevent directory traversal attacks in file scanning endpoints
+  - **Command Injection Prevention**: Replaced all unsafe subprocess calls with validated safe_subprocess_run wrapper
+  - **Input Validation**: Added JSON schema validation to all API endpoints with type checking and length limits
+  - **Rate Limiting**: Implemented rate limiting on all API endpoints (default: 200/day, 50/hour) with stricter limits on sensitive operations
+  - **CSRF Protection**: Added Flask-WTF CSRF protection (currently exempted for API endpoints pending token-based auth)
+  - **Audit Logging**: Added comprehensive security audit logging for all sensitive operations
+  
+- **New Security Module** (`pixelprobe/utils/security.py`):
+  - `validate_file_path()`: Validates file paths against allowed directories
+  - `validate_directory_path()`: Validates directory paths for safety
+  - `sanitize_filename()`: Removes dangerous characters from filenames
+  - `validate_command_args()`: Prevents command injection in subprocess calls
+  - `safe_subprocess_run()`: Secure wrapper for subprocess execution
+  - `AuditLogger`: Security event and action logging
+  - `validate_json_input()`: Decorator for input validation
+  
+- **Updated Dependencies**:
+  - Added Flask-Limiter==3.5.0 for rate limiting
+  - Added Flask-WTF==1.2.1 for CSRF protection
+
+### Major Architecture Overhaul
+- **Separation of Concerns**: 
+  - Broke down monolithic 2,500+ line app.py into modular components
+  - Created layered architecture with clear separation between API routes, business logic, and data access
+  
+- **New Directory Structure**:
+  - `api/` - Contains route modules organized by functionality:
+    - `scan_routes.py` - Scan-related endpoints
+    - `stats_routes.py` - Statistics endpoints  
+    - `admin_routes.py` - Admin/configuration endpoints
+    - `export_routes.py` - Export functionality endpoints
+    - `maintenance_routes.py` - Cleanup and file-changes operations
+  - `services/` - Business logic layer:
+    - `scan_service.py` - Scanning business logic
+    - `stats_service.py` - Statistics calculations
+    - `export_service.py` - Export functionality
+    - `monitor_service.py` - Monitoring and alerting
+  - `repositories/` - Data access layer:
+    - `base_repository.py` - Base repository pattern
+    - `scan_repository.py` - Database access for scans
+  - `models/` - Data models:
+    - `scan_models.py` - Scan-related models
+    - `stats_models.py` - Statistics models
+  - `utils/` - Shared utilities:
+    - `validators.py` - Input validation
+    - `decorators.py` - Common decorators
+    
+- **Benefits**:
+  - Improved testability with isolated components
+  - Clear separation of concerns following SOLID principles
+  - Easier parallel development without conflicts
+  - Simplified app.py focused only on initialization
+  - Better code organization and maintainability
+
+### Refactoring
+- **Eliminated Code Redundancy**:
+  - Created `utils.py` module with shared utilities:
+    - `ProgressTracker` class for unified progress calculation across all operations
+    - `log_operation_status()` for consistent operation logging
+    - `batch_process()` generator for consistent batch processing
+    - Common state manipulation functions (`mark_operation_complete`, `mark_operation_error`)
+  - Created `operation_handlers.py` with base classes for operations
+  - Refactored state models to use shared `create_state_dict()` function
+  - Replaced duplicate progress calculation code with centralized `ProgressTracker`
+  - Standardized error handling patterns with decorators
+  - Consolidated operation logging with `log_operation_status()`
+
+### Added
+- **Complete Audio Format Support**:
+  - Added support for all major audio formats (MP3, FLAC, WAV, AAC, OGG, Opus, WMA, etc.)
+  - Implemented audio-specific corruption detection using FFmpeg
+  - Added FLAC-specific validation for lossless integrity checking
+  - Deep scan mode for audio files to detect timestamp issues and packet errors
+  
+- **Expanded Video Format Support**:
+  - Added HEVC/H.265 support (.hevc, .h265 extensions)
+  - Added professional formats: ProRes (.prores), DNxHD/DNxHR (.dnxhd, .dnxhr), MXF (.mxf)
+  - Added broadcast formats: AVCHD (.mts, .m2ts, .avchd)
+  - Added legacy and additional formats: MPEG (.mpg, .mpeg, .vob), RealMedia (.rm, .rmvb), and more
+  
+- **Enhanced Image Format Support**:
+  - Added Apple HEIC/HEIF support (.heic, .heif)
+  - Added comprehensive RAW format support:
+    - Canon (CR2, CR3), Nikon (NEF, NRW), Sony (ARW, SRF, SR2)
+    - Adobe DNG, Olympus ORF, Panasonic RW2, Pentax PEF/PTX
+    - Fujifilm RAF, Sigma X3F, Kodak DCR/KDC, and more
+  - Added professional formats: PSD, OpenEXR, HDR, SVG
+  - Added scientific/specialized formats: FITS, Netpbm formats
+
+### Performance Optimizations
+- **File Discovery Performance**: 
+  - Replaced os.walk() with os.scandir() for 3-5x faster directory traversal
+  - Reduced file stat() calls by caching metadata during discovery
+  - Files are now discovered with creation time pre-fetched for efficient sorting
+  
+- **Database Operations**:
+  - Enhanced database write queue to process up to 100 items in a single transaction
+  - Improved batch processing to group similar operations together
+  - Added connection pooling with pool_size=10 and max_overflow=20 for better concurrency
+  - Optimized SQLite pragmas for better write performance
+  
+- **Hash Calculation**:
+  - Increased hash calculation chunk size from 4KB to 1MB (250x improvement in I/O operations)
+  - Use 4MB chunks for files larger than 1GB
+  - Added throughput metrics (MB/s) to hash progress logging
+  - Reduced system calls significantly for large file processing
+
 
 ## [2.0.53] - 2025-01-20
 
