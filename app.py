@@ -582,9 +582,7 @@ def cleanup_stuck_scans():
 def index():
     logger.info("Main page requested")
     try:
-        # Use modern template if USE_MODERN_UI env var is set
-        template = 'index_modern.html' if os.environ.get('USE_MODERN_UI', 'true').lower() == 'true' else 'index.html'
-        return render_template(template)
+        return render_template('index.html')
     except Exception as e:
         logger.error(f"Error rendering index template: {str(e)}")
         return f"Error loading page: {str(e)}", 500

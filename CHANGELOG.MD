@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.115] - 2025-07-24
+
+### Changed
+- **BREAKING**: Removed classic UI template - PixelProbe now uses only the modern UI
+- Simplified UI architecture by removing dual-template system
+- Removed USE_MODERN_UI environment variable (no longer needed)
+- Renamed index_modern.html to index.html as the sole UI template
+
+### Added
+- Reports navigation link in the main UI sidebar under System section
+
 ## [2.0.114] - 2025-07-24
 
 ### Added
