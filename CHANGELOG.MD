@@ -7,11 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.117] - 2025-07-25
+
+### Changed
+- **UI Improvement**: Reports management now opens in a modal popup instead of a separate page
+  - Provides better user experience by keeping users on the main dashboard
+  - Consistent with other system features (schedules, exclusions, etc.)
+  - All reports functionality preserved in the modal interface
+
 ## [2.0.116] - 2025-07-25
 
 ### Changed
 - Updated Docker image version to 2.0.116
 - Rebuilt from 2.0.115 branch with all recent UI simplifications
+- **UI Improvement**: Reports management now opens in a modal popup instead of a separate page
+  - Provides better user experience by keeping users on the main dashboard
+  - Consistent with other system features (schedules, exclusions, etc.)
+  - All reports functionality preserved in the modal interface
 
 ## [2.0.115] - 2025-07-24
 

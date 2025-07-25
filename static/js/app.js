@@ -1915,6 +1915,258 @@ class PixelProbeApp {
         }
     }
 
+    // Reports Management
+    async showReports() {
+        const modal = document.querySelector('#reports-modal');
+        if (!modal) return;
+        
+        modal.style.display = 'block';
+        this.reports = [];
+        this.selectedReports = new Set();
+        await this.loadReports();
+    }
+
+    async loadReports() {
+        try {
+            const response = await fetch('/api/reports');
+            const data = await response.json();
+            this.reports = data.reports;
+            this.renderReports();
+        } catch (error) {
+            console.error('Error loading reports:', error);
+            this.showNotification('Failed to load reports', 'error');
+        }
+    }
+
+    refreshReports() {
+        this.selectedReports.clear();
+        this.updateReportActionButtons();
+        this.loadReports();
+    }
+
+    renderReports() {
+        const tbody = document.getElementById('reportsTableBody');
+        
+        if (this.reports.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="8" style="text-align: center; padding: 50px; color: var(--text-secondary);">
+                        <i class="fas fa-file-alt" style="font-size: 48px; margin-bottom: 20px; opacity: 0.5;"></i>
+                        <p>No reports found</p>
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+        
+        tbody.innerHTML = this.reports.map(report => {
+            const created = new Date(report.created);
+            const formattedDate = created.toLocaleString();
+            const sizeKB = (report.size / 1024).toFixed(2);
+            
+            // Inline styles for report types and status
+            const typeStyles = {
+                scan: 'background: rgba(28, 231, 131, 0.2); color: var(--primary-green);',
+                cleanup: 'background: rgba(23, 162, 184, 0.2); color: #17a2b8;'
+            };
+            
+            const statusStyles = {
+                completed: 'background: rgba(40, 167, 69, 0.2); color: #28a745;',
+                error: 'background: rgba(220, 53, 69, 0.2); color: #dc3545;'
+            };
+            
+            return `
+                <tr>
+                    <td>
+                        <input type="checkbox" class="report-checkbox" value="${report.filename}" 
+                               onchange="app.toggleReportSelection('${report.filename}')" style="width: 20px; height: 20px; cursor: pointer;">
+                    </td>
+                    <td>${report.filename}</td>
+                    <td><span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; ${typeStyles[report.type] || ''}">${report.type}</span></td>
+                    <td>${report.scan_type || '-'}</td>
+                    <td><span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; ${statusStyles[report.status] || ''}">${report.status}</span></td>
+                    <td>${sizeKB} KB</td>
+                    <td>${formattedDate}</td>
+                    <td style="display: flex; gap: 5px;">
+                        <button class="btn btn-sm btn-primary" onclick="app.downloadReport('${report.filename}')" style="padding: 5px 10px; font-size: 12px;">
+                            <i class="fas fa-download"></i>
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="app.viewReport('${report.filename}')" style="padding: 5px 10px; font-size: 12px;">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="app.deleteReport('${report.filename}')" style="padding: 5px 10px; font-size: 12px;">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    toggleSelectAllReports() {
+        const selectAll = document.getElementById('selectAllReports').checked;
+        const checkboxes = document.querySelectorAll('.report-checkbox');
+        
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = selectAll;
+            if (selectAll) {
+                this.selectedReports.add(checkbox.value);
+            } else {
+                this.selectedReports.delete(checkbox.value);
+            }
+        });
+        
+        this.updateReportActionButtons();
+    }
+
+    toggleReportSelection(filename) {
+        if (this.selectedReports.has(filename)) {
+            this.selectedReports.delete(filename);
+        } else {
+            this.selectedReports.add(filename);
+        }
+        this.updateReportActionButtons();
+    }
+
+    updateReportActionButtons() {
+        const downloadBtn = document.getElementById('downloadBtn');
+        const deleteBtn = document.getElementById('deleteBtn');
+        
+        downloadBtn.disabled = this.selectedReports.size === 0;
+        deleteBtn.disabled = this.selectedReports.size === 0;
+        
+        if (this.selectedReports.size > 0) {
+            downloadBtn.innerHTML = `<i class="fas fa-download"></i> Download Selected (${this.selectedReports.size})`;
+            deleteBtn.innerHTML = `<i class="fas fa-trash"></i> Delete Selected (${this.selectedReports.size})`;
+        } else {
+            downloadBtn.innerHTML = '<i class="fas fa-download"></i> Download Selected';
+            deleteBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Selected';
+        }
+    }
+
+    downloadReport(filename) {
+        const url = filename.startsWith('cleanup_report_') 
+            ? `/api/cleanup-reports/${filename}`
+            : `/api/reports/download/${filename}`;
+        
+        window.location.href = url;
+    }
+
+    viewReport(filename) {
+        const url = filename.startsWith('cleanup_report_') 
+            ? `/api/cleanup-reports/${filename}`
+            : `/api/reports/download/${filename}`;
+        
+        window.open(url, '_blank');
+    }
+
+    async deleteReport(filename) {
+        if (!confirm(`Are you sure you want to delete ${filename}?`)) {
+            return;
+        }
+        
+        try {
+            const response = await fetch('/api/reports/delete', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ filenames: [filename] })
+            });
+            
+            const data = await response.json();
+            
+            if (data.deleted.length > 0) {
+                this.showNotification(`Deleted ${filename}`, 'success');
+                await this.loadReports();
+            } else if (data.errors.length > 0) {
+                this.showNotification(`Failed to delete: ${data.errors[0].error}`, 'error');
+            }
+        } catch (error) {
+            console.error('Error deleting report:', error);
+            this.showNotification('Failed to delete report', 'error');
+        }
+    }
+
+    async downloadSelectedReports() {
+        if (this.selectedReports.size === 0) return;
+        
+        const format = this.selectedReports.size > 1 
+            ? prompt('Download format (zip or pdf):', 'zip') 
+            : 'json';
+        
+        if (!format) return;
+        
+        if (this.selectedReports.size === 1) {
+            const filename = Array.from(this.selectedReports)[0];
+            this.downloadReport(filename);
+        } else {
+            try {
+                const response = await fetch('/api/reports/download-multiple', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filenames: Array.from(this.selectedReports),
+                        format: format.toLowerCase()
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Download failed');
+                }
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `pixelprobe_reports_${new Date().toISOString().slice(0,10)}.${format}`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            } catch (error) {
+                console.error('Error downloading reports:', error);
+                this.showNotification('Failed to download reports', 'error');
+            }
+        }
+    }
+
+    async deleteSelectedReports() {
+        if (this.selectedReports.size === 0) return;
+        
+        const count = this.selectedReports.size;
+        if (!confirm(`Are you sure you want to delete ${count} report(s)?`)) {
+            return;
+        }
+        
+        try {
+            const response = await fetch('/api/reports/delete', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ filenames: Array.from(this.selectedReports) })
+            });
+            
+            const data = await response.json();
+            
+            if (data.deleted.length > 0) {
+                this.showNotification(`Deleted ${data.deleted.length} report(s)`, 'success');
+                this.selectedReports.clear();
+                this.updateReportActionButtons();
+                await this.loadReports();
+            }
+            if (data.errors.length > 0) {
+                this.showNotification(`Failed to delete ${data.errors.length} report(s)`, 'error');
+            }
+        } catch (error) {
+            console.error('Error deleting reports:', error);
+            this.showNotification('Failed to delete reports', 'error');
+        }
+    }
+
 }
 
 // Initialize when DOM is ready

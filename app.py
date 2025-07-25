@@ -596,11 +596,12 @@ def api_docs():
         logger.error(f"Error rendering API docs template: {str(e)}")
         return f"Error loading API documentation: {str(e)}", 500
 
-@app.route('/reports')
-def reports_page():
-    """Reports management page"""
-    logger.info("Reports page requested")
-    return render_template('reports.html')
+# Reports page route removed - now using modal popup in main UI
+# @app.route('/reports')
+# def reports_page():
+#     """Reports management page"""
+#     logger.info("Reports page requested")
+#     return render_template('reports.html')
 
 @app.route('/favicon.ico')
 def favicon():
