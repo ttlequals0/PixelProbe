@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.121] - 2025-07-25
+
+### Fixed
+- **PDF Logo**: Added missing PixelProbe logo to PDF reports
+  - Logo now appears at the top of PDF reports using the existing logo file
+  - Properly centered and sized at 2 inches width
+- **Report View Dropdown**: Fixed missing dropdown menu CSS preventing PDF/Table view options
+  - Added dropdown styles for hover functionality
+  - Users can now choose between "View as Table" and "View as PDF" options
+- **Scan Progress Loop**: Fixed phase 3 progress bar oscillating between 0 and 1
+  - Fixed race condition in scan status endpoint that was resetting phase_current
+  - Progress now correctly tracks files processed during scanning phase
+
+### Changed
+- Reports are generated as JSON during scans, PDFs are created on-demand when viewed/downloaded
+  - This is the intended behavior - not a bug
+
 ## [2.0.120] - 2025-07-25
 
 ### Added

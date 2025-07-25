@@ -1988,7 +1988,8 @@ def get_scan_status():
         phase_total = state.get('phase_total', 0)
         
         # For scanning phase, ensure we're tracking files processed correctly
-        if state.get('phase') == 'scanning' and state.get('is_scanning'):
+        # Only override phase_current if files have actually been processed
+        if state.get('phase') == 'scanning' and state.get('is_scanning') and state.get('files_processed', 0) > 0:
             phase_current = state.get('files_processed', 0)
             phase_total = state.get('estimated_total', pending_files)
 
@@ -3227,7 +3228,7 @@ def download_multiple_reports():
             try:
                 from reportlab.lib import colors
                 from reportlab.lib.pagesizes import letter, landscape
-                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
                 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
                 from reportlab.lib.units import inch
                 from reportlab.lib.enums import TA_CENTER
@@ -3249,6 +3250,14 @@ def download_multiple_reports():
                     spaceAfter=30,
                     alignment=TA_CENTER
                 )
+                
+                # Add logo at the top of the first page
+                logo_path = os.path.join(app.static_folder, 'images', 'pixelprobe-logo.png')
+                if os.path.exists(logo_path):
+                    logo = Image(logo_path, width=2*inch, height=0.5*inch)
+                    logo.hAlign = 'CENTER'
+                    elements.append(logo)
+                    elements.append(Spacer(1, 0.3*inch))
                 
                 # Add each report
                 for idx, filename in enumerate(filenames):
