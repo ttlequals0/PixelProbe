@@ -495,7 +495,42 @@ class ProgressManager {
                 percentage = Math.round(phaseStart);
             }
             
-            text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
+            // Build progress message - keep phase info in main text
+            const phaseNames = {
+                'discovery': 'Discovering files',
+                'database': 'Adding to database',
+                'scanning': 'Scanning files'
+            };
+            
+            const phaseName = phaseNames[status.phase] || `Phase ${phaseNumber}`;
+            text = `${phaseName} (Phase ${phaseNumber} of ${totalPhases})`;
+            
+            // Add current file information for scan phase
+            if (status.phase === 'scanning' && status.current_file) {
+                const fileName = status.current_file.split('/').pop();
+                if (status.current_file_progress) {
+                    // Use the backend's formatted progress if available
+                    details = status.current_file_progress;
+                } else {
+                    // Fallback to just filename
+                    details = `Scanning: ${fileName}`;
+                }
+                
+                // Add file progress (e.g., "7/8")
+                if (phaseTotal > 0) {
+                    details += ` (${phaseCurrent}/${phaseTotal})`;
+                }
+            } else if (status.phase === 'discovery') {
+                if (status.discovery_count > 0) {
+                    details = `Found ${status.discovery_count} files to scan`;
+                }
+            } else if (status.phase === 'database') {
+                if (phaseTotal > 0) {
+                    details = `Adding files to database (${phaseCurrent}/${phaseTotal})`;
+                } else {
+                    details = 'Adding files to database...';
+                }
+            }
             
         } else if (operationType === 'cleanup') {
             // Use the progress percentage directly from the backend
@@ -1988,9 +2023,19 @@ class PixelProbeApp {
                     <td>${sizeKB} KB</td>
                     <td>${formattedDate}</td>
                     <td style="display: flex; gap: 5px;">
-                        <button class="btn btn-sm btn-primary" onclick="app.downloadReport('${report.filename}')" style="padding: 5px 10px; font-size: 12px;">
-                            <i class="fas fa-download"></i>
-                        </button>
+                        <div class="dropdown" style="display: inline-block;">
+                            <button class="btn btn-sm btn-primary dropdown-toggle" onclick="app.toggleDropdown(event, 'download-${report.filename}')" style="padding: 5px 10px; font-size: 12px;">
+                                <i class="fas fa-download"></i>
+                            </button>
+                            <div id="download-${report.filename}" class="dropdown-menu" style="display: none; position: absolute; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 1000; min-width: 100px;">
+                                <a class="dropdown-item" onclick="app.downloadReport('${report.filename}', 'json')" style="display: block; padding: 8px 12px; cursor: pointer; color: var(--text-primary);">
+                                    <i class="fas fa-file-code"></i> JSON
+                                </a>
+                                <a class="dropdown-item" onclick="app.downloadReport('${report.filename}', 'pdf')" style="display: block; padding: 8px 12px; cursor: pointer; color: var(--text-primary);">
+                                    <i class="fas fa-file-pdf"></i> PDF
+                                </a>
+                            </div>
+                        </div>
                         <button class="btn btn-sm btn-secondary" onclick="app.viewReport('${report.filename}')" style="padding: 5px 10px; font-size: 12px;">
                             <i class="fas fa-eye"></i>
                         </button>
@@ -2044,20 +2089,135 @@ class PixelProbeApp {
         }
     }
 
-    downloadReport(filename) {
-        const url = filename.startsWith('cleanup_report_') 
-            ? `/api/cleanup-reports/${filename}`
-            : `/api/reports/download/${filename}`;
+    toggleDropdown(event, dropdownId) {
+        event.stopPropagation();
+        const dropdown = document.getElementById(dropdownId);
         
-        window.location.href = url;
+        // Close all other dropdowns
+        document.querySelectorAll('.dropdown-menu').forEach(menu => {
+            if (menu.id !== dropdownId) {
+                menu.style.display = 'none';
+            }
+        });
+        
+        // Toggle this dropdown
+        dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+        
+        // Close dropdown when clicking outside
+        const closeDropdown = (e) => {
+            if (!e.target.closest('.dropdown')) {
+                dropdown.style.display = 'none';
+                document.removeEventListener('click', closeDropdown);
+            }
+        };
+        
+        if (dropdown.style.display === 'block') {
+            setTimeout(() => document.addEventListener('click', closeDropdown), 0);
+        }
     }
 
-    viewReport(filename) {
-        const url = filename.startsWith('cleanup_report_') 
-            ? `/api/cleanup-reports/${filename}`
-            : `/api/reports/download/${filename}`;
-        
-        window.open(url, '_blank');
+    async downloadReport(filename, format = 'json') {
+        try {
+            if (format === 'pdf') {
+                // For PDF download, we need to use the download-multiple endpoint with a single file
+                const response = await fetch('/api/reports/download-multiple', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filenames: [filename],
+                        format: 'pdf'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('PDF download failed');
+                }
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename.replace('.json', '.pdf');
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            } else {
+                // JSON download
+                const url = filename.startsWith('cleanup_report_') 
+                    ? `/api/cleanup-reports/${filename}`
+                    : `/api/reports/download/${filename}`;
+                
+                window.location.href = url;
+            }
+        } catch (error) {
+            console.error('Error downloading report:', error);
+            this.showNotification('Failed to download report', 'error');
+        }
+    }
+
+    async viewReport(filename) {
+        try {
+            const url = filename.startsWith('cleanup_report_') 
+                ? `/api/cleanup-reports/${filename}`
+                : `/api/reports/download/${filename}`;
+            
+            // Fetch the report content
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error('Failed to load report');
+            }
+            
+            const report = await response.json();
+            
+            // Create or get the report viewer modal
+            let modal = document.querySelector('#report-viewer-modal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'report-viewer-modal';
+                modal.className = 'modal';
+                modal.innerHTML = `
+                    <div class="modal-content" style="max-width: 90%; width: 90%; height: 80vh;">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Report Viewer</h3>
+                            <button class="modal-close">&times;</button>
+                        </div>
+                        <div class="modal-body" style="height: calc(100% - 60px); overflow-y: auto; padding: 20px;">
+                            <pre id="report-content" style="white-space: pre-wrap; font-family: monospace; font-size: 12px;"></pre>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                
+                // Setup close button
+                modal.querySelector('.modal-close').addEventListener('click', () => {
+                    modal.style.display = 'none';
+                });
+                
+                // Close on click outside
+                modal.addEventListener('click', function(e) {
+                    if (e.target === this) {
+                        this.style.display = 'none';
+                    }
+                });
+            }
+            
+            // Update modal title with filename
+            modal.querySelector('.modal-title').textContent = `Report Viewer - ${filename}`;
+            
+            // Display the report content
+            const contentEl = modal.querySelector('#report-content');
+            contentEl.textContent = JSON.stringify(report, null, 2);
+            
+            // Show the modal
+            modal.style.display = 'block';
+            
+        } catch (error) {
+            console.error('Error viewing report:', error);
+            this.showNotification('Failed to view report', 'error');
+        }
     }
 
     async deleteReport(filename) {
@@ -2088,18 +2248,24 @@ class PixelProbeApp {
         }
     }
 
-    async downloadSelectedReports() {
+    async downloadSelectedReports(format = null) {
         if (this.selectedReports.size === 0) return;
         
-        const format = this.selectedReports.size > 1 
-            ? prompt('Download format (zip or pdf):', 'zip') 
-            : 'json';
+        // If format not provided and single file, default to json
+        if (!format && this.selectedReports.size === 1) {
+            format = 'json';
+        }
         
-        if (!format) return;
+        // If format still not provided, show error
+        if (!format) {
+            this.showNotification('Please select a download format', 'warning');
+            return;
+        }
         
-        if (this.selectedReports.size === 1) {
+        if (this.selectedReports.size === 1 && format === 'json') {
+            // For single JSON file, use direct download
             const filename = Array.from(this.selectedReports)[0];
-            this.downloadReport(filename);
+            this.downloadReport(filename, 'json');
         } else {
             try {
                 const response = await fetch('/api/reports/download-multiple', {
@@ -2121,11 +2287,20 @@ class PixelProbeApp {
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `pixelprobe_reports_${new Date().toISOString().slice(0,10)}.${format}`;
+                
+                // Set appropriate filename based on format
+                let extension = format.toLowerCase();
+                if (extension === 'json' && this.selectedReports.size > 1) {
+                    extension = 'zip'; // Multiple JSON files are zipped
+                }
+                a.download = `pixelprobe_reports_${new Date().toISOString().slice(0,10)}.${extension}`;
+                
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
                 document.body.removeChild(a);
+                
+                this.showNotification(`Downloaded ${this.selectedReports.size} report(s) as ${format.toUpperCase()}`, 'success');
             } catch (error) {
                 console.error('Error downloading reports:', error);
                 this.showNotification('Failed to download reports', 'error');

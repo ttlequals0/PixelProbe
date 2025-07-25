@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.118] - 2025-07-25
+
+### Fixed
+- Enhanced scan progress display with detailed file information
+  - Shows current file being scanned with progress (e.g., "7/8")
+  - Added phase-specific messages for discovery and database phases
+  - Fixed conflicting progress information display
+- Improved reports management functionality
+  - View button now opens reports in a modal viewer instead of downloading
+  - Added dropdown menu for individual report downloads (JSON/PDF options)
+  - Bulk download now has dropdown with format options (JSON/ZIP/PDF)
+  - Better hover effects and UI consistency for dropdown menus
+
+### Changed
+- Progress bar now shows more verbose information during all scan types
+- Reports can be viewed in-app without downloading
+- Download functionality separated into format-specific options
+
 ## [2.0.117] - 2025-07-25
 
 ### Changed
