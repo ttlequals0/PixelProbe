@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.119] - 2025-07-25
+
+### Added
+- Added in-browser PDF viewer for reports using PDF.js
+  - Reports can now be viewed directly in the application without downloading
+  - PDF viewer includes navigation controls (previous/next page)
+  - Page number display and keyboard shortcuts (ESC to close)
+  - Download button available within the viewer
+- Added reportlab to requirements.txt for PDF generation support
+
+### Fixed
+- Fixed PDF generation that was broken due to missing reportlab dependency
+- Fixed UI layout issues with horizontal scrolling for reports table
+- Improved responsive design for better display on various screen sizes
+
+### Changed
+- Reports "View" button now opens PDFs in a modal viewer instead of downloading
+- Enhanced user experience with integrated PDF viewing capabilities
+
 ## [2.0.118] - 2025-07-25
 
 ### Fixed

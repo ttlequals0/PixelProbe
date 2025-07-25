@@ -6,6 +6,7 @@
     <title>PixelProbe - Reports Management</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/desktop.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
         .reports-container {
             padding: 20px;
@@ -118,6 +119,77 @@
             margin-bottom: 20px;
             opacity: 0.5;
         }
+        
+        /* PDF Viewer Modal */
+        .pdf-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+        }
+        
+        .pdf-modal-content {
+            position: relative;
+            margin: 20px auto;
+            width: 90%;
+            max-width: 1200px;
+            height: calc(100vh - 40px);
+            background: var(--bg-primary);
+            border-radius: var(--border-radius);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .pdf-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .pdf-modal-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .pdf-modal-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .pdf-viewer-container {
+            flex: 1;
+            overflow: auto;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            background: #525659;
+        }
+        
+        .pdf-canvas {
+            max-width: 100%;
+            height: auto;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+        }
+        
+        .pdf-navigation {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            padding: 15px;
+            border-top: 1px solid var(--border-color);
+        }
+        
+        .pdf-page-info {
+            min-width: 100px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -137,7 +209,7 @@
             </div>
         </div>
         
-        <div class="table-container">
+        <div class="table-container" style="overflow-x: auto;">
             <table class="reports-table">
                 <thead>
                     <tr>
@@ -161,6 +233,37 @@
                     </tr>
                 </tbody>
             </table>
+        </div>
+    </div>
+    
+    <!-- PDF Viewer Modal -->
+    <div class="pdf-modal" id="pdfModal">
+        <div class="pdf-modal-content">
+            <div class="pdf-modal-header">
+                <div class="pdf-modal-title" id="pdfModalTitle">PDF Report</div>
+                <div class="pdf-modal-actions">
+                    <button class="btn btn-secondary" onclick="downloadCurrentPDF()">
+                        <i class="fas fa-download"></i> Download
+                    </button>
+                    <button class="btn btn-secondary" onclick="closePDFModal()">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+            </div>
+            <div class="pdf-viewer-container">
+                <canvas id="pdfCanvas" class="pdf-canvas"></canvas>
+            </div>
+            <div class="pdf-navigation">
+                <button class="btn btn-secondary" onclick="previousPage()" id="prevPageBtn">
+                    <i class="fas fa-chevron-left"></i> Previous
+                </button>
+                <div class="pdf-page-info">
+                    Page <span id="currentPage">1</span> of <span id="totalPages">1</span>
+                </div>
+                <button class="btn btn-secondary" onclick="nextPage()" id="nextPageBtn">
+                    Next <i class="fas fa-chevron-right"></i>
+                </button>
+            </div>
         </div>
     </div>
     
@@ -290,14 +393,6 @@
             window.location.href = url;
         }
         
-        function viewReport(filename) {
-            // Open report in new window
-            const url = filename.startsWith('cleanup_report_') 
-                ? `/api/cleanup-reports/${filename}`
-                : `/api/reports/download/${filename}`;
-            
-            window.open(url, '_blank');
-        }
         
         function deleteReport(filename) {
             if (!confirm(`Are you sure you want to delete ${filename}?`)) {
@@ -416,6 +511,180 @@
             // Simple alert for now - could be replaced with toast notification
             alert('Error: ' + message);
         }
+        
+        // PDF Viewer functionality
+        let pdfDoc = null;
+        let pageNum = 1;
+        let pageRendering = false;
+        let pageNumPending = null;
+        let currentPDFFilename = null;
+        
+        // Configure PDF.js worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        
+        function viewReport(filename) {
+            // Check if it's a PDF report (we'll generate PDF on the fly)
+            currentPDFFilename = filename;
+            document.getElementById('pdfModalTitle').textContent = filename;
+            
+            // Show loading state
+            const modal = document.getElementById('pdfModal');
+            modal.style.display = 'block';
+            
+            // Generate and load PDF
+            loadPDF(filename);
+        }
+        
+        function loadPDF(filename) {
+            // For single report, we'll use the download-multiple endpoint with PDF format
+            fetch('/api/reports/download-multiple', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    filenames: [filename],
+                    format: 'pdf'
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to generate PDF');
+                }
+                return response.blob();
+            })
+            .then(blob => {
+                // Convert blob to array buffer
+                return blob.arrayBuffer();
+            })
+            .then(data => {
+                // Load PDF document
+                return pdfjsLib.getDocument({data: data}).promise;
+            })
+            .then(pdf => {
+                pdfDoc = pdf;
+                document.getElementById('totalPages').textContent = pdf.numPages;
+                
+                // Initial page render
+                pageNum = 1;
+                renderPage(pageNum);
+            })
+            .catch(error => {
+                console.error('Error loading PDF:', error);
+                showError('Failed to load PDF. Make sure reportlab is installed.');
+                closePDFModal();
+            });
+        }
+        
+        function renderPage(num) {
+            pageRendering = true;
+            
+            // Get page
+            pdfDoc.getPage(num).then(page => {
+                const canvas = document.getElementById('pdfCanvas');
+                const ctx = canvas.getContext('2d');
+                const viewport = page.getViewport({scale: 1.5});
+                
+                // Set canvas dimensions
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                
+                // Render PDF page into canvas context
+                const renderContext = {
+                    canvasContext: ctx,
+                    viewport: viewport
+                };
+                
+                const renderTask = page.render(renderContext);
+                
+                renderTask.promise.then(() => {
+                    pageRendering = false;
+                    
+                    if (pageNumPending !== null) {
+                        // New page rendering is pending
+                        renderPage(pageNumPending);
+                        pageNumPending = null;
+                    }
+                });
+            });
+            
+            // Update page info
+            document.getElementById('currentPage').textContent = num;
+            
+            // Update navigation buttons
+            document.getElementById('prevPageBtn').disabled = (num <= 1);
+            document.getElementById('nextPageBtn').disabled = (num >= pdfDoc.numPages);
+        }
+        
+        function queueRenderPage(num) {
+            if (pageRendering) {
+                pageNumPending = num;
+            } else {
+                renderPage(num);
+            }
+        }
+        
+        function previousPage() {
+            if (pageNum <= 1) return;
+            pageNum--;
+            queueRenderPage(pageNum);
+        }
+        
+        function nextPage() {
+            if (pageNum >= pdfDoc.numPages) return;
+            pageNum++;
+            queueRenderPage(pageNum);
+        }
+        
+        function closePDFModal() {
+            document.getElementById('pdfModal').style.display = 'none';
+            pdfDoc = null;
+            pageNum = 1;
+            currentPDFFilename = null;
+        }
+        
+        function downloadCurrentPDF() {
+            if (currentPDFFilename) {
+                // Generate and download PDF
+                fetch('/api/reports/download-multiple', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filenames: [currentPDFFilename],
+                        format: 'pdf'
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Download failed');
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = currentPDFFilename.replace('.json', '.pdf');
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                })
+                .catch(error => {
+                    console.error('Error downloading PDF:', error);
+                    showError('Failed to download PDF');
+                });
+            }
+        }
+        
+        // Close modal on escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && document.getElementById('pdfModal').style.display === 'block') {
+                closePDFModal();
+            }
+        });
     </script>
 </body>
 </html>
