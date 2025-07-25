@@ -3316,6 +3316,14 @@ def download_multiple_reports():
                             # Limit files shown in PDF to 500
                             files_to_show = results['scanned_files'][:500]
                             
+                            # Create styles for wrapping text
+                            cell_style = ParagraphStyle(
+                                'CellStyle',
+                                parent=styles['Normal'],
+                                fontSize=6,
+                                leading=7
+                            )
+                            
                             # Create files table with all required fields
                             files_data = [['Status', 'File Path', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
                             for file in files_to_show:
@@ -3324,9 +3332,8 @@ def download_multiple_reports():
                                     status = 'Warning'
                                 
                                 file_path = file.get('file_path', '')
-                                # Truncate very long paths for PDF
-                                if len(file_path) > 50:
-                                    file_path = '...' + file_path[-47:]
+                                # Wrap file path in Paragraph for proper text wrapping
+                                file_path_para = Paragraph(file_path, cell_style)
                                 
                                 file_size = file.get('file_size', 0)
                                 if file_size:
@@ -3341,11 +3348,14 @@ def download_multiple_reports():
                                 # Get details - corruption details or error message
                                 details = ''
                                 if file.get('corruption_details'):
-                                    details = str(file['corruption_details'])[:30] + '...' if len(str(file['corruption_details'])) > 30 else str(file['corruption_details'])
+                                    details = str(file['corruption_details'])[:50] + '...' if len(str(file['corruption_details'])) > 50 else str(file['corruption_details'])
                                 elif file.get('error_message'):
-                                    details = str(file['error_message'])[:30] + '...' if len(str(file['error_message'])) > 30 else str(file['error_message'])
+                                    details = str(file['error_message'])[:50] + '...' if len(str(file['error_message'])) > 50 else str(file['error_message'])
                                 else:
                                     details = 'OK'
+                                
+                                # Wrap details in Paragraph for proper text wrapping
+                                details_para = Paragraph(details, cell_style)
                                 
                                 scan_date = file.get('scan_date', 'N/A')
                                 if scan_date != 'N/A':
@@ -3357,7 +3367,7 @@ def download_multiple_reports():
                                     except:
                                         scan_date = scan_date[:10] if len(scan_date) > 10 else scan_date
                                 
-                                files_data.append([status, file_path, size_str, file_type, scan_tool, details, scan_date])
+                                files_data.append([status, file_path_para, size_str, file_type, scan_tool, details_para, scan_date])
                             
                             # Calculate column widths for landscape page
                             # Total width available in landscape: ~10 inches = 720 points

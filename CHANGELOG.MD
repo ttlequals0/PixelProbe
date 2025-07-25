@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.123] - 2025-07-25
+
+### Fixed
+- **PDF File Path Display**: Removed file path truncation in PDF reports
+  - File paths now display in full without being cut off
+  - Added text wrapping for long file paths using Paragraph objects
+  - Details field also wrapped for better display
+
 ## [2.0.122] - 2025-07-25
 
 ### Fixed
