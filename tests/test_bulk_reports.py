@@ -3,12 +3,18 @@ Tests for bulk report operations
 """
 import pytest
 import json
-from app import app, db
-from models import ScanResult, ScanReport
+import os
 from datetime import datetime, timezone
 import tempfile
 import zipfile
 import io
+
+# Set required environment variables for testing
+os.environ['SECRET_KEY'] = 'test-secret-key'
+os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+
+from app import app, db
+from models import ScanResult, ScanReport
 
 
 class TestBulkReportOperations:
