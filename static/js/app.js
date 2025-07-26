@@ -419,7 +419,7 @@ class ProgressManager {
                 if (isRunning) {
                     const progress = this.calculateProgress(status, operationType);
                     this.update(progress.percentage, progress.text, progress.details);
-                } else if (status.phase === 'completed' || status.phase === 'cancelled' || status.phase === 'error') {
+                } else if (status.phase === 'complete' || status.phase === 'completed' || status.phase === 'cancelled' || status.phase === 'error') {
                     // Operation is complete - show completion state
                     this.complete(operationType, status);
                 } else {
@@ -1566,6 +1566,60 @@ class PixelProbeApp {
         modal.onclick = (e) => {
             if (e.target === modal) {
                 modal.style.display = 'none';
+            }
+        };
+    }
+
+    async viewReport(filename) {
+        // Handle viewing reports - support both JSON and PDF
+        if (filename.endsWith('.pdf')) {
+            // Open PDF in new window/tab
+            window.open(`/api/reports/${filename}`, '_blank');
+        } else if (filename.endsWith('.json')) {
+            // For JSON files, load and display in modal
+            try {
+                const response = await fetch(`/api/reports/${filename}`);
+                if (!response.ok) throw new Error('Failed to load report');
+                
+                const data = await response.json();
+                this.showReportDetails(data);
+            } catch (error) {
+                console.error('Error viewing report:', error);
+                this.showNotification('Failed to load report', 'error');
+            }
+        }
+    }
+
+    showReportDetails(report) {
+        // Create modal content for report details
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.style.display = 'block';
+        
+        const content = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Report Details</h3>
+                    <button class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <pre>${JSON.stringify(report, null, 2)}</pre>
+                </div>
+            </div>
+        `;
+        
+        modal.innerHTML = content;
+        document.body.appendChild(modal);
+        
+        // Setup close handlers
+        const closeBtn = modal.querySelector('.modal-close');
+        closeBtn.onclick = () => {
+            modal.remove();
+        };
+        
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.remove();
             }
         };
     }

@@ -2,7 +2,7 @@
 import os
 
 # Default version - this is the single source of truth
-_DEFAULT_VERSION = '2.0.113'
+_DEFAULT_VERSION = '2.0.123'
 
 # Allow override via environment variable for CI/CD, but default to the hardcoded version
 __version__ = os.environ.get('APP_VERSION', _DEFAULT_VERSION)

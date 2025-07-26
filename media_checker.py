@@ -893,6 +893,8 @@ class PixelProbe:
         scan_tool = "ffmpeg"
         scan_output = []
         warning_details = []
+        codec_name = None
+        codec_profile = None
         
         logger.info(f"Starting FFmpeg probe for: {file_path}")
         try:
@@ -913,7 +915,24 @@ class PixelProbe:
                 logger.warning(f"No video stream found in {file_path}")
             else:
                 codec_name = video_stream.get('codec_name', 'unknown codec')
-                scan_output.append(f"Video stream: {codec_name}")
+                codec_profile = video_stream.get('profile', '')
+                pix_fmt = video_stream.get('pix_fmt', '')
+                
+                # Check for HEVC Main 10 specifically
+                if codec_name == 'hevc' and 'Main 10' in codec_profile:
+                    scan_output.append(f"Video stream: {codec_name} ({codec_profile})")
+                    scan_output.append(f"Pixel format: {pix_fmt}")
+                    logger.info(f"HEVC Main 10 detected in {file_path}: profile={codec_profile}, pix_fmt={pix_fmt}")
+                    
+                    # HEVC Main 10 requires 10-bit support - mark as warning if detected
+                    if '10' in pix_fmt:  # e.g., yuv420p10le
+                        warning_details.append("HEVC Main 10 profile (10-bit) - requires hardware/software support for proper playback")
+                        logger.warning(f"HEVC Main 10 10-bit video detected in {file_path} - may have playback issues on some systems")
+                else:
+                    scan_output.append(f"Video stream: {codec_name}")
+                    if codec_profile:
+                        scan_output.append(f"Profile: {codec_profile}")
+                    
                 logger.info(f"Video stream found in {file_path}: {codec_name}")
             
             # Log duration info but don't mark as corrupted - invalid duration doesn't mean corrupted file
@@ -1055,6 +1074,14 @@ class PixelProbe:
                 is_corrupted = True
                 corruption_details.extend(enhanced_details)
                 scan_output.extend(enhanced_output)
+        
+        # Additional HEVC Main 10 specific checks
+        if not is_corrupted and codec_name == 'hevc' and codec_profile and 'Main 10' in codec_profile:
+            hevc_corrupted, hevc_details, hevc_output = self._check_hevc_main10_issues(file_path)
+            if hevc_corrupted:
+                is_corrupted = True
+                corruption_details.extend(hevc_details)
+                scan_output.extend(hevc_output)
         
         # Return warning details as well
         return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
@@ -1230,6 +1257,83 @@ class PixelProbe:
                 logger.debug(f"FLAC test error: {str(e)}")
         
         return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+    
+    def _check_hevc_main10_issues(self, file_path):
+        """Check for HEVC Main 10 specific issues that cause green tint/freezing"""
+        corruption_details = []
+        is_corrupted = False
+        hevc_output = []
+        
+        logger.info(f"Running HEVC Main 10 specific checks for {file_path}")
+        hevc_output.append("=== HEVC Main 10 Analysis ===")
+        
+        try:
+            # Check for B-frame decoding issues common in HEVC Main 10
+            # Using more aggressive error detection to catch issues that cause playback freezing
+            result = subprocess.run([
+                'ffmpeg',
+                '-v', 'warning',
+                '-err_detect', 'aggressive',
+                '-i', file_path,
+                '-vf', 'showinfo',
+                '-frames:v', '100',
+                '-f', 'null',
+                '-'
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.stderr:
+                stderr_lower = result.stderr.lower()
+                # Look for specific HEVC Main 10 decoding issues
+                if 'reference picture missing' in stderr_lower:
+                    corruption_details.append("HEVC reference picture errors - causes video freezing")
+                    is_corrupted = True
+                    hevc_output.append("Reference picture errors found (causes playback freezing)")
+                
+                if 'error while decoding' in stderr_lower:
+                    corruption_details.append("HEVC decoding errors - video freezes while audio continues")
+                    is_corrupted = True
+                    hevc_output.append("Decoding errors found (VLC stops, Plex freezes video)")
+                
+                # Check for slice decoding errors that cause green artifacts
+                if 'slice' in stderr_lower and ('error' in stderr_lower or 'invalid' in stderr_lower):
+                    corruption_details.append("HEVC slice decoding errors - causes green tint/artifacts")
+                    is_corrupted = True
+                    hevc_output.append("Slice decoding errors (causes green tint)")
+                
+                # Check for SEI (Supplemental Enhancement Information) errors
+                if 'sei' in stderr_lower and 'error' in stderr_lower:
+                    corruption_details.append("HEVC SEI errors detected")
+                    is_corrupted = True
+                    hevc_output.append("SEI metadata errors found")
+            
+            # Check for color space conversion issues (10-bit to 8-bit)
+            result = subprocess.run([
+                'ffprobe',
+                '-v', 'error',
+                '-select_streams', 'v:0',
+                '-show_entries', 'stream=color_space,color_transfer,color_primaries',
+                '-of', 'json',
+                file_path
+            ], capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0 and result.stdout:
+                import json
+                try:
+                    probe_data = json.loads(result.stdout)
+                    if probe_data.get('streams'):
+                        stream = probe_data['streams'][0]
+                        if stream.get('color_space') == 'bt2020nc' or stream.get('color_primaries') == 'bt2020':
+                            hevc_output.append("HDR content detected (BT.2020) - requires HDR display support")
+                except json.JSONDecodeError:
+                    pass
+                    
+        except subprocess.TimeoutExpired:
+            hevc_output.append("HEVC analysis timeout")
+        except Exception as e:
+            hevc_output.append(f"HEVC analysis error: {str(e)}")
+            logger.error(f"HEVC Main 10 check error for {file_path}: {str(e)}")
+        
+        return is_corrupted, corruption_details, hevc_output
     
     def _enhanced_corruption_check(self, file_path, file_size_gb):
         """Enhanced multi-stage corruption detection for files that fail basic checks"""

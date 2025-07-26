@@ -5,6 +5,90 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.123] - 2025-07-26
+
+### Added
+- **HEVC Main 10 Detection**: Enhanced detection for HEVC Main 10 profile issues
+  - Detects reference picture errors that cause video freezing
+  - Identifies slice decoding errors that cause green tint/artifacts
+  - Warns about 10-bit playback requirements
+  - Uses aggressive error detection for subtle corruption
+  - Checks for HDR content (BT.2020 color space)
+  - Added _check_hevc_main10_issues() method for specialized HEVC analysis
+
+### Fixed
+- **PDF Reports**: Fixed file path truncation in PDF reports
+  - Removed 50 character truncation limit for file paths
+  - Added text wrapping using Paragraph objects for long file paths
+  - Improved details field display with wrapping support
+  - File paths and details now wrap properly in table cells
+- **Progress Bar**: Fixed single file scan progress bar issues
+  - Fixed UI progress stuck flipping between 67% and 100%
+  - Fixed progress bar not disappearing after scan completion
+  - Added 'completed' phase check alongside 'complete' in app.js
+
+### Technical Details
+- HEVC Main 10 detection integrates with existing video corruption checking
+- PDF generation now uses ParagraphStyle for cell text wrapping
+- Progress bar fixes ensure proper phase tracking without overrides
+
+## [2.0.122] - 2025-07-25
+
+### Added
+- **Enhanced PDF Reports**: Improved PDF report generation with comprehensive data
+- **View Functionality**: Fixed view button to properly display PDF reports
+
+## [2.0.121] - 2025-07-25
+
+### Fixed
+- **PDF Generation**: Various fixes for PDF report generation
+- **UI Improvements**: Enhanced user interface for report viewing
+
+## [2.0.120] - 2025-07-25
+
+### Added
+- **Comprehensive Report Viewer**: Restored report viewer with full scan results display
+- Shows complete scan results with all fields
+
+## [2.0.119] - 2025-07-25
+
+### Added
+- **In-Browser PDF Viewer**: Added capability to view PDF reports directly in browser
+- **PDF Generation**: Fixed PDF generation issues
+
+## [2.0.118] - 2025-07-25
+
+### Enhanced
+- **Scan Progress**: Improved scan progress tracking and display
+- **Reports Management**: Enhanced reports management functionality
+
+## [2.0.117] - 2025-07-25
+
+### Improved
+- **Reports Modal UI**: Enhanced the reports modal user interface
+- Better visual presentation of scan reports
+
+## [2.0.116] - 2025-07-24
+
+### Changed
+- **Docker Build**: Updated Docker build and deployment configuration
+- Version bump for deployment
+
+## [2.0.115] - 2025-07-24
+
+### Changed
+- **UI Simplification**: Removed classic UI and simplified to single modern interface
+- Streamlined user experience with unified interface
+
+## [2.0.114] - 2025-07-24
+
+### Added
+- **Reports Navigation**: Added Reports navigation links to UI templates
+- **Comprehensive Report Generation**: Added report generation for all scan types
+
+### Changed
+- **Docker Documentation**: Updated Docker build and documentation
+
 ## [2.0.113] - 2025-07-23
 
 ### Summary of Changes Since v2.0.100

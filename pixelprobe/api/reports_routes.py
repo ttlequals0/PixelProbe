@@ -145,6 +145,187 @@ def export_scan_report(report_id):
     
     return response
 
+@reports_bp.route('/generate-pdf-report/<scan_type>/<scan_id>')
+def generate_pdf_report(scan_type, scan_id):
+    """Generate PDF report for scan results with tool and details"""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter, landscape
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageBreak
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.lib.enums import TA_CENTER
+        
+        # Create PDF buffer
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), 
+                              topMargin=0.5*inch, bottomMargin=0.5*inch,
+                              leftMargin=0.5*inch, rightMargin=0.5*inch)
+        
+        # Container for the 'Flowable' objects
+        elements = []
+        
+        # Define styles with PixelProbe color scheme
+        styles = getSampleStyleSheet()
+        primary_green = colors.HexColor('#1ce783')
+        primary_black = colors.HexColor('#040405')
+        gradient_end = colors.HexColor('#183949')
+        
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=primary_black,
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
+        
+        # Create styles for wrapping text in table cells
+        cell_style = ParagraphStyle(
+            'CellStyle',
+            parent=styles['Normal'],
+            fontSize=6,
+            leading=7
+        )
+        
+        # Add logo and title
+        try:
+            logo_path = os.path.join(os.path.dirname(__file__), '../../static/images/pixelprobe-logo.png')
+            if os.path.exists(logo_path):
+                # Logo is 670x729 pixels, maintain aspect ratio
+                logo_width = 1.5*inch
+                logo_height = logo_width * (729.0/670.0)  # Maintain aspect ratio
+                logo = Image(logo_path, width=logo_width, height=logo_height)
+                logo.hAlign = 'CENTER'
+                elements.append(logo)
+                elements.append(Spacer(1, 0.2*inch))
+        except Exception as e:
+            logger.debug(f"Could not add logo to PDF: {e}")
+        
+        # Add title
+        elements.append(Paragraph("PixelProbe Scan Report", title_style))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # Add export info
+        info_text = f"Report Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}<br/>"
+        info_text += f"Scan Type: {scan_type.replace('_', ' ').title()}<br/>"
+        info_text += f"Scan ID: {scan_id}"
+        elements.append(Paragraph(info_text, styles['Normal']))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # Query scan results based on scan type
+        from models import ScanResult
+        if scan_type == 'rescan' and '_' in scan_id:
+            # For rescan, parse the file path from scan_id
+            file_path = scan_id.replace('_', '/')
+            results = ScanResult.query.filter_by(file_path=file_path).all()
+        else:
+            # For other scan types, get recent results
+            results = ScanResult.query.filter(
+                ScanResult.scan_date.isnot(None)
+            ).order_by(ScanResult.scan_date.desc()).limit(500).all()
+        
+        if not results:
+            elements.append(Paragraph("No scan results found.", styles['Normal']))
+        else:
+            # Create table header with all required fields
+            table_data = [['Status', 'File Path', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
+            
+            for result in results:
+                # Determine status
+                status = 'Corrupted' if result.is_corrupted and not result.marked_as_good else 'Healthy'
+                if getattr(result, 'has_warnings', False) and not result.marked_as_good:
+                    status = 'Warning'
+                
+                # Format file size
+                size = f"{result.file_size / (1024*1024):.2f} MB" if result.file_size else 'N/A'
+                
+                # Get file type
+                file_type = result.file_type or 'Unknown'
+                
+                # Get scan tool - use actual tool from database
+                scan_tool = getattr(result, 'scan_tool', None) or 'N/A'
+                
+                # Get details - combine corruption details, warnings, and scan output
+                details = []
+                if result.corruption_details:
+                    details.append(result.corruption_details)
+                if getattr(result, 'warning_details', None):
+                    details.append(getattr(result, 'warning_details', ''))
+                if getattr(result, 'scan_output', None):
+                    # Extract key information from scan output
+                    scan_output = getattr(result, 'scan_output', '')
+                    if 'Video stream:' in scan_output:
+                        for line in scan_output.split('\\n'):
+                            if 'Video stream:' in line or 'Duration:' in line:
+                                details.append(line.strip())
+                                break
+                
+                details_text = ' '.join(details) if details else ''
+                
+                # Format scan date
+                scan_date = result.scan_date.strftime('%m/%d/%Y, %I:%M:%S %p') if result.scan_date else 'N/A'
+                
+                # Wrap file path and details in Paragraph for proper text wrapping
+                file_path_para = Paragraph(result.file_path, cell_style)
+                details_para = Paragraph(details_text, cell_style)
+                
+                table_data.append([
+                    status,
+                    file_path_para,
+                    size,
+                    file_type,
+                    scan_tool,
+                    details_para,
+                    scan_date
+                ])
+            
+            # Create table with proper column widths
+            table = Table(table_data, colWidths=[0.7*inch, 3.5*inch, 0.7*inch, 0.8*inch, 0.6*inch, 2.5*inch, 1.2*inch])
+            table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('BACKGROUND', (0, 0), (-1, 0), primary_green),
+                ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                ('PADDING', (0, 0), (-1, -1), 4),
+            ]))
+            
+            elements.append(table)
+            
+            if len(results) >= 500:
+                elements.append(Spacer(1, 0.1*inch))
+                elements.append(Paragraph("Note: Showing first 500 results", styles['Normal']))
+        
+        # Build PDF
+        doc.build(elements)
+        
+        # Get PDF data
+        pdf_data = buffer.getvalue()
+        buffer.close()
+        
+        # Create filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"scan_report_{scan_type}_{scan_id}_{timestamp}.pdf"
+        
+        # Create response
+        response = make_response(pdf_data)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename={filename}'
+        
+        return response
+        
+    except ImportError:
+        logger.error("reportlab not installed for PDF export")
+        return jsonify({'error': 'PDF export requires reportlab package'}), 500
+    except Exception as e:
+        logger.error(f"Error generating PDF report: {e}")
+        return jsonify({'error': f'Failed to generate PDF: {str(e)}'}), 500
+
 @reports_bp.route('/scan-reports/<report_id>/pdf')
 def export_scan_report_pdf(report_id):
     """Export scan report as PDF for compliance"""
@@ -342,6 +523,14 @@ def export_scan_report_pdf(report_id):
             fontSize=8,
             textColor=colors.HexColor('#7f8c8d'),
             alignment=TA_CENTER
+        )
+        
+        # Create styles for wrapping text in table cells
+        cell_style = ParagraphStyle(
+            'CellStyle',
+            parent=styles['Normal'],
+            fontSize=6,
+            leading=7
         )
         
         # Add scanned files list

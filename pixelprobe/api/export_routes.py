@@ -247,6 +247,14 @@ def export_csv():
                     alignment=TA_CENTER
                 )
                 
+                # Create styles for wrapping text in table cells
+                cell_style = ParagraphStyle(
+                    'CellStyle',
+                    parent=styles['Normal'],
+                    fontSize=6,
+                    leading=7
+                )
+                
                 # Add title
                 elements.append(Paragraph("PixelProbe Scan Results Export", title_style))
                 elements.append(Spacer(1, 0.2*inch))
@@ -270,10 +278,8 @@ def export_csv():
                     file_type = result.file_type or 'Unknown'
                     scan_date = result.scan_date.strftime('%Y-%m-%d %H:%M') if result.scan_date else 'N/A'
                     
-                    # Truncate long paths for table display
+                    # Don't truncate file paths - use Paragraph for wrapping
                     file_path = result.file_path
-                    if len(file_path) > 50:
-                        file_path = "..." + file_path[-47:]
                     
                     # Combine details for display
                     details = []
@@ -287,12 +293,16 @@ def export_csv():
                         details.append(error[:40] + "..." if len(error) > 40 else error)
                     details_text = "; ".join(details) if details else ''
                     
+                    # Wrap file path and details in Paragraph for proper text wrapping
+                    file_path_para = Paragraph(file_path, cell_style)
+                    details_para = Paragraph(details_text, cell_style)
+                    
                     table_data.append([
-                        file_path,
+                        file_path_para,
                         status,
                         size,
                         file_type,
-                        details_text,
+                        details_para,
                         scan_date
                     ])
                 

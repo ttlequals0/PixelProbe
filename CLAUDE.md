@@ -12,6 +12,7 @@
 - ALWAYS run all tests after code changes.
 - When debugging issues, focus on fixing the existing implementation, not replacing it
 - When something doesn't work, debug and fix it - don't start over with a simple version
+- Always build new changes off the previous version in CHANGELOG never MAIN branch unless explicitly told to.
 - Always look at live server logs before making changes.
   - Server: https://pixelprobe.ttlequals0.com/
   - Verify app version from server
