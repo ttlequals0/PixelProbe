@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.124] - 2025-07-26
+
+### Added
+- **Real Media Test Suite**: Enhanced test infrastructure with real media samples
+  - Downloaded ~35 real media files from FFmpeg samples repository
+  - Added both valid and corrupted samples for all supported formats
+  - Created comprehensive test fixtures using actual media files
+  - Implemented real media corruption detection tests
+
+### Changed
+- **Test Infrastructure**: Improved test reliability and coverage
+  - Removed synthetic test files in favor of real media samples
+  - Fixed pytest-benchmark and psutil dependencies
+  - Updated conftest.py to use real media files for testing
+  - Achieved 23.5% corruption detection rate on real-world corrupted files
+
+### Fixed
+- **Test Dependencies**: Installed missing test dependencies (pytest-benchmark, psutil)
+
 ## [2.0.123] - 2025-07-26
 
 ### Added

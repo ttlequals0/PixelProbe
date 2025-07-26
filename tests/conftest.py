@@ -128,49 +128,73 @@ def test_data_dir():
     """Create temporary directory with test files"""
     temp_dir = tempfile.mkdtemp()
     
+    # Get the real media samples directory
+    media_samples_dir = os.path.join(os.path.dirname(__file__), 'fixtures', 'media_samples')
+    
     # Create test file structure
     paths = {
-        'valid_mp4': os.path.join(temp_dir, 'valid.mp4'),
-        'corrupted_mp4': os.path.join(temp_dir, 'corrupted.mp4'),
-        'valid_jpg': os.path.join(temp_dir, 'valid.jpg'),
-        'corrupted_jpg': os.path.join(temp_dir, 'corrupted.jpg'),
-        'valid_mp3': os.path.join(temp_dir, 'valid.mp3'),
-        'large_video': os.path.join(temp_dir, 'large_video.mp4'),
         'test_dir': os.path.join(temp_dir, 'test_directory')
     }
     
     # Create test directory
     os.makedirs(paths['test_dir'])
     
-    # Create minimal valid files (these would be replaced with actual test files)
-    # Valid MP4 header
-    with open(paths['valid_mp4'], 'wb') as f:
-        f.write(b'\x00\x00\x00\x20ftypmp42\x00\x00\x00\x00mp42isom')
-        f.write(b'\x00' * 1024)  # Padding
-    
-    # Corrupted MP4 (missing moov atom)
-    with open(paths['corrupted_mp4'], 'wb') as f:
-        f.write(b'\x00\x00\x00\x20ftypmp42\x00\x00\x00\x00mp42isom')
-        f.write(b'\xFF' * 1024)  # Invalid data
-    
-    # Valid JPEG header
-    with open(paths['valid_jpg'], 'wb') as f:
-        f.write(b'\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00')
-        f.write(b'\xFF\xD9')  # End marker
-    
-    # Corrupted JPEG (truncated)
-    with open(paths['corrupted_jpg'], 'wb') as f:
-        f.write(b'\xFF\xD8\xFF\xE0')  # Incomplete header
-    
-    # Valid MP3 (ID3 header)
-    with open(paths['valid_mp3'], 'wb') as f:
-        f.write(b'ID3\x03\x00\x00\x00\x00\x00\x00')
-        f.write(b'\xFF\xFB')  # MP3 sync word
-    
-    # Large video file (10MB)
-    with open(paths['large_video'], 'wb') as f:
-        f.write(b'\x00\x00\x00\x20ftypmp42\x00\x00\x00\x00mp42isom')
-        f.write(b'\x00' * (10 * 1024 * 1024))  # 10MB
+    # Copy real media files if they exist, otherwise create minimal test files
+    if os.path.exists(media_samples_dir):
+        # Use real media files - copy ALL available formats
+        for filename in os.listdir(media_samples_dir):
+            if filename.startswith(('valid.', 'corrupted.')) and not filename.endswith('.md'):
+                src = os.path.join(media_samples_dir, filename)
+                dst = os.path.join(temp_dir, filename)
+                shutil.copy2(src, dst)
+                # Add to paths dict without extension
+                key = filename.replace('.', '_')
+                paths[key] = dst
+        
+        # Copy large video if available, otherwise use valid.mp4
+        large_src = os.path.join(media_samples_dir, 'video.mp4')
+        if os.path.exists(large_src):
+            paths['large_video'] = os.path.join(temp_dir, 'large_video.mp4')
+            shutil.copy2(large_src, paths['large_video'])
+        elif 'valid_mp4' in paths:
+            paths['large_video'] = paths['valid_mp4']
+    else:
+        # Fallback: Create minimal valid files for testing
+        paths['valid_mp4'] = os.path.join(temp_dir, 'valid.mp4')
+        paths['corrupted_mp4'] = os.path.join(temp_dir, 'corrupted.mp4')
+        paths['valid_jpg'] = os.path.join(temp_dir, 'valid.jpg')
+        paths['corrupted_jpg'] = os.path.join(temp_dir, 'corrupted.jpg')
+        paths['valid_mp3'] = os.path.join(temp_dir, 'valid.mp3')
+        paths['large_video'] = os.path.join(temp_dir, 'large_video.mp4')
+        
+        # Valid MP4 header
+        with open(paths['valid_mp4'], 'wb') as f:
+            f.write(b'\x00\x00\x00\x20ftypmp42\x00\x00\x00\x00mp42isom')
+            f.write(b'\x00' * 1024)  # Padding
+        
+        # Corrupted MP4 (missing moov atom)
+        with open(paths['corrupted_mp4'], 'wb') as f:
+            f.write(b'\x00\x00\x00\x20ftypmp42\x00\x00\x00\x00mp42isom')
+            f.write(b'\xFF' * 1024)  # Invalid data
+        
+        # Valid JPEG header
+        with open(paths['valid_jpg'], 'wb') as f:
+            f.write(b'\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00')
+            f.write(b'\xFF\xD9')  # End marker
+        
+        # Corrupted JPEG (truncated)
+        with open(paths['corrupted_jpg'], 'wb') as f:
+            f.write(b'\xFF\xD8\xFF\xE0')  # Incomplete header
+        
+        # Valid MP3 (ID3 header)
+        with open(paths['valid_mp3'], 'wb') as f:
+            f.write(b'ID3\x03\x00\x00\x00\x00\x00\x00')
+            f.write(b'\xFF\xFB')  # MP3 sync word
+        
+        # Large video file (10MB)
+        with open(paths['large_video'], 'wb') as f:
+            f.write(b'\x00\x00\x00\x20ftypmp42\x00\x00\x00\x00mp42isom')
+            f.write(b'\x00' * (10 * 1024 * 1024))  # 10MB
     
     yield paths
     
@@ -198,6 +222,66 @@ def mock_scan_result(db):
     db.session.commit()
     
     return result
+
+
+@pytest.fixture
+def real_scan_results(db, test_data_dir):
+    """Scan real media files into test database"""
+    from models import ScanResult
+    from media_checker import PixelProbe
+    from datetime import datetime, timezone
+    
+    checker = PixelProbe()
+    results = []
+    
+    # Scan valid files
+    for key, path in test_data_dir.items():
+        if key.startswith('valid_') and os.path.exists(path):
+            scan_data = checker.scan_file(path)
+            if scan_data:
+                result = ScanResult(
+                    file_path=path,
+                    file_size=scan_data.get('file_size', 0),
+                    file_type=scan_data.get('file_type', ''),
+                    file_hash=scan_data.get('file_hash', ''),
+                    scan_date=datetime.now(timezone.utc),
+                    scan_status='completed',
+                    is_corrupted=scan_data.get('is_corrupted', False),
+                    error_message=scan_data.get('error_message'),
+                    corruption_details=scan_data.get('corruption_details'),
+                    scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
+                    scan_output=scan_data.get('scan_output'),
+                    warning_details=scan_data.get('warning_details'),
+                    marked_as_good=False
+                )
+                db.session.add(result)
+                results.append(result)
+    
+    # Scan corrupted files
+    for key, path in test_data_dir.items():
+        if key.startswith('corrupted_') and os.path.exists(path):
+            scan_data = checker.scan_file(path)
+            if scan_data:
+                result = ScanResult(
+                    file_path=path,
+                    file_size=scan_data.get('file_size', 0),
+                    file_type=scan_data.get('file_type', ''),
+                    file_hash=scan_data.get('file_hash', ''),
+                    scan_date=datetime.now(timezone.utc),
+                    scan_status='completed',
+                    is_corrupted=scan_data.get('is_corrupted', False),
+                    error_message=scan_data.get('error_message'),
+                    corruption_details=scan_data.get('corruption_details'),
+                    scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
+                    scan_output=scan_data.get('scan_output'),
+                    warning_details=scan_data.get('warning_details'),
+                    marked_as_good=False
+                )
+                db.session.add(result)
+                results.append(result)
+    
+    db.session.commit()
+    return results
 
 @pytest.fixture
 def mock_corrupted_result(db):

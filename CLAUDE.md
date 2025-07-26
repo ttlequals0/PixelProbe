@@ -29,10 +29,7 @@
 - python testing should use venv
 - dont add yourself or claude to git commits
 - Always follow claude.md
-
-### Known Issues to Address
-- **Table Text Overlap Issue**: The current CSS has fixed widths for table cells which might be causing text overlap on certain screen sizes. The CSS uses fixed width of 350px for file-path-cell which may not be responsive. This needs investigation by looking at the specific overlap issue in the browser and potentially implementing responsive table design.
-
+- Always run test suite before each build and make sure the app will actually start. 
 ### Docker Tagging Notes
 - dont tage  - ttlequals0/pixelprobe:2.0
 

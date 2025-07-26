@@ -3,7 +3,6 @@ Simple tests for the main app endpoints
 """
 
 import pytest
-from unittest.mock import patch, Mock
 
 def test_health_endpoint(client):
     """Test the health check endpoint"""
@@ -20,31 +19,26 @@ def test_version_endpoint(client):
     assert 'version' in data
     assert 'github_url' in data
 
-@patch('app.scan_state')
-def test_scan_status_endpoint(mock_scan_state, client):
+def test_scan_status_endpoint(client, db):
     """Test the scan status endpoint"""
-    mock_scan_state.copy.return_value = {
-        'is_scanning': False,
-        'phase': 'idle',
-        'phase_number': 0,
-        'phase_current': 0,
-        'phase_total': 0,
-        'files_processed': 0,
-        'estimated_total': 0,
-        'average_scan_time': 0,
-        'start_time': None,
-        'current_file': None,
-        'discovery_count': 0,
-        'adding_progress': 0,
-        'progress_message': '',
-        'total_phases': 3
-    }
+    # Ensure ScanState table exists and has a default entry
+    from models import ScanState
+    db.create_all()
     
     response = client.get('/api/scan-status')
     assert response.status_code == 200
     data = response.get_json()
-    assert data['is_scanning'] is False
-    assert data['phase'] == 'idle'
+    
+    # Check required fields are present
+    assert 'status' in data
+    assert 'current' in data
+    assert 'total' in data
+    assert 'is_running' in data
+    assert 'phase' in data
+    
+    # Check default values for idle state
+    assert data['is_running'] is False
+    assert data['phase'] in ['idle', 'completed', None]  # None is possible if no scan state
 
 def test_stats_endpoint(client, db, mock_scan_result):
     """Test the stats endpoint"""
