@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.128] - 2025-07-26
+
+### Audit Results - Scan Logic Verification
+- **full_scan**: ✓ Working correctly - scans all files in configured directories
+- **rescan**: ✓ Working correctly - uses force_rescan=true, properly scans only selected files
+- **deep_scan**: ✓ Fixed - now creates distinct 'deep_scan' report type with enhanced corruption detection
+- **cleanup**: ✓ Working correctly - finds and removes orphaned database entries
+- **file_changes**: ✓ Working correctly - detects hash changes and rescans modified files
+
+### Fixed
+- **Bulk Download API**: Fixed `/api/reports/download-multiple` endpoint to read from database instead of filesystem
+  - Changed from expecting filenames to accepting report_ids
+  - Generates report JSON from database records on-the-fly
+  - Works for both ZIP and PDF formats
+  - Updated tests to match new implementation
+
+- **Deep Scan Reports**: Added proper report type differentiation
+  - Deep scan now creates reports with scan_type='deep_scan'
+  - Scan service tracks deep_scan flag and passes it to report creation
+  - Reports now properly distinguish between full_scan, rescan, and deep_scan types
+
+- **PDF Report Column Widths**: Adjusted column widths for better landscape fit
+  - Changed from [0.7, 3.5, 0.7, 0.8, 0.6, 2.5, 1.2] inches
+  - To [0.6, 3.2, 0.6, 0.7, 0.6, 2.3, 1.0] inches  
+  - Ensures all columns fit within 10-inch available space (11" landscape - 1" margins)
+
+- **Test Fixes**: 
+  - Updated conftest.py to include reports blueprint
+  - Fixed test_bulk_reports.py to use proper fixtures
+  - Fixed test_scan_reports_list to use db fixture
+
+### Deployment
+- Built and pushed Docker image version 2.0.128 to DockerHub
+- Tagged as both `2.0.128` and `latest`
+- Platform: linux/amd64
+
 ## [2.0.127] - 2025-07-26
 
 ### Fixed

@@ -280,8 +280,9 @@ def generate_pdf_report(scan_type, scan_id):
                     scan_date
                 ])
             
-            # Create table with proper column widths
-            table = Table(table_data, colWidths=[0.7*inch, 3.5*inch, 0.7*inch, 0.8*inch, 0.6*inch, 2.5*inch, 1.2*inch])
+            # Create table with proper column widths adjusted for landscape
+            # Total width = 11 inches (landscape) - 1 inch margins = 10 inches available
+            table = Table(table_data, colWidths=[0.6*inch, 3.2*inch, 0.6*inch, 0.7*inch, 0.6*inch, 2.3*inch, 1.0*inch])
             table.setStyle(TableStyle([
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
@@ -344,7 +345,7 @@ def export_scan_report_pdf(report_id):
         
         # Create PDF buffer
         buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), topMargin=0.5*inch, bottomMargin=0.5*inch)
         
         # Container for the 'Flowable' objects
         elements = []
@@ -770,7 +771,7 @@ def delete_scan_report(report_id):
 
 @reports_bp.route('/reports/download-multiple', methods=['POST'])
 @validate_json_input({
-    'filenames': {'required': True, 'type': list},
+    'report_ids': {'required': True, 'type': list},
     'format': {'required': False, 'type': str}
 })
 def download_multiple_reports():
@@ -781,20 +782,21 @@ def download_multiple_reports():
         from flask import current_app
         
         data = request.get_json()
-        filenames = data.get('filenames', [])
+        report_ids = data.get('report_ids', [])
         format_type = data.get('format', 'zip').lower()  # 'zip' or 'pdf'
         
-        if not filenames:
-            return jsonify({'error': 'No filenames provided'}), 400
+        if not report_ids:
+            return jsonify({'error': 'No report IDs provided'}), 400
         
-        report_dir = os.path.join(current_app.instance_path, 'reports')
+        # Get reports from database
+        reports = []
+        for report_id in report_ids:
+            report = ScanReport.query.filter_by(report_id=report_id).first()
+            if report:
+                reports.append(report)
         
-        # Validate all filenames
-        for filename in filenames:
-            if '..' in filename or '/' in filename or '\\' in filename:
-                return jsonify({'error': f'Invalid filename: {filename}'}), 400
-            if not filename.endswith('.json'):
-                return jsonify({'error': f'Invalid report filename: {filename}'}), 400
+        if not reports:
+            return jsonify({'error': 'No valid reports found'}), 404
         
         if format_type == 'pdf':
             # Generate combined PDF
@@ -842,93 +844,96 @@ def download_multiple_reports():
                     elements.append(Spacer(1, 0.3*inch))
                 
                 # Add each report
-                for idx, filename in enumerate(filenames):
-                    file_path = os.path.join(report_dir, filename)
-                    if not os.path.exists(file_path):
-                        continue
-                    
-                    with open(file_path, 'r') as f:
-                        report_data = json.load(f)
-                    
+                for idx, report in enumerate(reports):
                     # Add page break between reports
                     if idx > 0:
                         elements.append(PageBreak())
                     
                     # Report title
-                    report_type = 'Cleanup Report' if filename.startswith('cleanup_report_') else 'Scan Report'
+                    report_type = 'Cleanup Report' if report.scan_type == 'cleanup' else 'Scan Report'
                     elements.append(Paragraph(f"PixelProbe {report_type}", title_style))
                     elements.append(Spacer(1, 0.2*inch))
                     
                     # Report info
-                    info_text = f"Report ID: {filename}<br/>"
-                    info_text += f"Status: {report_data.get('status', 'Unknown')}<br/>"
-                    info_text += f"Start Time: {report_data.get('start_time', 'N/A')}<br/>"
-                    info_text += f"End Time: {report_data.get('end_time', 'N/A')}<br/>"
+                    info_text = f"Report ID: {report.report_id}<br/>"
+                    info_text += f"Scan Type: {report.scan_type.replace('_', ' ').title()}<br/>"
+                    info_text += f"Status: {report.status}<br/>"
+                    info_text += f"Start Time: {report.start_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.start_time else 'N/A'}<br/>"
+                    info_text += f"End Time: {report.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.end_time else 'N/A'}<br/>"
                     elements.append(Paragraph(info_text, styles['Normal']))
                     elements.append(Spacer(1, 0.2*inch))
                     
                     # Statistics
-                    if 'stats' in report_data:
-                        elements.append(Paragraph("Statistics", styles['Heading2']))
-                        stats_data = [['Metric', 'Value']]
-                        for key, value in report_data['stats'].items():
-                            stats_data.append([key.replace('_', ' ').title(), str(value)])
-                        
-                        stats_table = Table(stats_data)
-                        stats_table.setStyle(TableStyle([
-                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                            ('BACKGROUND', (0, 0), (-1, 0), primary_green),
-                            ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
-                        ]))
-                        elements.append(stats_table)
-                        elements.append(Spacer(1, 0.2*inch))
+                    elements.append(Paragraph("Statistics", styles['Heading2']))
+                    stats_data = [['Metric', 'Value']]
                     
-                    # Add scanned files if available
-                    if 'results' in report_data and report_data['results']:
-                        results = report_data['results']
+                    if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+                        stats_data.extend([
+                            ['Total Files Discovered', f"{report.total_files_discovered:,}"],
+                            ['Files Scanned', f"{report.files_scanned:,}"],
+                            ['Files Corrupted', f"{report.files_corrupted:,}"],
+                            ['Files with Warnings', f"{report.files_with_warnings:,}"]
+                        ])
+                    elif report.scan_type == 'cleanup':
+                        stats_data.extend([
+                            ['Orphaned Records Found', f"{report.orphaned_records_found:,}"],
+                            ['Orphaned Records Deleted', f"{report.orphaned_records_deleted:,}"]
+                        ])
+                    elif report.scan_type == 'file_changes':
+                        stats_data.extend([
+                            ['Files Changed', f"{report.files_changed:,}"],
+                            ['New Corruptions', f"{report.files_corrupted_new:,}"]
+                        ])
                         
-                        # Scanned files list
-                        if 'scanned_files' in results and results['scanned_files']:
+                    stats_table = Table(stats_data)
+                    stats_table.setStyle(TableStyle([
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                        ('BACKGROUND', (0, 0), (-1, 0), primary_green),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
+                    ]))
+                    elements.append(stats_table)
+                    elements.append(Spacer(1, 0.2*inch))
+                    
+                    # Add scanned files if available for scan reports
+                    if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+                        # Query scan results for this report's time period
+                        from models import ScanResult
+                        scanned_files = ScanResult.query.filter(
+                            ScanResult.scan_date >= report.start_time,
+                            ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
+                        ).limit(500).all()
+                        
+                        if scanned_files:
                             elements.append(Paragraph("Scanned Files", styles['Heading2']))
                             elements.append(Spacer(1, 0.1*inch))
                             
-                            # Limit files shown in PDF to 500
-                            files_to_show = results['scanned_files'][:500]
-                            
                             # Create files table with all required fields
                             files_data = [['Status', 'File Path', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
-                            for file in files_to_show:
-                                status = 'Corrupted' if file.get('is_corrupted') else 'Healthy'
-                                if file.get('has_warnings'):
+                            for file in scanned_files:
+                                status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
+                                if file.has_warnings and not file.marked_as_good:
                                     status = 'Warning'
                                 
-                                file_path = file.get('file_path', '')
                                 # Wrap file path in Paragraph for proper text wrapping
-                                file_path_para = Paragraph(file_path, cell_style)
+                                file_path_para = Paragraph(file.file_path, cell_style)
                                 
-                                file_size = file.get('file_size', 0)
-                                if file_size:
-                                    size_mb = file_size / (1024 * 1024)
-                                    size_str = f"{size_mb:.1f} MB"
-                                else:
-                                    size_str = 'N/A'
-                                
-                                file_type = file.get('file_type') or 'N/A'
-                                scan_tool = file.get('scan_tool') or 'N/A'
+                                size_str = f"{file.file_size / (1024*1024):.1f} MB" if file.file_size else 'N/A'
+                                file_type = file.file_type or 'N/A'
+                                scan_tool = file.scan_tool or 'N/A'
                                 
                                 # Get details
                                 details = ''
-                                if file.get('is_corrupted') and file.get('corruption_details'):
-                                    details = str(file['corruption_details'])
-                                elif file.get('has_warnings') and file.get('warning_details'):
-                                    details = str(file['warning_details'])
+                                if file.is_corrupted and file.corruption_details:
+                                    details = file.corruption_details
+                                elif file.has_warnings and file.warning_details:
+                                    details = file.warning_details
                                 
                                 # Wrap details in Paragraph
                                 details_para = Paragraph(details, cell_style)
                                 
-                                scan_date = file.get('scan_date', 'N/A')
+                                scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
                                 
                                 files_data.append([
                                     status,
@@ -940,8 +945,9 @@ def download_multiple_reports():
                                     scan_date
                                 ])
                             
-                            # Create table with proper column widths
-                            table = Table(files_data, colWidths=[0.7*inch, 3.5*inch, 0.7*inch, 0.8*inch, 0.6*inch, 2.5*inch, 1.2*inch])
+                            # Create table with proper column widths adjusted for landscape
+                            # Total width = 11 inches (landscape) - 1 inch margins = 10 inches available
+                            table = Table(files_data, colWidths=[0.6*inch, 3.2*inch, 0.6*inch, 0.7*inch, 0.6*inch, 2.3*inch, 1.0*inch])
                             table.setStyle(TableStyle([
                                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                                 ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
@@ -957,7 +963,7 @@ def download_multiple_reports():
                             
                             elements.append(table)
                             
-                            if len(results['scanned_files']) > 500:
+                            if len(scanned_files) >= 500:
                                 elements.append(Spacer(1, 0.1*inch))
                                 elements.append(Paragraph("Note: Showing first 500 results", styles['Normal']))
                 
@@ -983,10 +989,24 @@ def download_multiple_reports():
             buffer = io.BytesIO()
             
             with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for filename in filenames:
-                    file_path = os.path.join(report_dir, filename)
-                    if os.path.exists(file_path):
-                        zipf.write(file_path, filename)
+                for report in reports:
+                    # Create JSON data for each report
+                    report_data = report.to_dict()
+                    report_data['export_metadata'] = {
+                        'exported_at': datetime.now(timezone.utc).isoformat(),
+                        'export_format': 'json',
+                        'version': '1.0'
+                    }
+                    json_data = json.dumps(report_data, indent=2)
+                    
+                    # Generate filename based on scan type
+                    if report.scan_type == 'cleanup':
+                        filename = f"cleanup_report_{report.report_id}.json"
+                    else:
+                        filename = f"scan_report_{report.report_id}.json"
+                    
+                    # Add to zip
+                    zipf.writestr(filename, json_data)
             
             buffer.seek(0)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

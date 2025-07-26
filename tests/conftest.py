@@ -11,7 +11,7 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 
 # Import models first to ensure they're registered with SQLAlchemy
-from models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule
+from models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport
 
 # Import models to ensure they're available
 from models import ScanState, ScanResult
@@ -48,6 +48,7 @@ def create_test_app():
     from pixelprobe.api.admin_routes import admin_bp, set_scheduler
     from pixelprobe.api.export_routes import export_bp
     from pixelprobe.api.maintenance_routes import maintenance_bp
+    from pixelprobe.api.reports_routes import reports_bp
     from scheduler import MediaScheduler
     
     test_app.register_blueprint(scan_bp)
@@ -55,6 +56,7 @@ def create_test_app():
     test_app.register_blueprint(admin_bp)
     test_app.register_blueprint(export_bp)
     test_app.register_blueprint(maintenance_bp)
+    test_app.register_blueprint(reports_bp)
     
     # Exempt API endpoints from CSRF
     csrf.exempt(scan_bp)
@@ -62,6 +64,7 @@ def create_test_app():
     csrf.exempt(admin_bp)
     csrf.exempt(export_bp)
     csrf.exempt(maintenance_bp)
+    csrf.exempt(reports_bp)
     
     # Set up scheduler
     scheduler = MediaScheduler()
@@ -116,7 +119,7 @@ def db(app):
     """Create database for testing"""
     with app.app_context():
         # Ensure all models are loaded
-        from models import ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule
+        from models import ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport
         
         _db.create_all()
         yield _db

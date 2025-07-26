@@ -142,7 +142,7 @@ class TestReportEndpoints:
         if response.status_code == 200:
             assert response.content_type == 'application/pdf'
     
-    def test_scan_reports_list(self, client):
+    def test_scan_reports_list(self, client, db):
         """Test scan reports listing"""
         response = client.get('/api/scan-reports')
         # Handle case where blueprint might not be registered in test

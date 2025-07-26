@@ -458,7 +458,8 @@ def scan_parallel():
         result = current_app.scan_service.scan_directories(
             validated_dirs, 
             force_rescan=force_rescan, 
-            num_workers=num_workers
+            num_workers=num_workers,
+            deep_scan=deep_scan
         )
         return jsonify(result)
     except RuntimeError as e:

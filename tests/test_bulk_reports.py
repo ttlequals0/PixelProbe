@@ -3,37 +3,17 @@ Tests for bulk report operations
 """
 import pytest
 import json
-import os
 from datetime import datetime, timezone
 import tempfile
 import zipfile
 import io
-
-# Set required environment variables for testing
-os.environ['SECRET_KEY'] = 'test-secret-key'
-os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
-
-from app import app, db
 from models import ScanResult, ScanReport
 
 
 class TestBulkReportOperations:
     """Test bulk report download functionality"""
     
-    @pytest.fixture
-    def client(self):
-        app.config['TESTING'] = True
-        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-        
-        with app.test_client() as client:
-            with app.app_context():
-                db.create_all()
-                # Create test data
-                self._create_test_reports()
-                yield client
-                db.drop_all()
-    
-    def _create_test_reports(self):
+    def _create_test_reports(self, db):
         """Create test scan reports"""
         # Create scan results first
         for i in range(5):
@@ -63,26 +43,22 @@ class TestBulkReportOperations:
         
         db.session.commit()
     
-    def test_download_multiple_reports_as_zip(self, client):
+    def test_download_multiple_reports_as_zip(self, client, db):
         """Test downloading multiple reports as ZIP"""
+        # Create test data
+        self._create_test_reports(db)
+        
         # Get available reports
         response = client.get('/api/scan-reports')
         assert response.status_code == 200
         reports = response.json['reports']
         
-        # Generate expected filenames based on report IDs
-        filenames = []
-        for report in reports[:2]:
-            # Generate filename based on scan type and report ID
-            if report['scan_type'] == 'cleanup':
-                filename = f"cleanup_report_{report['report_id']}.json"
-            else:
-                filename = f"scan_report_{report['report_id']}.json"
-            filenames.append(filename)
+        # Get report IDs
+        report_ids = [report['report_id'] for report in reports[:2]]
         
         # Download as ZIP
         response = client.post('/api/reports/download-multiple', 
-                             json={'filenames': filenames, 'format': 'zip'})
+                             json={'report_ids': report_ids, 'format': 'zip'})
         
         assert response.status_code == 200
         assert response.content_type == 'application/zip'
@@ -91,54 +67,55 @@ class TestBulkReportOperations:
         zip_data = io.BytesIO(response.data)
         with zipfile.ZipFile(zip_data, 'r') as zf:
             assert len(zf.namelist()) == 2
-            for filename in filenames:
-                assert filename in zf.namelist()
+            # Check that files have expected names
+            for report in reports[:2]:
+                if report['scan_type'] == 'cleanup':
+                    expected_filename = f"cleanup_report_{report['report_id']}.json"
+                else:
+                    expected_filename = f"scan_report_{report['report_id']}.json"
+                assert expected_filename in zf.namelist()
     
-    def test_download_multiple_reports_as_pdf(self, client):
+    def test_download_multiple_reports_as_pdf(self, client, db):
         """Test downloading multiple reports as combined PDF"""
+        # Create test data
+        self._create_test_reports(db)
+        
         # Get available reports
         response = client.get('/api/scan-reports')
         assert response.status_code == 200
         reports = response.json['reports']
         
-        # Generate expected filenames based on report IDs
-        filenames = []
-        for report in reports[:2]:
-            # Generate filename based on scan type and report ID
-            if report['scan_type'] == 'cleanup':
-                filename = f"cleanup_report_{report['report_id']}.json"
-            else:
-                filename = f"scan_report_{report['report_id']}.json"
-            filenames.append(filename)
+        # Get report IDs
+        report_ids = [report['report_id'] for report in reports[:2]]
         
         # Download as PDF
         response = client.post('/api/reports/download-multiple', 
-                             json={'filenames': filenames, 'format': 'pdf'})
+                             json={'report_ids': report_ids, 'format': 'pdf'})
         
         assert response.status_code == 200
         assert response.content_type == 'application/pdf'
         assert len(response.data) > 0  # PDF should have content
     
-    def test_download_multiple_reports_missing_filenames(self, client):
-        """Test error handling for missing filenames"""
+    def test_download_multiple_reports_missing_report_ids(self, client, db):
+        """Test error handling for missing report IDs"""
         response = client.post('/api/reports/download-multiple', 
                              json={'format': 'zip'})
         
         assert response.status_code == 400
-        assert 'filenames' in response.json['error']
+        assert 'report_ids' in response.json['error']
     
-    def test_download_multiple_reports_empty_list(self, client):
-        """Test error handling for empty filenames list"""
+    def test_download_multiple_reports_empty_list(self, client, db):
+        """Test error handling for empty report IDs list"""
         response = client.post('/api/reports/download-multiple', 
-                             json={'filenames': [], 'format': 'zip'})
+                             json={'report_ids': [], 'format': 'zip'})
         
         assert response.status_code == 400
-        assert 'No filenames provided' in response.json['error']
+        assert 'No report IDs provided' in response.json['error']
     
-    def test_download_multiple_reports_invalid_format(self, client):
-        """Test error handling for invalid format"""
+    def test_download_multiple_reports_invalid_report_ids(self, client, db):
+        """Test error handling for invalid report IDs"""
         response = client.post('/api/reports/download-multiple', 
-                             json={'filenames': ['test.json'], 'format': 'invalid'})
+                             json={'report_ids': ['invalid-id-1', 'invalid-id-2'], 'format': 'zip'})
         
-        assert response.status_code == 400
-        assert 'Invalid format' in response.json['error']
+        assert response.status_code == 404
+        assert 'No valid reports found' in response.json['error']

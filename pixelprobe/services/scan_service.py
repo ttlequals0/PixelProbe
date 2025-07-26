@@ -90,7 +90,7 @@ class ScanService:
         return {'status': 'started', 'message': 'Scan started', 'file_path': file_path}
     
     def scan_directories(self, directories: List[str], force_rescan: bool = False, 
-                        num_workers: int = 1) -> Dict:
+                        num_workers: int = 1, deep_scan: bool = False) -> Dict:
         """Scan multiple directories"""
         if self.is_scan_running():
             raise RuntimeError("Another scan is already in progress")
@@ -107,6 +107,8 @@ class ScanService:
         # Save scan state and capture ID before threading
         scan_state = ScanState.get_or_create()
         scan_state.start_scan(valid_dirs, force_rescan)
+        # Store deep_scan flag for later use in report creation
+        self._deep_scan = deep_scan
         db.session.commit()
         
         # Capture scan ID while the object is still bound to the session
@@ -236,8 +238,16 @@ class ScanService:
                             ).all()
                         ]
                     else:
-                        # Only scan new files and files that haven't been scanned
-                        files_to_scan = all_files  # Just the new files discovered
+                        # Scan new files and existing files with pending status
+                        from models import ScanResult
+                        pending_files = [
+                            result.file_path for result in db.session.query(ScanResult).filter(
+                                ScanResult.scan_status == 'pending',
+                                db.or_(*[ScanResult.file_path.like(f"{d}%") for d in valid_dirs])
+                            ).all()
+                        ]
+                        files_to_scan = list(set(all_files + pending_files))  # Combine new files and pending files
+                        logger.info(f"Including {len(pending_files)} pending files in scan")
                     
                     total_scan_files = len(files_to_scan)
                     logger.info(f"Starting scan phase: {total_scan_files} files to scan")
@@ -259,7 +269,14 @@ class ScanService:
                         # Create scan report even for empty scans
                         completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
                         if completed_scan_state:
-                            self._create_scan_report(completed_scan_state, scan_type='full_scan' if not force_rescan else 'rescan')
+                            # Determine scan type based on flags
+                            if getattr(self, '_deep_scan', False):
+                                scan_type = 'deep_scan'
+                            elif force_rescan:
+                                scan_type = 'rescan'
+                            else:
+                                scan_type = 'full_scan'
+                            self._create_scan_report(completed_scan_state, scan_type=scan_type)
                         
                         logger.info(f"Scan {scan_state_id} completed immediately (no files to process)")
                         return {'message': 'Scan completed - no files to process', 'total_files': 0}
@@ -317,6 +334,8 @@ class ScanService:
         # Save scan state
         scan_state = ScanState.get_or_create()
         scan_state.start_scan(["selected_files"], force_rescan)
+        # Store deep_scan flag for later use in report creation
+        self._deep_scan = deep_scan
         db.session.commit()
         
         # Capture scan ID
@@ -346,10 +365,14 @@ class ScanService:
                     total_files = len(valid_files)
                     logger.info(f"Scanning {total_files} specific files")
                     
-                    # Go directly to scanning phase
+                    # Go directly to scanning phase (phase 3 of 3 for consistency)
                     self.update_progress(0, total_files, '', 'scanning')
-                    scan_state.update_progress(0, total_files, phase='scanning')
-                    scan_state.progress_message = f'Scanning {total_files} selected files...'
+                    scan_state.phase = 'scanning'
+                    scan_state.phase_number = 3
+                    scan_state.phase_current = 0
+                    scan_state.phase_total = total_files
+                    scan_state.start_time = datetime.now(timezone.utc)
+                    scan_state.progress_message = f'Scanning {total_files} selected files for corruption...'
                     db.session.commit()
                     
                     if num_workers > 1:
@@ -457,7 +480,14 @@ class ScanService:
             # Re-fetch scan state to get updated values
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
-                self._create_scan_report(completed_scan_state, scan_type='full_scan' if not force_rescan else 'rescan')
+                # Determine scan type based on flags
+                if getattr(self, '_deep_scan', False):
+                    scan_type = 'deep_scan'
+                elif force_rescan:
+                    scan_type = 'rescan'
+                else:
+                    scan_type = 'full_scan'
+                self._create_scan_report(completed_scan_state, scan_type=scan_type)
     
     def _parallel_scan(self, checker: PixelProbe, files: List[str], 
                       force_rescan: bool, num_workers: int, scan_state: ScanState, scan_state_id: int):
@@ -529,7 +559,14 @@ class ScanService:
             # Re-fetch scan state to get updated values
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
-                self._create_scan_report(completed_scan_state, scan_type='full_scan' if not force_rescan else 'rescan')
+                # Determine scan type based on flags
+                if getattr(self, '_deep_scan', False):
+                    scan_type = 'deep_scan'
+                elif force_rescan:
+                    scan_type = 'rescan'
+                else:
+                    scan_type = 'full_scan'
+                self._create_scan_report(completed_scan_state, scan_type=scan_type)
     
     def _create_scan_report(self, scan_state: ScanState, scan_type: str = 'full_scan'):
         """Create a scan report from the completed scan state"""
