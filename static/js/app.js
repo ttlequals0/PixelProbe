@@ -2101,7 +2101,7 @@ class PixelProbeApp {
                 },
                 body: JSON.stringify({ 
                     directories: Array.from(directories),
-                    force_rescan: false  // Files are already reset, no need to force
+                    force_rescan: true  // Force rescan to actually re-scan the files
                 })
             });
 

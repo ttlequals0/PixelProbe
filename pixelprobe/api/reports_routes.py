@@ -767,3 +767,236 @@ def delete_scan_report(report_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Failed to delete report: {str(e)}'}), 500
+
+@reports_bp.route('/reports/download-multiple', methods=['POST'])
+@validate_json_input({
+    'filenames': {'required': True, 'type': list},
+    'format': {'required': False, 'type': str}
+})
+def download_multiple_reports():
+    """Download multiple reports as a zip file or combined PDF"""
+    try:
+        import io
+        import zipfile
+        from flask import current_app
+        
+        data = request.get_json()
+        filenames = data.get('filenames', [])
+        format_type = data.get('format', 'zip').lower()  # 'zip' or 'pdf'
+        
+        if not filenames:
+            return jsonify({'error': 'No filenames provided'}), 400
+        
+        report_dir = os.path.join(current_app.instance_path, 'reports')
+        
+        # Validate all filenames
+        for filename in filenames:
+            if '..' in filename or '/' in filename or '\\' in filename:
+                return jsonify({'error': f'Invalid filename: {filename}'}), 400
+            if not filename.endswith('.json'):
+                return jsonify({'error': f'Invalid report filename: {filename}'}), 400
+        
+        if format_type == 'pdf':
+            # Generate combined PDF
+            try:
+                from reportlab.lib import colors
+                from reportlab.lib.pagesizes import letter, landscape
+                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.lib.units import inch
+                from reportlab.lib.enums import TA_CENTER
+                
+                # Create PDF buffer
+                buffer = io.BytesIO()
+                doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+                elements = []
+                
+                styles = getSampleStyleSheet()
+                primary_green = colors.HexColor('#1ce783')
+                primary_black = colors.HexColor('#040405')
+                
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=24,
+                    textColor=primary_black,
+                    spaceAfter=30,
+                    alignment=TA_CENTER
+                )
+                
+                # Create styles for wrapping text
+                cell_style = ParagraphStyle(
+                    'CellStyle',
+                    parent=styles['Normal'],
+                    fontSize=6,
+                    leading=7
+                )
+                
+                # Add logo at the top of the first page
+                logo_path = os.path.join(os.path.dirname(__file__), '../../static/images/pixelprobe-logo.png')
+                if os.path.exists(logo_path):
+                    # Maintain aspect ratio for square logo (670x729 pixels)
+                    logo = Image(logo_path, width=1.5*inch, height=1.5*inch, kind='proportional')
+                    logo.hAlign = 'CENTER'
+                    elements.append(logo)
+                    elements.append(Spacer(1, 0.3*inch))
+                
+                # Add each report
+                for idx, filename in enumerate(filenames):
+                    file_path = os.path.join(report_dir, filename)
+                    if not os.path.exists(file_path):
+                        continue
+                    
+                    with open(file_path, 'r') as f:
+                        report_data = json.load(f)
+                    
+                    # Add page break between reports
+                    if idx > 0:
+                        elements.append(PageBreak())
+                    
+                    # Report title
+                    report_type = 'Cleanup Report' if filename.startswith('cleanup_report_') else 'Scan Report'
+                    elements.append(Paragraph(f"PixelProbe {report_type}", title_style))
+                    elements.append(Spacer(1, 0.2*inch))
+                    
+                    # Report info
+                    info_text = f"Report ID: {filename}<br/>"
+                    info_text += f"Status: {report_data.get('status', 'Unknown')}<br/>"
+                    info_text += f"Start Time: {report_data.get('start_time', 'N/A')}<br/>"
+                    info_text += f"End Time: {report_data.get('end_time', 'N/A')}<br/>"
+                    elements.append(Paragraph(info_text, styles['Normal']))
+                    elements.append(Spacer(1, 0.2*inch))
+                    
+                    # Statistics
+                    if 'stats' in report_data:
+                        elements.append(Paragraph("Statistics", styles['Heading2']))
+                        stats_data = [['Metric', 'Value']]
+                        for key, value in report_data['stats'].items():
+                            stats_data.append([key.replace('_', ' ').title(), str(value)])
+                        
+                        stats_table = Table(stats_data)
+                        stats_table.setStyle(TableStyle([
+                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                            ('BACKGROUND', (0, 0), (-1, 0), primary_green),
+                            ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
+                        ]))
+                        elements.append(stats_table)
+                        elements.append(Spacer(1, 0.2*inch))
+                    
+                    # Add scanned files if available
+                    if 'results' in report_data and report_data['results']:
+                        results = report_data['results']
+                        
+                        # Scanned files list
+                        if 'scanned_files' in results and results['scanned_files']:
+                            elements.append(Paragraph("Scanned Files", styles['Heading2']))
+                            elements.append(Spacer(1, 0.1*inch))
+                            
+                            # Limit files shown in PDF to 500
+                            files_to_show = results['scanned_files'][:500]
+                            
+                            # Create files table with all required fields
+                            files_data = [['Status', 'File Path', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
+                            for file in files_to_show:
+                                status = 'Corrupted' if file.get('is_corrupted') else 'Healthy'
+                                if file.get('has_warnings'):
+                                    status = 'Warning'
+                                
+                                file_path = file.get('file_path', '')
+                                # Wrap file path in Paragraph for proper text wrapping
+                                file_path_para = Paragraph(file_path, cell_style)
+                                
+                                file_size = file.get('file_size', 0)
+                                if file_size:
+                                    size_mb = file_size / (1024 * 1024)
+                                    size_str = f"{size_mb:.1f} MB"
+                                else:
+                                    size_str = 'N/A'
+                                
+                                file_type = file.get('file_type') or 'N/A'
+                                scan_tool = file.get('scan_tool') or 'N/A'
+                                
+                                # Get details
+                                details = ''
+                                if file.get('is_corrupted') and file.get('corruption_details'):
+                                    details = str(file['corruption_details'])
+                                elif file.get('has_warnings') and file.get('warning_details'):
+                                    details = str(file['warning_details'])
+                                
+                                # Wrap details in Paragraph
+                                details_para = Paragraph(details, cell_style)
+                                
+                                scan_date = file.get('scan_date', 'N/A')
+                                
+                                files_data.append([
+                                    status,
+                                    file_path_para,
+                                    size_str,
+                                    file_type,
+                                    scan_tool,
+                                    details_para,
+                                    scan_date
+                                ])
+                            
+                            # Create table with proper column widths
+                            table = Table(files_data, colWidths=[0.7*inch, 3.5*inch, 0.7*inch, 0.8*inch, 0.6*inch, 2.5*inch, 1.2*inch])
+                            table.setStyle(TableStyle([
+                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                                ('BACKGROUND', (0, 0), (-1, 0), primary_green),
+                                ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
+                                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                                ('PADDING', (0, 0), (-1, -1), 4),
+                            ]))
+                            
+                            elements.append(table)
+                            
+                            if len(results['scanned_files']) > 500:
+                                elements.append(Spacer(1, 0.1*inch))
+                                elements.append(Paragraph("Note: Showing first 500 results", styles['Normal']))
+                
+                # Build PDF
+                doc.build(elements)
+                pdf_data = buffer.getvalue()
+                buffer.close()
+                
+                # Create response
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                response = make_response(pdf_data)
+                response.headers['Content-Type'] = 'application/pdf'
+                response.headers['Content-Disposition'] = f'attachment; filename=pixelprobe_reports_{timestamp}.pdf'
+                
+                return response
+                
+            except ImportError:
+                logger.error("reportlab not installed for PDF export")
+                return jsonify({'error': 'PDF export requires reportlab package'}), 500
+        
+        else:  # ZIP format
+            # Create zip buffer
+            buffer = io.BytesIO()
+            
+            with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for filename in filenames:
+                    file_path = os.path.join(report_dir, filename)
+                    if os.path.exists(file_path):
+                        zipf.write(file_path, filename)
+            
+            buffer.seek(0)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            response = make_response(buffer.getvalue())
+            response.headers['Content-Type'] = 'application/zip'
+            response.headers['Content-Disposition'] = f'attachment; filename=pixelprobe_reports_{timestamp}.zip'
+            
+            return response
+            
+    except Exception as e:
+        logger.error(f"Error downloading multiple reports: {str(e)}")
+        return jsonify({'error': str(e)}), 500
