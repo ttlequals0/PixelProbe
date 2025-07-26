@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.126] - 2025-07-26
+
+### Fixed
+- **Bulk Operations UI**: Completed bulk operations functionality in scan reports modal
+  - Added checkboxes to each report row for selection
+  - Fixed "No reports found" colspan to accommodate checkbox column
+  - Implemented proper selection management with select-all functionality
+  - Added bulk download dropdown with JSON, ZIP, and PDF export options
+  - Fixed selection clearing when loading new reports or changing pages
+  - Fixed select-all checkbox synchronization with individual selections
+  - Added automatic dropdown menu closing after bulk download
+  - Improved UI state management for bulk action buttons
+  - Ensured proper cleanup of selections after bulk operations
+
+- **Rescan File Selection**: Fixed issue where selecting 9 files would scan 39 files
+  - Changed from scanning entire directories to scanning only selected files
+  - Updated rescanSelected() to use /api/scan-parallel with specific file paths
+  - Updated deepScanSelected() to also scan only selected files instead of directories
+  
+- **UI Filter Selection Reset**: Fixed selected items not clearing when switching filters
+  - Added logic to clear selectedFiles when filter buttons are clicked
+  - Reset select-all checkbox when filters change
+  - Properly update selection UI after filter changes
+
+- **Progress Bar ETA**: Added ETA calculation to all scan types
+  - Enhanced calculateProgress() to compute estimated time remaining
+  - Added ETA display for scan, cleanup, and file-changes operations
+  - Shows phase, current file, X of Y files processed, percentage, and ETA
+  - Improved progress details formatting with consistent information display
+
 ## [2.0.125] - 2025-07-26
 
 ### Fixed

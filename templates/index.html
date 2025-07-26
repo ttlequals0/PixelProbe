@@ -339,13 +339,48 @@
                         <button class="btn btn-primary" onclick="app.loadScanReports()">
                             <i class="fas fa-sync"></i> Refresh
                         </button>
+                        <div class="dropdown" style="display: inline-block;">
+                            <button class="btn btn-primary dropdown-toggle" onclick="app.toggleDropdown(event, 'bulk-download-menu')" disabled id="downloadBtn">
+                                <i class="fas fa-download"></i> Download Selected
+                            </button>
+                            <div id="bulk-download-menu" class="dropdown-menu" style="display: none; position: absolute; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 1000; min-width: 150px; right: 0;">
+                                <a class="dropdown-item" onclick="app.downloadSelectedReports('json')" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
+                                    <i class="fas fa-file-code"></i> Download as JSON
+                                </a>
+                                <a class="dropdown-item" onclick="app.downloadSelectedReports('zip')" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
+                                    <i class="fas fa-file-archive"></i> Download as ZIP
+                                </a>
+                                <a class="dropdown-item" onclick="app.downloadSelectedReports('pdf')" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
+                                    <i class="fas fa-file-pdf"></i> Download as PDF
+                                </a>
+                            </div>
+                        </div>
+                        <button class="btn btn-danger" onclick="app.deleteSelectedReports()" disabled id="deleteBtn">
+                            <i class="fas fa-trash"></i> Delete Selected
+                        </button>
                     </div>
                     
                     <!-- Reports Table -->
+                    <style>
+                        .dropdown {
+                            position: relative;
+                        }
+                        .dropdown-toggle::after {
+                            content: '\25BC';
+                            font-size: 10px;
+                            margin-left: 5px;
+                        }
+                        .dropdown-item:hover {
+                            background: var(--bg-tertiary);
+                        }
+                    </style>
                     <div class="table-container">
                         <table class="table" id="scan-reports-table">
                             <thead>
                                 <tr>
+                                    <th style="width: 40px;">
+                                        <input type="checkbox" id="select-all-reports" onchange="app.toggleAllReports(this.checked)">
+                                    </th>
                                     <th>Start Time</th>
                                     <th>Type</th>
                                     <th>Status</th>

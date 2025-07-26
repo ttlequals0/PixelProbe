@@ -481,6 +481,25 @@ class ProgressManager {
         let percentage = 0;
         let text = '';
         let details = '';
+        let eta = '';
+        
+        // Calculate ETA if we have timing data
+        if (status.start_time && status.current > 0 && status.total > 0) {
+            const startTime = new Date(status.start_time).getTime();
+            const currentTime = new Date().getTime();
+            const elapsedMs = currentTime - startTime;
+            const elapsedSeconds = elapsedMs / 1000;
+            
+            // Calculate rate and remaining time
+            const itemsProcessed = status.current;
+            const itemsRemaining = status.total - status.current;
+            const rate = itemsProcessed / elapsedSeconds; // items per second
+            
+            if (rate > 0) {
+                const remainingSeconds = itemsRemaining / rate;
+                eta = this.formatTime(remainingSeconds);
+            }
+        }
         
         if (operationType === 'scan') {
             // 3-phase progress tracking for scans
@@ -507,18 +526,28 @@ class ProgressManager {
                 
                 text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
                 
-                // Add file details for scan operations
+                // Build details string with all information
+                const parts = [];
+                
+                // Add file count
+                if (status.current > 0 && status.total > 0) {
+                    parts.push(`${status.current} of ${status.total} files`);
+                } else if (phaseCurrent > 0 && phaseTotal > 0) {
+                    parts.push(`${phaseCurrent} of ${phaseTotal} files`);
+                }
+                
+                // Add current file
                 if (status.file || status.current_file) {
                     const currentFile = status.file || status.current_file;
-                    details = `Scanning: ${currentFile.split('/').pop()}`;
+                    parts.push(`Scanning: ${currentFile.split('/').pop()}`);
                 }
-                if (status.current > 0 && status.total > 0) {
-                    details = `${status.current} of ${status.total} files`;
-                    if (status.file || status.current_file) {
-                        const currentFile = status.file || status.current_file;
-                        details += ` - ${currentFile.split('/').pop()}`;
-                    }
+                
+                // Add ETA
+                if (eta) {
+                    parts.push(`ETA: ${eta}`);
                 }
+                
+                details = parts.join(' - ');
             }
         } else if (operationType === 'cleanup') {
             // Use the progress percentage directly from the backend
@@ -527,20 +556,35 @@ class ProgressManager {
             
             text = status.progress_message || `Phase ${status.phase_number || 1} of ${status.total_phases || 3}`;
             
+            const parts = [];
+            
+            // Add file count for cleanup
+            if (status.current > 0 && status.total > 0) {
+                parts.push(`${status.current} of ${status.total} files`);
+            }
+            
             if (status.current_file) {
                 if (status.phase === 'deleting_entries') {
-                    details = status.current_file;
+                    parts.push(status.current_file);
                 } else {
-                    details = `Checking: ${status.current_file.split('/').pop()}`;
+                    parts.push(`Checking: ${status.current_file.split('/').pop()}`);
                 }
             }
+            
             if (status.orphaned_found > 0) {
                 if (status.phase === 'deleting_entries') {
-                    details += ` - Deleting ${status.orphaned_found} orphaned entries`;
+                    parts.push(`Deleting ${status.orphaned_found} orphaned entries`);
                 } else {
-                    details += ` - Found ${status.orphaned_found} orphaned files`;
+                    parts.push(`Found ${status.orphaned_found} orphaned files`);
                 }
             }
+            
+            // Add ETA
+            if (eta) {
+                parts.push(`ETA: ${eta}`);
+            }
+            
+            details = parts.join(' - ');
             
         } else if (operationType === 'file-changes') {
             // Use the progress percentage directly from the backend
@@ -548,12 +592,27 @@ class ProgressManager {
             
             text = status.progress_message || 'Checking for file changes...';
             
+            const parts = [];
+            
+            // Add file count
+            if (status.current > 0 && status.total > 0) {
+                parts.push(`${status.current} of ${status.total} files`);
+            }
+            
             if (status.current_file) {
-                details = `Checking: ${status.current_file.split('/').pop()}`;
+                parts.push(`Checking: ${status.current_file.split('/').pop()}`);
             }
+            
             if (status.changes_found > 0) {
-                details += ` - Found ${status.changes_found} changed files`;
+                parts.push(`Found ${status.changes_found} changed files`);
             }
+            
+            // Add ETA
+            if (eta) {
+                parts.push(`ETA: ${eta}`);
+            }
+            
+            details = parts.join(' - ');
         }
         
         return { percentage, text, details };
@@ -723,6 +782,12 @@ class TableManager {
                 document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
                 // Add active class to clicked button
                 e.target.classList.add('active');
+                
+                // Clear selections when filter changes
+                this.selectedFiles.clear();
+                const selectAllCheckbox = document.querySelector('#select-all');
+                if (selectAllCheckbox) selectAllCheckbox.checked = false;
+                this.updateSelectionUI();
                 
                 this.filter = e.target.dataset.filter;
                 this.currentPage = 1;
@@ -1626,6 +1691,12 @@ class PixelProbeApp {
 
     async loadScanReports(page = 1) {
         try {
+            // Clear selections when loading new reports
+            this.selectedReports.clear();
+            this.updateReportSelectionUI();
+            const selectAllCheckbox = document.getElementById('select-all-reports');
+            if (selectAllCheckbox) selectAllCheckbox.checked = false;
+            
             // Get filter values
             const typeFilter = document.querySelector('#report-type-filter')?.value || 'all';
             const statusFilter = document.querySelector('#report-status-filter')?.value || 'all';
@@ -1651,7 +1722,7 @@ class PixelProbeApp {
             tbody.innerHTML = '';
             
             if (data.reports.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center">No reports found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center">No reports found</td></tr>';
                 return;
             }
             
@@ -1690,6 +1761,12 @@ class PixelProbeApp {
                 }
                 
                 row.innerHTML = `
+                    <td>
+                        <input type="checkbox" 
+                               data-report-id="${report.report_id}" 
+                               data-filename="${report.filename || ''}"
+                               onchange="app.toggleReportSelection('${report.report_id}', this.checked)">
+                    </td>
                     <td>${new Date(report.start_time).toLocaleString()}</td>
                     <td>${scanType}</td>
                     <td><span class="${statusClass}">${report.status}</span></td>
@@ -1870,6 +1947,167 @@ class PixelProbeApp {
         }
     }
 
+    // Report selection handling
+    selectedReports = new Set();
+
+    toggleAllReports(checked) {
+        const checkboxes = document.querySelectorAll('#scan-reports-table tbody input[type="checkbox"]');
+        checkboxes.forEach(cb => {
+            cb.checked = checked;
+            if (checked) {
+                this.selectedReports.add(cb.dataset.reportId);
+            } else {
+                this.selectedReports.delete(cb.dataset.reportId);
+            }
+        });
+        this.updateReportSelectionUI();
+    }
+
+    toggleReportSelection(reportId, checked) {
+        if (checked) {
+            this.selectedReports.add(reportId);
+        } else {
+            this.selectedReports.delete(reportId);
+        }
+        this.updateReportSelectionUI();
+    }
+
+    updateReportSelectionUI() {
+        const downloadBtn = document.getElementById('downloadBtn');
+        const deleteBtn = document.getElementById('deleteBtn');
+        
+        if (downloadBtn) downloadBtn.disabled = this.selectedReports.size === 0;
+        if (deleteBtn) deleteBtn.disabled = this.selectedReports.size === 0;
+        
+        // Update select-all checkbox state
+        const selectAllCheckbox = document.getElementById('select-all-reports');
+        if (selectAllCheckbox) {
+            const allCheckboxes = document.querySelectorAll('#scan-reports-table tbody input[type="checkbox"]');
+            const checkedCount = document.querySelectorAll('#scan-reports-table tbody input[type="checkbox"]:checked').length;
+            selectAllCheckbox.checked = allCheckboxes.length > 0 && checkedCount === allCheckboxes.length;
+        }
+    }
+
+    async downloadSelectedReports(format) {
+        if (this.selectedReports.size === 0) {
+            this.showNotification('No reports selected', 'warning');
+            return;
+        }
+
+        try {
+            // Get filenames for selected reports
+            const filenames = [];
+            for (const reportId of this.selectedReports) {
+                filenames.push(`scan_report_${reportId}.json`);
+            }
+
+            const response = await fetch('/api/reports/download-multiple', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    filenames: filenames,
+                    format: format
+                })
+            });
+
+            if (!response.ok) throw new Error('Download failed');
+
+            // Get filename from content-disposition header
+            const contentDisposition = response.headers.get('content-disposition');
+            let filename = `pixelprobe_reports_${new Date().toISOString().slice(0,10)}.${format === 'pdf' ? 'pdf' : 'zip'}`;
+            if (contentDisposition) {
+                const match = contentDisposition.match(/filename="?(.+)"?/);
+                if (match) filename = match[1];
+            }
+
+            // Download the file
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+            this.showNotification(`Downloaded ${this.selectedReports.size} report(s)`, 'success');
+            this.selectedReports.clear();
+            this.updateReportSelectionUI();
+            // Clear the select-all checkbox
+            const selectAllCheckbox = document.getElementById('select-all-reports');
+            if (selectAllCheckbox) selectAllCheckbox.checked = false;
+            // Close the dropdown
+            const dropdown = document.getElementById('bulk-download-menu');
+            if (dropdown) dropdown.style.display = 'none';
+        } catch (error) {
+            console.error('Download error:', error);
+            this.showNotification('Failed to download reports', 'error');
+        }
+    }
+
+    async deleteSelectedReports() {
+        if (this.selectedReports.size === 0) {
+            this.showNotification('No reports selected', 'warning');
+            return;
+        }
+
+        if (!confirm(`Are you sure you want to delete ${this.selectedReports.size} report(s)?`)) {
+            return;
+        }
+
+        try {
+            for (const reportId of this.selectedReports) {
+                await fetch(`/api/scan-reports/${reportId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+            }
+
+            this.showNotification(`Deleted ${this.selectedReports.size} report(s)`, 'success');
+            this.selectedReports.clear();
+            this.updateReportSelectionUI();
+            // Clear the select-all checkbox
+            const selectAllCheckbox = document.getElementById('select-all-reports');
+            if (selectAllCheckbox) selectAllCheckbox.checked = false;
+            await this.loadScanReports();
+        } catch (error) {
+            console.error('Delete error:', error);
+            this.showNotification('Failed to delete reports', 'error');
+        }
+    }
+
+    toggleDropdown(event, dropdownId) {
+        event.stopPropagation();
+        const dropdown = document.getElementById(dropdownId);
+        
+        // Close all other dropdowns
+        document.querySelectorAll('.dropdown-menu').forEach(menu => {
+            if (menu.id !== dropdownId) {
+                menu.style.display = 'none';
+            }
+        });
+        
+        // Toggle current dropdown
+        dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+        
+        // Close on outside click
+        const closeDropdown = (e) => {
+            if (!e.target.closest('.dropdown')) {
+                dropdown.style.display = 'none';
+                document.removeEventListener('click', closeDropdown);
+            }
+        };
+        
+        if (dropdown.style.display === 'block') {
+            setTimeout(() => document.addEventListener('click', closeDropdown), 0);
+        }
+    }
+
     toggleExportMenu(event) {
         event.stopPropagation();
         const menu = document.getElementById('exportDropdownMenu');
@@ -1987,26 +2225,25 @@ class PixelProbeApp {
                 throw new Error('Failed to reset files for deep scan');
             }
 
-            // Get directories containing the selected files
-            const directories = new Set();
+            // Get file paths for the selected files
+            const filePaths = [];
             for (const fileId of fileIds) {
                 const response = await fetch(`/api/scan-results/${fileId}`);
                 if (response.ok) {
                     const result = await response.json();
-                    // Extract directory from file path
-                    const dir = result.file_path.substring(0, result.file_path.lastIndexOf('/'));
-                    if (dir) directories.add(dir);
+                    filePaths.push(result.file_path);
                 }
             }
 
-            // Start deep scan on the directories containing the selected files
-            const scanResponse = await fetch('/api/scan-all', {
+            // Start deep scan on only the selected files
+            const scanResponse = await fetch('/api/scan-parallel', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ 
-                    directories: Array.from(directories),
+                    file_paths: filePaths,
+                    deep_scan: true,
                     force_rescan: true  // Force rescan for deep scan
                 })
             });
@@ -2081,26 +2318,25 @@ class PixelProbeApp {
                 throw new Error('Failed to reset files for rescan');
             }
 
-            // Get directories containing the selected files
-            const directories = new Set();
+            // Get file paths for the selected files
+            const filePaths = [];
             for (const fileId of fileIds) {
                 const response = await fetch(`/api/scan-results/${fileId}`);
                 if (response.ok) {
                     const result = await response.json();
-                    // Extract directory from file path
-                    const dir = result.file_path.substring(0, result.file_path.lastIndexOf('/'));
-                    if (dir) directories.add(dir);
+                    filePaths.push(result.file_path);
                 }
             }
 
-            // Start scan on the directories containing the selected files
-            const scanResponse = await fetch('/api/scan-all', {
+            // Start scan on only the selected files
+            const scanResponse = await fetch('/api/scan-parallel', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ 
-                    directories: Array.from(directories),
+                    file_paths: filePaths,
+                    deep_scan: false,
                     force_rescan: true  // Force rescan to actually re-scan the files
                 })
             });
