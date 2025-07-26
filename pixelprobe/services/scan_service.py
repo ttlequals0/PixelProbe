@@ -297,6 +297,85 @@ class ScanService:
             'num_workers': num_workers
         }
     
+    def scan_files(self, file_paths: List[str], force_rescan: bool = False,
+                   deep_scan: bool = False, num_workers: int = 1) -> Dict:
+        """Scan specific files only"""
+        if self.is_scan_running():
+            raise RuntimeError("Another scan is already in progress")
+        
+        # Validate files exist
+        valid_files = [f for f in file_paths if os.path.exists(f)]
+        if not valid_files:
+            raise ValueError("No valid files provided")
+        
+        logger.info(f"Starting scan of {len(valid_files)} specific files")
+        
+        # Initialize progress
+        self.update_progress(0, 0, '', 'initializing')
+        self.scan_cancelled = False
+        
+        # Save scan state
+        scan_state = ScanState.get_or_create()
+        scan_state.start_scan(["selected_files"], force_rescan)
+        db.session.commit()
+        
+        # Capture scan ID
+        scan_state_id = scan_state.id
+        
+        # Capture Flask app context for the thread
+        app = current_app._get_current_object()
+        
+        # Create scan thread
+        def run_scan():
+            with app.app_context():
+                try:
+                    # Get fresh ScanState object in worker thread
+                    scan_state = db.session.get(ScanState, scan_state_id)
+                    if not scan_state:
+                        logger.error(f"Could not find scan state with ID {scan_state_id}")
+                        return
+                    
+                    excluded_paths, excluded_extensions = load_exclusions()
+                    checker = PixelProbe(
+                        database_path=self.database_uri,
+                        excluded_paths=excluded_paths,
+                        excluded_extensions=excluded_extensions
+                    )
+                    
+                    # Skip discovery phase - we already have the files
+                    total_files = len(valid_files)
+                    logger.info(f"Scanning {total_files} specific files")
+                    
+                    # Go directly to scanning phase
+                    self.update_progress(0, total_files, '', 'scanning')
+                    scan_state.update_progress(0, total_files, phase='scanning')
+                    scan_state.progress_message = f'Scanning {total_files} selected files...'
+                    db.session.commit()
+                    
+                    if num_workers > 1:
+                        self._parallel_scan(checker, valid_files, force_rescan, num_workers, scan_state, scan_state_id)
+                    else:
+                        self._sequential_scan(checker, valid_files, force_rescan, scan_state, scan_state_id)
+                        
+                except Exception as e:
+                    logger.error(f"Error during file scan: {e}")
+                    self.update_progress(0, 0, '', 'error')
+                    scan_state.error_scan(str(e))
+                    db.session.commit()
+                    raise
+        
+        self.current_scan_thread = threading.Thread(target=run_scan)
+        self.current_scan_thread.start()
+        
+        return {
+            'status': 'started',
+            'message': f'Scan started for {len(valid_files)} files',
+            'files': len(valid_files),
+            'force_rescan': force_rescan,
+            'deep_scan': deep_scan,
+            'num_workers': num_workers
+        }
+    
     def cancel_scan(self) -> Dict:
         """Cancel the current scan"""
         if not self.is_scan_running():

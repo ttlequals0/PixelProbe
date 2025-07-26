@@ -405,7 +405,27 @@ def scan_parallel():
     force_rescan = data.get('force_rescan', False)
     num_workers = data.get('num_workers', 4)
     scan_dirs = data.get('directories', [])
+    file_paths = data.get('file_paths', [])
+    deep_scan = data.get('deep_scan', False)
     
+    # Check if we're scanning specific files
+    if file_paths:
+        # Scan specific files only
+        logger.info(f"Scanning {len(file_paths)} specific files")
+        try:
+            result = current_app.scan_service.scan_files(
+                file_paths, 
+                force_rescan=force_rescan,
+                deep_scan=deep_scan,
+                num_workers=num_workers
+            )
+            return jsonify(result)
+        except RuntimeError as e:
+            return jsonify({'error': str(e)}), 409
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+    
+    # Otherwise scan directories
     # If no directories provided, use configured ones
     if not scan_dirs:
         from models import ScanConfiguration

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.127] - 2025-07-26
+
+### Fixed
+- **Rescan Regression**: Fixed rescan scanning entire directories instead of selected files
+  - Added file_paths parameter support to /api/scan-parallel endpoint
+  - Created new scan_files method in ScanService for scanning specific files only
+  - Now properly scans only the selected files instead of discovering all files in their directories
+  
+- **Cancel Scan Issue**: Identified that cancel doesn't stop in-progress file scans
+  - Cancel request is processed but large files continue scanning until completion
+  - This is a known limitation: once a file hash calculation starts, it runs to completion
+  - Future fix would require making hash calculation interruptible
+
 ## [2.0.126] - 2025-07-26
 
 ### Fixed
