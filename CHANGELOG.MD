@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.130] - 2025-07-27
+
+### Fixed
+- **Scheduler Update Method**: Added missing `update_schedules()` method to MediaScheduler class
+  - Method reloads all schedules from database after changes
+  - Fixes 500 error when creating/updating schedules
+
+- **Exclusions API**: Fixed path/extension exclusion endpoints
+  - API now accepts singular 'path' and 'extension' types (matching frontend)
+  - Fixed request body to accept 'item' field (as sent by frontend)
+  - Properly maps singular types to plural storage format
+
+- **PDF Report Formatting**: Further reduced spacing to fit scan statistics on first page
+  - Reduced logo size from 1.0 to 0.7 inches
+  - Reduced title font from 20 to 16pt
+  - Reduced heading font from 14 to 12pt
+  - Reduced all spacers and padding throughout
+
+- **Cancel Operations**: Fixed cancellation not working properly for cleanup and file changes operations
+  - Added db.session.expire() before refresh to force fresh database read
+  - Added early exit when cancellation detected between phases
+  - Improved logging to track cancellation detection
+  - Ensures cleanup properly stops when cancelled instead of continuing to deletion phase
+  - Fixed for both orphan cleanup and file changes check operations
+
+### Added
+- **Test Coverage**: Added comprehensive tests for previously untested API endpoints
+  - Schedule management endpoints (create, delete)
+  - Exclusions API endpoints (add/remove paths and extensions)
+  - Ignored patterns endpoints (add/remove patterns)
+  - Maintenance cancellation endpoints (cancel cleanup, cancel file changes)
+  - Scan management endpoints (reset stuck scans, reset for rescan, recover stuck scan)
+  - Added basic scheduler test to verify update_schedules method exists
+
+### Deployment
+- Built and pushed Docker image version 2.0.130 to DockerHub
+- Tagged as both `2.0.130` and `latest`
+- Platform: linux/amd64
+
 ## [2.0.129] - 2025-07-26
 
 ### Fixed

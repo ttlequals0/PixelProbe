@@ -279,8 +279,22 @@ class MaintenanceService:
                     self.cleanup_state['files_processed'] = i + 1
                     self.cleanup_state['orphaned_found'] = orphaned_count
             
+            # Check if cancelled before proceeding to deletion phase
+            if self._is_cancelled(cleanup_record):
+                logger.info("Cleanup cancelled before deletion phase")
+                cleanup_record.phase = 'cancelled'
+                cleanup_record.progress_message = 'Cleanup cancelled by user'
+                cleanup_record.is_active = False
+                cleanup_record.end_time = datetime.now(timezone.utc)
+                db.session.commit()
+                
+                with self.cleanup_lock:
+                    self.cleanup_state['is_running'] = False
+                    self.cleanup_state['phase'] = 'cancelled'
+                return
+            
             # Phase 3: Delete orphaned entries from database
-            if orphaned_entries and not self._is_cancelled(cleanup_record):
+            if orphaned_entries:
                 cleanup_record.phase = 'deleting_entries'
                 cleanup_record.phase_number = 3
                 cleanup_record.progress_message = f'Phase 3 of 3: Removing {orphaned_count} orphaned entries from database...'
@@ -577,17 +591,29 @@ class MaintenanceService:
     def _is_cancelled(self, cleanup_record: CleanupState) -> bool:
         """Check if cleanup has been cancelled"""
         try:
+            # Force a fresh read from database
+            db.session.expire(cleanup_record)
             db.session.refresh(cleanup_record)
-            return getattr(cleanup_record, 'cancel_requested', False) or self.cleanup_state.get('cancel_requested', False)
-        except:
+            is_cancelled = getattr(cleanup_record, 'cancel_requested', False) or self.cleanup_state.get('cancel_requested', False)
+            if is_cancelled:
+                logger.info(f"Cleanup cancellation detected - DB: {cleanup_record.cancel_requested}, Memory: {self.cleanup_state.get('cancel_requested', False)}")
+            return is_cancelled
+        except Exception as e:
+            logger.warning(f"Error checking cancel status from DB: {e}")
             return self.cleanup_state.get('cancel_requested', False)
     
     def _is_cancelled_file_changes(self, record: FileChangesState) -> bool:
         """Check if file changes check has been cancelled"""
         try:
+            # Force a fresh read from database
+            db.session.expire(record)
             db.session.refresh(record)
-            return getattr(record, 'cancel_requested', False) or self.file_changes_state.get('cancel_requested', False)
-        except:
+            is_cancelled = getattr(record, 'cancel_requested', False) or self.file_changes_state.get('cancel_requested', False)
+            if is_cancelled:
+                logger.info(f"File changes cancellation detected - DB: {record.cancel_requested}, Memory: {self.file_changes_state.get('cancel_requested', False)}")
+            return is_cancelled
+        except Exception as e:
+            logger.warning(f"Error checking cancel status from DB: {e}")
             return self.file_changes_state.get('cancel_requested', False)
     
     def _handle_cleanup_error(self, cleanup_id: int, error_msg: str):

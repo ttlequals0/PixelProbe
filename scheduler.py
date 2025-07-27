@@ -364,6 +364,17 @@ class MediaScheduler:
         if extensions is not None:
             self.excluded_extensions = [e.lower() for e in extensions]
             
+    def update_schedules(self):
+        """Reload all schedules from database"""
+        # Remove all existing scheduled jobs except defaults
+        for job in self.scheduler.get_jobs():
+            if job.id.startswith('schedule_'):
+                self.scheduler.remove_job(job.id)
+        
+        # Reload from database
+        with self.app.app_context():
+            self._load_saved_schedules()
+            
     def shutdown(self):
         """Shutdown the scheduler"""
         if self.scheduler.running:

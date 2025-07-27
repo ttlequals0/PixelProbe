@@ -335,11 +335,15 @@ def update_exclusions():
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['POST'])
 def add_exclusion(exclusion_type):
     """Add a single exclusion (path or extension)"""
-    if exclusion_type not in ['paths', 'extensions']:
+    # Map singular to plural for storage
+    type_map = {'path': 'paths', 'extension': 'extensions'}
+    storage_type = type_map.get(exclusion_type)
+    
+    if not storage_type:
         return jsonify({'error': 'Invalid exclusion type'}), 400
     
     data = request.get_json()
-    value = data.get('value')
+    value = data.get('item') or data.get('value')  # Support both 'item' and 'value'
     
     if not value:
         return jsonify({'error': 'Value is required'}), 400
@@ -354,16 +358,16 @@ def add_exclusion(exclusion_type):
                 exclusions = json.load(f)
         
         # Add new exclusion if not already present
-        if value not in exclusions[exclusion_type]:
-            exclusions[exclusion_type].append(value)
+        if value not in exclusions[storage_type]:
+            exclusions[storage_type].append(value)
             
             # Write back to file
             with open(exclusions_file, 'w') as f:
                 json.dump(exclusions, f, indent=2)
             
-            return jsonify({'message': f'{exclusion_type[:-1].capitalize()} added successfully'})
+            return jsonify({'message': f'{exclusion_type.capitalize()} added successfully'})
         else:
-            return jsonify({'message': f'{exclusion_type[:-1].capitalize()} already exists'}), 400
+            return jsonify({'message': f'{exclusion_type.capitalize()} already exists'}), 400
             
     except Exception as e:
         logger.error(f"Error adding exclusion: {e}")
@@ -372,11 +376,15 @@ def add_exclusion(exclusion_type):
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['DELETE'])
 def remove_exclusion(exclusion_type):
     """Remove a single exclusion (path or extension)"""
-    if exclusion_type not in ['paths', 'extensions']:
+    # Map singular to plural for storage
+    type_map = {'path': 'paths', 'extension': 'extensions'}
+    storage_type = type_map.get(exclusion_type)
+    
+    if not storage_type:
         return jsonify({'error': 'Invalid exclusion type'}), 400
     
     data = request.get_json()
-    value = data.get('value')
+    value = data.get('item') or data.get('value')  # Support both 'item' and 'value'
     
     if not value:
         return jsonify({'error': 'Value is required'}), 400
@@ -391,16 +399,16 @@ def remove_exclusion(exclusion_type):
                 exclusions = json.load(f)
         
         # Remove exclusion if present
-        if value in exclusions[exclusion_type]:
-            exclusions[exclusion_type].remove(value)
+        if value in exclusions[storage_type]:
+            exclusions[storage_type].remove(value)
             
             # Write back to file
             with open(exclusions_file, 'w') as f:
                 json.dump(exclusions, f, indent=2)
             
-            return jsonify({'message': f'{exclusion_type[:-1].capitalize()} removed successfully'})
+            return jsonify({'message': f'{exclusion_type.capitalize()} removed successfully'})
         else:
-            return jsonify({'error': f'{exclusion_type[:-1].capitalize()} not found'}), 404
+            return jsonify({'error': f'{exclusion_type.capitalize()} not found'}), 404
             
     except Exception as e:
         logger.error(f"Error removing exclusion: {e}")
