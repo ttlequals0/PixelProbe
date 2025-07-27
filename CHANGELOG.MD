@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added short delay in cancel_scan() to allow threads to notice cancellation
   - Frontend already handles cancelled state properly with notifications
 
+### Deployment
+- Built and pushed Docker image version 2.0.129 to DockerHub
+- Tagged as both `2.0.129` and `latest`
+- Platform: linux/amd64
+
 ## [2.0.128] - 2025-07-26
 
 ### Audit Results - Scan Logic Verification
