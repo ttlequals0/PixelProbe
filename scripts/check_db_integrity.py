@@ -6,7 +6,7 @@ Check database integrity and attempt recovery
 import sqlite3
 import os
 
-DB_PATH = "/Users/dkrachtus/Downloads/media_checker.db"
+DB_PATH = os.environ.get('DATABASE_PATH', './instance/media_checker.db')
 
 def check_integrity():
     """Check database integrity"""

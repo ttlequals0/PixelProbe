@@ -18,9 +18,9 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/css/desktop.css?v=2.0.40">
-    <link rel="stylesheet" href="/static/css/mobile.css?v=2.0.40">
-    <link rel="stylesheet" href="/static/css/logo-styles.css?v=2.0.40">
+    <link rel="stylesheet" href="/static/css/desktop.css?v={{ version }}">
+    <link rel="stylesheet" href="/static/css/mobile.css?v={{ version }}">
+    <link rel="stylesheet" href="/static/css/logo-styles.css?v={{ version }}">
 </head>
 <body>
     <div class="app-wrapper">
@@ -77,9 +77,9 @@
                         <i class="fas fa-chart-line"></i>
                         <span>System Stats</span>
                     </a>
-                    <a href="/reports" class="nav-item" title="Reports Management">
+                    <a href="#" class="nav-item" onclick="app.showScanReports()" title="Scan Reports">
                         <i class="fas fa-file-alt"></i>
-                        <span>Reports</span>
+                        <span>Scan Reports</span>
                     </a>
                     <a href="https://github.com/ttlequals0/PixelProbe" target="_blank" class="nav-item" title="Build Info">
                         <i class="fas fa-info-circle"></i>
@@ -215,9 +215,22 @@
                                         id="download-btn" disabled>
                                     <i class="fas fa-download"></i> Download
                                 </button>
-                                <button class="btn btn-secondary" onclick="app.exportCSV()">
-                                    <i class="fas fa-file-csv"></i> Export CSV
-                                </button>
+                                <div class="export-dropdown">
+                                    <button class="btn btn-secondary" onclick="app.toggleExportMenu(event)">
+                                        <i class="fas fa-file-export"></i> Export <i class="fas fa-caret-down"></i>
+                                    </button>
+                                    <div class="export-dropdown-menu" id="exportDropdownMenu">
+                                        <a href="#" onclick="app.exportData('csv'); return false;">
+                                            <i class="fas fa-file-csv"></i> Export as CSV
+                                        </a>
+                                        <a href="#" onclick="app.exportData('json'); return false;">
+                                            <i class="fas fa-file-code"></i> Export as JSON
+                                        </a>
+                                        <a href="#" onclick="app.exportData('pdf'); return false;">
+                                            <i class="fas fa-file-pdf"></i> Export as PDF
+                                        </a>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         
@@ -287,6 +300,107 @@
             </div>
             <div class="modal-body">
                 <!-- System stats will be loaded here -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Scan Reports Modal -->
+    <div id="scan-reports-modal" class="modal">
+        <div class="modal-content" style="max-width: 90%; width: 90%;">
+            <div class="modal-header">
+                <h3 class="modal-title">Scan Reports</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="scan-reports-container">
+                    <!-- Filter Controls -->
+                    <div class="filter-controls mb-3">
+                        <div class="filter-group">
+                            <label for="report-type-filter">Scan Type:</label>
+                            <select id="report-type-filter" class="form-control">
+                                <option value="all">All Types</option>
+                                <option value="full_scan">Full Scan</option>
+                                <option value="rescan">Rescan</option>
+                                <option value="deep_scan">Deep Scan</option>
+                                <option value="cleanup">Cleanup</option>
+                                <option value="file_changes">File Changes</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="report-status-filter">Status:</label>
+                            <select id="report-status-filter" class="form-control">
+                                <option value="all">All</option>
+                                <option value="completed">Completed</option>
+                                <option value="running">Running</option>
+                                <option value="error">Error</option>
+                                <option value="cancelled">Cancelled</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" onclick="app.loadScanReports()">
+                            <i class="fas fa-sync"></i> Refresh
+                        </button>
+                        <div class="dropdown" style="display: inline-block;">
+                            <button class="btn btn-primary dropdown-toggle" onclick="app.toggleDropdown(event, 'bulk-download-menu')" disabled id="downloadBtn">
+                                <i class="fas fa-download"></i> Download Selected
+                            </button>
+                            <div id="bulk-download-menu" class="dropdown-menu" style="display: none; position: absolute; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 1000; min-width: 150px; right: 0;">
+                                <a class="dropdown-item" onclick="app.downloadSelectedReports('json')" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
+                                    <i class="fas fa-file-code"></i> Download as JSON
+                                </a>
+                                <a class="dropdown-item" onclick="app.downloadSelectedReports('zip')" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
+                                    <i class="fas fa-file-archive"></i> Download as ZIP
+                                </a>
+                                <a class="dropdown-item" onclick="app.downloadSelectedReports('pdf')" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
+                                    <i class="fas fa-file-pdf"></i> Download as PDF
+                                </a>
+                            </div>
+                        </div>
+                        <button class="btn btn-danger" onclick="app.deleteSelectedReports()" disabled id="deleteBtn">
+                            <i class="fas fa-trash"></i> Delete Selected
+                        </button>
+                    </div>
+                    
+                    <!-- Reports Table -->
+                    <style>
+                        .dropdown {
+                            position: relative;
+                        }
+                        .dropdown-toggle::after {
+                            content: '\25BC';
+                            font-size: 10px;
+                            margin-left: 5px;
+                        }
+                        .dropdown-item:hover {
+                            background: var(--bg-tertiary);
+                        }
+                    </style>
+                    <div class="table-container">
+                        <table class="table" id="scan-reports-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 40px;">
+                                        <input type="checkbox" id="select-all-reports" onchange="app.toggleAllReports(this.checked)">
+                                    </th>
+                                    <th>Start Time</th>
+                                    <th>Type</th>
+                                    <th>Status</th>
+                                    <th>Duration</th>
+                                    <th>Files</th>
+                                    <th>Issues</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Reports will be loaded here -->
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Pagination -->
+                    <div class="pagination-container">
+                        <div id="scan-reports-pagination"></div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -426,7 +540,7 @@
     </div>
     
     <!-- Scripts -->
-    <script src="/static/js/app.js?v=2.0.40"></script>
+    <script src="/static/js/app.js?v={{ version }}"></script>
     
     <!-- Initialize version info -->
     <script>

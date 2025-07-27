@@ -13,7 +13,7 @@ export SECRET_KEY="development-secret-key"
 
 echo "=== PixelProbe Test Server ==="
 echo "Database: test_media_checker.db (with sample data)"
-echo "UI: Modern UI with Hulu-inspired design"
+echo "UI: Modern UI"
 echo "URL: http://localhost:5001"
 echo ""
 echo "Press Ctrl+C to stop"

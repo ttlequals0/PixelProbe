@@ -1,0 +1,669 @@
+openapi: 3.0.3
+info:
+  title: PixelProbe API
+  description: |
+    PixelProbe is a comprehensive media file corruption detection system with an intuitive web interface.
+    This API allows you to scan media files, manage scan results, and perform maintenance operations.
+    
+    ## Authentication
+    Currently, the API does not require authentication. Future versions will implement JWT-based authentication.
+    
+    ## Rate Limiting
+    - Default: 200 requests per day, 50 per hour
+    - Scan operations: 2-5 per minute
+    - Admin operations: 10 per minute
+    
+    ## Error Handling
+    All endpoints return standard HTTP status codes and JSON error responses.
+  version: 2.0.55
+  contact:
+    name: PixelProbe Support
+    url: https://github.com/ttlequals0/PixelProbe
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:5000
+    description: Local development server
+  - url: https://pixelprobe.example.com
+    description: Production server
+
+tags:
+  - name: Scan
+    description: Media file scanning operations
+  - name: Stats
+    description: Statistics and reporting
+  - name: Admin
+    description: Administrative operations
+  - name: Export
+    description: Data export operations
+  - name: Maintenance
+    description: Database and file maintenance
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      tags: [System]
+      responses:
+        '200':
+          description: System is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  version:
+                    type: string
+                    example: 2.0.55
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /api/version:
+    get:
+      summary: Get API version information
+      tags: [System]
+      responses:
+        '200':
+          description: Version information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    example: 2.0.55
+                  github_url:
+                    type: string
+                    example: https://github.com/ttlequals0/PixelProbe
+                  api_version:
+                    type: string
+                    example: "1.0"
+
+  /api/scan-results:
+    get:
+      summary: Get paginated scan results
+      tags: [Scan]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+          description: Page number
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+          description: Results per page
+        - name: scan_status
+          in: query
+          schema:
+            type: string
+            enum: [all, pending, scanning, completed, error]
+            default: all
+          description: Filter by scan status
+        - name: is_corrupted
+          in: query
+          schema:
+            type: string
+            enum: [all, true, false]
+            default: all
+          description: Filter by corruption status
+      responses:
+        '200':
+          description: Paginated scan results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ScanResult'
+                  total:
+                    type: integer
+                    example: 150
+                  page:
+                    type: integer
+                    example: 1
+                  per_page:
+                    type: integer
+                    example: 100
+                  pages:
+                    type: integer
+                    example: 2
+
+  /api/scan-results/{result_id}:
+    get:
+      summary: Get a single scan result
+      tags: [Scan]
+      parameters:
+        - name: result_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Scan result ID
+      responses:
+        '200':
+          description: Scan result details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanResult'
+        '404':
+          description: Result not found
+
+  /api/scan-file:
+    post:
+      summary: Scan a single file for corruption
+      tags: [Scan]
+      security:
+        - RateLimit: ["5 per minute"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - file_path
+              properties:
+                file_path:
+                  type: string
+                  maxLength: 1000
+                  description: Path to the file to scan
+                  example: /media/photos/image.jpg
+      responses:
+        '200':
+          description: Scan started successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Scan started
+                  file_path:
+                    type: string
+                    example: /media/photos/image.jpg
+        '400':
+          description: Invalid file path or request
+        '409':
+          description: Another scan is already in progress
+
+  /api/scan-all:
+    post:
+      summary: Start scanning all media files
+      tags: [Scan]
+      security:
+        - RateLimit: ["2 per minute"]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force_rescan:
+                  type: boolean
+                  default: false
+                  description: Force rescan of previously scanned files
+                directories:
+                  type: array
+                  items:
+                    type: string
+                  description: Specific directories to scan (uses configured if empty)
+      responses:
+        '200':
+          description: Scan started successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Scan started
+                  directories:
+                    type: array
+                    items:
+                      type: string
+                  force_rescan:
+                    type: boolean
+        '400':
+          description: Invalid request or no directories configured
+        '409':
+          description: Another scan is already in progress
+
+  /api/scan-parallel:
+    post:
+      summary: Start a parallel scan with multiple workers
+      tags: [Scan]
+      security:
+        - RateLimit: ["2 per minute"]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force_rescan:
+                  type: boolean
+                  default: false
+                num_workers:
+                  type: integer
+                  default: 4
+                  minimum: 1
+                  maximum: 16
+                directories:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Parallel scan started
+        '400':
+          description: Invalid request
+        '409':
+          description: Another scan is already in progress
+
+  /api/scan-status:
+    get:
+      summary: Get current scan status and progress
+      tags: [Scan]
+      responses:
+        '200':
+          description: Current scan status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current:
+                    type: integer
+                    example: 45
+                  total:
+                    type: integer
+                    example: 100
+                  file:
+                    type: string
+                    example: /media/video.mp4
+                  status:
+                    type: string
+                    enum: [idle, initializing, discovering, scanning, completed, cancelled, error]
+                  is_running:
+                    type: boolean
+                  scan_id:
+                    type: integer
+                  start_time:
+                    type: string
+                    format: date-time
+                  end_time:
+                    type: string
+                    format: date-time
+                  directories:
+                    type: array
+                    items:
+                      type: string
+                  force_rescan:
+                    type: boolean
+
+  /api/cancel-scan:
+    post:
+      summary: Cancel the current scan
+      tags: [Scan]
+      responses:
+        '200':
+          description: Scan cancellation requested
+        '400':
+          description: No scan is currently running
+
+  /api/stats/summary:
+    get:
+      summary: Get overall statistics summary
+      tags: [Stats]
+      responses:
+        '200':
+          description: Statistics summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsSummary'
+
+  /api/stats/corruption-by-type:
+    get:
+      summary: Get corruption statistics by file type
+      tags: [Stats]
+      responses:
+        '200':
+          description: Corruption statistics by type
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    file_type:
+                      type: string
+                      example: image/jpeg
+                    total_files:
+                      type: integer
+                    corrupted_files:
+                      type: integer
+                    corruption_rate:
+                      type: number
+                      format: float
+
+  /api/stats/scan-history:
+    get:
+      summary: Get scan history statistics
+      tags: [Stats]
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+          description: Number of days to include
+      responses:
+        '200':
+          description: Scan history data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    date:
+                      type: string
+                      format: date
+                    files_scanned:
+                      type: integer
+                    corrupted_found:
+                      type: integer
+
+  /api/mark-as-good:
+    post:
+      summary: Mark files as good/healthy
+      tags: [Admin]
+      security:
+        - RateLimit: ["10 per minute"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - file_ids
+              properties:
+                file_ids:
+                  type: array
+                  items:
+                    type: integer
+                  maxItems: 1000
+                  description: IDs of files to mark as good
+      responses:
+        '200':
+          description: Files marked as good
+        '400':
+          description: Invalid request
+
+  /api/ignored-patterns:
+    get:
+      summary: Get all ignored error patterns
+      tags: [Admin]
+      responses:
+        '200':
+          description: List of ignored patterns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/IgnoredPattern'
+
+    post:
+      summary: Add a new ignored error pattern
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - pattern
+              properties:
+                pattern:
+                  type: string
+                  maxLength: 200
+                description:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: Pattern added successfully
+        '400':
+          description: Invalid pattern
+
+  /api/configurations:
+    get:
+      summary: Get all scan configurations
+      tags: [Admin]
+      responses:
+        '200':
+          description: List of configurations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Configuration'
+
+    post:
+      summary: Add or update a scan configuration
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - path
+              properties:
+                path:
+                  type: string
+                  maxLength: 1000
+      responses:
+        '200':
+          description: Configuration added/updated
+        '400':
+          description: Invalid path
+
+  /api/export/csv:
+    post:
+      summary: Export scan results to CSV
+      tags: [Export]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filters:
+                  type: object
+                  properties:
+                    scan_status:
+                      type: string
+                    is_corrupted:
+                      type: string
+                    start_date:
+                      type: string
+                      format: date
+                    end_date:
+                      type: string
+                      format: date
+      responses:
+        '200':
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+
+  /api/cleanup:
+    post:
+      summary: Clean up missing files from database
+      tags: [Maintenance]
+      security:
+        - RateLimit: ["10 per minute"]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dry_run:
+                  type: boolean
+                  default: true
+                directories:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Cleanup completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  missing_files:
+                    type: integer
+                  cleaned_files:
+                    type: integer
+                  dry_run:
+                    type: boolean
+
+  /api/vacuum:
+    post:
+      summary: Vacuum the database
+      tags: [Maintenance]
+      security:
+        - RateLimit: ["5 per minute"]
+      responses:
+        '200':
+          description: Database vacuumed successfully
+
+components:
+  schemas:
+    ScanResult:
+      type: object
+      properties:
+        id:
+          type: integer
+        file_path:
+          type: string
+        file_name:
+          type: string
+        file_size:
+          type: integer
+        scan_date:
+          type: string
+          format: date-time
+        discovered_date:
+          type: string
+          format: date-time
+        last_modified:
+          type: string
+          format: date-time
+        file_hash:
+          type: string
+        scan_status:
+          type: string
+          enum: [pending, scanning, completed, error]
+        error_message:
+          type: string
+        is_corrupted:
+          type: boolean
+        marked_as_good:
+          type: boolean
+        media_info:
+          type: object
+        file_exists:
+          type: boolean
+
+    StatsSummary:
+      type: object
+      properties:
+        total_files:
+          type: integer
+        scanned_files:
+          type: integer
+        corrupted_files:
+          type: integer
+        healthy_files:
+          type: integer
+        pending_files:
+          type: integer
+        error_files:
+          type: integer
+        total_size:
+          type: integer
+        corrupted_size:
+          type: integer
+        last_scan_date:
+          type: string
+          format: date-time
+        corruption_rate:
+          type: number
+          format: float
+
+    IgnoredPattern:
+      type: object
+      properties:
+        id:
+          type: integer
+        pattern:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Configuration:
+      type: object
+      properties:
+        id:
+          type: integer
+        path:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+  securitySchemes:
+    RateLimit:
+      type: apiKey
+      in: header
+      name: X-RateLimit-Limit
+      description: Rate limiting is automatically applied

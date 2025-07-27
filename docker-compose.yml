@@ -1,14 +1,33 @@
+# PixelProbe Docker Compose Configuration
+# 
+# IMPORTANT: Copy .env.example to .env and configure your environment variables
+# 
+# Required environment variables:
+# - SECRET_KEY: Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+# - MEDIA_PATH: Path to your media files on the host system
+# 
+# Optional environment variables (see .env.example for full list):
+# - DATABASE_URL: Custom database connection string
+# - SCAN_PATHS: Comma-separated directories to monitor
+# - TZ: Timezone configuration
+# - Scheduling and exclusion settings
+
 version: '3.8'
 
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:latest
+    image: ttlequals0/pixelprobe:2.0.68
     ports:
       - "5001:5000"
     environment:
-      - SCAN_PATHS=/media
+      # REQUIRED: Secure secret key for Flask sessions - MUST be set for production
+      - SECRET_KEY=${SECRET_KEY}
+      # Database configuration - customize path and type as needed
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////app/instance/media_checker.db}
+      # Scanning configuration - comma-separated list of directories to monitor
+      - SCAN_PATHS=${SCAN_PATHS:-/media}
       - MAX_FILES_TO_SCAN=100
-      - MAX_SCAN_WORKERS=4  # New: Configure parallel scanning threads
+      - MAX_SCAN_WORKERS=4  # Configure parallel scanning threads
       - TZ=America/New_York  # Set your desired timezone here
       # Periodic scan schedule (examples):
       # - PERIODIC_SCAN_SCHEDULE=cron:0 2 * * *  # Daily at 2 AM
@@ -27,7 +46,7 @@ services:
       - ${MEDIA_PATH}:/media
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/stats"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 10s
       retries: 3

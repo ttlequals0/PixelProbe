@@ -13,6 +13,6 @@ services:
       - FLASK_ENV=development
       - DATABASE_URL=sqlite:////data/media_checker.db
     volumes:
-      # Mount the provided database
-      - /Users/dkrachtus/Downloads/media_checker.db:/data/media_checker.db
+      # Mount the database (update path as needed)
+      - ./instance/media_checker.db:/data/media_checker.db
     restart: unless-stopped

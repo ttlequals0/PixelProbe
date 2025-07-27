@@ -13,8 +13,22 @@ import tempfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+from pixelprobe.utils.security import safe_subprocess_run, validate_file_path
 
 logger = logging.getLogger(__name__)
+
+def load_exclusions():
+    """Load exclusion patterns from exclusions.json file"""
+    try:
+        exclusions_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'exclusions.json')
+        if os.path.exists(exclusions_file):
+            with open(exclusions_file, 'r') as f:
+                data = json.load(f)
+                return data.get('paths', []), data.get('extensions', [])
+        return [], []
+    except Exception as e:
+        logger.error(f"Error loading exclusions.json: {e}")
+        return [], []
 
 def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
     """Truncate scan output to prevent memory issues"""
@@ -36,18 +50,86 @@ def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
     return lines
 
 class PixelProbe:
-    def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None):
-        self.supported_video_formats = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v']
-        self.supported_image_formats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
-        self.supported_formats = self.supported_video_formats + self.supported_image_formats
+    def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None, database_path=None):
+        # Video formats - including HEVC/H.265 and professional formats
+        self.supported_video_formats = [
+            '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
+            '.hevc', '.h265',  # HEVC/H.265 formats
+            '.mxf', '.prores',  # ProRes format
+            '.dnxhd', '.dnxhr',  # DNxHD/DNxHR formats
+            '.mts', '.m2ts', '.avchd',  # AVCHD formats
+            '.mpg', '.mpeg', '.vob',  # MPEG formats
+            '.3gp', '.3g2',  # Mobile formats
+            '.f4v', '.f4p',  # Flash formats
+            '.ogv', '.ogg',  # Ogg video
+            '.rm', '.rmvb',  # RealMedia
+            '.asf', '.amv',  # Other formats
+            '.m2v', '.svi', '.mpe', '.mpv', '.m4p'
+        ]
+        
+        # Image formats - including HEIC/HEIF and RAW formats
+        self.supported_image_formats = [
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
+            '.heic', '.heif',  # Apple HEIC/HEIF formats
+            '.cr2', '.cr3',  # Canon RAW
+            '.nef', '.nrw',  # Nikon RAW
+            '.arw', '.srf', '.sr2',  # Sony RAW
+            '.dng',  # Adobe Digital Negative
+            '.orf',  # Olympus RAW
+            '.rw2',  # Panasonic RAW
+            '.pef', '.ptx',  # Pentax RAW
+            '.raf',  # Fujifilm RAW
+            '.raw',  # Generic RAW
+            '.x3f',  # Sigma RAW
+            '.dcr', '.kdc',  # Kodak RAW
+            '.mos',  # Leaf RAW
+            '.psd',  # Photoshop
+            '.ico',  # Icon files
+            '.svg',  # Scalable Vector Graphics
+            '.exr',  # OpenEXR
+            '.pbm', '.pgm', '.ppm', '.pnm',  # Netpbm formats
+            '.hdr', '.pic',  # Radiance HDR
+            '.fts', '.fits',  # FITS (astronomy)
+        ]
+        
+        # Audio formats - NEW: Complete audio support
+        self.supported_audio_formats = [
+            '.mp3',  # MPEG Audio Layer 3
+            '.flac',  # Free Lossless Audio Codec
+            '.wav', '.wave',  # Waveform Audio
+            '.aac', '.m4a',  # Advanced Audio Coding
+            '.ogg', '.oga', '.opus',  # Ogg Vorbis/Opus
+            '.wma',  # Windows Media Audio
+            '.aiff', '.aif', '.aifc',  # Audio Interchange File Format
+            '.ape',  # Monkey's Audio
+            '.wv',  # WavPack
+            '.tta',  # True Audio
+            '.m4b',  # Audiobook format
+            '.mka',  # Matroska Audio
+            '.dsf', '.dff',  # DSD formats
+            '.au', '.snd',  # Sun/NeXT audio
+            '.voc',  # Creative Voice
+            '.amr',  # Adaptive Multi-Rate
+            '.ac3',  # Dolby Digital
+            '.dts',  # DTS audio
+            '.ra', '.ram',  # RealAudio
+            '.mid', '.midi',  # MIDI (if needed)
+            '.caf',  # Core Audio Format
+            '.gsm',  # GSM audio
+        ]
+        
+        self.supported_formats = (self.supported_video_formats + 
+                                self.supported_image_formats + 
+                                self.supported_audio_formats)
         self.max_workers = max_workers or min(4, os.cpu_count() or 1)
         self.scan_lock = threading.Lock()
         self.current_scan_file = None
         self.scan_start_time = None
         self.excluded_paths = excluded_paths or []
         self.excluded_extensions = excluded_extensions or []
+        self.database_path = database_path
     
-    def discover_files(self, directories, max_files=None, existing_files=None, progress_callback=None):
+    def discover_media_files(self, directories, max_files=None, existing_files=None, progress_callback=None):
         """Phase 1: Discover all supported files and return their paths (parallel version)"""
         existing_files = existing_files or set()
         
@@ -187,7 +269,7 @@ class PixelProbe:
     
     def scan_directories(self, directories, max_files=None, skip_paths=None):
         """Legacy method for backward compatibility - now uses new two-phase approach"""
-        discovered_files = self.discover_files(directories, max_files)
+        discovered_files = self.discover_media_files(directories, max_files)
         results = []
         
         skip_paths = skip_paths or set()
@@ -201,22 +283,43 @@ class PixelProbe:
         return results
     
     def _get_files_sorted_by_age(self, directory):
+        """Optimized file discovery using os.scandir for better performance"""
         files = []
-        for root, dirs, filenames in os.walk(directory):
-            # Skip excluded directories
-            dirs[:] = [d for d in dirs if not any(os.path.join(root, d).startswith(exc) for exc in self.excluded_paths)]
-            
-            # Skip if current directory is excluded
-            if any(root.startswith(exc) for exc in self.excluded_paths):
-                continue
-                
-            for filename in filenames:
-                file_path = os.path.join(root, filename)
-                if os.path.isfile(file_path):
-                    files.append(file_path)
         
-        files.sort(key=lambda x: os.path.getctime(x))
-        return files
+        # Use os.scandir for faster directory traversal
+        def scan_directory(path):
+            try:
+                with os.scandir(path) as entries:
+                    for entry in entries:
+                        full_path = entry.path
+                        
+                        if entry.is_dir(follow_symlinks=False):
+                            # Skip excluded directories
+                            if not any(full_path.startswith(exc) for exc in self.excluded_paths):
+                                # Recursively scan subdirectory
+                                scan_directory(full_path)
+                        elif entry.is_file(follow_symlinks=False):
+                            # Check if file extension is supported
+                            extension = os.path.splitext(entry.name)[1].lower()
+                            if extension in self.supported_formats and extension not in self.excluded_extensions:
+                                try:
+                                    # Use DirEntry.stat() for better performance
+                                    stat = entry.stat(follow_symlinks=False)
+                                    files.append((full_path, stat.st_ctime))
+                                except OSError:
+                                    # If stat fails, skip this file
+                                    continue
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Cannot access directory {path}: {e}")
+        
+        # Start scanning from root directory
+        scan_directory(directory)
+        
+        # Sort by creation time (already have the ctime from stat)
+        files.sort(key=lambda x: x[1])
+        
+        # Return just the file paths
+        return [f[0] for f in files]
     
     def _is_supported_file(self, file_path):
         extension = Path(file_path).suffix.lower()
@@ -259,15 +362,29 @@ class PixelProbe:
             }
     
     def calculate_file_hash(self, file_path):
-        """Calculate SHA-256 hash of a file"""
+        """Calculate SHA-256 hash of a file with optimized chunk size"""
         try:
             logger.info(f"Calculating hash for: {file_path}")
             hash_sha256 = hashlib.sha256()
             start_time = time.time()
             bytes_processed = 0
             
+            # Get file size to determine optimal chunk size
+            file_size = os.path.getsize(file_path)
+            
+            # Use larger chunks for better performance (1MB instead of 4KB)
+            # This reduces the number of read operations significantly
+            chunk_size = 1024 * 1024  # 1MB chunks
+            
+            # For very large files (>1GB), use even larger chunks
+            if file_size > 1024 * 1024 * 1024:
+                chunk_size = 4 * 1024 * 1024  # 4MB chunks
+            
             with open(file_path, "rb") as f:
-                for chunk in iter(lambda: f.read(4096), b""):
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
                     hash_sha256.update(chunk)
                     bytes_processed += len(chunk)
                     
@@ -275,29 +392,31 @@ class PixelProbe:
                     if bytes_processed % (100 * 1024 * 1024) == 0:
                         elapsed = time.time() - start_time
                         mb_processed = bytes_processed / (1024 * 1024)
-                        logger.info(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s")
+                        mb_per_sec = mb_processed / elapsed if elapsed > 0 else 0
+                        logger.info(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s ({mb_per_sec:.1f}MB/s)")
             
             total_time = time.time() - start_time
             if total_time > 10:  # Log completion time for files that take more than 10 seconds
                 mb_size = bytes_processed / (1024 * 1024)
-                logger.info(f"Hash complete for {file_path}: {mb_size:.1f}MB in {total_time:.1f}s")
+                mb_per_sec = mb_size / total_time if total_time > 0 else 0
+                logger.info(f"Hash complete for {file_path}: {mb_size:.1f}MB in {total_time:.1f}s ({mb_per_sec:.1f}MB/s)")
             
             return hash_sha256.hexdigest()
         except Exception as e:
             logger.error(f"Error calculating hash for {file_path}: {str(e)}")
             return None
     
-    def scan_files_parallel(self, file_paths, progress_callback=None, deep_scan=False, scan_paths=None):
+    def scan_files_parallel(self, file_paths, progress_callback=None, deep_scan=False, scan_paths=None, force_rescan=False):
         """Scan multiple files in parallel using ThreadPoolExecutor with path-based optimization"""
         
         # If scan_paths provided and multiple paths, use path-based parallel scanning
         if scan_paths and len(scan_paths) > 1:
-            return self._scan_files_by_paths_parallel(file_paths, progress_callback, deep_scan, scan_paths)
+            return self._scan_files_by_paths_parallel(file_paths, progress_callback, deep_scan, scan_paths, force_rescan)
         else:
             # Use original single-pool approach
-            return self._scan_files_single_pool(file_paths, progress_callback, deep_scan)
+            return self._scan_files_single_pool(file_paths, progress_callback, deep_scan, force_rescan)
     
-    def _scan_files_single_pool(self, file_paths, progress_callback=None, deep_scan=False):
+    def _scan_files_single_pool(self, file_paths, progress_callback=None, deep_scan=False, force_rescan=False):
         """Original single thread pool scanning approach"""
         results = []
         completed = 0
@@ -308,7 +427,7 @@ class PixelProbe:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # Submit all tasks
             future_to_file = {
-                executor.submit(self.scan_file, file_path, deep_scan): file_path 
+                executor.submit(self.scan_file, file_path, deep_scan, force_rescan): file_path 
                 for file_path in file_paths
             }
             
@@ -343,7 +462,7 @@ class PixelProbe:
         logger.info(f"Parallel scan completed: {completed}/{total} files processed")
         return results
     
-    def _scan_files_by_paths_parallel(self, file_paths, progress_callback=None, deep_scan=False, scan_paths=None):
+    def _scan_files_by_paths_parallel(self, file_paths, progress_callback=None, deep_scan=False, scan_paths=None, force_rescan=False):
         """Scan files using dedicated worker pools per path"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
@@ -385,7 +504,7 @@ class PixelProbe:
             with ThreadPoolExecutor(max_workers=workers_per_path) as executor:
                 # Submit all files in this path
                 future_to_file = {
-                    executor.submit(self.scan_file, file_path, deep_scan): file_path 
+                    executor.submit(self.scan_file, file_path, deep_scan, force_rescan): file_path 
                     for file_path in path_files
                 }
                 
@@ -445,12 +564,13 @@ class PixelProbe:
         logger.info(f"Path-based parallel scan completed: {len(all_results)} files processed across {num_paths} paths")
         return all_results
     
-    def scan_file(self, file_path, deep_scan=False):
+    def scan_file(self, file_path, deep_scan=False, force_rescan=False):
         """Scan a single file for corruption
         
         Args:
             file_path (str): Path to the file to scan
             deep_scan (bool): If True, perform enhanced corruption detection regardless of basic scan results
+            force_rescan (bool): If True, rescan the file even if already in cache
         """
         scan_start_time = time.time()
         scan_tool = None
@@ -473,6 +593,13 @@ class PixelProbe:
             # Calculate file hash
             file_hash = self.calculate_file_hash(file_path)
             
+            # Check cache if not forcing rescan
+            if not force_rescan and self.database_path:
+                cached_result = self._check_cache(file_path, file_hash, file_info['last_modified'])
+                if cached_result:
+                    logger.info(f"Using cached result for {file_path}")
+                    return cached_result
+            
             is_corrupted = False
             corruption_details = []
             warning_details = []
@@ -489,6 +616,13 @@ class PixelProbe:
             elif extension in self.supported_video_formats:
                 logger.info(f"Checking video corruption for: {file_path}")
                 is_corrupted, details, tool, output, warnings = self._check_video_corruption(file_path, deep_scan)
+                corruption_details.extend(details)
+                scan_tool = tool
+                scan_output.extend(output)
+                warning_details = warnings
+            elif extension in self.supported_audio_formats:
+                logger.info(f"Checking audio corruption for: {file_path}")
+                is_corrupted, details, tool, output, warnings = self._check_audio_corruption(file_path, deep_scan)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
@@ -521,6 +655,9 @@ class PixelProbe:
                 'has_warnings': len(warning_details) > 0,
                 'warning_details': '; '.join(warning_details) if warning_details else None
             })
+            
+            # Save to cache
+            self._save_to_cache(file_path, result)
             
             return result
         
@@ -600,7 +737,7 @@ class PixelProbe:
         
         logger.info(f"Starting ImageMagick verification for: {file_path}")
         try:
-            result = subprocess.run(
+            result = safe_subprocess_run(
                 ['identify', '-verbose', file_path],
                 capture_output=True,
                 text=True,
@@ -665,7 +802,7 @@ class PixelProbe:
             logger.warning(f"ImageMagick error for {file_path}: {str(e)}")
         
         try:
-            result = subprocess.run(
+            result = safe_subprocess_run(
                 ['ffmpeg', '-v', 'error', '-i', file_path, '-f', 'null', '-'],
                 capture_output=True,
                 text=True,
@@ -756,6 +893,8 @@ class PixelProbe:
         scan_tool = "ffmpeg"
         scan_output = []
         warning_details = []
+        codec_name = None
+        codec_profile = None
         
         logger.info(f"Starting FFmpeg probe for: {file_path}")
         try:
@@ -776,7 +915,24 @@ class PixelProbe:
                 logger.warning(f"No video stream found in {file_path}")
             else:
                 codec_name = video_stream.get('codec_name', 'unknown codec')
-                scan_output.append(f"Video stream: {codec_name}")
+                codec_profile = video_stream.get('profile', '')
+                pix_fmt = video_stream.get('pix_fmt', '')
+                
+                # Check for HEVC Main 10 specifically
+                if codec_name == 'hevc' and 'Main 10' in codec_profile:
+                    scan_output.append(f"Video stream: {codec_name} ({codec_profile})")
+                    scan_output.append(f"Pixel format: {pix_fmt}")
+                    logger.info(f"HEVC Main 10 detected in {file_path}: profile={codec_profile}, pix_fmt={pix_fmt}")
+                    
+                    # HEVC Main 10 requires 10-bit support - mark as warning if detected
+                    if '10' in pix_fmt:  # e.g., yuv420p10le
+                        warning_details.append("HEVC Main 10 profile (10-bit) - requires hardware/software support for proper playback")
+                        logger.warning(f"HEVC Main 10 10-bit video detected in {file_path} - may have playback issues on some systems")
+                else:
+                    scan_output.append(f"Video stream: {codec_name}")
+                    if codec_profile:
+                        scan_output.append(f"Profile: {codec_profile}")
+                    
                 logger.info(f"Video stream found in {file_path}: {codec_name}")
             
             # Log duration info but don't mark as corrupted - invalid duration doesn't mean corrupted file
@@ -812,7 +968,7 @@ class PixelProbe:
         
         # Use improved FFmpeg command for corruption detection
         try:
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffmpeg', 
                 '-v', 'error',           # Show only errors
                 '-err_detect', 'ignore_err',  # Continue on errors to get full error report
@@ -828,8 +984,12 @@ class PixelProbe:
             )
             
             if result.returncode != 0:
-                corruption_details.append("FFmpeg validation failed")
-                is_corrupted = True
+                # Check if the error should be ignored
+                if not self._check_ignored_patterns(result.stderr):
+                    corruption_details.append("FFmpeg validation failed")
+                    is_corrupted = True
+                else:
+                    logger.info(f"FFmpeg error ignored due to matching pattern for {file_path}")
             
             if result.stderr:
                 error_lines = result.stderr.strip().split('\n')
@@ -888,7 +1048,7 @@ class PixelProbe:
             is_corrupted = True
         
         try:
-            result = subprocess.run(
+            result = safe_subprocess_run(
                 ['ffmpeg', '-v', 'error', '-t', '10', '-i', file_path, '-f', 'null', '-'],
                 capture_output=True,
                 text=True,
@@ -915,8 +1075,265 @@ class PixelProbe:
                 corruption_details.extend(enhanced_details)
                 scan_output.extend(enhanced_output)
         
+        # Additional HEVC Main 10 specific checks
+        if not is_corrupted and codec_name == 'hevc' and codec_profile and 'Main 10' in codec_profile:
+            hevc_corrupted, hevc_details, hevc_output = self._check_hevc_main10_issues(file_path)
+            if hevc_corrupted:
+                is_corrupted = True
+                corruption_details.extend(hevc_details)
+                scan_output.extend(hevc_output)
+        
         # Return warning details as well
         return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+    
+    def _check_audio_corruption(self, file_path, deep_scan=False):
+        """Check audio files for corruption using FFmpeg and format-specific tools"""
+        corruption_details = []
+        is_corrupted = False
+        scan_tool = "ffmpeg"
+        scan_output = []
+        warning_details = []
+        
+        # Step 1: Basic FFprobe analysis
+        logger.info(f"Running FFprobe on audio file: {file_path}")
+        try:
+            probe = ffmpeg.probe(file_path)
+            scan_output.append("FFprobe: PASSED")
+            
+            # Check for audio streams
+            if 'streams' not in probe or len(probe['streams']) == 0:
+                corruption_details.append("No audio streams found")
+                is_corrupted = True
+                scan_output.append("FFmpeg probe: No streams found")
+                logger.warning(f"No streams found in {file_path}")
+                return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+            
+            audio_stream = next((s for s in probe['streams'] if s['codec_type'] == 'audio'), None)
+            if not audio_stream:
+                corruption_details.append("No audio stream found")
+                is_corrupted = True
+                scan_output.append("FFmpeg probe: No audio stream")
+                logger.warning(f"No audio stream found in {file_path}")
+                return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+                
+            # Check audio stream properties
+            codec_name = audio_stream.get('codec_name', 'unknown')
+            sample_rate = audio_stream.get('sample_rate', 'unknown')
+            channels = audio_stream.get('channels', 'unknown')
+            bit_rate = audio_stream.get('bit_rate', 'unknown')
+            duration = audio_stream.get('duration', 'unknown')
+            
+            logger.info(f"Audio details - Codec: {codec_name}, Sample rate: {sample_rate}, Channels: {channels}, Bitrate: {bit_rate}")
+            scan_output.append(f"Audio stream: {codec_name}, {sample_rate}Hz, {channels}ch")
+            
+        except ffmpeg.Error as e:
+            stderr = e.stderr.decode('utf-8') if e.stderr else ''
+            if 'Invalid data found when processing input' in stderr:
+                if not self._check_ignored_patterns(stderr):
+                    corruption_details.append("Invalid data found in audio file")
+                    is_corrupted = True
+                    scan_tool = "ffmpeg"
+            elif 'moov atom not found' in stderr:
+                if not self._check_ignored_patterns(stderr):
+                    corruption_details.append("Missing moov atom (audio metadata)")
+                    is_corrupted = True
+                    scan_tool = "ffmpeg"
+            else:
+                if not self._check_ignored_patterns(stderr):
+                    corruption_details.append(f"FFprobe error: {stderr[:100]}")
+                    is_corrupted = True
+                    scan_tool = "ffmpeg"
+            scan_output.append(f"FFprobe: FAILED - {stderr[:200]}")
+            logger.error(f"FFprobe error on audio {file_path}: {stderr[:200]}")
+            return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+        
+        # Step 2: Attempt to decode audio to check for corruption
+        logger.info(f"Attempting audio decode test for: {file_path}")
+        try:
+            # Use ffmpeg to decode a portion of the audio
+            decode_duration = 10 if not deep_scan else 30  # Decode first 10s (or 30s for deep scan)
+            
+            result = safe_subprocess_run([
+                'ffmpeg', '-v', 'error',
+                '-i', file_path,
+                '-t', str(decode_duration),
+                '-f', 'null', '-'
+            ], capture_output=True, text=True, timeout=60)
+            
+            if result.returncode != 0:
+                stderr = result.stderr
+                scan_output.append(f"Audio decode: FAILED - {stderr[:200]}")
+                
+                # Analyze specific audio errors
+                if 'Error while decoding stream' in stderr:
+                    corruption_details.append("Audio stream decoding errors detected")
+                    is_corrupted = True
+                elif 'Invalid frame size' in stderr:
+                    corruption_details.append("Invalid audio frame size")
+                    is_corrupted = True
+                elif 'Header missing' in stderr:
+                    corruption_details.append("Audio header missing or corrupted")
+                    is_corrupted = True
+                elif 'Truncated' in stderr:
+                    corruption_details.append("Truncated audio file")
+                    is_corrupted = True
+                else:
+                    # Check for specific codec errors
+                    if 'mp3' in codec_name.lower() and 'Header missing' in stderr:
+                        corruption_details.append("MP3 header corruption")
+                        is_corrupted = True
+                    elif 'flac' in codec_name.lower() and 'crc mismatch' in stderr:
+                        corruption_details.append("FLAC CRC mismatch - data corruption")
+                        is_corrupted = True
+                    else:
+                        corruption_details.append("Audio decoding failed")
+                        is_corrupted = True
+                        
+                logger.warning(f"Audio decode failed for {file_path}: {stderr[:100]}")
+            else:
+                scan_output.append(f"Audio decode ({decode_duration}s): PASSED")
+                logger.info(f"Audio decode test passed for {file_path}")
+                
+        except subprocess.TimeoutExpired:
+            warning_details.append("Audio decode test timeout (file may be very large)")
+            scan_output.append("Audio decode: TIMEOUT")
+            logger.warning(f"Audio decode timeout for {file_path}")
+        except Exception as e:
+            scan_output.append(f"Audio decode: ERROR - {str(e)}")
+            logger.error(f"Error during audio decode test for {file_path}: {str(e)}")
+        
+        # Step 3: Deep scan - check entire file if requested
+        if deep_scan and not is_corrupted:
+            logger.info(f"Running deep audio scan for: {file_path}")
+            try:
+                # Scan entire file for errors
+                result = safe_subprocess_run([
+                    'ffmpeg', '-v', 'error',
+                    '-i', file_path,
+                    '-f', 'null', '-'
+                ], capture_output=True, text=True, timeout=300)  # 5 minute timeout for deep scan
+                
+                if result.stderr:
+                    # Look for non-fatal warnings that might indicate issues
+                    stderr_lower = result.stderr.lower()
+                    if 'non-monotonous dts' in stderr_lower:
+                        warning_details.append("Non-monotonous timestamps detected")
+                    if 'queue input is backward in time' in stderr_lower:
+                        warning_details.append("Timestamp inconsistencies detected")
+                    if 'invalid packet size' in stderr_lower:
+                        warning_details.append("Invalid packet sizes detected")
+                        
+                    scan_output.append(f"Deep scan warnings: {result.stderr[:200]}")
+                else:
+                    scan_output.append("Deep audio scan: PASSED")
+                    
+            except subprocess.TimeoutExpired:
+                warning_details.append("Deep scan timeout")
+                scan_output.append("Deep scan: TIMEOUT")
+            except Exception as e:
+                scan_output.append(f"Deep scan: ERROR - {str(e)}")
+                logger.error(f"Error during deep audio scan for {file_path}: {str(e)}")
+        
+        # Step 4: Format-specific validation for lossless formats
+        extension = Path(file_path).suffix.lower()
+        if extension == '.flac':
+            # FLAC has built-in error detection
+            logger.info(f"Running FLAC-specific validation for: {file_path}")
+            try:
+                result = safe_subprocess_run([
+                    'flac', '-t', file_path
+                ], capture_output=True, text=True, timeout=60)
+                
+                if result.returncode != 0:
+                    corruption_details.append("FLAC validation failed")
+                    is_corrupted = True
+                    scan_output.append(f"FLAC test: FAILED - {result.stderr[:200]}")
+                else:
+                    scan_output.append("FLAC test: PASSED")
+            except FileNotFoundError:
+                # flac command not available, skip this test
+                logger.debug("FLAC command not found, skipping FLAC-specific test")
+            except Exception as e:
+                logger.debug(f"FLAC test error: {str(e)}")
+        
+        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+    
+    def _check_hevc_main10_issues(self, file_path):
+        """Check for HEVC Main 10 specific issues that cause green tint/freezing"""
+        corruption_details = []
+        is_corrupted = False
+        hevc_output = []
+        
+        logger.info(f"Running HEVC Main 10 specific checks for {file_path}")
+        hevc_output.append("=== HEVC Main 10 Analysis ===")
+        
+        try:
+            # Check for B-frame decoding issues common in HEVC Main 10
+            # Using more aggressive error detection to catch issues that cause playback freezing
+            result = subprocess.run([
+                'ffmpeg',
+                '-v', 'warning',
+                '-err_detect', 'aggressive',
+                '-i', file_path,
+                '-vf', 'showinfo',
+                '-frames:v', '100',
+                '-f', 'null',
+                '-'
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.stderr:
+                stderr_lower = result.stderr.lower()
+                # Look for specific HEVC Main 10 decoding issues
+                if 'reference picture missing' in stderr_lower:
+                    corruption_details.append("HEVC reference picture errors - causes video freezing")
+                    is_corrupted = True
+                    hevc_output.append("Reference picture errors found (causes playback freezing)")
+                
+                if 'error while decoding' in stderr_lower:
+                    corruption_details.append("HEVC decoding errors - video freezes while audio continues")
+                    is_corrupted = True
+                    hevc_output.append("Decoding errors found (VLC stops, Plex freezes video)")
+                
+                # Check for slice decoding errors that cause green artifacts
+                if 'slice' in stderr_lower and ('error' in stderr_lower or 'invalid' in stderr_lower):
+                    corruption_details.append("HEVC slice decoding errors - causes green tint/artifacts")
+                    is_corrupted = True
+                    hevc_output.append("Slice decoding errors (causes green tint)")
+                
+                # Check for SEI (Supplemental Enhancement Information) errors
+                if 'sei' in stderr_lower and 'error' in stderr_lower:
+                    corruption_details.append("HEVC SEI errors detected")
+                    is_corrupted = True
+                    hevc_output.append("SEI metadata errors found")
+            
+            # Check for color space conversion issues (10-bit to 8-bit)
+            result = subprocess.run([
+                'ffprobe',
+                '-v', 'error',
+                '-select_streams', 'v:0',
+                '-show_entries', 'stream=color_space,color_transfer,color_primaries',
+                '-of', 'json',
+                file_path
+            ], capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0 and result.stdout:
+                import json
+                try:
+                    probe_data = json.loads(result.stdout)
+                    if probe_data.get('streams'):
+                        stream = probe_data['streams'][0]
+                        if stream.get('color_space') == 'bt2020nc' or stream.get('color_primaries') == 'bt2020':
+                            hevc_output.append("HDR content detected (BT.2020) - requires HDR display support")
+                except json.JSONDecodeError:
+                    pass
+                    
+        except subprocess.TimeoutExpired:
+            hevc_output.append("HEVC analysis timeout")
+        except Exception as e:
+            hevc_output.append(f"HEVC analysis error: {str(e)}")
+            logger.error(f"HEVC Main 10 check error for {file_path}: {str(e)}")
+        
+        return is_corrupted, corruption_details, hevc_output
     
     def _enhanced_corruption_check(self, file_path, file_size_gb):
         """Enhanced multi-stage corruption detection for files that fail basic checks"""
@@ -983,7 +1400,7 @@ class PixelProbe:
         
         try:
             logger.info(f"Checking frame integrity for {file_path}")
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffprobe', 
                 '-show_entries', 'stream=r_frame_rate,nb_read_frames,duration',
                 '-select_streams', 'v:0',
@@ -1041,7 +1458,7 @@ class PixelProbe:
         
         try:
             logger.info(f"Checking temporal outliers for {file_path}")
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffprobe',
                 '-f', 'lavfi',
                 '-i', f'movie={file_path},signalstats=stat=tout+vrep',
@@ -1114,7 +1531,7 @@ class PixelProbe:
             
             for start_time, sample_duration, location in sample_points:
                 try:
-                    result = subprocess.run([
+                    result = safe_subprocess_run([
                         'ffmpeg',
                         '-v', 'error',
                         '-err_detect', 'crccheck+bitstream',
@@ -1145,7 +1562,7 @@ class PixelProbe:
         
         try:
             logger.info(f"Running strict error detection for {file_path}")
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffmpeg',
                 '-v', 'error',
                 '-err_detect', 'crccheck+bitstream+buffer+explode',
@@ -1265,3 +1682,126 @@ class PixelProbe:
                 'elapsed_time': 0,
                 'is_scanning': False
             }
+    
+    def _check_cache(self, file_path, file_hash, last_modified):
+        """Check if we have a valid cached scan result for this file"""
+        if not self.database_path:
+            return None
+            
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from models import ScanResult
+            
+            engine = create_engine(self.database_path)
+            Session = sessionmaker(bind=engine)
+            session = Session()
+            
+            # Check for existing scan result
+            result = session.query(ScanResult).filter_by(file_path=file_path).first()
+            
+            if result and result.scan_date:
+                # Check if file hasn't changed (same hash and modification time)
+                if (result.file_hash == file_hash and 
+                    result.last_modified and 
+                    result.last_modified.replace(tzinfo=None) == last_modified.replace(tzinfo=None)):
+                    
+                    # Convert database result to expected format
+                    cached_data = {
+                        'file_path': result.file_path,
+                        'file_size': result.file_size,
+                        'file_type': result.file_type,
+                        'creation_date': result.creation_date,
+                        'last_modified': result.last_modified,
+                        'is_corrupted': result.is_corrupted,
+                        'corruption_details': result.corruption_details,
+                        'file_hash': result.file_hash,
+                        'scan_tool': result.scan_tool,
+                        'scan_duration': result.scan_duration,
+                        'scan_output': result.scan_output,
+                        'has_warnings': result.has_warnings,
+                        'warning_details': result.warning_details
+                    }
+                    session.close()
+                    return cached_data
+            
+            session.close()
+        except Exception as e:
+            logger.error(f"Error checking cache for {file_path}: {e}")
+        
+        return None
+    
+    def _save_to_cache(self, file_path, scan_result):
+        """Save scan result to database cache"""
+        if not self.database_path:
+            return
+            
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from models import ScanResult
+            from datetime import datetime, timezone
+            
+            engine = create_engine(self.database_path)
+            Session = sessionmaker(bind=engine)
+            session = Session()
+            
+            # Check for existing record
+            db_result = session.query(ScanResult).filter_by(file_path=file_path).first()
+            
+            if not db_result:
+                db_result = ScanResult(file_path=file_path)
+                session.add(db_result)
+            
+            # Update with scan results
+            db_result.file_size = scan_result.get('file_size')
+            db_result.file_type = scan_result.get('file_type')
+            db_result.creation_date = scan_result.get('creation_date')
+            db_result.last_modified = scan_result.get('last_modified')
+            db_result.is_corrupted = scan_result.get('is_corrupted', False)
+            db_result.corruption_details = scan_result.get('corruption_details')
+            db_result.file_hash = scan_result.get('file_hash')
+            db_result.scan_tool = scan_result.get('scan_tool')
+            db_result.scan_duration = scan_result.get('scan_duration')
+            db_result.scan_output = scan_result.get('scan_output')
+            db_result.has_warnings = scan_result.get('has_warnings', False)
+            db_result.warning_details = scan_result.get('warning_details')
+            db_result.scan_date = datetime.now(timezone.utc)
+            db_result.scan_status = 'completed'
+            db_result.file_exists = True
+            
+            session.commit()
+            session.close()
+            logger.info(f"Saved scan result to cache for {file_path}")
+        except Exception as e:
+            logger.error(f"Error saving to cache for {file_path}: {e}")
+    
+    def _check_ignored_patterns(self, error_output):
+        """Check if error output contains any ignored patterns"""
+        if not self.database_path or not error_output:
+            return False
+            
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from models import IgnoredErrorPattern
+            
+            engine = create_engine(self.database_path)
+            Session = sessionmaker(bind=engine)
+            session = Session()
+            
+            # Get active ignored patterns
+            patterns = session.query(IgnoredErrorPattern).filter_by(is_active=True).all()
+            
+            # Check if any pattern matches the error output
+            for pattern in patterns:
+                if pattern.pattern.lower() in error_output.lower():
+                    logger.info(f"Error output matches ignored pattern: {pattern.pattern}")
+                    session.close()
+                    return True
+            
+            session.close()
+        except Exception as e:
+            logger.error(f"Error checking ignored patterns: {e}")
+        
+        return False
