@@ -6,7 +6,83 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.0.132** fixes schedules not being visible in UI after creation by correcting the API response format and data serialization.
+**Version 2.1.0** is a major milestone release with 80+ improvements including scan reports, enhanced security, modular architecture, and comprehensive audio format support.
+
+## 🎉 What's New in Version 2.1.0
+
+This major release includes 80 versions worth of improvements since 2.0.53:
+
+### 🔒 Security Enhancements
+- **Path Traversal Protection**: Comprehensive validation prevents directory traversal attacks
+- **Command Injection Prevention**: All subprocess calls now use validated safe wrappers
+- **Input Validation**: JSON schema validation on all API endpoints
+- **Rate Limiting**: Configurable limits on API endpoints (200/day, 50/hour default)
+- **CSRF Protection**: Flask-WTF integration for enhanced security
+- **Audit Logging**: Comprehensive security event logging
+
+### 🏗️ Architecture Overhaul
+- **Modular Design**: Separated 2,500+ line monolith into clean, maintainable modules
+- **Layered Architecture**: Clear separation between API routes, business logic, and data access
+- **SOLID Principles**: Each module has single, well-defined responsibility
+- **Repository Pattern**: Clean data access layer with testable components
+- **Improved Testability**: Components can be tested in isolation
+
+### 📊 Scan Reports Feature
+- **Scan History**: View all past scan operations with detailed statistics
+- **Advanced Filtering**: Filter by scan type and status
+- **Export Options**: Export reports as JSON or PDF
+- **Bulk Operations**: Select and manage multiple reports
+- **Performance Metrics**: Track scan duration and efficiency
+
+### 🎵 Audio Format Support
+- **Comprehensive Coverage**: MP3, FLAC, WAV, AAC, OGG, Opus, WMA, and more
+- **Lossless Formats**: FLAC, AIFF, APE, WavPack with integrity checking
+- **High-Resolution**: DSD formats (DSF, DFF) support
+- **Deep Scan Mode**: Detect timestamp issues and packet errors
+- **Format-Specific Tests**: FLAC CRC validation, MP3 frame validation
+
+### 🎥 Enhanced Video Support
+- **HEVC/H.265**: Full support including Main 10 profile detection
+- **Professional Formats**: ProRes, DNxHD/DNxHR, MXF
+- **Broadcast Formats**: AVCHD, MTS, M2TS
+- **Better Detection**: Enhanced corruption detection for modern codecs
+
+### 🖼️ Expanded Image Support
+- **Apple Formats**: HEIC/HEIF support
+- **RAW Formats**: Canon CR2/CR3, Nikon NEF, Sony ARW, Adobe DNG, and more
+- **Professional**: PSD, OpenEXR, HDR, SVG
+- **Scientific**: FITS, Netpbm formats
+
+### ⚡ Performance Optimizations
+- **3-5x Faster Discovery**: Replaced os.walk() with os.scandir()
+- **250x I/O Improvement**: Increased hash chunk size from 4KB to 1MB
+- **Database Performance**: Connection pooling and optimized SQLite pragmas
+- **Batch Processing**: Process up to 100 items per transaction
+- **Progress Tracking**: Real-time ETA calculations for all operations
+
+### 🐛 Major Bug Fixes
+- Fixed scan progress getting stuck at 0% or 67%
+- Fixed rescan scanning entire directories instead of selected files
+- Fixed UI filters and sorting not working properly
+- Fixed database initialization issues after upgrades
+- Fixed rate limiting blocking internal requests
+- Fixed memory issues with 1M+ file databases
+- Fixed timezone handling throughout the application
+- Fixed PDF report generation and formatting
+
+### 🎨 UI Improvements
+- **Bulk Operations**: Enhanced bulk selection and actions
+- **Progress Display**: Shows current file, phase, and ETA
+- **Export Options**: Dropdown menu with CSV, JSON, PDF formats
+- **Dark Mode**: Refined dark mode with better contrast
+- **Mobile Responsive**: Improved mobile interface
+
+### 🔧 Developer Experience
+- **Comprehensive Tests**: 70+ tests covering all components
+- **API Documentation**: OpenAPI/Swagger documentation
+- **Better Logging**: Structured logging with proper levels
+- **Database Tools**: Migration and repair utilities
+- **CI/CD Ready**: Docker multi-stage builds
 
 ## ✨ Features
 
@@ -88,6 +164,17 @@ Detailed scan results viewer:
 
 ### Advanced Features
 
+#### Scan Reports
+![Scan Reports](docs/screenshots/features/scan-reports.png)
+
+Comprehensive scan reporting with history and analytics:
+- View all past scan operations with detailed statistics
+- Filter by scan type (full scan, rescan, deep scan, cleanup, file changes)
+- See duration, files processed, and issues found for each scan
+- Export reports as JSON for data analysis or PDF for documentation
+- Bulk actions: refresh or delete multiple reports at once
+- Actions include viewing details, exporting JSON/PDF, and deleting reports
+
 #### Scheduled Scanning
 ![Scan Schedules](docs/screenshots/features/scan-schedules.png)
 
@@ -157,18 +244,14 @@ Interactive exclusion management with modern UI:
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.132)
-- **`ttlequals0/pixelprobe:2.0.132`** - Fixed schedules not visible after creation
-- **`ttlequals0/pixelprobe:2.0.131`** - Fixed test suite mock persistence issue
-- **`ttlequals0/pixelprobe:2.0.130`** - Fixed scheduler update method and exclusions API
-- **`ttlequals0/pixelprobe:2.0.129`** - Optimized rescan performance with parallel processing
-- **`ttlequals0/pixelprobe:2.0.128`** - Fixed SQL update syntax for orphan cleanup
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.1.0)
+- **`ttlequals0/pixelprobe:2.1.0`** - Major milestone with 80+ improvements
 
 You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.132  # or :latest for newest
+    image: ttlequals0/pixelprobe:2.1.0  # or :latest for newest
 ```
 
 ### Development Setup

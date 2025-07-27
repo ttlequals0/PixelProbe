@@ -118,69 +118,92 @@ class TestScheduleEndpoints:
 class TestExclusionEndpoints:
     """Test exclusion management endpoints"""
     
-    def test_add_path_exclusion(self, client, monkeypatch, tmp_path):
+    def test_add_path_exclusion(self, client, db, app):
         """Test adding a path exclusion"""
-        exclusions_file = tmp_path / 'exclusions.json'
-        monkeypatch.setattr('os.path.join', lambda *args: str(exclusions_file))
+        from models import Exclusion
         
-        response = client.post('/api/exclusions/path',
-            json={'item': '/test/excluded/path'})
-        assert response.status_code == 200
-        assert 'Path added successfully' in response.get_json()['message']
-        
-        # Verify file was created
-        assert exclusions_file.exists()
-        with open(exclusions_file) as f:
-            data = json.load(f)
-            assert '/test/excluded/path' in data['paths']
+        with app.app_context():
+            response = client.post('/api/exclusions/path',
+                json={'item': '/test/excluded/path'})
+            assert response.status_code == 200
+            assert 'Path added successfully' in response.get_json()['message']
+            
+            # Verify exclusion was created in database
+            exclusion = Exclusion.query.filter_by(
+                exclusion_type='path',
+                value='/test/excluded/path'
+            ).first()
+            assert exclusion is not None
+            assert exclusion.is_active is True
     
-    def test_add_extension_exclusion(self, client, monkeypatch, tmp_path):
+    def test_add_extension_exclusion(self, client, db, app):
         """Test adding an extension exclusion"""
-        exclusions_file = tmp_path / 'exclusions.json'
-        exclusions_file.write_text('{"paths": [], "extensions": []}')
-        monkeypatch.setattr('os.path.join', lambda *args: str(exclusions_file))
+        from models import Exclusion
         
-        response = client.post('/api/exclusions/extension',
-            json={'item': '.tmp'})
-        assert response.status_code == 200
-        assert 'Extension added successfully' in response.get_json()['message']
-        
-        with open(exclusions_file) as f:
-            data = json.load(f)
-            assert '.tmp' in data['extensions']
+        with app.app_context():
+            response = client.post('/api/exclusions/extension',
+                json={'item': '.tmp'})
+            assert response.status_code == 200
+            assert 'Extension added successfully' in response.get_json()['message']
+            
+            # Verify exclusion was created in database
+            exclusion = Exclusion.query.filter_by(
+                exclusion_type='extension',
+                value='.tmp'
+            ).first()
+            assert exclusion is not None
+            assert exclusion.is_active is True
     
-    def test_add_duplicate_exclusion(self, client, monkeypatch, tmp_path):
+    def test_add_duplicate_exclusion(self, client, db, app):
         """Test adding duplicate exclusion"""
-        exclusions_file = tmp_path / 'exclusions.json'
-        exclusions_file.write_text('{"paths": ["/existing"], "extensions": []}')
-        monkeypatch.setattr('os.path.join', lambda *args: str(exclusions_file))
+        from models import Exclusion
         
-        response = client.post('/api/exclusions/path',
-            json={'item': '/existing'})
-        assert response.status_code == 400
-        assert 'already exists' in response.get_json()['message']
+        with app.app_context():
+            # Create existing exclusion
+            existing = Exclusion(
+                exclusion_type='path',
+                value='/existing',
+                is_active=True
+            )
+            db.session.add(existing)
+            db.session.commit()
+            
+            # Try to add duplicate
+            response = client.post('/api/exclusions/path',
+                json={'item': '/existing'})
+            assert response.status_code == 400
+            assert 'already exists' in response.get_json()['error']
     
-    def test_remove_path_exclusion(self, client, monkeypatch, tmp_path):
+    def test_remove_path_exclusion(self, client, db, app):
         """Test removing a path exclusion"""
-        exclusions_file = tmp_path / 'exclusions.json'
-        exclusions_file.write_text('{"paths": ["/test/path"], "extensions": []}')
-        monkeypatch.setattr('os.path.join', lambda *args: str(exclusions_file))
+        from models import Exclusion
         
-        response = client.delete('/api/exclusions/path',
-            json={'item': '/test/path'})
-        assert response.status_code == 200
-        assert 'Path removed successfully' in response.get_json()['message']
-        
-        with open(exclusions_file) as f:
-            data = json.load(f)
-            assert '/test/path' not in data['paths']
+        with app.app_context():
+            # Create exclusion to remove
+            exclusion = Exclusion(
+                exclusion_type='path',
+                value='/test/path',
+                is_active=True
+            )
+            db.session.add(exclusion)
+            db.session.commit()
+            
+            # Remove exclusion
+            response = client.delete('/api/exclusions/path',
+                json={'item': '/test/path'})
+            assert response.status_code == 200
+            assert 'Path removed successfully' in response.get_json()['message']
+            
+            # Verify it was soft deleted
+            exclusion = Exclusion.query.filter_by(
+                exclusion_type='path',
+                value='/test/path'
+            ).first()
+            assert exclusion is not None
+            assert exclusion.is_active is False
     
-    def test_remove_nonexistent_exclusion(self, client, monkeypatch, tmp_path):
+    def test_remove_nonexistent_exclusion(self, client, db):
         """Test removing non-existent exclusion"""
-        exclusions_file = tmp_path / 'exclusions.json'
-        exclusions_file.write_text('{"paths": [], "extensions": []}')
-        monkeypatch.setattr('os.path.join', lambda *args: str(exclusions_file))
-        
         response = client.delete('/api/exclusions/path',
             json={'item': '/nonexistent'})
         assert response.status_code == 404

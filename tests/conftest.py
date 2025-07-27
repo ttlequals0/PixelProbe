@@ -11,7 +11,7 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 
 # Import models first to ensure they're registered with SQLAlchemy
-from models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport
+from models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport, Exclusion
 
 # Import models to ensure they're available
 from models import ScanState, ScanResult
