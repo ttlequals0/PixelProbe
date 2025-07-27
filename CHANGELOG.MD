@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exclusion deletion via UI and API
 - Schedule deletion via UI and API
 
+### Deployment
+- Built and pushed Docker image version 2.0.133 to DockerHub
+- Tagged as both `2.0.133` and `latest`
+- Platform: linux/amd64
+
 ## [2.0.132] - 2025-07-27
 
 ### Fixed
