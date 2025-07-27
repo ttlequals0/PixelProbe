@@ -633,6 +633,42 @@ def recover_stuck_scan():
         logger.error(f"Error recovering stuck scan: {e}")
         return jsonify({'error': str(e)}), 500
 
+@scan_bp.route('/reset-files-by-path', methods=['POST'])
+@rate_limit("5 per minute")
+def reset_files_by_path():
+    """Reset specific files by their paths"""
+    data = request.get_json() or {}
+    file_path = data.get('file_path')
+    file_paths = data.get('file_paths', [])
+    
+    if file_path:
+        file_paths = [file_path]
+    
+    if not file_paths:
+        return jsonify({'error': 'No file paths provided'}), 400
+    
+    try:
+        # Reset files by path
+        results = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+        count = len(results)
+        for result in results:
+            result.scan_status = 'pending'
+            result.is_corrupted = False
+            result.marked_as_good = False
+            result.error_message = None
+            result.scan_output = None
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': f'Reset {count} files for rescanning',
+            'reset_count': count
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting files by path: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @scan_bp.route('/scan-output/<int:result_id>')
 def get_scan_output(result_id):
     """Get the detailed scan output for a specific result"""

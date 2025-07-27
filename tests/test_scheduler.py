@@ -18,7 +18,7 @@ class TestMediaScheduler:
         assert hasattr(scheduler, 'update_schedules')
         assert callable(getattr(scheduler, 'update_schedules'))
     
-    def test_update_schedules_removes_and_reloads(self, scheduler, app):
+    def test_update_schedules_removes_and_reloads(self, scheduler, app, db):
         """Test that update_schedules removes existing jobs and reloads from DB"""
         with app.app_context():
             # Create a test schedule

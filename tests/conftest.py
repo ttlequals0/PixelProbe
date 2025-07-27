@@ -66,8 +66,10 @@ def create_test_app():
     csrf.exempt(maintenance_bp)
     csrf.exempt(reports_bp)
     
-    # Set up scheduler
+    # Set up scheduler without initializing (to avoid DB access before tables exist)
     scheduler = MediaScheduler()
+    scheduler.app = test_app  # Set app directly without full init
+    scheduler.scheduler.start()  # Start the scheduler
     set_scheduler(scheduler)
     
     # Add basic routes

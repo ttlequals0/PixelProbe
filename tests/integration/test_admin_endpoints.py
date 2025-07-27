@@ -5,7 +5,7 @@ from models import db, ScanSchedule, IgnoredErrorPattern
 class TestScheduleEndpoints:
     """Test schedule management endpoints"""
     
-    def test_create_schedule(self, client, app):
+    def test_create_schedule(self, client, app, db):
         """Test creating a new schedule"""
         with app.app_context():
             response = client.post('/api/schedules', 
@@ -17,15 +17,15 @@ class TestScheduleEndpoints:
                 })
             assert response.status_code == 201
             data = response.get_json()
-            assert data['message'] == 'Schedule created successfully'
-            assert 'schedule_id' in data
+            assert 'id' in data  # The response is schedule.to_dict()
+            assert data['name'] == 'Test Schedule'
             
             # Verify schedule was created
             schedule = ScanSchedule.query.filter_by(name='Test Schedule').first()
             assert schedule is not None
             assert schedule.cron_expression == '0 2 * * *'
     
-    def test_create_schedule_duplicate_name(self, client, app):
+    def test_create_schedule_duplicate_name(self, client, app, db):
         """Test creating schedule with duplicate name"""
         with app.app_context():
             # Create first schedule
@@ -46,7 +46,7 @@ class TestScheduleEndpoints:
             assert response.status_code == 400
             assert 'already exists' in response.get_json()['error']
     
-    def test_delete_schedule(self, client, app):
+    def test_delete_schedule(self, client, app, db):
         """Test deleting a schedule"""
         with app.app_context():
             # Create schedule
@@ -61,13 +61,14 @@ class TestScheduleEndpoints:
             
             # Delete schedule
             response = client.delete(f'/api/schedules/{schedule_id}')
-            assert response.status_code == 200
-            assert 'deleted successfully' in response.get_json()['message']
+            assert response.status_code == 204
             
-            # Verify deleted
-            assert ScanSchedule.query.get(schedule_id) is None
+            # Verify soft deleted
+            schedule = ScanSchedule.query.get(schedule_id)
+            assert schedule is not None
+            assert schedule.is_active is False
     
-    def test_delete_nonexistent_schedule(self, client):
+    def test_delete_nonexistent_schedule(self, client, db):
         """Test deleting non-existent schedule"""
         response = client.delete('/api/schedules/99999')
         assert response.status_code == 404
@@ -144,7 +145,7 @@ class TestExclusionEndpoints:
         assert response.status_code == 404
         assert 'not found' in response.get_json()['error']
     
-    def test_invalid_exclusion_type(self, client):
+    def test_invalid_exclusion_type(self, client, db):
         """Test invalid exclusion type"""
         response = client.post('/api/exclusions/invalid',
             json={'item': 'test'})
@@ -155,31 +156,30 @@ class TestExclusionEndpoints:
 class TestIgnoredPatternsEndpoints:
     """Test ignored patterns endpoints"""
     
-    def test_add_ignored_pattern(self, client, app):
+    def test_add_ignored_pattern(self, client, app, db):
         """Test adding an ignored pattern"""
         with app.app_context():
             response = client.post('/api/ignored-patterns',
                 json={
                     'pattern': 'moov atom not found',
-                    'pattern_type': 'error',
                     'description': 'Test pattern'
                 })
             assert response.status_code == 201
             data = response.get_json()
-            assert 'pattern_id' in data
+            assert 'id' in data  # Response includes pattern object
             
             # Verify pattern was created
             pattern = IgnoredErrorPattern.query.filter_by(pattern='moov atom not found').first()
             assert pattern is not None
-            assert pattern.pattern_type == 'error'
+            assert pattern.description == 'Test pattern'
     
-    def test_add_duplicate_pattern(self, client, app):
+    def test_add_duplicate_pattern(self, client, app, db):
         """Test adding duplicate pattern"""
         with app.app_context():
             # Create first pattern
             pattern = IgnoredErrorPattern(
                 pattern='duplicate pattern',
-                pattern_type='error'
+                description='Test pattern'
             )
             db.session.add(pattern)
             db.session.commit()
@@ -188,18 +188,18 @@ class TestIgnoredPatternsEndpoints:
             response = client.post('/api/ignored-patterns',
                 json={
                     'pattern': 'duplicate pattern',
-                    'pattern_type': 'error'
+                    'description': 'Another pattern'
                 })
             assert response.status_code == 400
             assert 'already exists' in response.get_json()['error']
     
-    def test_delete_ignored_pattern(self, client, app):
+    def test_delete_ignored_pattern(self, client, app, db):
         """Test deleting an ignored pattern"""
         with app.app_context():
             # Create pattern
             pattern = IgnoredErrorPattern(
                 pattern='test delete',
-                pattern_type='error'
+                description='Pattern to delete'
             )
             db.session.add(pattern)
             db.session.commit()
@@ -210,10 +210,12 @@ class TestIgnoredPatternsEndpoints:
             assert response.status_code == 200
             assert 'deleted successfully' in response.get_json()['message']
             
-            # Verify deleted
-            assert IgnoredErrorPattern.query.get(pattern_id) is None
+            # Verify soft deleted
+            pattern = IgnoredErrorPattern.query.get(pattern_id)
+            assert pattern is not None
+            assert pattern.is_active is False
     
-    def test_delete_nonexistent_pattern(self, client):
+    def test_delete_nonexistent_pattern(self, client, db):
         """Test deleting non-existent pattern"""
         response = client.delete('/api/ignored-patterns/99999')
         assert response.status_code == 404

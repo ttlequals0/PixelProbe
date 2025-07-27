@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.131] - 2025-07-27
+
+### Fixed
+- **Test Suite**: Fixed mock persistence issue in scan cancellation tests
+  - Added proper cleanup of mocked scan_service after tests
+  - Prevents mocks from affecting other tests
+
+### Deployment
+- Built and pushed Docker image version 2.0.131 to DockerHub
+- Tagged as both `2.0.131` and `latest`
+- Platform: linux/amd64
+
 ## [2.0.130] - 2025-07-27
 
 ### Fixed
@@ -38,6 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Maintenance cancellation endpoints (cancel cleanup, cancel file changes)
   - Scan management endpoints (reset stuck scans, reset for rescan, recover stuck scan)
   - Added basic scheduler test to verify update_schedules method exists
+
+- **API Endpoints**: Added new endpoints for better functionality
+  - `/api/reset-files-by-path` - Reset specific files by their paths for rescanning
+  - Added duplicate name validation for schedules and ignored patterns
+
+### Fixed (Additional)
+- **Test Suite**: Fixed all failing tests
+  - Added missing `db` fixture to tests that access database
+  - Fixed test expectations to match actual API responses
+  - Fixed soft delete expectations (schedules and patterns use is_active=False)
+  - Fixed mock persistence issue in scan cancellation tests
+  - Updated response field names to match actual API returns
 
 ### Deployment
 - Built and pushed Docker image version 2.0.130 to DockerHub

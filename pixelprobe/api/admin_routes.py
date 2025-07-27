@@ -121,6 +121,11 @@ def add_ignored_pattern():
             return jsonify({'error': 'Pattern contains potentially dangerous regex syntax'}), 400
     
     try:
+        # Check for duplicate pattern
+        existing = IgnoredErrorPattern.query.filter_by(pattern=pattern, is_active=True).first()
+        if existing:
+            return jsonify({'error': f'Pattern "{pattern}" already exists'}), 400
+        
         new_pattern = IgnoredErrorPattern(
             pattern=pattern,
             description=description,
@@ -137,7 +142,7 @@ def add_ignored_pattern():
             'pattern': new_pattern.pattern,
             'description': new_pattern.description,
             'message': 'Pattern added successfully'
-        })
+        }), 201
     except Exception as e:
         logger.error(f"Error adding ignored pattern: {e}")
         db.session.rollback()
@@ -146,8 +151,11 @@ def add_ignored_pattern():
 @admin_bp.route('/ignored-patterns/<int:pattern_id>', methods=['DELETE'])
 def delete_ignored_pattern(pattern_id):
     """Delete an ignored error pattern"""
+    pattern = IgnoredErrorPattern.query.get(pattern_id)
+    if not pattern:
+        return jsonify({'error': 'Pattern not found'}), 404
+    
     try:
-        pattern = IgnoredErrorPattern.query.get_or_404(pattern_id)
         pattern_text = pattern.pattern
         pattern.is_active = False  # Soft delete
         db.session.commit()
@@ -233,8 +241,14 @@ def create_schedule():
     data = request.get_json()
     
     try:
+        # Check for duplicate name
+        name = data.get('name', 'Unnamed Schedule')
+        existing = ScanSchedule.query.filter_by(name=name, is_active=True).first()
+        if existing:
+            return jsonify({'error': f'Schedule with name "{name}" already exists'}), 400
+        
         schedule = ScanSchedule(
-            name=data.get('name', 'Unnamed Schedule'),
+            name=name,
             cron_expression=data['cron_expression'],
             scan_type=data.get('scan_type', 'full'),
             force_rescan=data.get('force_rescan', False),

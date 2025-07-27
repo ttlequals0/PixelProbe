@@ -28,6 +28,8 @@
 - docker if you test locally cleanup afterwards
 - python testing should use venv
 - dont add yourself or claude to git commits
+- NEVER remove failed tests , ALWAYS fix them
+- Run ALL tests NEVER skip them.
 - Always follow claude.md
 - Always run test suite before each build and make sure the app will actually start. 
 ### Docker Tagging Notes

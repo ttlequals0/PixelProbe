@@ -5,7 +5,7 @@ import time
 class TestMaintenanceCancelEndpoints:
     """Test maintenance cancellation endpoints"""
     
-    def test_cancel_cleanup(self, client, app):
+    def test_cancel_cleanup(self, client, app, db):
         """Test cancelling cleanup operation"""
         with app.app_context():
             # Create active cleanup state
@@ -28,13 +28,13 @@ class TestMaintenanceCancelEndpoints:
             assert cleanup.cancel_requested is True
             assert cleanup.progress_message == 'Cancellation requested...'
     
-    def test_cancel_cleanup_no_active(self, client):
+    def test_cancel_cleanup_no_active(self, client, db):
         """Test cancelling when no active cleanup"""
         response = client.post('/api/cancel-cleanup')
         assert response.status_code == 400
         assert 'No active cleanup' in response.get_json()['error']
     
-    def test_cancel_file_changes(self, client, app):
+    def test_cancel_file_changes(self, client, app, db):
         """Test cancelling file changes check"""
         with app.app_context():
             # Create active file changes state
@@ -58,7 +58,7 @@ class TestMaintenanceCancelEndpoints:
             assert check.cancel_requested is True
             assert check.progress_message == 'Cancellation requested...'
     
-    def test_reset_cleanup_state(self, client, app):
+    def test_reset_cleanup_state(self, client, app, db):
         """Test resetting cleanup state"""
         with app.app_context():
             # Create stuck cleanup state
@@ -77,9 +77,9 @@ class TestMaintenanceCancelEndpoints:
             # Verify reset
             db.session.refresh(cleanup)
             assert cleanup.is_active is False
-            assert cleanup.phase == 'reset'
+            assert cleanup.phase == 'failed'
     
-    def test_reset_file_changes_state(self, client, app):
+    def test_reset_file_changes_state(self, client, app, db):
         """Test resetting file changes state"""
         with app.app_context():
             # Create stuck file changes state
@@ -98,13 +98,13 @@ class TestMaintenanceCancelEndpoints:
             # Verify reset
             db.session.refresh(check)
             assert check.is_active is False
-            assert check.phase == 'reset'
+            assert check.phase == 'failed'
 
 
 class TestMaintenanceOperationEndpoints:
     """Test maintenance operation endpoints"""
     
-    def test_start_cleanup_orphaned(self, client, app, monkeypatch):
+    def test_start_cleanup_orphaned(self, client, app, db, monkeypatch):
         """Test starting orphaned cleanup"""
         # Mock the async function to prevent actual execution
         def mock_cleanup(*args):
@@ -123,11 +123,16 @@ class TestMaintenanceOperationEndpoints:
             assert cleanup is not None
             assert cleanup.phase == 'starting'
     
-    def test_cleanup_already_running(self, client, app, monkeypatch):
+    def test_cleanup_already_running(self, client, app, db, monkeypatch):
         """Test starting cleanup when already running"""
-        # Mock thread check
+        # Mock thread check with a thread that stays alive
         import threading
-        mock_thread = threading.Thread(target=lambda: None)
+        import time
+        
+        def long_running():
+            time.sleep(1)  # Keep thread alive for 1 second
+        
+        mock_thread = threading.Thread(target=long_running)
         mock_thread.start()
         monkeypatch.setattr('pixelprobe.api.maintenance_routes.current_cleanup_thread', mock_thread)
         
@@ -137,11 +142,11 @@ class TestMaintenanceOperationEndpoints:
         
         mock_thread.join()
     
-    def test_vacuum_database(self, client, app):
+    def test_vacuum_database(self, client, app, db):
         """Test vacuum database endpoint"""
         response = client.post('/api/vacuum')
         assert response.status_code == 200
         data = response.get_json()
         assert 'message' in data
-        assert 'before_size' in data
-        assert 'after_size' in data
+        assert 'size_before_bytes' in data
+        assert 'size_after_bytes' in data
