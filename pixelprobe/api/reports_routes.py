@@ -379,9 +379,11 @@ def export_scan_report_pdf(report_id):
         from reportlab.lib.units import inch
         from reportlab.lib.enums import TA_CENTER, TA_RIGHT
         
-        # Create PDF buffer
+        # Create PDF buffer with wider margins for more space
         buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), topMargin=0.5*inch, bottomMargin=0.5*inch)
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), 
+                              topMargin=0.3*inch, bottomMargin=0.3*inch,
+                              leftMargin=0.3*inch, rightMargin=0.3*inch)
         
         # Container for the 'Flowable' objects
         elements = []
@@ -396,37 +398,37 @@ def export_scan_report_pdf(report_id):
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
-            fontSize=24,
+            fontSize=16,
             textColor=primary_black,
-            spaceAfter=30,
+            spaceAfter=8,
             alignment=TA_CENTER
         )
         
         heading_style = ParagraphStyle(
             'CustomHeading',
             parent=styles['Heading2'],
-            fontSize=16,
+            fontSize=12,
             textColor=gradient_end,
-            spaceAfter=12
+            spaceAfter=6
         )
         
         # Add logo and title
         try:
             logo_path = os.path.join(os.path.dirname(__file__), '../../static/images/pixelprobe-logo.png')
             if os.path.exists(logo_path):
-                # Logo is 670x729 pixels, maintain aspect ratio
-                logo_width = 1.5*inch
+                # Logo is 670x729 pixels, maintain aspect ratio - smaller logo
+                logo_width = 0.7*inch
                 logo_height = logo_width * (729.0/670.0)  # Maintain aspect ratio
                 logo = Image(logo_path, width=logo_width, height=logo_height)
                 logo.hAlign = 'CENTER'
                 elements.append(logo)
-                elements.append(Spacer(1, 0.2*inch))
+                elements.append(Spacer(1, 0.05*inch))
         except Exception as e:
             logger.debug(f"Could not add logo to PDF: {e}")
         
         # Add title
         elements.append(Paragraph("PixelProbe Scan Report", title_style))
-        elements.append(Spacer(1, 0.2*inch))
+        elements.append(Spacer(1, 0.05*inch))
         
         # Add report metadata
         elements.append(Paragraph("Report Information", heading_style))
@@ -484,18 +486,18 @@ def export_scan_report_pdf(report_id):
         info_table = Table(formatted_info, colWidths=[2*inch, 4*inch])
         info_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
             ('ALIGN', (1, 0), (1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
             ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f8f9fa')),
-            ('PADDING', (0, 0), (-1, -1), 8),
+            ('PADDING', (0, 0), (-1, -1), 4),
         ]))
         
         elements.append(info_table)
-        elements.append(Spacer(1, 0.3*inch))
+        elements.append(Spacer(1, 0.08*inch))
         
         # Add scan statistics
         elements.append(Paragraph("Scan Statistics", heading_style))
@@ -540,34 +542,25 @@ def export_scan_report_pdf(report_id):
         stats_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
             ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
             ('BACKGROUND', (0, 0), (-1, 0), primary_green),
             ('TEXTCOLOR', (0, 0), (-1, 0), primary_black),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
-            ('PADDING', (0, 0), (-1, -1), 8),
+            ('PADDING', (0, 0), (-1, -1), 4),
         ]))
         
         elements.append(stats_table)
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Add compliance footer
-        elements.append(Spacer(1, 0.5*inch))
-        footer_style = ParagraphStyle(
-            'Footer',
-            parent=styles['Normal'],
-            fontSize=8,
-            textColor=colors.HexColor('#7f8c8d'),
-            alignment=TA_CENTER
-        )
+        elements.append(Spacer(1, 0.1*inch))
         
         # Create styles for wrapping text in table cells
         cell_style = ParagraphStyle(
             'CellStyle',
             parent=styles['Normal'],
-            fontSize=6,
-            leading=7
+            fontSize=8,
+            leading=10,
+            wordWrap='CJK'
         )
         
         # Add scanned files list
@@ -584,30 +577,53 @@ def export_scan_report_pdf(report_id):
             
             if scanned_files:
                 # Create files table header
-                files_data = [['File Path', 'Status', 'Size', 'Type', 'Scan Date']]
+                files_data = [['File Path', 'Status', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
                 
                 # Add file rows (limit to first 500 for PDF size)
                 for file in scanned_files[:500]:
                     status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
+                    if file.has_warnings and not file.marked_as_good:
+                        status = 'Warning'
+                    
                     size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
                     file_type = file.file_type or 'Unknown'
+                    scan_tool = file.scan_tool or 'N/A'
                     scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
                     
+                    # Combine details from various fields
+                    details = []
+                    if file.is_corrupted and file.corruption_details:
+                        details.append(file.corruption_details)
+                    elif file.has_warnings and file.warning_details:
+                        details.append(file.warning_details)
+                    elif file.error_message:
+                        details.append(file.error_message)
+                    details_text = ' '.join(details)[:100] + '...' if len(' '.join(details)) > 100 else ' '.join(details) if details else ''
+                    
+                    # Wrap file path in Paragraph for text wrapping
+                    file_path_para = Paragraph(file.file_path, cell_style)
+                    details_para = Paragraph(details_text, cell_style) if details_text else ''
+                    
                     files_data.append([
-                        file.file_path,  # Show full path without truncation
+                        file_path_para,  # Wrapped for proper text flow
                         status,
                         size,
                         file_type,
+                        scan_tool,
+                        details_para,
                         scan_date
                     ])
                 
-                # Create files table
-                files_table = Table(files_data, colWidths=[3.5*inch, 0.8*inch, 0.8*inch, 1.2*inch, 1.2*inch])
+                # Create files table with wider columns using full page width
+                # Total width = 11 inches (landscape) - 0.6 inches margins = 10.4 inches available
+                files_table = Table(files_data, colWidths=[3.8*inch, 0.7*inch, 0.7*inch, 0.9*inch, 0.7*inch, 2.6*inch, 1.0*inch], repeatRows=1)
                 files_table.setStyle(TableStyle([
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                     ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
                     ('FONTSIZE', (0, 0), (-1, -1), 8),
                     ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+                    ('ALIGN', (0, 0), (0, -1), 'LEFT'),  # Left align file paths
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Top align all cells
                     ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                     ('BACKGROUND', (0, 0), (-1, 0), gradient_end),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -619,12 +635,29 @@ def export_scan_report_pdf(report_id):
                 
                 if len(scanned_files) > 500:
                     elements.append(Spacer(1, 0.1*inch))
+                    # Define footer style here
+                    footer_style = ParagraphStyle(
+                        'Footer',
+                        parent=styles['Normal'],
+                        fontSize=8,
+                        textColor=colors.HexColor('#7f8c8d'),
+                        alignment=TA_CENTER
+                    )
                     elements.append(Paragraph(f"Note: Showing first 500 of {len(scanned_files)} total files", footer_style))
             else:
                 elements.append(Paragraph("No files were scanned during this scan.", styles['Normal']))
         
+        # Add footer
+        footer_style = ParagraphStyle(
+            'Footer',
+            parent=styles['Normal'],
+            fontSize=8,
+            textColor=colors.HexColor('#7f8c8d'),
+            alignment=TA_CENTER
+        )
+        
         elements.append(Spacer(1, 0.5*inch))
-        elements.append(Paragraph(f"Generated on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}", footer_style))
+        elements.append(Paragraph(f"Generated on {convert_to_timezone(datetime.now(timezone.utc)).replace('T', ' ').split('+')[0]}", footer_style))
         elements.append(Paragraph("This report is for compliance and auditing purposes", footer_style))
         
         # Build PDF
