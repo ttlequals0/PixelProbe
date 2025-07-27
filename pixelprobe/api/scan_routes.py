@@ -138,41 +138,41 @@ def get_scan_results():
     # Build response
     results = []
     for result in pagination.items:
-        # Ensure all datetime fields are timezone-aware
-        scan_date = result.scan_date
-        if scan_date and scan_date.tzinfo is None:
-            scan_date = tz.localize(scan_date)
+        result_dict = result.to_dict()
         
-        discovered_date = result.discovered_date
-        if discovered_date and discovered_date.tzinfo is None:
-            discovered_date = tz.localize(discovered_date)
+        # Convert timestamps to configured timezone
+        if result.scan_date:
+            if result.scan_date.tzinfo is None:
+                scan_date = tz.localize(result.scan_date)
+            else:
+                scan_date = result.scan_date
+            result_dict['scan_date'] = scan_date.astimezone(tz).isoformat()
         
-        last_modified = result.last_modified
-        if last_modified and last_modified.tzinfo is None:
-            last_modified = tz.localize(last_modified)
-            
-        results.append({
-            'id': result.id,
-            'file_path': result.file_path,
-            'file_name': os.path.basename(result.file_path) if result.file_path else '',
-            'file_size': result.file_size,
-            'scan_date': scan_date.isoformat() if scan_date else None,
-            'discovered_date': discovered_date.isoformat() if discovered_date else None,
-            'last_modified': last_modified.isoformat() if last_modified else None,
-            'file_hash': result.file_hash,
-            'scan_status': result.scan_status,
-            'error_message': result.error_message,
-            'is_corrupted': result.is_corrupted,
-            'marked_as_good': result.marked_as_good,
-            'media_info': result.media_info,
-            'file_exists': result.file_exists,
-            'corruption_details': result.corruption_details,
-            'scan_output': result.scan_output,
-            'has_warnings': result.has_warnings,
-            'warning_details': result.warning_details,
-            'file_type': result.file_type,
-            'scan_tool': result.scan_tool
-        })
+        if result.discovered_date:
+            if result.discovered_date.tzinfo is None:
+                discovered_date = tz.localize(result.discovered_date)
+            else:
+                discovered_date = result.discovered_date
+            result_dict['discovered_date'] = discovered_date.astimezone(tz).isoformat()
+        
+        if result.creation_date:
+            if result.creation_date.tzinfo is None:
+                creation_date = tz.localize(result.creation_date)
+            else:
+                creation_date = result.creation_date  
+            result_dict['creation_date'] = creation_date.astimezone(tz).isoformat()
+        
+        if result.last_modified:
+            if result.last_modified.tzinfo is None:
+                last_modified = tz.localize(result.last_modified)
+            else:
+                last_modified = result.last_modified
+            result_dict['last_modified'] = last_modified.astimezone(tz).isoformat()
+        
+        # Add file_name for frontend convenience
+        result_dict['file_name'] = os.path.basename(result.file_path) if result.file_path else ''
+        
+        results.append(result_dict)
     
     return jsonify({
         'results': results,
@@ -186,7 +186,38 @@ def get_scan_results():
 def get_scan_result(result_id):
     """Get a single scan result by ID"""
     result = ScanResult.query.get_or_404(result_id)
-    return jsonify(result.to_dict())
+    result_dict = result.to_dict()
+    
+    # Convert timestamps to configured timezone
+    if result.scan_date:
+        if result.scan_date.tzinfo is None:
+            scan_date = tz.localize(result.scan_date)
+        else:
+            scan_date = result.scan_date
+        result_dict['scan_date'] = scan_date.astimezone(tz).isoformat()
+    
+    if result.discovered_date:
+        if result.discovered_date.tzinfo is None:
+            discovered_date = tz.localize(result.discovered_date)
+        else:
+            discovered_date = result.discovered_date
+        result_dict['discovered_date'] = discovered_date.astimezone(tz).isoformat()
+    
+    if result.creation_date:
+        if result.creation_date.tzinfo is None:
+            creation_date = tz.localize(result.creation_date)
+        else:
+            creation_date = result.creation_date  
+        result_dict['creation_date'] = creation_date.astimezone(tz).isoformat()
+    
+    if result.last_modified:
+        if result.last_modified.tzinfo is None:
+            last_modified = tz.localize(result.last_modified)
+        else:
+            last_modified = result.last_modified
+        result_dict['last_modified'] = last_modified.astimezone(tz).isoformat()
+    
+    return jsonify(result_dict)
 
 @scan_bp.route('/scan-file', methods=['POST'])
 @rate_limit("5 per minute")
@@ -362,6 +393,27 @@ def get_scan_status():
         phase_current = total_progress
         phase_total = total_progress
         
+    # Calculate ETA if scan is running and we have progress
+    eta = None
+    files_per_second = 0
+    if is_running and state_dict.get('start_time') and current_progress > 0:
+        from datetime import datetime, timezone
+        try:
+            start_time = datetime.fromisoformat(state_dict['start_time'].replace('Z', '+00:00'))
+            current_time = datetime.now(timezone.utc)
+            elapsed_seconds = (current_time - start_time).total_seconds()
+            
+            if elapsed_seconds > 0:
+                files_per_second = current_progress / elapsed_seconds
+                
+                if files_per_second > 0 and total_progress > current_progress:
+                    remaining_files = total_progress - current_progress
+                    eta_seconds = remaining_files / files_per_second
+                    eta_time = current_time.timestamp() + eta_seconds
+                    eta = datetime.fromtimestamp(eta_time, tz=timezone.utc).isoformat()
+        except Exception as e:
+            logger.debug(f"Could not calculate ETA: {e}")
+    
     # Build comprehensive status response with frontend-expected fields
     status = {
         'current': current_progress,
@@ -382,7 +434,11 @@ def get_scan_status():
         'total_phases': total_phases,
         'phase_current': phase_current,
         'phase_total': phase_total,
-        'progress_message': progress_message
+        'progress_message': progress_message,
+        
+        # ETA fields
+        'eta': eta,
+        'files_per_second': round(files_per_second, 2) if files_per_second > 0 else 0
     }
     
     return jsonify(status)

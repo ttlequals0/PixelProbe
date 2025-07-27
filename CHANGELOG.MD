@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.129] - 2025-07-26
+
+### Fixed
+- **PDF Download Error**: Fixed "site wasn't available" error when downloading PDF reports
+  - Added missing `landscape` import in reports_routes.py line 340
+  - PDF reports now download correctly without import errors
+
+- **Timestamp Display**: Timestamps now respect the configured timezone (TZ environment variable)
+  - Added timezone conversion in reports_routes.py and scan_routes.py
+  - All timestamps are converted from UTC to the configured timezone before sending to frontend
+  - Frontend formatDate() updated to display timestamps without converting to browser's local time
+  - System timezone is displayed in the System Information modal
+
+- **Scan ETA Display**: Added estimated time of arrival (ETA) for running scans
+  - Added ETA calculation in scan-status API endpoint
+  - Calculates files per second and estimates remaining time
+  - Frontend updated to prefer backend-provided ETA over client-side calculation
+  - Shows scan speed (files/sec) and remaining time in progress display
+  - Updated formatTime() to handle hours for long-running scans
+
+- **Cancel Job Functionality**: Improved scan cancellation to properly stop threads
+  - Added better logging for cancellation process
+  - Enhanced _handle_scan_cancellation to reset stuck files from 'scanning' to 'pending'
+  - Added short delay in cancel_scan() to allow threads to notice cancellation
+  - Frontend already handles cancelled state properly with notifications
+
 ## [2.0.128] - 2025-07-26
 
 ### Audit Results - Scan Logic Verification

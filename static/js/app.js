@@ -484,7 +484,18 @@ class ProgressManager {
         let eta = '';
         
         // Calculate ETA if we have timing data
-        if (status.start_time && status.current > 0 && status.total > 0) {
+        // Prefer backend-provided ETA and speed
+        if (status.eta) {
+            const etaDate = new Date(status.eta);
+            const now = new Date();
+            const remainingMs = etaDate - now;
+            
+            if (remainingMs > 0) {
+                const remainingSeconds = Math.floor(remainingMs / 1000);
+                eta = this.formatTime(remainingSeconds);
+            }
+        } else if (status.start_time && status.current > 0 && status.total > 0) {
+            // Fallback to client-side calculation
             const startTime = new Date(status.start_time).getTime();
             const currentTime = new Date().getTime();
             const elapsedMs = currentTime - startTime;
@@ -531,9 +542,14 @@ class ProgressManager {
                 
                 // Add file count
                 if (status.current > 0 && status.total > 0) {
-                    parts.push(`${status.current} of ${status.total} files`);
+                    parts.push(`${status.current.toLocaleString()} of ${status.total.toLocaleString()} files`);
                 } else if (phaseCurrent > 0 && phaseTotal > 0) {
-                    parts.push(`${phaseCurrent} of ${phaseTotal} files`);
+                    parts.push(`${phaseCurrent.toLocaleString()} of ${phaseTotal.toLocaleString()} files`);
+                }
+                
+                // Add speed if available
+                if (status.files_per_second > 0) {
+                    parts.push(`${status.files_per_second} files/sec`);
                 }
                 
                 // Add current file
@@ -619,9 +635,17 @@ class ProgressManager {
     }
 
     formatTime(seconds) {
-        const mins = Math.floor(seconds / 60);
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
         const secs = Math.floor(seconds % 60);
-        return `${mins}m ${secs}s`;
+        
+        if (hours > 0) {
+            return `${hours}h ${mins}m`;
+        } else if (mins > 0) {
+            return `${mins}m ${secs}s`;
+        } else {
+            return `${secs}s`;
+        }
     }
 
     async complete(operationType = 'scan', status = null) {
@@ -1140,7 +1164,29 @@ class TableManager {
     formatDate(dateString) {
         if (!dateString) return 'N/A';
         const date = new Date(dateString);
-        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+        
+        // The backend now sends dates in the configured timezone
+        // Display them as-is without converting to browser's local time
+        const options = {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        };
+        
+        // Parse the ISO string to get timezone offset
+        const match = dateString.match(/([+-]\d{2}:\d{2}|Z)$/);
+        if (match) {
+            const offset = match[0];
+            if (offset === 'Z') {
+                options.timeZone = 'UTC';
+            }
+        }
+        
+        return date.toLocaleString('en-US', options);
     }
 
     escapeHtml(text) {

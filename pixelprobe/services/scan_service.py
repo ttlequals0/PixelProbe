@@ -405,11 +405,29 @@ class ScanService:
             raise RuntimeError("No scan is currently running")
         
         self.scan_cancelled = True
+        logger.info("Scan cancellation requested")
         
-        # Update scan state
-        scan_state = ScanState.get_or_create()
-        scan_state.cancel_scan()
-        db.session.commit()
+        # Update scan state in database
+        try:
+            scan_state = ScanState.get_or_create()
+            scan_state.cancel_scan()
+            db.session.commit()
+            logger.info("Scan state updated to cancelled in database")
+        except Exception as e:
+            logger.error(f"Error updating scan state: {e}")
+        
+        # The scan threads will check self.scan_cancelled flag and stop
+        # Wait a moment for threads to notice the cancellation
+        import time
+        time.sleep(0.5)
+        
+        # Force progress update to show cancelled state
+        self.update_progress(
+            self.scan_progress['current'],
+            self.scan_progress['total'],
+            '',
+            'cancelled'
+        )
         
         return {'message': 'Scan cancellation requested'}
     
@@ -631,14 +649,31 @@ class ScanService:
     
     def _handle_scan_cancellation(self, scan_state: ScanState):
         """Handle scan cancellation"""
+        logger.info("Handling scan cancellation")
+        
+        # Update progress
         self.update_progress(
             self.scan_progress['current'],
             self.scan_progress['total'],
             '',
             'cancelled'
         )
+        
+        # Update scan state
         scan_state.cancel_scan()
+        
+        # Clean up any files stuck in 'scanning' state
+        from models import ScanResult
+        stuck_count = ScanResult.query.filter_by(scan_status='scanning').update(
+            {'scan_status': 'pending'},
+            synchronize_session=False
+        )
+        
+        if stuck_count > 0:
+            logger.info(f"Reset {stuck_count} files from 'scanning' to 'pending' state")
+        
         db.session.commit()
+        logger.info("Scan cancellation complete")
     
     def _add_file_to_db(self, file_path: str) -> bool:
         """Add a new file to the database with basic info (no corruption check)

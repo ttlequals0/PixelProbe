@@ -5,13 +5,34 @@ import logging
 from datetime import datetime, timezone
 from io import BytesIO
 import base64
+import pytz
 
 from models import db, ScanReport
 from pixelprobe.utils.security import validate_json_input
 
 logger = logging.getLogger(__name__)
 
+# Get timezone from environment variable, default to UTC
+APP_TIMEZONE = os.environ.get('TZ', 'UTC')
+try:
+    tz = pytz.timezone(APP_TIMEZONE)
+except pytz.exceptions.UnknownTimeZoneError:
+    tz = pytz.UTC
+    logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
+
 reports_bp = Blueprint('reports', __name__, url_prefix='/api')
+
+def convert_to_timezone(dt):
+    """Convert datetime to configured timezone"""
+    if dt is None:
+        return None
+    
+    # If datetime is naive, assume it's UTC
+    if dt.tzinfo is None:
+        dt = pytz.UTC.localize(dt)
+    
+    # Convert to configured timezone
+    return dt.astimezone(tz).isoformat()
 
 @reports_bp.route('/scan-reports')
 def get_scan_reports():
@@ -46,6 +67,11 @@ def get_scan_reports():
     for report in pagination.items:
         report_dict = report.to_dict()
         
+        # Convert timestamps to configured timezone
+        report_dict['start_time'] = convert_to_timezone(report.start_time)
+        report_dict['end_time'] = convert_to_timezone(report.end_time)
+        report_dict['created_at'] = convert_to_timezone(report.created_at)
+        
         # Add human-readable duration
         if report.duration_seconds:
             hours = int(report.duration_seconds // 3600)
@@ -79,6 +105,11 @@ def get_scan_report(report_id):
         return jsonify({'error': 'Report not found'}), 404
     
     report_dict = report.to_dict()
+    
+    # Convert timestamps to configured timezone
+    report_dict['start_time'] = convert_to_timezone(report.start_time)
+    report_dict['end_time'] = convert_to_timezone(report.end_time)
+    report_dict['created_at'] = convert_to_timezone(report.created_at)
     
     # Add additional computed fields
     if report.duration_seconds:
@@ -128,9 +159,14 @@ def export_scan_report(report_id):
     
     report_dict = report.to_dict()
     
+    # Convert timestamps to configured timezone
+    report_dict['start_time'] = convert_to_timezone(report.start_time)
+    report_dict['end_time'] = convert_to_timezone(report.end_time)
+    report_dict['created_at'] = convert_to_timezone(report.created_at)
+    
     # Add metadata
     report_dict['export_metadata'] = {
-        'exported_at': datetime.now(timezone.utc).isoformat(),
+        'exported_at': convert_to_timezone(datetime.now(timezone.utc)),
         'export_format': 'json',
         'version': '1.0'
     }
@@ -337,7 +373,7 @@ def export_scan_report_pdf(report_id):
     try:
         # Import reportlab for PDF generation
         from reportlab.lib import colors
-        from reportlab.lib.pagesizes import letter, A4
+        from reportlab.lib.pagesizes import letter, A4, landscape
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import inch
@@ -737,6 +773,12 @@ def get_latest_scan_reports():
         
         if report:
             report_dict = report.to_dict()
+            
+            # Convert timestamps to configured timezone
+            report_dict['start_time'] = convert_to_timezone(report.start_time)
+            report_dict['end_time'] = convert_to_timezone(report.end_time)
+            report_dict['created_at'] = convert_to_timezone(report.created_at)
+            
             # Add formatted duration
             if report.duration_seconds:
                 hours = int(report.duration_seconds // 3600)
