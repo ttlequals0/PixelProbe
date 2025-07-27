@@ -2550,7 +2550,7 @@ class PixelProbeApp {
                                 <p><strong>Type:</strong> ${this.formatScanType(schedule.scan_type || 'normal')}</p>
                                 <p><strong>Next Run:</strong> ${nextRun}</p>
                                 <p><strong>Last Run:</strong> ${lastRun}</p>
-                                ${schedule.scan_paths ? `<p><strong>Paths:</strong> ${this.escapeHtml(JSON.parse(schedule.scan_paths).join(', '))}</p>` : ''}
+                                ${schedule.scan_paths && schedule.scan_paths.length > 0 ? `<p><strong>Paths:</strong> ${this.escapeHtml(schedule.scan_paths.join(', '))}</p>` : ''}
                             </div>
                         </div>
                     `;
@@ -2648,8 +2648,8 @@ class PixelProbeApp {
             // Update paths list
             const pathsList = document.querySelector('#excluded-paths-list');
             if (pathsList) {
-                if (data.excluded_paths && data.excluded_paths.length > 0) {
-                    pathsList.innerHTML = data.excluded_paths.map(path => `
+                if (data.paths && data.paths.length > 0) {
+                    pathsList.innerHTML = data.paths.map(path => `
                         <div class="exclusion-item">
                             <span>${this.escapeHtml(path)}</span>
                             <button class="btn btn-sm btn-danger" onclick="app.removeExclusion('path', '${this.escapeHtml(path)}')">
@@ -2665,8 +2665,8 @@ class PixelProbeApp {
             // Update extensions list
             const extensionsList = document.querySelector('#excluded-extensions-list');
             if (extensionsList) {
-                if (data.excluded_extensions && data.excluded_extensions.length > 0) {
-                    extensionsList.innerHTML = data.excluded_extensions.map(ext => `
+                if (data.extensions && data.extensions.length > 0) {
+                    extensionsList.innerHTML = data.extensions.map(ext => `
                         <div class="exclusion-item">
                             <span>${this.escapeHtml(ext)}</span>
                             <button class="btn btn-sm btn-danger" onclick="app.removeExclusion('extension', '${this.escapeHtml(ext)}')">

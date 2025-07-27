@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.133] - 2025-07-27
+
+### Fixed
+- **UI Display Issues**: Fixed exclusions and schedules not showing in the UI
+  - Updated JavaScript to use correct API response field names (`data.paths` instead of `data.excluded_paths`)
+  - Fixed JavaScript to handle pre-parsed `scan_paths` array from API (removed redundant JSON.parse)
+  - Fixed static file versioning to use dynamic version from `version.py` instead of hardcoded values
+  
+- **Exclusions API**: Fixed error response format consistency
+  - Changed duplicate exclusion response from `{message: ...}` to `{error: ...}` for consistency
+
+- **Test Suite**: Fixed missing Exclusion model import in test configuration
+  - Added Exclusion model to conftest.py to ensure table is created during tests
+
+### Confirmed Working
+- Exclusion deletion via UI and API
+- Schedule deletion via UI and API
+
 ## [2.0.132] - 2025-07-27
 
 ### Fixed

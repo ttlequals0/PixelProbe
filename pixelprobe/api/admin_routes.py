@@ -395,7 +395,7 @@ def add_exclusion(exclusion_type):
         ).first()
         
         if existing:
-            return jsonify({'message': f'{exclusion_type.capitalize()} already exists'}), 400
+            return jsonify({'error': f'{exclusion_type.capitalize()} already exists'}), 400
         
         # Add new exclusion
         exclusion = Exclusion(

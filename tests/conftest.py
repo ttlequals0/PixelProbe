@@ -121,7 +121,7 @@ def db(app):
     """Create database for testing"""
     with app.app_context():
         # Ensure all models are loaded
-        from models import ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport
+        from models import ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport, Exclusion
         
         _db.create_all()
         yield _db

@@ -157,3 +157,4 @@ backup/
 
 # Claude AI specific files
 .claude/
+test_env/
