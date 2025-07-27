@@ -233,7 +233,7 @@ def add_configuration():
 def get_schedules():
     """Get all scan schedules"""
     schedules = ScanSchedule.query.filter_by(is_active=True).all()
-    return jsonify([schedule.to_dict() for schedule in schedules])
+    return jsonify({'schedules': [schedule.to_dict() for schedule in schedules]})
 
 @admin_bp.route('/schedules', methods=['POST'])
 def create_schedule():
@@ -250,8 +250,10 @@ def create_schedule():
         schedule = ScanSchedule(
             name=name,
             cron_expression=data['cron_expression'],
+            scan_paths=json.dumps(data.get('scan_paths', [])),
             scan_type=data.get('scan_type', 'full'),
             force_rescan=data.get('force_rescan', False),
+            is_active=True,
             created_at=datetime.now(timezone.utc)
         )
         db.session.add(schedule)
@@ -276,6 +278,8 @@ def update_schedule(schedule_id):
     try:
         schedule.name = data.get('name', schedule.name)
         schedule.cron_expression = data.get('cron_expression', schedule.cron_expression)
+        if 'scan_paths' in data:
+            schedule.scan_paths = json.dumps(data['scan_paths'])
         schedule.scan_type = data.get('scan_type', schedule.scan_type)
         schedule.force_rescan = data.get('force_rescan', schedule.force_rescan)
         schedule.is_active = data.get('is_active', schedule.is_active)
@@ -313,47 +317,65 @@ def delete_schedule(schedule_id):
 
 @admin_bp.route('/exclusions', methods=['GET'])
 def get_exclusions():
-    """Get current exclusion settings"""
-    exclusions_file = os.path.join(os.path.dirname(__file__), '..', '..', 'exclusions.json')
-    
+    """Get current exclusion settings from database"""
     try:
-        if os.path.exists(exclusions_file):
-            with open(exclusions_file, 'r') as f:
-                return jsonify(json.load(f))
-        else:
-            return jsonify({'paths': [], 'extensions': []})
+        from models import Exclusion
+        
+        # Get all active exclusions
+        path_exclusions = Exclusion.query.filter_by(
+            exclusion_type='path', 
+            is_active=True
+        ).all()
+        
+        extension_exclusions = Exclusion.query.filter_by(
+            exclusion_type='extension', 
+            is_active=True
+        ).all()
+        
+        return jsonify({
+            'paths': [e.value for e in path_exclusions],
+            'extensions': [e.value for e in extension_exclusions]
+        })
     except Exception as e:
         logger.error(f"Error reading exclusions: {e}")
         return jsonify({'paths': [], 'extensions': []})
 
 @admin_bp.route('/exclusions', methods=['PUT'])
 def update_exclusions():
-    """Update all exclusion settings"""
+    """Update all exclusion settings in database"""
     data = request.get_json()
-    exclusions_file = os.path.join(os.path.dirname(__file__), '..', '..', 'exclusions.json')
     
     try:
+        from models import Exclusion
+        
         # Validate data structure
         if not isinstance(data.get('paths', []), list) or not isinstance(data.get('extensions', []), list):
             return jsonify({'error': 'Invalid data format'}), 400
         
-        # Write to file
-        with open(exclusions_file, 'w') as f:
-            json.dump(data, f, indent=2)
+        # Clear existing exclusions
+        Exclusion.query.update({'is_active': False})
         
+        # Add new exclusions
+        for path in data.get('paths', []):
+            exclusion = Exclusion(exclusion_type='path', value=path, is_active=True)
+            db.session.add(exclusion)
+        
+        for extension in data.get('extensions', []):
+            exclusion = Exclusion(exclusion_type='extension', value=extension, is_active=True)
+            db.session.add(exclusion)
+        
+        db.session.commit()
         return jsonify({'message': 'Exclusions updated successfully'})
     except Exception as e:
         logger.error(f"Error updating exclusions: {e}")
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['POST'])
 def add_exclusion(exclusion_type):
-    """Add a single exclusion (path or extension)"""
-    # Map singular to plural for storage
-    type_map = {'path': 'paths', 'extension': 'extensions'}
-    storage_type = type_map.get(exclusion_type)
-    
-    if not storage_type:
+    """Add a single exclusion (path or extension) to database"""
+    # Validate exclusion type
+    if exclusion_type not in ['path', 'extension']:
         return jsonify({'error': 'Invalid exclusion type'}), 400
     
     data = request.get_json()
@@ -362,39 +384,42 @@ def add_exclusion(exclusion_type):
     if not value:
         return jsonify({'error': 'Value is required'}), 400
     
-    exclusions_file = os.path.join(os.path.dirname(__file__), '..', '..', 'exclusions.json')
-    
     try:
-        # Read current exclusions
-        exclusions = {'paths': [], 'extensions': []}
-        if os.path.exists(exclusions_file):
-            with open(exclusions_file, 'r') as f:
-                exclusions = json.load(f)
+        from models import Exclusion
         
-        # Add new exclusion if not already present
-        if value not in exclusions[storage_type]:
-            exclusions[storage_type].append(value)
-            
-            # Write back to file
-            with open(exclusions_file, 'w') as f:
-                json.dump(exclusions, f, indent=2)
-            
-            return jsonify({'message': f'{exclusion_type.capitalize()} added successfully'})
-        else:
+        # Check if already exists
+        existing = Exclusion.query.filter_by(
+            exclusion_type=exclusion_type,
+            value=value,
+            is_active=True
+        ).first()
+        
+        if existing:
             return jsonify({'message': f'{exclusion_type.capitalize()} already exists'}), 400
+        
+        # Add new exclusion
+        exclusion = Exclusion(
+            exclusion_type=exclusion_type,
+            value=value,
+            is_active=True
+        )
+        db.session.add(exclusion)
+        db.session.commit()
+        
+        AuditLogger.log_action('add_exclusion', {'type': exclusion_type, 'value': value})
+        
+        return jsonify({'message': f'{exclusion_type.capitalize()} added successfully'})
             
     except Exception as e:
         logger.error(f"Error adding exclusion: {e}")
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['DELETE'])
 def remove_exclusion(exclusion_type):
-    """Remove a single exclusion (path or extension)"""
-    # Map singular to plural for storage
-    type_map = {'path': 'paths', 'extension': 'extensions'}
-    storage_type = type_map.get(exclusion_type)
-    
-    if not storage_type:
+    """Remove a single exclusion (path or extension) from database"""
+    # Validate exclusion type
+    if exclusion_type not in ['path', 'extension']:
         return jsonify({'error': 'Invalid exclusion type'}), 400
     
     data = request.get_json()
@@ -403,27 +428,28 @@ def remove_exclusion(exclusion_type):
     if not value:
         return jsonify({'error': 'Value is required'}), 400
     
-    exclusions_file = os.path.join(os.path.dirname(__file__), '..', '..', 'exclusions.json')
-    
     try:
-        # Read current exclusions
-        exclusions = {'paths': [], 'extensions': []}
-        if os.path.exists(exclusions_file):
-            with open(exclusions_file, 'r') as f:
-                exclusions = json.load(f)
+        from models import Exclusion
         
-        # Remove exclusion if present
-        if value in exclusions[storage_type]:
-            exclusions[storage_type].remove(value)
-            
-            # Write back to file
-            with open(exclusions_file, 'w') as f:
-                json.dump(exclusions, f, indent=2)
-            
-            return jsonify({'message': f'{exclusion_type.capitalize()} removed successfully'})
-        else:
+        # Find the exclusion
+        exclusion = Exclusion.query.filter_by(
+            exclusion_type=exclusion_type,
+            value=value,
+            is_active=True
+        ).first()
+        
+        if not exclusion:
             return jsonify({'error': f'{exclusion_type.capitalize()} not found'}), 404
+        
+        # Soft delete
+        exclusion.is_active = False
+        db.session.commit()
+        
+        AuditLogger.log_action('remove_exclusion', {'type': exclusion_type, 'value': value})
+        
+        return jsonify({'message': f'{exclusion_type.capitalize()} removed successfully'})
             
     except Exception as e:
         logger.error(f"Error removing exclusion: {e}")
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500

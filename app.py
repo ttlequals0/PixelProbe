@@ -162,6 +162,8 @@ app.register_blueprint(reports_bp)
 # Register Swagger blueprint if available
 if SWAGGER_AVAILABLE:
     app.register_blueprint(swagger_bp)
+    # Exempt swagger blueprint from CSRF
+    csrf.exempt(swagger_bp)
     # Import swagger routes after blueprint registration to avoid circular imports
     import pixelprobe.api.swagger_routes
     logger.info("Swagger API documentation available at /api/v1/docs")

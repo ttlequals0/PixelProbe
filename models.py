@@ -91,6 +91,29 @@ class IgnoredErrorPattern(db.Model):
             'is_active': self.is_active
         }
 
+class Exclusion(db.Model):
+    __tablename__ = 'exclusions'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    exclusion_type = db.Column(db.String(20), nullable=False)  # 'path' or 'extension'
+    value = db.Column(db.String(500), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    
+    __table_args__ = (
+        db.UniqueConstraint('exclusion_type', 'value', name='_type_value_uc'),
+    )
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'type': self.exclusion_type,
+            'value': self.value,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'is_active': self.is_active
+        }
+
+
 class ScanSchedule(db.Model):
     __tablename__ = 'scan_schedules'
     
@@ -111,7 +134,7 @@ class ScanSchedule(db.Model):
             'id': self.id,
             'name': self.name,
             'cron_expression': self.cron_expression,
-            'scan_paths': self.scan_paths,
+            'scan_paths': json.loads(self.scan_paths) if self.scan_paths else [],
             'scan_type': self.scan_type,
             'force_rescan': self.force_rescan,
             'is_active': self.is_active,

@@ -6,7 +6,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.0.127** fixes critical rescan regression where selected files were scanning entire directories, and includes support for scanning specific files only.
+**Version 2.0.132** fixes schedules not being visible in UI after creation by correcting the API response format and data serialization.
 
 ## ✨ Features
 
@@ -157,18 +157,18 @@ Interactive exclusion management with modern UI:
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.65)
-- **`ttlequals0/pixelprobe:2.0.65`** - Fixed critical Python syntax errors in scan routes
-- **`ttlequals0/pixelprobe:2.0.64`** - Fixed scan functionality with rate limiting and database compatibility
-- **`ttlequals0/pixelprobe:2.0.63`** - Added reset file changes state endpoint
-- **`ttlequals0/pixelprobe:2.0.62`** - Fixed schedule deletion and scan configuration bugs
-- **`ttlequals0/pixelprobe:2.0.61`** - Enhanced scheduled scans with configuration management
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.0.132)
+- **`ttlequals0/pixelprobe:2.0.132`** - Fixed schedules not visible after creation
+- **`ttlequals0/pixelprobe:2.0.131`** - Fixed test suite mock persistence issue
+- **`ttlequals0/pixelprobe:2.0.130`** - Fixed scheduler update method and exclusions API
+- **`ttlequals0/pixelprobe:2.0.129`** - Optimized rescan performance with parallel processing
+- **`ttlequals0/pixelprobe:2.0.128`** - Fixed SQL update syntax for orphan cleanup
 
 You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.65  # or :latest for newest
+    image: ttlequals0/pixelprobe:2.0.132  # or :latest for newest
 ```
 
 ### Development Setup
@@ -243,7 +243,7 @@ The docker-compose.yml is fully configured to use environment variables from you
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.65  # Specify version
+    image: ttlequals0/pixelprobe:2.0.132  # Specify version
     environment:
       - SCAN_PATHS=/media
       - DATABASE_URL=sqlite:///media_checker.db

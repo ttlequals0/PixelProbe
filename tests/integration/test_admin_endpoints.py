@@ -72,6 +72,47 @@ class TestScheduleEndpoints:
         """Test deleting non-existent schedule"""
         response = client.delete('/api/schedules/99999')
         assert response.status_code == 404
+    
+    def test_get_schedules(self, client, app, db):
+        """Test getting all schedules"""
+        with app.app_context():
+            # Create test schedules
+            schedule1 = ScanSchedule(
+                name='Schedule 1',
+                cron_expression='0 1 * * *',
+                scan_paths='["/path1"]',
+                scan_type='full',
+                is_active=True
+            )
+            schedule2 = ScanSchedule(
+                name='Schedule 2',
+                cron_expression='0 2 * * *',
+                scan_paths='["/path2"]',
+                scan_type='orphan',
+                is_active=True
+            )
+            db.session.add(schedule1)
+            db.session.add(schedule2)
+            db.session.commit()
+            
+            # Get schedules
+            response = client.get('/api/schedules')
+            assert response.status_code == 200
+            data = response.get_json()
+            
+            # Check response format
+            assert 'schedules' in data
+            assert isinstance(data['schedules'], list)
+            assert len(data['schedules']) == 2
+            
+            # Check schedule data
+            names = [s['name'] for s in data['schedules']]
+            assert 'Schedule 1' in names
+            assert 'Schedule 2' in names
+            
+            # Check that scan_paths is returned as array
+            for schedule in data['schedules']:
+                assert isinstance(schedule['scan_paths'], list)
 
 
 class TestExclusionEndpoints:

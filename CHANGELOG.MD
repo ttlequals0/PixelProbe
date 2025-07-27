@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.132] - 2025-07-27
+
+### Fixed
+- **Schedule Visibility**: Fixed schedules not being displayed in UI after creation
+  - Updated GET /api/schedules endpoint to return proper response format expected by frontend
+  - Response now returns {schedules: [...]} instead of raw array
+  - Fixed scan_paths field to be returned as array instead of JSON string
+  - Explicitly set is_active=True when creating schedules
+  - Added scan_paths field handling in create and update operations
+
+### Deployment
+- Built and pushed Docker image version 2.0.132 to DockerHub
+- Tagged as both `2.0.132` and `latest`
+- Platform: linux/amd64
+
 ## [2.0.131] - 2025-07-27
 
 ### Fixed
