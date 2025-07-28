@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Solution: Compare duplicate_count against total files processed (added_count + duplicate_count)
   - The check now correctly identifies when ALL files are duplicates, not when count equals index
   - This fixes the issue where database insertion would get stuck at exactly 474,000 records
+- **Test Suite psutil Version Conflict**: Fixed version conflict in requirements
+  - Root cause: requirements-test.txt specified psutil==5.9.6 while requirements.txt had psutil==7.0.0
+  - Solution: Removed duplicate psutil specification from requirements-test.txt
+  - This fixes GitHub Actions test failures due to conflicting dependency versions
 
 ## [2.1.10] - 2025-07-28
 

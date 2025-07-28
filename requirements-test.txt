@@ -16,7 +16,7 @@ factory-boy==3.3.0
 faker==20.1.0
 
 # Performance monitoring for tests
-psutil==5.9.6
+# psutil is now included in requirements.txt
 
 # Code quality tools
 flake8==6.1.0
