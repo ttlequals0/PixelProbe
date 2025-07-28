@@ -238,8 +238,10 @@ class ScanService:
                             logger.info(f"Added {added_count} new files out of {batch_end} processed ({duplicate_count} duplicates)")
                             
                             # Safety check: if too many duplicates, something is wrong
-                            if batch_end > 1000 and duplicate_count > (batch_end * 0.95):
-                                logger.error(f"Too many duplicate files detected ({duplicate_count}/{batch_end}). Discovery phase may have failed.")
+                            # Check against files processed so far, not the index
+                            files_processed_so_far = batch_end
+                            if files_processed_so_far > 1000 and duplicate_count == files_processed_so_far:
+                                logger.error(f"Too many duplicate files detected ({duplicate_count}/{files_processed_so_far}). Discovery phase may have failed.")
                                 logger.error("Aborting add phase to prevent infinite loop.")
                                 break
                         
@@ -247,16 +249,7 @@ class ScanService:
                         logger.info(f"Add phase completed. Added {added_count} new files out of {new_files_count} discovered")
                     
                     # Phase 3: Scanning - Check integrity of files that need scanning
-                    # Create chunks for scanning phase
-                    scan_chunks = self._create_directory_chunks(valid_dirs, scan_state.scan_id)
-                    
-                    # Save chunks to database
-                    for chunk in scan_chunks:
-                        chunk.phase = 'scanning'
-                        db.session.add(chunk)
-                    db.session.commit()
-                    
-                    # Count total files to scan across all chunks
+                    # First count total files to scan
                     if force_rescan:
                         total_scan_files = db.session.query(ScanResult).filter(
                             db.or_(*[ScanResult.file_path.like(f"{d}%") for d in valid_dirs])
@@ -266,8 +259,6 @@ class ScanService:
                             ScanResult.scan_status == 'pending',
                             db.or_(*[ScanResult.file_path.like(f"{d}%") for d in valid_dirs])
                         ).count()
-                    
-                    logger.info(f"Starting scan phase: {total_scan_files} files to scan across {len(scan_chunks)} chunks")
                     
                     # Special case: if no files to scan, complete immediately
                     if total_scan_files == 0:
@@ -297,6 +288,17 @@ class ScanService:
                         
                         logger.info(f"Scan {scan_state_id} completed immediately (no files to process)")
                         return {'message': 'Scan completed - no files to process', 'total_files': 0}
+                    
+                    # Create chunks only if there are files to scan
+                    scan_chunks = self._create_directory_chunks(valid_dirs, scan_state.scan_id)
+                    
+                    # Save chunks to database
+                    for chunk in scan_chunks:
+                        chunk.phase = 'scanning'
+                        db.session.add(chunk)
+                    db.session.commit()
+                    
+                    logger.info(f"Starting scan phase: {total_scan_files} files to scan across {len(scan_chunks)} chunks")
                     
                     # Update both service and database state for actual scanning
                     self.update_progress(0, total_scan_files, '', 'scanning')
@@ -1037,7 +1039,9 @@ class ScanService:
                             (:file_path, :file_size, :file_type, :last_modified, :discovered_date,
                              :scan_status, :is_corrupted, :marked_as_good, :file_exists)
                         """)
-                        db.session.execute(stmt, files_without_errors)
+                        # Use executemany for batch insert
+                        for file_data in files_without_errors:
+                            db.session.execute(stmt, file_data)
                         db.session.commit()
                         
                         # Check which ones exist now
@@ -1048,6 +1052,9 @@ class ScanService:
                         # Calculate actual added
                         actual_added = len(existing_after) - len(existing_before)
                         added_count += actual_added
+                        
+                        # Track duplicates for files without errors
+                        duplicate_count += len(existing_before)
                         
                         logger.info(f"Batch insert: attempted {len(files_without_errors)}, already existed {len(existing_before)}, actually added {actual_added}")
                     
@@ -1069,7 +1076,9 @@ class ScanService:
                             (:file_path, :discovered_date, :scan_status, :error_message,
                              :is_corrupted, :marked_as_good, :file_exists)
                         """)
-                        db.session.execute(stmt_error, files_with_errors)
+                        # Use executemany for batch insert
+                        for file_data in files_with_errors:
+                            db.session.execute(stmt_error, file_data)
                         db.session.commit()
                         
                         # Check which ones exist now
@@ -1080,9 +1089,10 @@ class ScanService:
                         actual_added = len(existing_error_after) - len(existing_error_before)
                         added_count += actual_added
                         
+                        # Track duplicates for files with errors
+                        duplicate_count += len(existing_error_before)
+                        
                         logger.info(f"Error batch insert: attempted {len(files_with_errors)}, already existed {len(existing_error_before)}, actually added {actual_added}")
-                    
-                    duplicate_count = len(files_to_insert) - added_count
                 else:
                     # For other databases, insert one by one (less efficient)
                     for file_data in files_to_insert:

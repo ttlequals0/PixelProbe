@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.9] - 2025-07-28
+
+### Summary
+- Consolidated build including all critical fixes from versions 2.1.6 through 2.1.8
+- Resolves chunking issues, duplicate detection problems, and database insert failures
+- Production-ready release with all known issues fixed
+
+### Included Fixes
+- All fixes from v2.1.6: Chunking issue resolution
+- All fixes from v2.1.7: Duplicate detection logic corrections
+- All fixes from v2.1.8: Database insert failure resolution
+
+## [2.1.8] - 2025-07-28
+
+### Fixed
+- **Database Insert Failure**: Fixed critical issue where no files were being inserted into the database
+  - Root cause: SQLAlchemy's execute() with text() SQL was not properly handling batch inserts
+  - The code was passing a list of dictionaries to execute() which silently failed
+  - Solution: Changed to iterate through each file and execute individual INSERT statements
+  - This fixes the issue where all batch inserts showed "actually added 0"
+  - Files are now properly inserted into the database
+
+## [2.1.7] - 2025-07-28
+
+### Fixed
+- **Duplicate Detection Logic**: Fixed multiple issues causing false duplicate detection
+  - Root cause 1: The duplicate count calculation was incorrect after batch inserts
+  - Root cause 2: The safety check was comparing total duplicates against file index instead of files processed
+  - Solution 1: Track duplicates correctly by counting existing files before each batch insert
+  - Solution 2: Compare duplicate count against actual files processed, not the array index
+  - This fixes the "Too many duplicate files detected (2000/2000)" error that was aborting scans
+  - Files are now correctly added to the database without false duplicate detection
+
+## [2.1.6] - 2025-07-28
+
+### Fixed
+- **Chunking Issue**: Fixed issue where scan created thousands of empty chunks when no files needed scanning
+  - Root cause: Chunk creation logic was creating chunks for all subdirectories regardless of whether files existed to scan
+  - Solution: Moved chunk creation to occur after verifying files exist to scan
+  - This prevents creation of unnecessary chunks (e.g., 5236 chunks for 0 files)
+  - Improves performance and reduces database overhead
+
 ## [2.1.5] - 2025-07-28
 
 ### Fixed
