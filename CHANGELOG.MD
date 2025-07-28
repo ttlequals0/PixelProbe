@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2025-07-28
+
+### Fixed
+- **UNIQUE Constraint Failure**: Fixed scan process crashing with SQLite IntegrityError when attempting to insert duplicate files
+  - Root cause: Discovery phase was not filtering existing files when database had 400k+ entries
+  - Implemented adaptive strategy: loads all paths for databases <100k files, uses INSERT OR IGNORE for larger ones
+  - Replaced individual file inserts with batch operations using `INSERT OR IGNORE`
+  - Added proper duplicate handling to continue scan even if some files already exist
+  - Improved error recovery with fallback mechanisms
+
+- **Performance Degradation**: Fixed severe performance issues when scanning databases with 400k+ files
+  - Implemented adaptive loading strategy: loads paths for <100k files, uses INSERT OR IGNORE for larger databases
+  - Increased batch size from 100 to 1000 files for database commits
+  - Removed expensive hash calculation during discovery/add phase (now properly calculated during scan phase)
+  - Added SQLite-specific optimizations: WAL mode, increased cache size, memory-mapped I/O
+  - Optimized database pragmas for bulk insert operations
+
+### Added
+- **Database Optimization Module**: New `db_optimization.py` module with SQLite performance enhancements
+  - Automatic WAL (Write-Ahead Logging) mode for better concurrency
+  - 64MB cache size for improved query performance
+  - Memory-mapped I/O support (256MB)
+  - Optimized pragma settings for large databases
+  - Periodic PRAGMA optimize after every 10,000 operations
+
+- **Resumable Scan Capability**: Scans can now be resumed if interrupted
+  - New `scan_chunks` table tracks progress by directory
+  - Chunked processing divides large scans into manageable pieces
+  - Each directory and subdirectory (up to 2 levels) becomes a separate chunk
+  - Chunks are processed independently and can be resumed if scan fails
+  - New `resume_scan()` method to continue incomplete scans
+
+- **Enhanced Database Indexes**: Added composite index on (file_path, scan_status) for faster duplicate checking
+
+### Implementation Details
+- **Chunked Processing**: Scans are now divided into directory-based chunks
+  - Better progress tracking and recovery
+  - Reduces memory usage by processing one directory at a time
+  - Allows partial completion and resumption
+  
+- **How Resumable Scans Work**:
+  1. When a scan starts, directories are divided into chunks (each directory = 1 chunk)
+  2. For the scanning phase:
+     - Queries database for pending files in each chunk's directory
+     - No redundant file discovery - uses existing database entries
+     - Each chunk tracks how many files it successfully scanned
+  3. If scan is interrupted, completed chunks are preserved
+  4. Resume picks up from the first incomplete chunk
+  5. No need to reprocess already completed directories
+  
+- **Scanning Phase Optimization**:
+  - Uses database queries to find files needing scanning (status='pending')
+  - Processes files by directory for better disk I/O patterns
+  - Parallel mode processes multiple directories simultaneously
+
+- **Enhanced Selected File Scanning**:
+  - "Rescan Selected" and "Deep Scan Selected" now use chunking for > 100 files
+  - Groups selected files by directory for better performance
+  - Supports resumability even for manually selected file scans
+  - Prevents memory issues when users select thousands of files
+
 ## [2.1.0] - 2025-07-27
 
 ### Summary

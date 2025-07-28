@@ -89,6 +89,12 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
 
 # Initialize extensions
 db.init_app(app)
+
+# Apply SQLite optimizations for large databases
+if 'sqlite' in app.config['SQLALCHEMY_DATABASE_URI']:
+    from pixelprobe.services.db_optimization import setup_sqlite_optimizations
+    setup_sqlite_optimizations(db)
+
 CORS(app, resources={
     r"/api/*": {"origins": "*"},
     r"/": {"origins": "*"}
@@ -373,7 +379,10 @@ def migrate_database():
             
             state_migrations = [
                 ('directories', "ALTER TABLE scan_state ADD COLUMN directories TEXT"),
-                ('force_rescan', "ALTER TABLE scan_state ADD COLUMN force_rescan BOOLEAN DEFAULT 0")
+                ('force_rescan', "ALTER TABLE scan_state ADD COLUMN force_rescan BOOLEAN DEFAULT 0"),
+                ('current_chunk_index', "ALTER TABLE scan_state ADD COLUMN current_chunk_index INTEGER DEFAULT 0"),
+                ('total_chunks', "ALTER TABLE scan_state ADD COLUMN total_chunks INTEGER DEFAULT 0"),
+                ('chunks_completed', "ALTER TABLE scan_state ADD COLUMN chunks_completed TEXT")
             ]
             
             for column_name, sql in state_migrations:
@@ -381,6 +390,33 @@ def migrate_database():
                     logger.info(f"Adding {column_name} column to scan_state table")
                     conn.execute(text(sql))
                     conn.commit()
+            
+            # Check if scan_chunks table exists
+            tables = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+            table_names = [row[0] for row in tables]
+            
+            if 'scan_chunks' not in table_names:
+                logger.info("Creating scan_chunks table for resumable scanning")
+                conn.execute(text("""
+                    CREATE TABLE scan_chunks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        scan_id VARCHAR(36) NOT NULL,
+                        chunk_id VARCHAR(100) NOT NULL UNIQUE,
+                        directory_path VARCHAR(500) NOT NULL,
+                        phase VARCHAR(20) NOT NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                        files_discovered INTEGER NOT NULL DEFAULT 0,
+                        files_added INTEGER NOT NULL DEFAULT 0,
+                        files_scanned INTEGER NOT NULL DEFAULT 0,
+                        start_time DATETIME,
+                        end_time DATETIME,
+                        error_message TEXT
+                    )
+                """))
+                conn.execute(text("CREATE INDEX idx_scan_chunks_scan_id ON scan_chunks(scan_id)"))
+                conn.execute(text("CREATE INDEX idx_scan_chunks_chunk_id ON scan_chunks(chunk_id)"))
+                conn.execute(text("CREATE INDEX idx_scan_chunks_status ON scan_chunks(status)"))
+                conn.commit()
         
         logger.info("Database migration completed successfully")
         
@@ -401,7 +437,8 @@ def create_performance_indexes():
         "CREATE INDEX IF NOT EXISTS idx_last_modified ON scan_results(last_modified)",
         "CREATE INDEX IF NOT EXISTS idx_file_path ON scan_results(file_path)",
         "CREATE INDEX IF NOT EXISTS idx_status_date ON scan_results(scan_status, scan_date)",
-        "CREATE INDEX IF NOT EXISTS idx_corrupted_good ON scan_results(is_corrupted, marked_as_good)"
+        "CREATE INDEX IF NOT EXISTS idx_corrupted_good ON scan_results(is_corrupted, marked_as_good)",
+        "CREATE INDEX IF NOT EXISTS idx_file_path_status ON scan_results(file_path, scan_status)"
     ]
     
     logger.info("Creating performance indexes...")

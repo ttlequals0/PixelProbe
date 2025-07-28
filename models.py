@@ -199,6 +199,10 @@ class ScanState(db.Model):
     error_message = db.Column(db.String(500), nullable=True)
     directories = db.Column(db.Text, nullable=True)  # JSON array of directories being scanned
     force_rescan = db.Column(db.Boolean, nullable=False, default=False)
+    # Resumable scan fields
+    current_chunk_index = db.Column(db.Integer, nullable=False, default=0)
+    total_chunks = db.Column(db.Integer, nullable=False, default=0)
+    chunks_completed = db.Column(db.Text, nullable=True)  # JSON array of completed chunk IDs
     
     def to_dict(self):
         # Import here to avoid circular imports
@@ -369,6 +373,38 @@ class FileChangesState(db.Model):
         # Handle special case for changed_files JSON field
         result['changed_files'] = json.loads(self.changed_files) if self.changed_files else []
         return result
+
+class ScanChunk(db.Model):
+    __tablename__ = 'scan_chunks'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(36), nullable=False, index=True)
+    chunk_id = db.Column(db.String(100), nullable=False, unique=True, index=True)
+    directory_path = db.Column(db.String(500), nullable=False)
+    phase = db.Column(db.String(20), nullable=False)  # discovering, adding, scanning
+    status = db.Column(db.String(20), nullable=False, default='pending')  # pending, processing, completed, error
+    files_discovered = db.Column(db.Integer, nullable=False, default=0)
+    files_added = db.Column(db.Integer, nullable=False, default=0)
+    files_scanned = db.Column(db.Integer, nullable=False, default=0)
+    start_time = db.Column(db.DateTime, nullable=True)
+    end_time = db.Column(db.DateTime, nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'scan_id': self.scan_id,
+            'chunk_id': self.chunk_id,
+            'directory_path': self.directory_path,
+            'phase': self.phase,
+            'status': self.status,
+            'files_discovered': self.files_discovered,
+            'files_added': self.files_added,
+            'files_scanned': self.files_scanned,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'error_message': self.error_message
+        }
 
 class ScanReport(db.Model):
     __tablename__ = 'scan_reports'
