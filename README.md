@@ -6,7 +6,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.1.4** - Latest release with improved duplicate detection accuracy during file scanning.
+**Version 2.1.5** - Critical fix for transaction rollback issue that was preventing files from being added to database.
 
 ## 🎉 What's New in Version 2.1.0
 

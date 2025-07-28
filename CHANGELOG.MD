@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.5] - 2025-07-28
+
+### Fixed
+- **Critical Transaction Rollback Issue**: Fixed the root cause of duplicate detection failures
+  - Issue: UNIQUE constraint failures on scan_chunks table were causing entire transactions to rollback
+  - This rolled back all file inserts, making them appear as duplicates when they weren't
+  - Solution: Clean up old scan chunks from previous failed scans before starting new scans
+  - This explains why file inserts appeared to succeed but files weren't actually in the database
+  - Resolves the issue that was preventing any files from being added to the database
+
 ## [2.1.4] - 2025-07-28
 
 ### Fixed

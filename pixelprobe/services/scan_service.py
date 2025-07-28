@@ -132,6 +132,17 @@ class ScanService:
                         logger.error(f"Could not find scan state with ID {scan_state_id}")
                         return
                     
+                    # Clean up any existing chunks for the directories we're about to scan
+                    # This prevents UNIQUE constraint failures from previous failed scans
+                    logger.info(f"Cleaning up old scan chunks for directories: {valid_dirs}")
+                    for directory in valid_dirs:
+                        # Delete chunks for this directory and all subdirectories
+                        db.session.query(ScanChunk).filter(
+                            ScanChunk.directory_path.like(f"{directory}%")
+                        ).delete(synchronize_session=False)
+                    db.session.commit()
+                    logger.info("Old scan chunks cleaned up successfully")
+                    
                     excluded_paths, excluded_extensions = load_exclusions()
                     checker = PixelProbe(
                         database_path=self.database_uri,
