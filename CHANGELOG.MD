@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.10] - 2025-07-28
+
+### Fixed
+- **Critical Performance Issue**: Fixed exponential slowdown in batch inserts
+  - Root cause: Individual INSERT statements were being executed in a loop (1000 per batch)
+  - Each INSERT created its own transaction overhead, causing 2+ minute delays per batch
+  - Solution: Replaced loop with proper SQLAlchemy bulk insert using insert().values()
+  - Performance improvement: From 2+ minutes per 1000 records to milliseconds
+  - This fixes the issue where scans would hang at 475,000 files
+
 ## [2.1.9] - 2025-07-28
 
 ### Summary

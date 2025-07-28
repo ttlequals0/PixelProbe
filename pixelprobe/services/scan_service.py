@@ -1030,18 +1030,12 @@ class ScanService:
                             ScanResult.file_path.in_(file_paths_to_insert)
                         ).all())
                         
-                        # Execute the INSERT OR IGNORE
-                        stmt = text("""
-                            INSERT OR IGNORE INTO scan_results 
-                            (file_path, file_size, file_type, last_modified, discovered_date, 
-                             scan_status, is_corrupted, marked_as_good, file_exists)
-                            VALUES 
-                            (:file_path, :file_size, :file_type, :last_modified, :discovered_date,
-                             :scan_status, :is_corrupted, :marked_as_good, :file_exists)
-                        """)
-                        # Use executemany for batch insert
-                        for file_data in files_without_errors:
-                            db.session.execute(stmt, file_data)
+                        # Execute the INSERT OR IGNORE using bulk insert
+                        from sqlalchemy import insert
+                        stmt = insert(ScanResult).values(files_without_errors)
+                        # For SQLite, use INSERT OR IGNORE
+                        stmt = stmt.prefix_with("OR IGNORE")
+                        db.session.execute(stmt)
                         db.session.commit()
                         
                         # Check which ones exist now
@@ -1068,17 +1062,12 @@ class ScanService:
                             ScanResult.file_path.in_(error_file_paths)
                         ).all())
                         
-                        stmt_error = text("""
-                            INSERT OR IGNORE INTO scan_results 
-                            (file_path, discovered_date, scan_status, error_message, 
-                             is_corrupted, marked_as_good, file_exists)
-                            VALUES 
-                            (:file_path, :discovered_date, :scan_status, :error_message,
-                             :is_corrupted, :marked_as_good, :file_exists)
-                        """)
-                        # Use executemany for batch insert
-                        for file_data in files_with_errors:
-                            db.session.execute(stmt_error, file_data)
+                        # Execute bulk insert for files with errors
+                        from sqlalchemy import insert
+                        stmt_error = insert(ScanResult).values(files_with_errors)
+                        # For SQLite, use INSERT OR IGNORE
+                        stmt_error = stmt_error.prefix_with("OR IGNORE")
+                        db.session.execute(stmt_error)
                         db.session.commit()
                         
                         # Check which ones exist now
