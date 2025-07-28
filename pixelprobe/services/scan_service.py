@@ -238,10 +238,10 @@ class ScanService:
                             logger.info(f"Added {added_count} new files out of {batch_end} processed ({duplicate_count} duplicates)")
                             
                             # Safety check: if too many duplicates, something is wrong
-                            # Check against files processed so far, not the index
-                            files_processed_so_far = batch_end
-                            if files_processed_so_far > 1000 and duplicate_count == files_processed_so_far:
-                                logger.error(f"Too many duplicate files detected ({duplicate_count}/{files_processed_so_far}). Discovery phase may have failed.")
+                            # Check against total files actually processed (added + duplicates)
+                            total_processed = added_count + duplicate_count
+                            if total_processed > 1000 and duplicate_count == total_processed:
+                                logger.error(f"All files are duplicates ({duplicate_count}/{total_processed}). Discovery phase may have failed.")
                                 logger.error("Aborting add phase to prevent infinite loop.")
                                 break
                         

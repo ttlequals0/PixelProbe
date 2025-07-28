@@ -32,6 +32,7 @@
 - Run ALL tests NEVER skip them.
 - Always follow claude.md
 - Always run test suite before each build and make sure the app will actually start. 
+- NEVER skip failed test, ALWAYS fix the problem
 ### Docker Tagging Notes
 - dont tage  - ttlequals0/pixelprobe:2.0
 

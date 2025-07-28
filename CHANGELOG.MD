@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.11] - 2025-07-28
+
+### Fixed
+- **Database Insertion Stuck at 474,000 Records**: Fixed bug in safety check logic
+  - Root cause: Safety check was comparing cumulative duplicate_count with batch_end index
+  - This caused the loop to break when duplicate_count coincidentally equaled the current batch index (474,000)
+  - Solution: Compare duplicate_count against total files processed (added_count + duplicate_count)
+  - The check now correctly identifies when ALL files are duplicates, not when count equals index
+  - This fixes the issue where database insertion would get stuck at exactly 474,000 records
+
 ## [2.1.10] - 2025-07-28
 
 ### Fixed
