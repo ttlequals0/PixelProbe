@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.4] - 2025-07-28
+
+### Fixed
+- **Improved Duplicate Detection Fix**: Enhanced the duplicate detection logic to be more accurate
+  - Previous fix in 2.1.3 had issues with counting total database rows which could be inaccurate
+  - Now specifically checks which files from the batch already exist before and after INSERT
+  - Uses IN clause to query only the specific file paths being inserted
+  - Provides detailed logging showing attempted inserts, pre-existing files, and actual additions
+  - This ensures accurate tracking even in multi-threaded environments
+
 ## [2.1.3] - 2025-07-28
 
 ### Fixed

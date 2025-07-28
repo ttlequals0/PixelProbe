@@ -1008,10 +1008,16 @@ class ScanService:
                     
                     # Insert files without errors (most common case)
                     if files_without_errors:
-                        # For SQLite, we need to use a different approach to track inserts
-                        # Count rows before insert
-                        count_before = db.session.query(ScanResult).count()
+                        # For SQLite with INSERT OR IGNORE, we need to check which files were actually inserted
+                        # First, get the file paths we're trying to insert
+                        file_paths_to_insert = [f['file_path'] for f in files_without_errors]
                         
+                        # Check which ones already exist
+                        existing_before = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
+                            ScanResult.file_path.in_(file_paths_to_insert)
+                        ).all())
+                        
+                        # Execute the INSERT OR IGNORE
                         stmt = text("""
                             INSERT OR IGNORE INTO scan_results 
                             (file_path, file_size, file_type, last_modified, discovered_date, 
@@ -1023,16 +1029,26 @@ class ScanService:
                         db.session.execute(stmt, files_without_errors)
                         db.session.commit()
                         
-                        # Count rows after insert to get actual added count
-                        count_after = db.session.query(ScanResult).count()
-                        actual_added = count_after - count_before
+                        # Check which ones exist now
+                        existing_after = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
+                            ScanResult.file_path.in_(file_paths_to_insert)
+                        ).all())
+                        
+                        # Calculate actual added
+                        actual_added = len(existing_after) - len(existing_before)
                         added_count += actual_added
                         
-                        logger.debug(f"Batch insert: attempted {len(files_without_errors)}, actually added {actual_added}")
+                        logger.info(f"Batch insert: attempted {len(files_without_errors)}, already existed {len(existing_before)}, actually added {actual_added}")
                     
                     # Insert files with errors separately
                     if files_with_errors:
-                        count_before = db.session.query(ScanResult).count()
+                        # Get file paths for error files
+                        error_file_paths = [f['file_path'] for f in files_with_errors]
+                        
+                        # Check which ones already exist
+                        existing_error_before = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
+                            ScanResult.file_path.in_(error_file_paths)
+                        ).all())
                         
                         stmt_error = text("""
                             INSERT OR IGNORE INTO scan_results 
@@ -1045,11 +1061,15 @@ class ScanService:
                         db.session.execute(stmt_error, files_with_errors)
                         db.session.commit()
                         
-                        count_after = db.session.query(ScanResult).count()
-                        actual_added = count_after - count_before
+                        # Check which ones exist now
+                        existing_error_after = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
+                            ScanResult.file_path.in_(error_file_paths)
+                        ).all())
+                        
+                        actual_added = len(existing_error_after) - len(existing_error_before)
                         added_count += actual_added
                         
-                        logger.debug(f"Error batch insert: attempted {len(files_with_errors)}, actually added {actual_added}")
+                        logger.info(f"Error batch insert: attempted {len(files_with_errors)}, already existed {len(existing_error_before)}, actually added {actual_added}")
                     
                     duplicate_count = len(files_to_insert) - added_count
                 else:
