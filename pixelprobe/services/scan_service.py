@@ -223,8 +223,7 @@ class ScanService:
                             self.update_progress(batch_end, new_files_count, batch_files[-1] if batch_files else '', 'adding')
                             scan_state.update_progress(batch_end, new_files_count, current_file=batch_files[-1] if batch_files else '')
                             
-                            # Commit batch
-                            db.session.commit()
+                            # Note: Commit is now done inside _add_files_batch_to_db
                             logger.info(f"Added {added_count} new files out of {batch_end} processed ({duplicate_count} duplicates)")
                             
                             # Safety check: if too many duplicates, something is wrong
@@ -1009,6 +1008,10 @@ class ScanService:
                     
                     # Insert files without errors (most common case)
                     if files_without_errors:
+                        # For SQLite, we need to use a different approach to track inserts
+                        # Count rows before insert
+                        count_before = db.session.query(ScanResult).count()
+                        
                         stmt = text("""
                             INSERT OR IGNORE INTO scan_results 
                             (file_path, file_size, file_type, last_modified, discovered_date, 
@@ -1017,11 +1020,20 @@ class ScanService:
                             (:file_path, :file_size, :file_type, :last_modified, :discovered_date,
                              :scan_status, :is_corrupted, :marked_as_good, :file_exists)
                         """)
-                        result = db.session.execute(stmt, files_without_errors)
-                        added_count += result.rowcount
+                        db.session.execute(stmt, files_without_errors)
+                        db.session.commit()
+                        
+                        # Count rows after insert to get actual added count
+                        count_after = db.session.query(ScanResult).count()
+                        actual_added = count_after - count_before
+                        added_count += actual_added
+                        
+                        logger.debug(f"Batch insert: attempted {len(files_without_errors)}, actually added {actual_added}")
                     
                     # Insert files with errors separately
                     if files_with_errors:
+                        count_before = db.session.query(ScanResult).count()
+                        
                         stmt_error = text("""
                             INSERT OR IGNORE INTO scan_results 
                             (file_path, discovered_date, scan_status, error_message, 
@@ -1030,8 +1042,14 @@ class ScanService:
                             (:file_path, :discovered_date, :scan_status, :error_message,
                              :is_corrupted, :marked_as_good, :file_exists)
                         """)
-                        result = db.session.execute(stmt_error, files_with_errors)
-                        added_count += result.rowcount
+                        db.session.execute(stmt_error, files_with_errors)
+                        db.session.commit()
+                        
+                        count_after = db.session.query(ScanResult).count()
+                        actual_added = count_after - count_before
+                        added_count += actual_added
+                        
+                        logger.debug(f"Error batch insert: attempted {len(files_with_errors)}, actually added {actual_added}")
                     
                     duplicate_count = len(files_to_insert) - added_count
                 else:

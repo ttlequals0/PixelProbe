@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3] - 2025-07-28
+
+### Fixed
+- **False Duplicate Detection**: Fixed issue where all files were incorrectly flagged as duplicates during add phase
+  - Root cause: SQLite's `INSERT OR IGNORE` returns rowcount of 0 even when rows are successfully inserted
+  - Solution: Changed to count database rows before and after batch insert to accurately track added files
+  - This was causing scans to abort with "Too many duplicate files detected" even on empty databases
+  - Files are now correctly added to the database and duplicate detection works as expected
+
 ## [2.1.2] - 2025-07-28
 
 ### Fixed
