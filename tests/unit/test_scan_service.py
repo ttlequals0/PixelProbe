@@ -147,6 +147,16 @@ class TestScanService:
                     mock_stats.errors = 0
                     mock_stats.completed = 2
                     mock_query.first.return_value = mock_stats
+                # Check if querying for ScanResult itself
+                elif args and args[0] == mock_scan_result_class:
+                    # This is querying ScanResult directly
+                    mock_query.count.return_value = 50000  # Less than 100000, so it will load paths
+                    # For loading file paths query
+                    mock_query.all.return_value = []  # Empty list, no existing files
+                # Check if querying for ScanResult.file_path
+                elif args and hasattr(args[0], 'property') and hasattr(args[0].property, 'key') and args[0].property.key == 'file_path':
+                    # This is querying ScanResult.file_path
+                    mock_query.all.return_value = []  # Empty list, no existing files
                 else:
                     # This is a normal query
                     mock_query.offset.return_value.limit.return_value.all.return_value = []
@@ -154,9 +164,14 @@ class TestScanService:
                     mock_filter_query = Mock()
                     mock_filter_query.all.return_value = []  # No existing files
                     mock_query.filter.return_value = mock_filter_query
+                    # Mock count() method for existing files check
+                    mock_query.count.return_value = 50000  # Less than 100000, so it will load paths
                 return mock_query
             
             mock_db.session.query.side_effect = query_side_effect
+            
+            # Mock db.session.get to return the scan state
+            mock_db.session.get.return_value = mock_scan_state
             
             # Mock probe
             mock_probe = Mock()
@@ -264,13 +279,43 @@ class TestScanService:
             mock_scan_state_class.get_or_create.return_value = mock_scan_state
             
             # Mock ScanResult query to avoid database access
-            mock_query = Mock()
-            mock_query.offset.return_value.limit.return_value.all.return_value = []
-            # Mock the filter query for force_rescan
-            mock_filter_query = Mock()
-            mock_filter_query.all.return_value = []  # No existing files
-            mock_query.filter.return_value = mock_filter_query
-            mock_db.session.query.return_value = mock_query
+            def query_side_effect(*args):
+                mock_query = Mock()
+                # Check if this is the stats query (has func.count)
+                if args and hasattr(args[0], '_elements') and any('count' in str(e) for e in getattr(args[0], '_elements', [])):
+                    # This is the stats query
+                    mock_stats = Mock()
+                    mock_stats.total = 4
+                    mock_stats.corrupted = 0
+                    mock_stats.warnings = 0
+                    mock_stats.errors = 0
+                    mock_stats.completed = 4
+                    mock_query.first.return_value = mock_stats
+                # Check if querying for ScanResult itself
+                elif args and args[0] == mock_scan_result_class:
+                    # This is querying ScanResult directly
+                    mock_query.count.return_value = 50000  # Less than 100000, so it will load paths
+                    # For loading file paths query
+                    mock_query.all.return_value = []  # Empty list, no existing files
+                # Check if querying for ScanResult.file_path
+                elif args and hasattr(args[0], 'property') and hasattr(args[0].property, 'key') and args[0].property.key == 'file_path':
+                    # This is querying ScanResult.file_path
+                    mock_query.all.return_value = []  # Empty list, no existing files
+                else:
+                    # This is a normal query
+                    mock_query.offset.return_value.limit.return_value.all.return_value = []
+                    # Mock the filter query for force_rescan
+                    mock_filter_query = Mock()
+                    mock_filter_query.all.return_value = []  # No existing files
+                    mock_query.filter.return_value = mock_filter_query
+                    # Mock count() method for existing files check
+                    mock_query.count.return_value = 50000  # Less than 100000, so it will load paths
+                return mock_query
+            
+            mock_db.session.query.side_effect = query_side_effect
+            
+            # Mock db.session.get to return the scan state
+            mock_db.session.get.return_value = mock_scan_state
             
             # Mock probe
             mock_probe = Mock()

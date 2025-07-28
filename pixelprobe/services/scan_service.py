@@ -1003,18 +1003,36 @@ class ScanService:
             try:
                 # For SQLite, use INSERT OR IGNORE
                 if 'sqlite' in str(db.engine.url):
-                    # Use raw SQL for better control
-                    stmt = text("""
-                        INSERT OR IGNORE INTO scan_results 
-                        (file_path, file_size, file_type, last_modified, discovered_date, 
-                         scan_status, is_corrupted, marked_as_good, file_exists, error_message)
-                        VALUES 
-                        (:file_path, :file_size, :file_type, :last_modified, :discovered_date,
-                         :scan_status, :is_corrupted, :marked_as_good, :file_exists, :error_message)
-                    """)
+                    # Separate files with errors from successful ones
+                    files_with_errors = [f for f in files_to_insert if 'error_message' in f]
+                    files_without_errors = [f for f in files_to_insert if 'error_message' not in f]
                     
-                    result = db.session.execute(stmt, files_to_insert)
-                    added_count = result.rowcount
+                    # Insert files without errors (most common case)
+                    if files_without_errors:
+                        stmt = text("""
+                            INSERT OR IGNORE INTO scan_results 
+                            (file_path, file_size, file_type, last_modified, discovered_date, 
+                             scan_status, is_corrupted, marked_as_good, file_exists)
+                            VALUES 
+                            (:file_path, :file_size, :file_type, :last_modified, :discovered_date,
+                             :scan_status, :is_corrupted, :marked_as_good, :file_exists)
+                        """)
+                        result = db.session.execute(stmt, files_without_errors)
+                        added_count += result.rowcount
+                    
+                    # Insert files with errors separately
+                    if files_with_errors:
+                        stmt_error = text("""
+                            INSERT OR IGNORE INTO scan_results 
+                            (file_path, discovered_date, scan_status, error_message, 
+                             is_corrupted, marked_as_good, file_exists)
+                            VALUES 
+                            (:file_path, :discovered_date, :scan_status, :error_message,
+                             :is_corrupted, :marked_as_good, :file_exists)
+                        """)
+                        result = db.session.execute(stmt_error, files_with_errors)
+                        added_count += result.rowcount
+                    
                     duplicate_count = len(files_to_insert) - added_count
                 else:
                     # For other databases, insert one by one (less efficient)
