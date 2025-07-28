@@ -225,8 +225,17 @@ class ScanService:
                             batch_end = min(batch_start + batch_size, len(all_files))
                             batch_files = all_files[batch_start:batch_end]
                             
+                            # Log batch processing start for debugging
+                            if batch_start % 10000 == 0:
+                                logger.info(f"Processing batch starting at {batch_start}/{len(all_files)}")
+                            
                             # Add batch of files efficiently
-                            batch_added, batch_duplicates = self._add_files_batch_to_db(batch_files)
+                            try:
+                                batch_added, batch_duplicates = self._add_files_batch_to_db(batch_files)
+                            except Exception as e:
+                                logger.error(f"Error processing batch {batch_start}-{batch_end}: {e}")
+                                # Continue with next batch to avoid complete failure
+                                continue
                             added_count += batch_added
                             duplicate_count += batch_duplicates
                             
@@ -235,7 +244,7 @@ class ScanService:
                             scan_state.update_progress(batch_end, new_files_count, current_file=batch_files[-1] if batch_files else '')
                             
                             # Note: Commit is now done inside _add_files_batch_to_db
-                            logger.info(f"Added {added_count} new files out of {batch_end} processed ({duplicate_count} duplicates)")
+                            logger.info(f"Processed batch {batch_start//batch_size + 1}/{(len(all_files) + batch_size - 1)//batch_size}: Added {added_count} total, {duplicate_count} duplicates (batch end: {batch_end}/{len(all_files)})")
                             
                             # Safety check: if too many duplicates, something is wrong
                             # Check against total files actually processed (added + duplicates)
@@ -244,6 +253,11 @@ class ScanService:
                                 logger.error(f"All files are duplicates ({duplicate_count}/{total_processed}). Discovery phase may have failed.")
                                 logger.error("Aborting add phase to prevent infinite loop.")
                                 break
+                            
+                            # Periodic checkpoint to prevent transaction log bloat
+                            if batch_end % 50000 == 0:
+                                logger.info(f"Checkpoint at {batch_end} files - committing transaction")
+                                db.session.commit()
                         
                         db.session.commit()
                         logger.info(f"Add phase completed. Added {added_count} new files out of {new_files_count} discovered")
@@ -1026,9 +1040,15 @@ class ScanService:
                         file_paths_to_insert = [f['file_path'] for f in files_without_errors]
                         
                         # Check which ones already exist
-                        existing_before = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
-                            ScanResult.file_path.in_(file_paths_to_insert)
-                        ).all())
+                        # For large batches, check in smaller chunks to avoid query size limits
+                        existing_before = set()
+                        chunk_size = 100  # Process IN queries in smaller chunks
+                        for i in range(0, len(file_paths_to_insert), chunk_size):
+                            chunk_paths = file_paths_to_insert[i:i+chunk_size]
+                            existing_chunk = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
+                                ScanResult.file_path.in_(chunk_paths)
+                            ).all())
+                            existing_before.update(existing_chunk)
                         
                         # Execute the INSERT OR IGNORE using bulk insert
                         from sqlalchemy import insert
@@ -1039,9 +1059,14 @@ class ScanService:
                         db.session.commit()
                         
                         # Check which ones exist now
-                        existing_after = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
-                            ScanResult.file_path.in_(file_paths_to_insert)
-                        ).all())
+                        # For large batches, check in smaller chunks to avoid query size limits
+                        existing_after = set()
+                        for i in range(0, len(file_paths_to_insert), chunk_size):
+                            chunk_paths = file_paths_to_insert[i:i+chunk_size]
+                            existing_chunk = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
+                                ScanResult.file_path.in_(chunk_paths)
+                            ).all())
+                            existing_after.update(existing_chunk)
                         
                         # Calculate actual added
                         actual_added = len(existing_after) - len(existing_before)

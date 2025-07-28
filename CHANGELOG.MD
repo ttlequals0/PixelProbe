@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.12] - 2025-07-28
+
+### Fixed
+- **Database Insertion Slowdown at 485,000 Records**: Fixed performance issues with large-scale insertions
+  - Root cause: Large IN queries with 1000 file paths were hitting SQLite query size limits
+  - Solution 1: Break down IN queries into smaller chunks of 100 paths
+  - Solution 2: Add periodic transaction commits every 50,000 records to prevent log bloat
+  - Solution 3: Add better error handling and progress logging
+  - Fixed misleading log messages that showed incorrect completion status
+  - This resolves the issue where database insertion would slow down or appear stuck at 485,000 records
+
 ## [2.1.11] - 2025-07-28
 
 ### Fixed
