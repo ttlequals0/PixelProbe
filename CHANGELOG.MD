@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.23] - 2025-07-29
+
+### Fixed
+- **Scan Progress Not Showing on Page Refresh**: Fixed scan progress disappearing when page is refreshed
+  - Root cause: While the init() method checked for running scans, the progress wasn't updating immediately
+  - Added immediate progress check when monitoring starts
+  - Added debug logging to help diagnose scan detection issues
+  - Refactored progress checking into a separate checkProgress() method
+  - Now checks both is_scanning and is_running fields for compatibility
+  - Progress container now properly shows when a scan is detected on page load
+
 ## [2.1.22] - 2025-07-29
 
 ### Fixed

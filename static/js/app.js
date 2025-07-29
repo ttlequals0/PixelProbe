@@ -330,8 +330,10 @@ class ProgressManager {
     }
 
     show() {
+        console.log('ProgressManager.show() called, container exists:', !!this.progressContainer);
         if (this.progressContainer) {
             this.progressContainer.style.display = 'block';
+            console.log('Progress container display set to block');
             
             // Update progress title based on operation type
             const progressTitle = this.progressContainer.querySelector('.progress-title');
@@ -384,7 +386,45 @@ class ProgressManager {
         }
     }
 
+    async checkProgress() {
+        try {
+            let status;
+            let isRunning = false;
+            
+            // Get status based on operation type
+            if (this.operationType === 'scan') {
+                status = await this.api.getScanStatus();
+                isRunning = status.is_scanning || status.is_running;
+            } else if (this.operationType === 'cleanup') {
+                status = await this.api.getCleanupStatus();
+                isRunning = status.is_running;
+            } else if (this.operationType === 'file-changes') {
+                status = await this.api.getFileChangesStatus();
+                isRunning = status.is_running;
+            }
+            
+            if (status) {
+                if (isRunning) {
+                    const progress = this.calculateProgress(status, this.operationType);
+                    this.update(progress.percentage, progress.text, progress.details);
+                } else if (status.phase === 'complete' || status.phase === 'completed' || 
+                          status.phase === 'cancelled' || status.phase === 'error' ||
+                          status.status === 'completed') {
+                    // Operation is complete - show completion state
+                    this.complete(this.operationType, status);
+                } else {
+                    // Still showing last progress state
+                    const progress = this.calculateProgress(status, this.operationType);
+                    this.update(progress.percentage, progress.text, progress.details);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to check progress:', error);
+        }
+    }
+
     async startMonitoring(operationType = 'scan') {
+        console.log(`Starting monitoring for ${operationType}`);
         this.operationType = operationType;
         this.show();
         
@@ -397,39 +437,11 @@ class ProgressManager {
             this.updateFileChangesButton(true);
         }
         
+        // Immediately check status once
+        await this.checkProgress();
+        
         this.checkInterval = setInterval(async () => {
-            try {
-                let status;
-                let isRunning = false;
-                
-                // Get status based on operation type
-                if (operationType === 'scan') {
-                    status = await this.api.getScanStatus();
-                    isRunning = status.is_scanning;
-                } else if (operationType === 'cleanup') {
-                    status = await this.api.getCleanupStatus();
-                    isRunning = status.is_running;
-                    // Debug log for cleanup status
-                    console.log('Cleanup status:', status);
-                } else if (operationType === 'file-changes') {
-                    status = await this.api.getFileChangesStatus();
-                    isRunning = status.is_running;
-                }
-                
-                if (isRunning) {
-                    const progress = this.calculateProgress(status, operationType);
-                    this.update(progress.percentage, progress.text, progress.details);
-                } else if (status.phase === 'complete' || status.phase === 'completed' || status.phase === 'cancelled' || status.phase === 'error') {
-                    // Operation is complete - show completion state
-                    this.complete(operationType, status);
-                } else {
-                    // Still initializing or in transition - keep showing progress
-                    const progress = this.calculateProgress(status, operationType);
-                    this.update(progress.percentage, progress.text, progress.details);
-                }
-            } catch (error) {
-                console.error(`Failed to check ${operationType} status:`, error);
-            }
+            await this.checkProgress();
         }, 1000); // Poll every 1 second
     }
     
@@ -1229,7 +1241,9 @@ class PixelProbeApp {
         try {
             // Check for ongoing scan
             const scanStatus = await this.api.getScanStatus();
-            if (scanStatus.is_scanning) {
+            console.log('Page load - Scan status:', scanStatus);
+            if (scanStatus.is_scanning || scanStatus.is_running) {
+                console.log('Active scan detected on page load, starting monitoring...');
                 this.progress.operationType = 'scan';
                 this.progress.startMonitoring('scan');
                 return; // Only monitor one operation at a time
