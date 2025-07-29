@@ -115,7 +115,8 @@ class TestScanService:
     @patch('pixelprobe.services.scan_service.ScanState')
     @patch('pixelprobe.services.scan_service.ScanResult')
     @patch('pixelprobe.services.scan_service.PixelProbe')
-    def test_scan_directories_success(self, mock_probe_class, mock_scan_result_class, mock_scan_state_class, mock_scan_report_class, mock_db, mock_exists, scan_service, app, db):
+    @patch.object(ScanService, '_get_chunk_file_count', return_value=2)
+    def test_scan_directories_success(self, mock_get_chunk_count, mock_probe_class, mock_scan_result_class, mock_scan_state_class, mock_scan_report_class, mock_db, mock_exists, scan_service, app, db):
         """Test successful directory scanning"""
         with app.app_context():
             mock_exists.return_value = True
@@ -132,6 +133,7 @@ class TestScanService:
             mock_scan_state.phase = 'completed'
             mock_scan_state.error_message = None
             mock_scan_state.estimated_total = 2
+            mock_scan_state.phase_total = 2
             mock_scan_state_class.get_or_create.return_value = mock_scan_state
             
             # Mock ScanResult query to avoid database access
@@ -259,7 +261,8 @@ class TestScanService:
     @patch('pixelprobe.services.scan_service.ScanState')
     @patch('pixelprobe.services.scan_service.ScanResult')
     @patch('pixelprobe.services.scan_service.PixelProbe')
-    def test_parallel_scan(self, mock_probe_class, mock_scan_result_class, mock_scan_state_class, mock_scan_report_class, mock_db, mock_exists, scan_service, app, db):
+    @patch.object(ScanService, '_get_chunk_file_count', return_value=2)
+    def test_parallel_scan(self, mock_get_chunk_count, mock_probe_class, mock_scan_result_class, mock_scan_state_class, mock_scan_report_class, mock_db, mock_exists, scan_service, app, db):
         """Test parallel scanning with multiple workers"""
         with app.app_context():
             mock_exists.return_value = True
@@ -276,6 +279,7 @@ class TestScanService:
             mock_scan_state.phase = 'completed'
             mock_scan_state.error_message = None
             mock_scan_state.estimated_total = 4
+            mock_scan_state.phase_total = 4
             mock_scan_state_class.get_or_create.return_value = mock_scan_state
             
             # Mock ScanResult query to avoid database access

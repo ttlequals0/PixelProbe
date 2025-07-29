@@ -434,10 +434,50 @@ def get_scan_status():
                     remaining_files = total_progress - current_progress
                     eta_seconds = remaining_files / files_per_second
                     eta_time = current_time.timestamp() + eta_seconds
-                    eta = datetime.fromtimestamp(eta_time, tz=timezone.utc).isoformat()
+                    eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
                     logger.debug(f"ETA calculated: {eta}")
         except Exception as e:
             logger.warning(f"Could not calculate ETA: {e}")
+    
+    # Convert timestamps to configured timezone
+    start_time_tz = None
+    end_time_tz = None
+    
+    if state_dict.get('start_time'):
+        try:
+            start_time_str = state_dict['start_time']
+            if isinstance(start_time_str, str):
+                start_dt = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+            else:
+                start_dt = start_time_str
+            
+            # Make timezone-aware if needed
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+            
+            # Convert to configured timezone
+            start_time_tz = start_dt.astimezone(tz).isoformat()
+        except Exception as e:
+            logger.warning(f"Could not convert start_time to timezone: {e}")
+            start_time_tz = state_dict.get('start_time')
+    
+    if state_dict.get('end_time'):
+        try:
+            end_time_str = state_dict['end_time']
+            if isinstance(end_time_str, str):
+                end_dt = datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
+            else:
+                end_dt = end_time_str
+            
+            # Make timezone-aware if needed
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
+            
+            # Convert to configured timezone
+            end_time_tz = end_dt.astimezone(tz).isoformat()
+        except Exception as e:
+            logger.warning(f"Could not convert end_time to timezone: {e}")
+            end_time_tz = state_dict.get('end_time')
     
     # Build comprehensive status response with frontend-expected fields
     status = {
@@ -448,8 +488,8 @@ def get_scan_status():
         'is_running': is_running,
         'is_scanning': is_running,  # Legacy compatibility
         'scan_id': state_dict.get('id'),
-        'start_time': state_dict.get('start_time'),
-        'end_time': state_dict.get('end_time'),
+        'start_time': start_time_tz,
+        'end_time': end_time_tz,
         'directories': state_dict.get('directories'),
         'force_rescan': state_dict.get('force_rescan'),
         'phase': current_phase,
