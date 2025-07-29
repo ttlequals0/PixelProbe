@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.13] - 2025-07-29
+
+### Fixed
+- **Duplicate File Processing in Concurrent Workers**: Fixed issue where files were being scanned multiple times
+  - Root cause: Directory path pattern matching with LIKE operator caused overlapping matches (e.g., /path/dir and /path/dir2)
+  - Solution: Added proper path separator to pattern matching to ensure exact directory boundaries
+  - This prevents files from being processed multiple times by different worker threads
+  
+- **Files Processed Counter Stuck at 0**: Fixed progress tracking during scan phase
+  - Root cause: Progress was tracking chunk counts instead of actual file counts
+  - Solution: Track cumulative files scanned across all chunks and update progress with actual file counts
+  - Added proper file counting in both sequential and parallel scan methods
+  - Progress now correctly shows files processed instead of chunks processed
+  
+- **Missing Scan Completion/Interruption Logging**: Added comprehensive scan lifecycle logging
+  - Added "SCAN STARTED", "SCAN COMPLETED", "SCAN ERROR", and "SCAN CANCELLATION" log entries
+  - Each log entry includes scan ID, phase information, and relevant statistics
+  - Improves debugging and monitoring of scan operations
+  
+- **HEIC Image False Positive Corruption Detection**: Fixed FFmpeg incorrectly marking HEIC images as corrupted
+  - Root cause: FFmpeg often lacks proper HEIC/HEIF codec support, causing validation failures
+  - Added detection for known FFmpeg HEIC compatibility errors (moov atom not found, invalid data, etc.)
+  - Skip FFmpeg validation for HEIC files with known compatibility issues
+  - Added pillow-heif support detection for better HEIC handling with PIL
+  - Convert HEIC compatibility errors to warnings when other tools (ImageMagick) validate successfully
+  - This fixes false positives for valid HEIC images from iOS devices
+
 ## [2.1.12] - 2025-07-28
 
 ### Fixed

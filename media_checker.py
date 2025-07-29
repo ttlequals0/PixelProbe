@@ -8,6 +8,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
+
+# Try to import pillow-heif for better HEIC support
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    HEIF_SUPPORT = True
+except ImportError:
+    HEIF_SUPPORT = False
 import ffmpeg
 import tempfile
 import shutil
@@ -694,28 +702,42 @@ class PixelProbe:
         
         logger.info(f"Starting PIL verification for: {file_path}")
         
-        # Check if this is a GIF file
-        is_gif = file_path.lower().endswith('.gif')
-        pil_failed = False
-        pil_error = None
+        # Check file type
+        file_ext = os.path.splitext(file_path)[1].lower()
+        is_gif = file_ext == '.gif'
+        is_heic = file_ext in ['.heic', '.heif']
         
-        try:
-            with Image.open(file_path) as img:
-                img.verify()
-            logger.info(f"PIL verification passed for: {file_path}")
-            scan_output.append("PIL verification: PASSED")
-        except Exception as e:
-            pil_failed = True
-            pil_error = str(e)
-            scan_output.append(f"PIL verification: FAILED - {str(e)}")
-            logger.warning(f"PIL verification failed for {file_path}: {str(e)}")
+        # Check if HEIC is supported
+        if is_heic and not HEIF_SUPPORT:
+            scan_output.append("PIL verification: SKIPPED (HEIC support not available)")
+            logger.info(f"PIL HEIC support not available, skipping PIL verification for {file_path}")
+            pil_failed = False
+            pil_error = None
+        else:
+            pil_failed = False
+            pil_error = None
+            
+            try:
+                with Image.open(file_path) as img:
+                    img.verify()
+                logger.info(f"PIL verification passed for: {file_path}")
+                scan_output.append("PIL verification: PASSED")
+            except Exception as e:
+                pil_failed = True
+                pil_error = str(e)
+                scan_output.append(f"PIL verification: FAILED - {str(e)}")
+                logger.warning(f"PIL verification failed for {file_path}: {str(e)}")
         
         pil_load_failed = False
         pil_load_error = None
         
-        try:
-            with Image.open(file_path) as img:
-                img.load()
+        # Skip load test for HEIC if not supported
+        if is_heic and not HEIF_SUPPORT:
+            scan_output.append("PIL load test: SKIPPED (HEIC support not available)")
+        else:
+            try:
+                with Image.open(file_path) as img:
+                    img.load()
                 
                 if img.size[0] == 0 or img.size[1] == 0:
                     corruption_details.append("Invalid image dimensions")
@@ -727,13 +749,13 @@ class PixelProbe:
                 # Note: After load(), tile data is consumed and cleared in PIL - this is normal behavior
                 # Removed incorrect tile data check that was causing false positives
                 
-                img.transpose(Image.FLIP_LEFT_RIGHT)
-                scan_output.append("Transform test: PASSED")
-        
-        except Exception as e:
-            pil_load_failed = True
-            pil_load_error = str(e)
-            scan_output.append(f"PIL load/transform: FAILED - {str(e)}")
+                    img.transpose(Image.FLIP_LEFT_RIGHT)
+                    scan_output.append("Transform test: PASSED")
+            
+            except Exception as e:
+                pil_load_failed = True
+                pil_load_error = str(e)
+                scan_output.append(f"PIL load/transform: FAILED - {str(e)}")
         
         logger.info(f"Starting ImageMagick verification for: {file_path}")
         try:
@@ -810,11 +832,26 @@ class PixelProbe:
             )
             
             if result.returncode != 0 and result.stderr:
-                corruption_details.append("FFmpeg image validation failed")
-                is_corrupted = True
-                scan_tool = "ffmpeg"
-                scan_output.append(f"FFmpeg image validation: FAILED")
-                scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
+                # Check if this is a HEIC/HEIF file with known FFmpeg compatibility issues
+                file_ext = os.path.splitext(file_path)[1].lower()
+                stderr_lower = result.stderr.lower()
+                
+                if file_ext in ['.heic', '.heif'] and any(msg in stderr_lower for msg in [
+                    'moov atom not found',
+                    'invalid data found',
+                    'could not find codec parameters',
+                    'no decoder found',
+                    'unrecognized file format'
+                ]):
+                    # Known FFmpeg HEIC compatibility issue - check with other tools first
+                    scan_output.append("FFmpeg image validation: SKIPPED (HEIC compatibility)")
+                    logger.info(f"FFmpeg HEIC compatibility issue for {file_path}, relying on PIL/ImageMagick")
+                else:
+                    corruption_details.append("FFmpeg image validation failed")
+                    is_corrupted = True
+                    scan_tool = "ffmpeg"
+                    scan_output.append(f"FFmpeg image validation: FAILED")
+                    scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
             elif result.stderr:
                 # Check if this is just an EXIF/metadata warning (not actual corruption)
                 stderr_lower = result.stderr.lower()
@@ -861,6 +898,24 @@ class PixelProbe:
                 is_corrupted = False
                 warning_details = ["GIF header warning: Non-standard header detected (file may still be playable)"]
                 # Clear corruption details since we're treating it as a warning
+                corruption_details = []
+        
+        # Check if this is a HEIC/HEIF with compatibility issues that should be warnings
+        if is_heic and is_corrupted:
+            # Check if FFmpeg had compatibility issues
+            ffmpeg_heic_issue = any('SKIPPED (HEIC compatibility)' in line for line in scan_output)
+            
+            # Check if PIL couldn't handle HEIC
+            pil_heic_skipped = any('SKIPPED (HEIC support not available)' in line for line in scan_output)
+            
+            # Check if ImageMagick passed
+            imagemagick_passed = any('ImageMagick identify: PASSED' in line for line in scan_output)
+            
+            # If FFmpeg had HEIC issues but ImageMagick passed, it's likely a false positive
+            if (ffmpeg_heic_issue or pil_heic_skipped) and imagemagick_passed:
+                logger.info(f"Converting HEIC compatibility errors to warnings for {file_path}")
+                is_corrupted = False
+                warning_details = ["HEIC compatibility warning: FFmpeg/PIL may not fully support this HEIC file (image is valid)"]
                 corruption_details = []
         
         # Check if this is a WebP with EXIF issues that should be a warning instead
