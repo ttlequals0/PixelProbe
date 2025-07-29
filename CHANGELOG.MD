@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.16] - 2025-07-29
+
+### Fixed
+- **Scan Progress Not Updating in Database**: Fixed progress tracking during file scanning
+  - Root cause: The `_scan_chunk_files` method was updating internal progress but not the database scan_state
+  - The method lacked access to the scan_state object, preventing database updates
+  - Solution: Added scan_state parameter to `_scan_chunk_files` method
+  - Added scan_state.update_progress() calls within the file scanning loop
+  - Added explicit db.session.commit() after progress updates to ensure persistence
+  - Progress now properly updates in database during scanning, showing actual files processed and enabling ETA calculations
+  - This fixes the issue introduced in v2.1.15 where progress appeared stuck at 0 despite files being scanned
+
 ## [2.1.15] - 2025-07-29
 
 ### Fixed

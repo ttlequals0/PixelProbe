@@ -577,7 +577,7 @@ class ScanService:
                         # For scanning phase, we only scan files already in DB
                         if scan_state.phase == 'scanning':
                             # For resume, we don't have cumulative counts readily available
-                            self._scan_chunk_files(chunk, checker, scan_state.force_rescan, 0, 0)
+                            self._scan_chunk_files(chunk, checker, scan_state.force_rescan, 0, 0, scan_state)
                         else:
                             # For discovery/adding phases, use the full process
                             self._process_chunk(chunk, checker, scan_state.phase, scan_state.force_rescan)
@@ -681,7 +681,7 @@ class ScanService:
             initial_scanned = total_files_scanned
             
             # Scan files in this chunk
-            self._scan_chunk_files(chunk, checker, force_rescan, total_files_scanned, total_files_to_scan)
+            self._scan_chunk_files(chunk, checker, force_rescan, total_files_scanned, total_files_to_scan, scan_state)
             
             # Update total files scanned based on chunk results
             if chunk.files_scanned:
@@ -815,7 +815,7 @@ class ScanService:
                 return None
             # For parallel scan, we can't pass cumulative counts, so pass 0
             # The main thread will handle updating the cumulative progress
-            self._scan_chunk_files(chunk, checker, force_rescan, 0, 0)
+            self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, scan_state)
             return chunk, chunk.files_scanned or 0
         
         with ThreadPoolExecutor(max_workers=min(num_workers, len(chunks))) as executor:
@@ -1340,7 +1340,7 @@ class ScanService:
             return {'error': str(e)}
     
     def _scan_chunk_files(self, chunk: ScanChunk, checker: PixelProbe, force_rescan: bool = False, 
-                          total_scanned_so_far: int = 0, total_to_scan: int = 0):
+                          total_scanned_so_far: int = 0, total_to_scan: int = 0, scan_state: ScanState = None):
         """Scan files in a chunk that are already in the database"""
         chunk.status = 'processing'
         chunk.phase = 'scanning'
@@ -1399,6 +1399,12 @@ class ScanService:
                         self.update_progress(current_total, total_to_scan, 
                                            file_result.file_path, 'scanning')
                         
+                        # Update scan state if provided
+                        if scan_state:
+                            scan_state.files_processed = current_total
+                            scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+                            db.session.commit()
+                        
                 except Exception as e:
                     logger.error(f"Error scanning {file_result.file_path}: {e}")
                     errors += 1
@@ -1406,6 +1412,13 @@ class ScanService:
             chunk.files_scanned = scanned
             chunk.status = 'completed'
             chunk.end_time = datetime.now(timezone.utc)
+            
+            # Final update to scan state
+            if scan_state and scanned > 0:
+                final_total = total_scanned_so_far + scanned
+                scan_state.files_processed = final_total
+                scan_state.update_progress(final_total, total_to_scan, current_file=chunk.directory_path)
+            
             db.session.commit()
             
             logger.info(f"Chunk {chunk.chunk_id} completed: {scanned} files scanned, {errors} errors")
