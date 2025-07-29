@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.20] - 2025-07-29
+
+### Fixed
+- **Progress Message Format**: Updated progress message format to be cleaner and more readable
+  - Old format: "Phase 3 of 3: Scanning files: Processing 320/668092 - filename.jpeg - ETA: 1s - 320 of 668,092 files - Scanning: filename.jpeg"
+  - New format: "Phase 3 of 3: Scanning files: current file: filename.jpeg - 320 of 668,092 files ETA: 2h 45m"
+  - Removed redundant information and improved readability
+  - ETA now correctly represents time for all remaining files, not just current file
+  - Added proper number formatting with commas for large file counts
+
 ## [2.1.19] - 2025-07-29
 
 ### Fixed
