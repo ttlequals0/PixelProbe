@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.21] - 2025-07-29
+
+### Fixed
+- **Duplicate Progress Information**: Fixed frontend duplicating progress message content
+  - Root cause: Frontend was building its own details string and appending it to the backend's progress message
+  - The backend already includes all progress information in a properly formatted message
+  - Solution: Removed redundant frontend code that was adding duplicate file count, current file, and ETA
+  - Progress now shows clean format without duplication
+
 ## [2.1.20] - 2025-07-29
 
 ### Fixed

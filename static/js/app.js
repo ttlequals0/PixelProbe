@@ -537,33 +537,9 @@ class ProgressManager {
                 
                 text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
                 
-                // Build details string with all information
-                const parts = [];
-                
-                // Add file count
-                if (status.current > 0 && status.total > 0) {
-                    parts.push(`${status.current.toLocaleString()} of ${status.total.toLocaleString()} files`);
-                } else if (phaseCurrent > 0 && phaseTotal > 0) {
-                    parts.push(`${phaseCurrent.toLocaleString()} of ${phaseTotal.toLocaleString()} files`);
-                }
-                
-                // Add speed if available
-                if (status.files_per_second > 0) {
-                    parts.push(`${status.files_per_second} files/sec`);
-                }
-                
-                // Add current file
-                if (status.file || status.current_file) {
-                    const currentFile = status.file || status.current_file;
-                    parts.push(`Scanning: ${currentFile.split('/').pop()}`);
-                }
-                
-                // Add ETA
-                if (eta) {
-                    parts.push(`ETA: ${eta}`);
-                }
-                
-                details = parts.join(' - ');
+                // The backend now includes all progress details in the progress_message
+                // No need to build additional details string
+                details = '';
             }
         } else if (operationType === 'cleanup') {
             // Use the progress percentage directly from the backend
