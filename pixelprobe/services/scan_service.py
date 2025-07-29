@@ -37,7 +37,11 @@ class ScanService:
         
     def is_scan_running(self) -> bool:
         """Check if a scan is currently running"""
-        return self.current_scan_thread is not None and self.current_scan_thread.is_alive()
+        is_running = self.current_scan_thread is not None and self.current_scan_thread.is_alive()
+        logger.debug(f"is_scan_running check: thread exists={self.current_scan_thread is not None}, "
+                    f"is_alive={self.current_scan_thread.is_alive() if self.current_scan_thread else False}, "
+                    f"result={is_running}")
+        return is_running
     
     def get_scan_progress(self) -> Dict:
         """Get current scan progress"""
@@ -87,8 +91,13 @@ class ScanService:
                     logger.error(f"Error scanning file: {e}")
                     self.update_progress(1, 1, file_path, 'error')
                     raise
+                finally:
+                    # Clear thread reference to allow new scans
+                    self.current_scan_thread = None
+                    logger.debug("Single file scan thread cleaned up")
         
-        self.current_scan_thread = threading.Thread(target=run_scan)
+        self.current_scan_thread = threading.Thread(target=run_scan, name="SingleFileScan")
+        logger.info(f"Starting single file scan thread: {self.current_scan_thread.name}")
         self.current_scan_thread.start()
         
         return {'status': 'started', 'message': 'Scan started', 'file_path': file_path}
@@ -350,8 +359,13 @@ class ScanService:
                         scan_state.error_scan(str(e))
                         db.session.commit()
                     raise
+                finally:
+                    # Clear thread reference to allow new scans
+                    self.current_scan_thread = None
+                    logger.info("Scan thread cleaned up")
         
-        self.current_scan_thread = threading.Thread(target=run_scan)
+        self.current_scan_thread = threading.Thread(target=run_scan, name="DirectoryScan")
+        logger.info(f"Starting directory scan thread: {self.current_scan_thread.name}")
         self.current_scan_thread.start()
         
         return {
@@ -478,8 +492,13 @@ class ScanService:
                     scan_state.error_scan(str(e))
                     db.session.commit()
                     raise
+                finally:
+                    # Clear thread reference to allow new scans
+                    self.current_scan_thread = None
+                    logger.info("File scan thread cleaned up")
         
-        self.current_scan_thread = threading.Thread(target=run_scan)
+        self.current_scan_thread = threading.Thread(target=run_scan, name="FileListScan")
+        logger.info(f"Starting file list scan thread: {self.current_scan_thread.name}")
         self.current_scan_thread.start()
         
         return {
@@ -580,8 +599,13 @@ class ScanService:
                     self.update_progress(0, 0, '', 'error')
                     scan_state.error_scan(str(e))
                     db.session.commit()
+                finally:
+                    # Clear thread reference to allow new scans
+                    self.current_scan_thread = None
+                    logger.info("Resume scan thread cleaned up")
         
-        self.current_scan_thread = threading.Thread(target=run_resume)
+        self.current_scan_thread = threading.Thread(target=run_resume, name="ResumeScan")
+        logger.info(f"Starting resume scan thread: {self.current_scan_thread.name}")
         self.current_scan_thread.start()
         
         return {

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.14] - 2025-07-29
+
+### Fixed
+- **Concurrent Scan Prevention Failure**: Fixed critical thread management issue allowing multiple scans to run simultaneously
+  - Root cause: Thread reference was never cleared after scan completion, causing is_alive() to return false for dead threads
+  - Solution: Added finally blocks to all scan methods to clear thread reference on completion/error
+  - Added detailed thread state logging for better debugging
+  - This prevents the "Another scan is already in progress" check from being bypassed
+
 ## [2.1.13] - 2025-07-29
 
 ### Fixed
