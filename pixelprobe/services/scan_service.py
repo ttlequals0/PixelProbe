@@ -576,7 +576,8 @@ class ScanService:
                         
                         # For scanning phase, we only scan files already in DB
                         if scan_state.phase == 'scanning':
-                            self._scan_chunk_files(chunk, checker, scan_state.force_rescan)
+                            # For resume, we don't have cumulative counts readily available
+                            self._scan_chunk_files(chunk, checker, scan_state.force_rescan, 0, 0)
                         else:
                             # For discovery/adding phases, use the full process
                             self._process_chunk(chunk, checker, scan_state.phase, scan_state.force_rescan)
@@ -680,7 +681,7 @@ class ScanService:
             initial_scanned = total_files_scanned
             
             # Scan files in this chunk
-            self._scan_chunk_files(chunk, checker, force_rescan)
+            self._scan_chunk_files(chunk, checker, force_rescan, total_files_scanned, total_files_to_scan)
             
             # Update total files scanned based on chunk results
             if chunk.files_scanned:
@@ -691,6 +692,7 @@ class ScanService:
             
             # Update scan state progress with files, not chunks
             scan_state.current_chunk_index = i + 1
+            scan_state.files_processed = total_files_scanned  # Ensure files_processed is set
             scan_state.update_progress(total_files_scanned, total_files_to_scan, current_file=chunk.directory_path)
             
             # Update progress message
@@ -811,7 +813,9 @@ class ScanService:
         def scan_chunk(chunk):
             if self.scan_cancelled:
                 return None
-            self._scan_chunk_files(chunk, checker, force_rescan)
+            # For parallel scan, we can't pass cumulative counts, so pass 0
+            # The main thread will handle updating the cumulative progress
+            self._scan_chunk_files(chunk, checker, force_rescan, 0, 0)
             return chunk, chunk.files_scanned or 0
         
         with ThreadPoolExecutor(max_workers=min(num_workers, len(chunks))) as executor:
@@ -837,6 +841,7 @@ class ScanService:
                     
                     # Update scan state progress with file counts
                     scan_state.current_chunk_index = completed_chunks
+                    scan_state.files_processed = current_files_scanned  # Ensure files_processed is set
                     scan_state.update_progress(current_files_scanned, total_files_to_scan, current_file=chunk.directory_path)
                     
                     # Update progress message
@@ -1334,7 +1339,8 @@ class ScanService:
             logger.error(f"Error processing chunk {chunk.chunk_id}: {e}")
             return {'error': str(e)}
     
-    def _scan_chunk_files(self, chunk: ScanChunk, checker: PixelProbe, force_rescan: bool = False):
+    def _scan_chunk_files(self, chunk: ScanChunk, checker: PixelProbe, force_rescan: bool = False, 
+                          total_scanned_so_far: int = 0, total_to_scan: int = 0):
         """Scan files in a chunk that are already in the database"""
         chunk.status = 'processing'
         chunk.phase = 'scanning'
@@ -1387,9 +1393,10 @@ class ScanService:
                     checker.scan_file(file_result.file_path, force_rescan=force_rescan)
                     scanned += 1
                     
-                    # Update progress periodically
-                    if scanned % 10 == 0:
-                        self.update_progress(scanned, len(files_to_scan), 
+                    # Update progress with cumulative counts
+                    current_total = total_scanned_so_far + scanned
+                    if scanned % 10 == 0 or scanned == 1:  # Update on first file and every 10
+                        self.update_progress(current_total, total_to_scan, 
                                            file_result.file_path, 'scanning')
                         
                 except Exception as e:

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.15] - 2025-07-29
+
+### Fixed
+- **Scan Progress Not Updating**: Fixed files_processed counter stuck at 0 during scanning phase
+  - Root cause: Progress updates in _scan_chunk_files were using local chunk counts instead of cumulative totals
+  - Solution: Pass cumulative file counts to _scan_chunk_files and update progress with total counts
+  - Added explicit setting of scan_state.files_processed to ensure database updates
+  - Progress now shows actual files scanned and ETA calculations work properly
+  - This fixes the issue where scans showed no progress despite processing files
+
 ## [2.1.14] - 2025-07-29
 
 ### Fixed
