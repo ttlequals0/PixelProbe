@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.19] - 2025-07-29
+
+### Fixed
+- **ETA Not Calculating Due to Timezone Mismatch**: Fixed "can't subtract offset-naive and offset-aware datetimes" error
+  - Root cause: Database start_time was timezone-naive but being compared with timezone-aware current time
+  - Solution: Added proper timezone handling to make start_time timezone-aware before calculations
+  - ETA should now calculate and display properly
+  
+- **Current File Not Displaying in Progress**: Fixed empty file field in API response
+  - Root cause: API was checking service_status first, which didn't have the file info
+  - Solution: Prioritize state_dict.current_file over service_status.file
+  - Current file being scanned will now display in progress
+  
+- **Progress Message Missing File Details**: Fixed progress message not updating with current file
+  - Root cause: Progress message was set initially but not updated during chunk file scanning
+  - Solution: Added ProgressTracker message updates inside _scan_chunk_files method
+  - Progress will now show: "Phase 3 of 3: Scanning files: Processing 260/668,822 - filename.jpg - ETA: 2h 45m"
+
 ## [2.1.18] - 2025-07-29
 
 ### Fixed

@@ -407,7 +407,18 @@ def get_scan_status():
     if is_running and state_dict.get('start_time') and current_progress > 0:
         from datetime import datetime, timezone
         try:
-            start_time = datetime.fromisoformat(state_dict['start_time'].replace('Z', '+00:00'))
+            # Handle both timezone-aware and naive datetimes
+            start_time_str = state_dict['start_time']
+            if isinstance(start_time_str, str):
+                start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+            else:
+                # If it's already a datetime object
+                start_time = start_time_str
+            
+            # Make sure start_time is timezone-aware
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+                
             current_time = datetime.now(timezone.utc)
             elapsed_seconds = (current_time - start_time).total_seconds()
             
@@ -432,7 +443,7 @@ def get_scan_status():
     status = {
         'current': current_progress,
         'total': total_progress,
-        'file': service_status.get('file', state_dict.get('current_file', '')),
+        'file': state_dict.get('current_file', service_status.get('file', '')),
         'status': status_value,
         'is_running': is_running,
         'is_scanning': is_running,  # Legacy compatibility

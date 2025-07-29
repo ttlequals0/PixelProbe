@@ -1468,6 +1468,16 @@ class ScanService:
                         if scan_state:
                             scan_state.files_processed = current_total
                             scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+                            
+                            # Update progress message with current file info
+                            from utils import ProgressTracker
+                            progress_tracker = ProgressTracker('scan')
+                            scan_state.progress_message = progress_tracker.get_progress_message(
+                                f'Phase 3 of 3: Scanning files',
+                                current_total,
+                                total_to_scan,
+                                os.path.basename(file_result.file_path)
+                            )
                             db.session.commit()
                         
                 except Exception as e:
