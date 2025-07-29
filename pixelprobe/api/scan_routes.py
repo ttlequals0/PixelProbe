@@ -335,7 +335,9 @@ def get_scan_status():
     
     # Debug logging - changed to INFO for visibility in production logs
     logger.info(f"API scan-status: scan_id={scan_state.id}, phase={scan_state.phase}, "
-                f"is_active={scan_state.is_active}, files_processed={scan_state.files_processed}")
+                f"is_active={scan_state.is_active}, files_processed={scan_state.files_processed}, "
+                f"estimated_total={scan_state.estimated_total}, current_file={scan_state.current_file}, "
+                f"start_time={scan_state.start_time}")
     
     # Prioritize database values when available, fall back to service values
     is_running = current_app.scan_service.is_scan_running()
@@ -368,21 +370,24 @@ def get_scan_status():
     
     if current_phase == 'discovering':
         phase_number = 1
-        progress_message = "Discovering files..."
+        # Use the actual progress message from database if available
+        progress_message = state_dict.get('progress_message', "Discovering files...")
         # For discovery, we don't know total files yet, so show indeterminate progress
         phase_current = 0
         phase_total = 0  # Will show base phase progress (0-33%)
         
     elif current_phase == 'adding':
         phase_number = 2  
-        progress_message = "Adding new files to database..."
+        # Use the actual progress message from database if available
+        progress_message = state_dict.get('progress_message', "Adding new files to database...")
         # Use current/total from database for adding phase
         phase_current = current_progress
         phase_total = total_progress
         
     elif current_phase == 'scanning':
         phase_number = 3
-        progress_message = "Checking file integrity..."
+        # Use the actual progress message from database if available
+        progress_message = state_dict.get('progress_message', "Checking file integrity...")
         # Use current/total from database for scanning phase  
         phase_current = current_progress
         phase_total = total_progress
@@ -396,6 +401,9 @@ def get_scan_status():
     # Calculate ETA if scan is running and we have progress
     eta = None
     files_per_second = 0
+    logger.debug(f"ETA calculation: is_running={is_running}, start_time={state_dict.get('start_time')}, "
+                 f"current={current_progress}, total={total_progress}")
+    
     if is_running and state_dict.get('start_time') and current_progress > 0:
         from datetime import datetime, timezone
         try:
@@ -403,16 +411,22 @@ def get_scan_status():
             current_time = datetime.now(timezone.utc)
             elapsed_seconds = (current_time - start_time).total_seconds()
             
+            logger.debug(f"ETA calculation: elapsed_seconds={elapsed_seconds}")
+            
             if elapsed_seconds > 0:
                 files_per_second = current_progress / elapsed_seconds
+                
+                logger.debug(f"ETA calculation: files_per_second={files_per_second}, "
+                            f"remaining={total_progress - current_progress}")
                 
                 if files_per_second > 0 and total_progress > current_progress:
                     remaining_files = total_progress - current_progress
                     eta_seconds = remaining_files / files_per_second
                     eta_time = current_time.timestamp() + eta_seconds
                     eta = datetime.fromtimestamp(eta_time, tz=timezone.utc).isoformat()
+                    logger.debug(f"ETA calculated: {eta}")
         except Exception as e:
-            logger.debug(f"Could not calculate ETA: {e}")
+            logger.warning(f"Could not calculate ETA: {e}")
     
     # Build comprehensive status response with frontend-expected fields
     status = {
@@ -440,6 +454,11 @@ def get_scan_status():
         'eta': eta,
         'files_per_second': round(files_per_second, 2) if files_per_second > 0 else 0
     }
+    
+    # Debug log the complete response
+    logger.info(f"API scan-status response: progress_message='{status['progress_message']}', "
+                f"file='{status['file']}', eta='{status['eta']}', "
+                f"current={status['current']}, total={status['total']}")
     
     return jsonify(status)
 

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.18] - 2025-07-29
+
+### Fixed
+- **Missing Phase Information in Progress Display**: Fixed hardcoded progress messages
+  - Root cause: API was overriding database progress messages with generic text
+  - Solution: Use actual progress_message from database which includes phase information
+  - Progress now shows "Phase 3 of 3: Scanning X files..." as intended
+  
+- **Current File Not Showing in Progress**: Fixed current file display
+  - The progress tracker already generates messages with current file information
+  - API now properly uses the database progress_message which includes the current file
+  
+- **Enhanced Debugging for ETA Issues**: Added comprehensive logging
+  - Added detailed logging to track scan state values (current_file, start_time, estimated_total)
+  - Added ETA calculation debugging to identify why ETA might not display
+  - Added response logging to verify what values are being sent to frontend
+  - This will help diagnose any remaining ETA display issues
+
 ## [2.1.17] - 2025-07-29
 
 ### Fixed
