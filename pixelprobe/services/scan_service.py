@@ -666,7 +666,9 @@ class ScanService:
         """Perform sequential scan of chunks"""
         total_chunks = len(chunks)
         total_files_scanned = 0
-        total_files_to_scan = scan_state.phase_total  # Total files from scanning phase
+        total_files_to_scan = scan_state.phase_total  # Initial estimate from scanning phase
+        actual_total_discovered = 0  # Track actual total as we discover files in chunks
+        chunks_processed = 0
         
         # Create progress tracker for scan
         progress_tracker = ProgressTracker('scan')
@@ -680,8 +682,25 @@ class ScanService:
             # Get initial files scanned count for this chunk
             initial_scanned = total_files_scanned
             
-            # Scan files in this chunk
+            # Scan files in this chunk - First we need to know how many files are in this chunk
+            # to update our total estimate
+            chunk_files_count = self._get_chunk_file_count(chunk, force_rescan)
+            actual_total_discovered += chunk_files_count
+            
+            # Update total estimate based on discovered files and remaining chunks
+            # Use the actual discovered count plus an estimate for remaining chunks
+            remaining_chunks = total_chunks - chunks_processed - 1
+            if chunks_processed > 0 and remaining_chunks > 0:
+                avg_files_per_chunk = actual_total_discovered / (chunks_processed + 1)
+                estimated_remaining = int(avg_files_per_chunk * remaining_chunks)
+                total_files_to_scan = actual_total_discovered + estimated_remaining
+            else:
+                total_files_to_scan = max(actual_total_discovered, scan_state.phase_total)
+            
+            # Now scan the chunk with updated total
             self._scan_chunk_files(chunk, checker, force_rescan, total_files_scanned, total_files_to_scan, scan_state)
+            
+            chunks_processed += 1
             
             # Update total files scanned based on chunk results
             if chunk.files_scanned:
@@ -693,6 +712,7 @@ class ScanService:
             # Update scan state progress with files, not chunks
             scan_state.current_chunk_index = i + 1
             scan_state.files_processed = total_files_scanned  # Ensure files_processed is set
+            scan_state.estimated_total = total_files_to_scan  # Update with better estimate
             scan_state.update_progress(total_files_scanned, total_files_to_scan, current_file=chunk.directory_path)
             
             # Update progress message
@@ -804,8 +824,10 @@ class ScanService:
         total_chunks = len(chunks)
         completed_chunks = 0
         total_files_scanned = 0
-        total_files_to_scan = scan_state.phase_total  # Total files from scanning phase
+        total_files_to_scan = scan_state.phase_total  # Initial estimate from scanning phase
+        actual_total_discovered = 0  # Track actual total as we discover files in chunks
         files_scanned_lock = threading.Lock()
+        discovery_lock = threading.Lock()
         
         # Create progress tracker for scan
         progress_tracker = ProgressTracker('scan')
@@ -819,6 +841,20 @@ class ScanService:
             return chunk, chunk.files_scanned or 0
         
         with ThreadPoolExecutor(max_workers=min(num_workers, len(chunks))) as executor:
+            # First, get file counts for all chunks to get accurate total
+            logger.info("Calculating total files to scan across all chunks...")
+            chunk_counts = {}
+            for chunk in chunks:
+                count = self._get_chunk_file_count(chunk, force_rescan)
+                chunk_counts[chunk.chunk_id] = count
+                actual_total_discovered += count
+            
+            # Update total with actual count
+            total_files_to_scan = actual_total_discovered
+            scan_state.estimated_total = total_files_to_scan
+            scan_state.update_progress(0, total_files_to_scan, phase='scanning')
+            logger.info(f"Total files to scan: {total_files_to_scan} across {total_chunks} chunks")
+            
             # Submit all chunks for scanning
             future_to_chunk = {executor.submit(scan_chunk, chunk): chunk for chunk in chunks}
             
@@ -1338,6 +1374,35 @@ class ScanService:
             db.session.commit()
             logger.error(f"Error processing chunk {chunk.chunk_id}: {e}")
             return {'error': str(e)}
+    
+    def _get_chunk_file_count(self, chunk: ScanChunk, force_rescan: bool) -> int:
+        """Get count of files to scan in a chunk without actually scanning them"""
+        chunk_path_pattern = chunk.directory_path.rstrip(os.sep) + os.sep + '%'
+        
+        if force_rescan:
+            # Count all files in directory
+            count = db.session.query(ScanResult).filter(
+                db.or_(
+                    ScanResult.file_path == chunk.directory_path,  # Exact match for files in root
+                    ScanResult.file_path.like(chunk_path_pattern)  # Files in subdirectories
+                )
+            ).count()
+        else:
+            # Count only pending files
+            count = db.session.query(ScanResult).filter(
+                db.or_(
+                    db.and_(
+                        ScanResult.file_path == chunk.directory_path,
+                        ScanResult.scan_status == 'pending'
+                    ),
+                    db.and_(
+                        ScanResult.file_path.like(chunk_path_pattern),
+                        ScanResult.scan_status == 'pending'
+                    )
+                )
+            ).count()
+        
+        return count
     
     def _scan_chunk_files(self, chunk: ScanChunk, checker: PixelProbe, force_rescan: bool = False, 
                           total_scanned_so_far: int = 0, total_to_scan: int = 0, scan_state: ScanState = None):

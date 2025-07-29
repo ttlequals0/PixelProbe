@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.17] - 2025-07-29
+
+### Fixed
+- **Progress Showing More Files Than Total (e.g., 190 of 83)**: Fixed inaccurate total file count estimation
+  - Root cause: Initial count query used simple LIKE pattern but chunk queries used more specific matching
+  - The initial estimate could be wildly inaccurate, especially with large directory structures
+  - Solution: Dynamically update total estimate as chunks are processed
+  - For sequential scans: Calculate actual file count for each chunk and update estimate based on averages
+  - For parallel scans: Pre-calculate all chunk counts before starting to get accurate total
+  - Progress now shows accurate "X of Y files" with Y being properly calculated
+  
+- **Missing ETA Calculation**: Fixed ETA not displaying during scans
+  - Root cause: ETA calculation failed when current progress exceeded estimated total
+  - With the accurate total count fix above, ETA calculations now work properly
+  - Users will see estimated time remaining during all scan operations
+
 ## [2.1.16] - 2025-07-29
 
 ### Fixed
