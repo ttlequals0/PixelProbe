@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.27] - 2025-07-30
+
+### Fixed
+- **DateTime Import Scope Error**: Fixed `datetime` module not being available in timezone conversion
+  - Root cause: `datetime` was imported inside an if block but used outside that scope
+  - Moved import to top of file to ensure it's always available
+  - This was causing "cannot access local variable 'datetime'" warnings in logs
+- **Improved Stuck Scan Detection**: Made stuck scan detection more accurate
+  - Now uses `is_active` from database state as primary indicator of scan running
+  - Only triggers stuck detection when both database and service agree scan is not active
+  - Added `is_active` field to API response for frontend to use
+  - Clears stuck counter when scan is not in stuck state
+  - This prevents false stuck warnings when scan is actually progressing
+
 ## [2.1.26] - 2025-07-30
 
 ### Fixed

@@ -409,10 +409,13 @@ class ProgressManager {
             // Get status based on operation type
             if (this.operationType === 'scan') {
                 status = await this.api.getScanStatus();
-                isRunning = status.is_scanning || status.is_running;
+                // Use is_active from database state as primary indicator
+                const isActive = status.is_active !== undefined ? status.is_active : (status.phase === 'scanning' || status.phase === 'discovering' || status.phase === 'adding');
+                isRunning = status.is_scanning || status.is_running || isActive;
                 
                 // Check for stuck scan - has progress but not running AND progress hasn't changed
-                const isStuck = !isRunning && status.phase === 'scanning' && status.current > 0;
+                // Only check for stuck if database says not active AND service says not running
+                const isStuck = !isActive && !status.is_running && status.phase === 'scanning' && status.current > 0;
                 if (isStuck) {
                     // Check if progress has actually changed since last check
                     const lastProgress = this._lastProgress || {};
@@ -442,6 +445,13 @@ class ProgressManager {
                     }
                     
                     // Store current progress for next check
+                    this._lastProgress = {
+                        current: status.current,
+                        file: status.file
+                    };
+                } else {
+                    // Not stuck - clear counters
+                    this._stuckCounter = 0;
                     this._lastProgress = {
                         current: status.current,
                         file: status.file

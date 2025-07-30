@@ -3,6 +3,7 @@ import pytz
 import os
 import threading
 import logging
+from datetime import datetime, timezone
 
 from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
@@ -420,7 +421,6 @@ def get_scan_status():
                  f"current={current_progress}, total={total_progress}")
     
     if is_running and state_dict.get('start_time') and current_progress > 0:
-        from datetime import datetime, timezone
         try:
             # Handle both timezone-aware and naive datetimes
             start_time_str = state_dict['start_time']
@@ -502,6 +502,7 @@ def get_scan_status():
         'status': status_value,
         'is_running': is_running,
         'is_scanning': is_running,  # Legacy compatibility
+        'is_active': state_dict.get('is_active', False),  # Database active state
         'scan_id': state_dict.get('id'),
         'start_time': start_time_tz,
         'end_time': end_time_tz,
