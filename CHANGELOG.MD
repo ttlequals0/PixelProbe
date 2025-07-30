@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.28] - 2025-07-30
+
+### Fixed
+- **Cancel Functionality for Stuck Scans**: Fixed inability to cancel scans when thread dies
+  - Root cause: Cancel checked only thread status, not database state
+  - Now checks both thread status AND database `is_active` state
+  - Can cancel stuck scans where database shows active but thread is dead
+  - Automatically cleans up dead thread references
+  - Resets files stuck in 'scanning' status during cancellation
+  - Returns status indicating if scan was stuck when cancelled
+
+### Identified Issues
+- **Scan Getting Stuck at Multiples of 100 Files**: Root cause identified
+  - Scan thread appears to crash/hang at 100, 200, 300, 400, 500, 600 files
+  - Related to database query chunk size of 100 in batch operations
+  - Needs further investigation and fix in next version
+
 ## [2.1.27] - 2025-07-30
 
 ### Fixed

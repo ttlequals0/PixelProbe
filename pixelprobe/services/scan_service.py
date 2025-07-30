@@ -618,15 +618,23 @@ class ScanService:
     
     def cancel_scan(self) -> Dict:
         """Cancel the current scan"""
-        if not self.is_scan_running():
+        # Check both thread status AND database state
+        scan_state = ScanState.get_or_create()
+        is_thread_running = self.is_scan_running()
+        is_db_active = scan_state.is_active and scan_state.phase in ['discovering', 'adding', 'scanning']
+        
+        if not is_thread_running and not is_db_active:
             raise RuntimeError("No scan is currently running")
+        
+        # If database shows active but thread is not running, it's stuck
+        if is_db_active and not is_thread_running:
+            logger.warning("Scan appears to be stuck (database active but thread not running)")
         
         self.scan_cancelled = True
         logger.info("Scan cancellation requested")
         
         # Update scan state in database
         try:
-            scan_state = ScanState.get_or_create()
             scan_state.cancel_scan()
             db.session.commit()
             logger.info("Scan state updated to cancelled in database")
@@ -638,15 +646,32 @@ class ScanService:
         import time
         time.sleep(0.5)
         
+        # Force thread reference cleanup if thread is dead
+        if not is_thread_running and self.current_scan_thread is not None:
+            logger.warning("Cleaning up dead scan thread reference")
+            self.current_scan_thread = None
+        
         # Force progress update to show cancelled state
         self.update_progress(
-            self.scan_progress['current'],
-            self.scan_progress['total'],
+            self.scan_progress.get('current', 0),
+            self.scan_progress.get('total', 0),
             '',
             'cancelled'
         )
         
-        return {'message': 'Scan cancellation requested'}
+        # Reset any files stuck in 'scanning' status
+        try:
+            stuck_count = db.session.query(ScanResult).filter_by(scan_status='scanning').update(
+                {'scan_status': 'pending', 'error_message': 'Reset due to scan cancellation'},
+                synchronize_session=False
+            )
+            if stuck_count > 0:
+                db.session.commit()
+                logger.info(f"Reset {stuck_count} files from 'scanning' to 'pending' status")
+        except Exception as e:
+            logger.error(f"Error resetting stuck files: {e}")
+        
+        return {'message': 'Scan cancellation completed', 'was_stuck': is_db_active and not is_thread_running}
     
     def reset_stuck_scans(self) -> Dict:
         """Reset files stuck in scanning state"""
