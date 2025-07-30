@@ -411,15 +411,41 @@ class ProgressManager {
                 status = await this.api.getScanStatus();
                 isRunning = status.is_scanning || status.is_running;
                 
-                // Check for stuck scan - has progress but not running
+                // Check for stuck scan - has progress but not running AND progress hasn't changed
                 const isStuck = !isRunning && status.phase === 'scanning' && status.current > 0;
                 if (isStuck) {
-                    console.warn('Detected stuck scan:', status);
-                    // Treat stuck scan as still running so UI shows progress
-                    isRunning = true;
-                    // Add stuck indicator to progress message
-                    status.progress_message = '⚠️ SCAN STUCK: ' + (status.progress_message || 'Scan appears to have stopped unexpectedly');
-                    status._isStuck = true; // Add flag to pass to update method
+                    // Check if progress has actually changed since last check
+                    const lastProgress = this._lastProgress || {};
+                    const progressChanged = lastProgress.current !== status.current || 
+                                          lastProgress.file !== status.file;
+                    
+                    if (progressChanged) {
+                        // Progress is still changing, not actually stuck
+                        console.log('Progress changed, not stuck:', lastProgress.current, '->', status.current);
+                        this._stuckCounter = 0;
+                    } else {
+                        // Progress hasn't changed, increment stuck counter
+                        this._stuckCounter = (this._stuckCounter || 0) + 1;
+                        console.log('Progress unchanged, stuck counter:', this._stuckCounter);
+                    }
+                    
+                    // Only consider it stuck if progress hasn't changed for multiple checks
+                    const reallyStuck = this._stuckCounter >= 5; // 5 seconds of no progress
+                    
+                    if (reallyStuck) {
+                        console.warn('Scan confirmed stuck after', this._stuckCounter, 'checks:', status);
+                        // Treat stuck scan as still running so UI shows progress
+                        isRunning = true;
+                        // Add stuck indicator to progress message
+                        status.progress_message = '⚠️ SCAN STUCK: ' + (status.progress_message || 'Scan appears to have stopped unexpectedly');
+                        status._isStuck = true; // Add flag to pass to update method
+                    }
+                    
+                    // Store current progress for next check
+                    this._lastProgress = {
+                        current: status.current,
+                        file: status.file
+                    };
                 }
             } else if (this.operationType === 'cleanup') {
                 status = await this.api.getCleanupStatus();
@@ -1269,14 +1295,10 @@ class PixelProbeApp {
             const scanStatus = await this.api.getScanStatus();
             console.log('Page load - Scan status:', scanStatus);
             
-            // Check for active or stuck scan
-            const isStuck = !scanStatus.is_running && scanStatus.phase === 'scanning' && scanStatus.current > 0;
-            if (scanStatus.is_scanning || scanStatus.is_running || isStuck) {
-                if (isStuck) {
-                    console.warn('Stuck scan detected on page load:', scanStatus);
-                } else {
-                    console.log('Active scan detected on page load, starting monitoring...');
-                }
+            // Check for active scan (remove stuck detection on page load - it will be handled by monitoring)
+            if (scanStatus.is_scanning || scanStatus.is_running || 
+                (scanStatus.phase === 'scanning' && scanStatus.current > 0)) {
+                console.log('Active scan detected on page load, starting monitoring...');
                 this.progress.operationType = 'scan';
                 this.progress.startMonitoring('scan');
                 return; // Only monitor one operation at a time

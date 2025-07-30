@@ -386,8 +386,23 @@ def get_scan_status():
         
     elif current_phase == 'scanning':
         phase_number = 3
-        # Use the actual progress message from database if available
-        progress_message = state_dict.get('progress_message', "Checking file integrity...")
+        # Generate fresh progress message based on current data
+        current_file = state_dict.get('current_file', '')
+        if current_file:
+            # Extract just the filename for display
+            import os
+            filename = os.path.basename(current_file)
+            # Generate fresh progress message with current data
+            from utils import ProgressTracker
+            progress_tracker = ProgressTracker('scan')
+            progress_message = progress_tracker.get_progress_message(
+                'Phase 3 of 3: Scanning files',
+                current_progress,
+                total_progress,
+                filename
+            )
+        else:
+            progress_message = f"Phase 3 of 3: Scanning files - {current_progress} of {total_progress:,} files"
         # Use current/total from database for scanning phase  
         phase_current = current_progress
         phase_total = total_progress

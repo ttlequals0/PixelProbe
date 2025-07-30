@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.26] - 2025-07-30
+
+### Fixed
+- **False Stuck Scan Detection**: Fixed UI incorrectly showing "SCAN STUCK" warning during normal operation
+  - Root cause: Frontend was detecting stuck scan whenever `is_running=false` even if scan was progressing
+  - Added progress change detection that requires 5 consecutive checks with no progress before marking as stuck
+  - This prevents false positives when the scan is actually progressing but the service reports not running
+- **Stale Progress Messages**: Fixed scan status API returning outdated progress messages
+  - Root cause: API was returning cached progress message from database instead of generating fresh one
+  - Now generates fresh progress message based on current file and count for scanning phase
+  - Progress messages now accurately reflect the current file being scanned
+
 ## [2.1.25] - 2025-07-29
 
 ### Fixed
