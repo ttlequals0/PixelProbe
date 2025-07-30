@@ -685,18 +685,51 @@ def reset_for_rescan():
 def recover_stuck_scan():
     """Attempt to recover from a stuck scan state"""
     try:
-        # Use scan service to reset stuck scans
-        result = current_app.scan_service.reset_stuck_scans()
-        
-        # Reset database scan state
+        # Check if scan is actually stuck (has progress but not running)
+        is_running = current_app.scan_service.is_scan_running()
         scan_state = ScanState.get_or_create()
-        if scan_state.phase == 'scanning':
-            scan_state.error_scan('Scan was stuck and has been recovered')
+        
+        # A scan is stuck if:
+        # 1. Database says it's active but service says it's not running
+        # 2. It's in scanning phase with files processed > 0
+        is_stuck = (scan_state.is_active and not is_running and 
+                   scan_state.phase in ['discovering', 'adding', 'scanning'] and
+                   scan_state.files_processed > 0)
+        
+        if not is_stuck:
+            return jsonify({
+                'message': 'No stuck scan detected',
+                'is_active': scan_state.is_active,
+                'is_running': is_running,
+                'phase': scan_state.phase
+            })
+        
+        logger.warning(f"Recovering stuck scan: phase={scan_state.phase}, files_processed={scan_state.files_processed}")
+        
+        # Mark the scan as errored
+        scan_state.error_scan('Scan was stuck and has been recovered')
+        db.session.commit()
+        
+        # Reset any files stuck in 'scanning' status
+        stuck_results = ScanResult.query.filter_by(scan_status='scanning').all()
+        stuck_count = len(stuck_results)
+        for result in stuck_results:
+            result.scan_status = 'pending'
+            result.error_message = 'Reset from stuck scanning state'
+        
+        if stuck_count > 0:
             db.session.commit()
+            logger.info(f"Reset {stuck_count} files from 'scanning' to 'pending' status")
+        
+        # Clear the service's internal state
+        current_app.scan_service.scan_cancelled = False
+        current_app.scan_service.current_scan_thread = None
         
         return jsonify({
             'message': 'Scan state recovered successfully',
-            'stuck_files_reset': result.get('count', 0)
+            'stuck_files_reset': stuck_count,
+            'previous_phase': scan_state.phase,
+            'files_processed': scan_state.files_processed
         })
         
     except Exception as e:

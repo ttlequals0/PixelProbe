@@ -367,7 +367,7 @@ class ProgressManager {
         }
     }
 
-    update(percentage, text, details = '') {
+    update(percentage, text, details = '', isStuck = false) {
         if (this.progressBar) {
             this.progressBar.style.width = `${percentage}%`;
         }
@@ -378,10 +378,25 @@ class ProgressManager {
         const progressDetails = document.querySelector('.progress-details');
         if (progressDetails) {
             // Show both the main text and details if available
+            let detailsText = '';
             if (details) {
-                progressDetails.textContent = `${text} - ${details}`;
+                detailsText = `${text} - ${details}`;
             } else if (text) {
-                progressDetails.textContent = text;
+                detailsText = text;
+            }
+            
+            // Add recovery button if scan is stuck
+            if (isStuck && this.operationType === 'scan') {
+                progressDetails.innerHTML = `
+                    <div>${detailsText}</div>
+                    <div style="margin-top: 10px;">
+                        <button class="btn btn-warning" onclick="app.recoverStuckScan()">
+                            <i class="fas fa-wrench"></i> Recover Stuck Scan
+                        </button>
+                    </div>
+                `;
+            } else {
+                progressDetails.textContent = detailsText;
             }
         }
     }
@@ -395,6 +410,17 @@ class ProgressManager {
             if (this.operationType === 'scan') {
                 status = await this.api.getScanStatus();
                 isRunning = status.is_scanning || status.is_running;
+                
+                // Check for stuck scan - has progress but not running
+                const isStuck = !isRunning && status.phase === 'scanning' && status.current > 0;
+                if (isStuck) {
+                    console.warn('Detected stuck scan:', status);
+                    // Treat stuck scan as still running so UI shows progress
+                    isRunning = true;
+                    // Add stuck indicator to progress message
+                    status.progress_message = '⚠️ SCAN STUCK: ' + (status.progress_message || 'Scan appears to have stopped unexpectedly');
+                    status._isStuck = true; // Add flag to pass to update method
+                }
             } else if (this.operationType === 'cleanup') {
                 status = await this.api.getCleanupStatus();
                 isRunning = status.is_running;
@@ -406,7 +432,7 @@ class ProgressManager {
             if (status) {
                 if (isRunning) {
                     const progress = this.calculateProgress(status, this.operationType);
-                    this.update(progress.percentage, progress.text, progress.details);
+                    this.update(progress.percentage, progress.text, progress.details, status._isStuck || false);
                 } else if (status.phase === 'complete' || status.phase === 'completed' || 
                           status.phase === 'cancelled' || status.phase === 'error' ||
                           status.status === 'completed') {
@@ -415,7 +441,7 @@ class ProgressManager {
                 } else {
                     // Still showing last progress state
                     const progress = this.calculateProgress(status, this.operationType);
-                    this.update(progress.percentage, progress.text, progress.details);
+                    this.update(progress.percentage, progress.text, progress.details, status._isStuck || false);
                 }
             }
         } catch (error) {
@@ -1242,8 +1268,15 @@ class PixelProbeApp {
             // Check for ongoing scan
             const scanStatus = await this.api.getScanStatus();
             console.log('Page load - Scan status:', scanStatus);
-            if (scanStatus.is_scanning || scanStatus.is_running) {
-                console.log('Active scan detected on page load, starting monitoring...');
+            
+            // Check for active or stuck scan
+            const isStuck = !scanStatus.is_running && scanStatus.phase === 'scanning' && scanStatus.current > 0;
+            if (scanStatus.is_scanning || scanStatus.is_running || isStuck) {
+                if (isStuck) {
+                    console.warn('Stuck scan detected on page load:', scanStatus);
+                } else {
+                    console.log('Active scan detected on page load, starting monitoring...');
+                }
                 this.progress.operationType = 'scan';
                 this.progress.startMonitoring('scan');
                 return; // Only monitor one operation at a time
@@ -1285,6 +1318,33 @@ class PixelProbeApp {
             this.showNotification('Scan started', 'success');
         } catch (error) {
             this.showNotification('Failed to start scan', 'error');
+        }
+    }
+
+    async recoverStuckScan() {
+        try {
+            this.showNotification('Attempting to recover stuck scan...', 'info');
+            const response = await fetch('/api/recover-stuck-scan', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Failed to recover scan: ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            this.showNotification(result.message || 'Scan recovered successfully', 'success');
+            
+            // Reload the page to reset the UI
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } catch (error) {
+            console.error('Failed to recover stuck scan:', error);
+            this.showNotification(error.message || 'Failed to recover scan', 'error');
         }
     }
 

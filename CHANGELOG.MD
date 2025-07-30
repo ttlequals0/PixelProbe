@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.25] - 2025-07-29
+
+### Fixed
+- **Extended Error Recovery to All Scan Types**: Applied stuck scan recovery to all scan modes
+  - Added error recovery with database rollback/retry to all scan progress update locations
+  - Now covers all scan types: single file, directory scan, file list scan, and resume scan
+  - Now covers all scan modes: sequential and parallel, normal and deep scan
+  - Error recovery pattern: try update → catch error → rollback → re-fetch scan state → retry update
+  - This ensures scan progress updates are resilient across all scanning scenarios
+  - Prevents scan getting stuck regardless of scan type or mode being used
+
+## [2.1.24] - 2025-07-29
+
+### Fixed
+- **Scan Progress Getting Stuck**: Fixed scan progress freezing at certain file counts
+  - Root cause: Scan thread was crashing/stopping without properly updating database state
+  - Database showed `is_active=true` but scan service showed `is_running=false`
+  - Added detection for stuck scans in UI (checks for active but not running state)
+  - UI now shows stuck scan progress with warning message and recovery button
+  - Added recovery endpoint that properly detects and fixes stuck scans
+  - Improved error handling in scan progress updates with rollback/retry logic
+  - Added better error logging with stack traces for debugging thread crashes
+  - This regression from v2.0.53 was caused by missing error recovery in threaded scan operations
+
 ## [2.1.23] - 2025-07-29
 
 ### Fixed
