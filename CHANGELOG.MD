@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.30] - 2025-07-30
+
+### Fixed
+- **ETA Stuck at 0s**: Fixed ETA calculation showing 0s during scans
+  - Root cause: ETA calculation required `total_progress > current_progress` which failed when:
+    1. Total was 0 during discovery phase
+    2. Total equaled current at completion
+    3. Early stages of scanning had insufficient data
+  - Solutions implemented:
+    1. Handle case when we know the total (normal scanning phase)
+    2. Provide estimated ETA during discovery/adding phases based on current rate
+    3. Use heuristic of 2x current files for estimated total during early phases
+    4. Cap estimated ETA to reasonable values (max 24 hours)
+  - Now shows proper ETA throughout all scan phases
+
+## [2.1.29] - 2025-07-30
+
+### Fixed
+- **Scan Getting Stuck at Multiples of 100 Files**: Fixed scan thread hanging at regular intervals
+  - Root cause: Multiple issues causing scan to hang
+    1. Loading all files for a chunk into memory with `.all()` causing memory issues
+    2. Database commits inside tight loops causing lock contention
+    3. Query chunk size of 100 causing timeouts on large batches
+  - Solutions implemented:
+    1. Process files in batches of 50 instead of loading all at once
+    2. Reduced commit frequency from every 10 files to every 25 files
+    3. Increased query chunk size from 100 to 500 with fallback to 50 on errors
+    4. Added better error handling and recovery for database operations
+    5. Clear session cache on errors to avoid stale data
+  - These changes prevent the scan from getting stuck and improve overall performance
+
 ## [2.1.28] - 2025-07-30
 
 ### Fixed
@@ -15,12 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatically cleans up dead thread references
   - Resets files stuck in 'scanning' status during cancellation
   - Returns status indicating if scan was stuck when cancelled
-
-### Identified Issues
-- **Scan Getting Stuck at Multiples of 100 Files**: Root cause identified
-  - Scan thread appears to crash/hang at 100, 200, 300, 400, 500, 600 files
-  - Related to database query chunk size of 100 in batch operations
-  - Needs further investigation and fix in next version
 
 ## [2.1.27] - 2025-07-30
 

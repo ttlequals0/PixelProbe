@@ -1240,13 +1240,26 @@ class ScanService:
                         # Check which ones already exist
                         # For large batches, check in smaller chunks to avoid query size limits
                         existing_before = set()
-                        chunk_size = 100  # Process IN queries in smaller chunks
+                        chunk_size = 500  # Increased chunk size for better performance
                         for i in range(0, len(file_paths_to_insert), chunk_size):
                             chunk_paths = file_paths_to_insert[i:i+chunk_size]
-                            existing_chunk = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
-                                ScanResult.file_path.in_(chunk_paths)
-                            ).all())
-                            existing_before.update(existing_chunk)
+                            try:
+                                existing_chunk = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
+                                    ScanResult.file_path.in_(chunk_paths)
+                                ).all())
+                                existing_before.update(existing_chunk)
+                            except Exception as e:
+                                logger.warning(f"Error checking existing files in batch {i//chunk_size}: {e}")
+                                # Fall back to smaller chunks if this fails
+                                for j in range(i, min(i + chunk_size, len(file_paths_to_insert)), 50):
+                                    try:
+                                        small_chunk = file_paths_to_insert[j:j+50]
+                                        existing_small = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
+                                            ScanResult.file_path.in_(small_chunk)
+                                        ).all())
+                                        existing_before.update(existing_small)
+                                    except Exception as e2:
+                                        logger.error(f"Failed to check files {j}-{j+50}: {e2}")
                         
                         # Execute the INSERT OR IGNORE using bulk insert
                         from sqlalchemy import insert
@@ -1261,10 +1274,23 @@ class ScanService:
                         existing_after = set()
                         for i in range(0, len(file_paths_to_insert), chunk_size):
                             chunk_paths = file_paths_to_insert[i:i+chunk_size]
-                            existing_chunk = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
-                                ScanResult.file_path.in_(chunk_paths)
-                            ).all())
-                            existing_after.update(existing_chunk)
+                            try:
+                                existing_chunk = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
+                                    ScanResult.file_path.in_(chunk_paths)
+                                ).all())
+                                existing_after.update(existing_chunk)
+                            except Exception as e:
+                                logger.warning(f"Error checking inserted files in batch {i//chunk_size}: {e}")
+                                # Try smaller chunks
+                                for j in range(i, min(i + chunk_size, len(file_paths_to_insert)), 50):
+                                    try:
+                                        small_chunk = file_paths_to_insert[j:j+50]
+                                        existing_small = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
+                                            ScanResult.file_path.in_(small_chunk)
+                                        ).all())
+                                        existing_after.update(existing_small)
+                                    except Exception as e2:
+                                        logger.error(f"Failed to verify files {j}-{j+50}: {e2}")
                         
                         # Calculate actual added
                         actual_added = len(existing_after) - len(existing_before)
@@ -1495,17 +1521,18 @@ class ScanService:
             # Ensure the path ends with a separator to avoid /path/to/dir matching /path/to/dir2
             chunk_path_pattern = chunk.directory_path.rstrip(os.sep) + os.sep + '%'
             
+            # Get count first to avoid loading all files into memory
             if force_rescan:
-                # Rescan all files in directory
-                files_to_scan = db.session.query(ScanResult).filter(
+                # Count all files in directory
+                files_count = db.session.query(ScanResult).filter(
                     db.or_(
-                        ScanResult.file_path == chunk.directory_path,  # Exact match for files in root
-                        ScanResult.file_path.like(chunk_path_pattern)  # Files in subdirectories
+                        ScanResult.file_path == chunk.directory_path,
+                        ScanResult.file_path.like(chunk_path_pattern)
                     )
-                ).all()
+                ).count()
             else:
-                # Only scan pending files
-                files_to_scan = db.session.query(ScanResult).filter(
+                # Count only pending files
+                files_count = db.session.query(ScanResult).filter(
                     db.or_(
                         db.and_(
                             ScanResult.file_path == chunk.directory_path,
@@ -1516,33 +1543,71 @@ class ScanService:
                             ScanResult.scan_status == 'pending'
                         )
                     )
-                ).all()
+                ).count()
             
-            logger.info(f"Chunk {chunk.chunk_id}: Found {len(files_to_scan)} files to scan in {chunk.directory_path}")
+            logger.info(f"Chunk {chunk.chunk_id}: Found {files_count} files to scan in {chunk.directory_path}")
             
             scanned = 0
             errors = 0
+            batch_size = 50  # Process files in smaller batches to avoid memory issues
+            last_commit_count = 0  # Track when we last committed
             
-            for file_result in files_to_scan:
+            # Process files in batches to avoid loading all into memory
+            for batch_offset in range(0, files_count, batch_size):
                 if self.scan_cancelled:
                     chunk.status = 'cancelled'
                     chunk.end_time = datetime.now(timezone.utc)
                     db.session.commit()
                     return
                 
-                try:
-                    # Scan the file
-                    checker.scan_file(file_result.file_path, force_rescan=force_rescan)
-                    scanned += 1
+                # Get batch of files
+                if force_rescan:
+                    files_batch = db.session.query(ScanResult).filter(
+                        db.or_(
+                            ScanResult.file_path == chunk.directory_path,
+                            ScanResult.file_path.like(chunk_path_pattern)
+                        )
+                    ).offset(batch_offset).limit(batch_size).all()
+                else:
+                    files_batch = db.session.query(ScanResult).filter(
+                        db.or_(
+                            db.and_(
+                                ScanResult.file_path == chunk.directory_path,
+                                ScanResult.scan_status == 'pending'
+                            ),
+                            db.and_(
+                                ScanResult.file_path.like(chunk_path_pattern),
+                                ScanResult.scan_status == 'pending'
+                            )
+                        )
+                    ).offset(batch_offset).limit(batch_size).all()
+                
+                if not files_batch:
+                    break  # No more files
+                
+                for file_result in files_batch:
+                    if self.scan_cancelled:
+                        chunk.status = 'cancelled'
+                        chunk.end_time = datetime.now(timezone.utc)
+                        db.session.commit()
+                        return
                     
-                    # Update progress with cumulative counts
-                    current_total = total_scanned_so_far + scanned
-                    if scanned % 10 == 0 or scanned == 1:  # Update on first file and every 10
-                        self.update_progress(current_total, total_to_scan, 
-                                           file_result.file_path, 'scanning')
+                    try:
+                        # Scan the file
+                        checker.scan_file(file_result.file_path, force_rescan=force_rescan)
+                        scanned += 1
                         
-                        # Update scan state if provided with error recovery
-                        if scan_state:
+                        # Update progress with cumulative counts
+                        current_total = total_scanned_so_far + scanned
+                        
+                        # Update progress every 5 files or at start of each batch
+                        if scanned % 5 == 0 or scanned == 1 or scanned == batch_offset + 1:
+                            self.update_progress(current_total, total_to_scan, 
+                                               file_result.file_path, 'scanning')
+                        
+                        # Commit less frequently - every 25 files instead of every 10
+                        # This reduces database lock contention
+                        if scan_state and (scanned - last_commit_count) >= 25:
                             try:
                                 scan_state.files_processed = current_total
                                 scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
@@ -1557,22 +1622,26 @@ class ScanService:
                                     os.path.basename(file_result.file_path)
                                 )
                                 db.session.commit()
+                                last_commit_count = scanned
                             except Exception as e:
                                 logger.error(f"Failed to update progress for file {file_result.file_path}: {e}")
                                 # Try to recover the database session
                                 try:
                                     db.session.rollback()
+                                    # Clear the session to avoid stale data
+                                    db.session.expunge_all()
                                     # Re-get scan state and try again
                                     scan_state = db.session.query(ScanState).filter_by(id=scan_state.id).first()
                                     if scan_state:
                                         scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
                                         db.session.commit()
+                                        last_commit_count = scanned
                                 except Exception as e2:
                                     logger.error(f"Failed to recover progress update: {e2}")
-                        
-                except Exception as e:
-                    logger.error(f"Error scanning {file_result.file_path}: {e}")
-                    errors += 1
+                            
+                    except Exception as e:
+                        logger.error(f"Error scanning {file_result.file_path}: {e}")
+                        errors += 1
             
             chunk.files_scanned = scanned
             chunk.status = 'completed'

@@ -445,12 +445,27 @@ def get_scan_status():
                 logger.debug(f"ETA calculation: files_per_second={files_per_second}, "
                             f"remaining={total_progress - current_progress}")
                 
-                if files_per_second > 0 and total_progress > current_progress:
-                    remaining_files = total_progress - current_progress
-                    eta_seconds = remaining_files / files_per_second
-                    eta_time = current_time.timestamp() + eta_seconds
-                    eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
-                    logger.debug(f"ETA calculated: {eta}")
+                # Calculate ETA if we have a valid total and are not complete
+                # During discovery/adding phases, use an estimate based on current rate
+                if files_per_second > 0:
+                    if total_progress > 0 and total_progress > current_progress:
+                        # Normal case: we know the total
+                        remaining_files = total_progress - current_progress
+                        eta_seconds = remaining_files / files_per_second
+                        eta_time = current_time.timestamp() + eta_seconds
+                        eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
+                        logger.debug(f"ETA calculated (known total): {eta}")
+                    elif current_phase in ['discovering', 'adding'] and current_progress > 10:
+                        # During discovery/adding, estimate based on typical scan sizes
+                        # Use a heuristic: if we're discovering, assume we'll find similar number of files
+                        estimated_total = current_progress * 2  # Conservative estimate
+                        remaining_files = estimated_total - current_progress
+                        eta_seconds = remaining_files / files_per_second
+                        # Cap ETA to reasonable values (max 24 hours)
+                        eta_seconds = min(eta_seconds, 86400)
+                        eta_time = current_time.timestamp() + eta_seconds
+                        eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
+                        logger.debug(f"ETA calculated (estimated): {eta}")
         except Exception as e:
             logger.warning(f"Could not calculate ETA: {e}")
     
