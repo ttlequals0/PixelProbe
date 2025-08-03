@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.34] - 2025-08-03
+
+### Fixed
+- **Improved ETA Calculation**: Fixed ETA showing "0s" for fast file processing
+  - Implemented rolling window approach for more accurate speed calculation
+  - Added smoothing to prevent ETA from jumping erratically
+  - Set minimum ETA display of "Less than 1 minute" instead of "0s"
+  - For scans under 5 minutes, use overall average speed
+  - For longer scans, use weighted average (70% recent, 30% overall)
+  - Round ETAs to sensible intervals (30s, 1m, 5m) for stability
+
+### Changed
+- **Enhanced Time Display**: Improved formatTime function in frontend
+  - Shows "Less than 1 minute" for times under 60 seconds
+  - Added support for multi-day ETAs (e.g., "2d 5h")
+  - Cleaner display by hiding seconds for times over 5 minutes
+  - Shows "calculating..." for invalid/zero times
+
+### Root Cause
+The ETA was calculating based on instantaneous file processing speed rather than overall phase progress. When processing many small files quickly (like thumbnails), the remaining time would calculate to mere seconds even with hundreds of thousands of files left.
+
 ## [2.1.33] - 2025-08-03
 
 ### Fixed

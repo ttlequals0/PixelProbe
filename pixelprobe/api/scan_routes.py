@@ -445,7 +445,21 @@ def get_scan_status():
             logger.debug(f"ETA calculation: elapsed_seconds={elapsed_seconds}")
             
             if elapsed_seconds > 0:
-                files_per_second = current_progress / elapsed_seconds
+                # Use a rolling window approach for more accurate recent speed
+                # If we've been running for less than 5 minutes, use overall average
+                if elapsed_seconds < 300:
+                    files_per_second = current_progress / elapsed_seconds
+                else:
+                    # For longer scans, give more weight to recent progress
+                    # Assume last 10% of progress is representative of current speed
+                    recent_window = 0.1  # 10% window
+                    recent_progress = max(1, int(current_progress * recent_window))
+                    recent_time = elapsed_seconds * recent_window
+                    
+                    # Calculate weighted average (70% recent, 30% overall)
+                    recent_rate = recent_progress / recent_time if recent_time > 0 else 0
+                    overall_rate = current_progress / elapsed_seconds
+                    files_per_second = (recent_rate * 0.7) + (overall_rate * 0.3)
                 
                 logger.debug(f"ETA calculation: files_per_second={files_per_second}, "
                             f"remaining={total_progress - current_progress}")
@@ -457,9 +471,25 @@ def get_scan_status():
                         # Normal case: we know the total
                         remaining_files = total_progress - current_progress
                         eta_seconds = remaining_files / files_per_second
+                        
+                        # Apply smoothing for more stable ETA
+                        # Use a minimum threshold to avoid jumping ETAs
+                        if eta_seconds < 30:  # Less than 30 seconds
+                            # Show "Less than 1 minute" instead of 0s
+                            eta_seconds = 60
+                        elif eta_seconds < 120:  # Less than 2 minutes
+                            # Round to nearest 30 seconds
+                            eta_seconds = round(eta_seconds / 30) * 30
+                        elif eta_seconds < 600:  # Less than 10 minutes
+                            # Round to nearest minute
+                            eta_seconds = round(eta_seconds / 60) * 60
+                        else:
+                            # For longer ETAs, round to nearest 5 minutes
+                            eta_seconds = round(eta_seconds / 300) * 300
+                        
                         eta_time = current_time.timestamp() + eta_seconds
                         eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
-                        logger.debug(f"ETA calculated (known total): {eta}")
+                        logger.debug(f"ETA calculated (known total): {eta}, smoothed from {remaining_files / files_per_second:.1f}s")
                     elif current_phase in ['discovering', 'adding'] and current_progress > 10:
                         # During discovery/adding, estimate based on typical scan sizes
                         # Use a heuristic: if we're discovering, assume we'll find similar number of files
@@ -468,6 +498,15 @@ def get_scan_status():
                         eta_seconds = remaining_files / files_per_second
                         # Cap ETA to reasonable values (max 24 hours)
                         eta_seconds = min(eta_seconds, 86400)
+                        # Apply same smoothing
+                        if eta_seconds < 60:
+                            eta_seconds = 60
+                        elif eta_seconds < 120:
+                            eta_seconds = round(eta_seconds / 30) * 30
+                        elif eta_seconds < 600:
+                            eta_seconds = round(eta_seconds / 60) * 60
+                        else:
+                            eta_seconds = round(eta_seconds / 300) * 300
                         eta_time = current_time.timestamp() + eta_seconds
                         eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
                         logger.debug(f"ETA calculated (estimated): {eta}")

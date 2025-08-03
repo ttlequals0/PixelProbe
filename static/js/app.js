@@ -702,16 +702,35 @@ class ProgressManager {
     }
 
     formatTime(seconds) {
+        // Handle edge cases
+        if (seconds <= 0) {
+            return 'calculating...';
+        }
+        
+        // For very short times, show "Less than 1 minute"
+        if (seconds < 60) {
+            return 'Less than 1 minute';
+        }
+        
         const hours = Math.floor(seconds / 3600);
         const mins = Math.floor((seconds % 3600) / 60);
         const secs = Math.floor(seconds % 60);
         
         if (hours > 0) {
+            if (hours > 24) {
+                const days = Math.floor(hours / 24);
+                const remainingHours = hours % 24;
+                return `${days}d ${remainingHours}h`;
+            }
             return `${hours}h ${mins}m`;
         } else if (mins > 0) {
+            // Don't show seconds for times over 5 minutes for cleaner display
+            if (mins >= 5) {
+                return `${mins}m`;
+            }
             return `${mins}m ${secs}s`;
         } else {
-            return `${secs}s`;
+            return 'Less than 1 minute';
         }
     }
 
