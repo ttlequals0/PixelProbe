@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.35] - 2025-08-03
+
+### Fixed
+- **FFmpeg Validation Error**: Fixed false positives for files with ampersand (&) in filenames
+  - Security validation was too strict and rejected legitimate filenames containing '&'
+  - Removed '&' from dangerous character patterns as it's safe in filenames when using subprocess with shell=False
+  - Files like "Murphy & Son" and "McMansion & Wife" now scan correctly
+
+### Root Cause
+The security validation in `validate_command_args` was rejecting filenames with '&' characters, treating them as potential shell injection attempts. Since we always use subprocess with `shell=False`, the '&' character poses no security risk and is a legitimate character in filenames.
+
 ## [2.1.34] - 2025-08-03
 
 ### Fixed
