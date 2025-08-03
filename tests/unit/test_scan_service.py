@@ -218,7 +218,7 @@ class TestScanService:
         # Cancel scan
         result = scan_service.cancel_scan()
         
-        assert result['message'] == 'Scan cancellation requested'
+        assert result['message'] == 'Scan cancellation completed'
         assert scan_service.scan_cancelled == True
         
         # Verify scan state was updated

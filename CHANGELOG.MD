@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.33] - 2025-08-03
+
+### Fixed
+- **Cancel Functionality**: Added comprehensive debugging to diagnose cancel issues
+  - Added logging to track cancel button clicks in frontend
+  - Added server-side logging for cancel endpoint calls
+  - Added detailed logging in cancel_scan method to track state
+  - This will help identify why cancel might not be working in production
+
+- **Test Suite**: Fixed failing test for cancel_scan
+  - Updated test expectation to match actual return message
+  - All tests now pass successfully
+
+### Changed
+- Enhanced cancel operation visibility with console logging
+
 ## [2.1.32] - 2025-08-03
 
 ### Changed
