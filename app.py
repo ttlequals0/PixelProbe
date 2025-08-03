@@ -457,6 +457,22 @@ with app.app_context():
     create_tables()
     init_services()
     scheduler.init_app(app)
+    
+    # Clean up any stuck scans from previous runs
+    from datetime import datetime, timezone, timedelta
+    from models import ScanState
+    stuck_scans = ScanState.query.filter(
+        ScanState.is_active == True,
+        ScanState.start_time < datetime.now(timezone.utc) - timedelta(hours=24)
+    ).all()
+    
+    for scan in stuck_scans:
+        logger.warning(f"Found stuck scan {scan.id} from {scan.start_time}, marking as errored")
+        scan.error_scan("Scan was stuck from previous application run")
+    
+    if stuck_scans:
+        db.session.commit()
+        logger.info(f"Cleaned up {len(stuck_scans)} stuck scans")
 
 if __name__ == '__main__':
     # Start the application (initialization already done above)

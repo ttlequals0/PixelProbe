@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.31] - 2025-08-03
+
+### Fixed
+- **ETA Display Issues**: Fixed multiple issues with ETA calculation and display
+  - Backend was sending Python None which frontend couldn't parse
+  - Frontend now properly handles null/None ETA values
+  - Added detection for stuck scans running over 24 hours
+  - ETA calculation disabled for stuck scans to prevent misleading estimates
+  
+- **Stuck Scan Detection**: Added automatic cleanup of stuck scans
+  - On startup, detects scans that have been running for over 24 hours
+  - Automatically marks these as errored with appropriate message
+  - Frontend shows warning when scan has been running too long
+  - Prevents old scan states from persisting across container restarts
+
+### Changed
+- Improved scan status logging to help diagnose stuck scan issues
+- Frontend now shows "WARNING: Scan stuck for X hours" instead of incorrect ETA
+
+### Note
+- The doubled file count issue (1.4M files showing as 2.5M) appears to be from an overestimation during the scan's discovery phase. This will be addressed in a future version with improved estimation logic.
+
 ## [2.1.30] - 2025-07-30
 
 ### Fixed

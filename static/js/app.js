@@ -559,7 +559,7 @@ class ProgressManager {
         
         // Calculate ETA if we have timing data
         // Prefer backend-provided ETA and speed
-        if (status.eta) {
+        if (status.eta && status.eta !== 'None' && status.eta !== null) {
             const etaDate = new Date(status.eta);
             const now = new Date();
             const remainingMs = etaDate - now;
@@ -567,6 +567,9 @@ class ProgressManager {
             if (remainingMs > 0) {
                 const remainingSeconds = Math.floor(remainingMs / 1000);
                 eta = this.formatTime(remainingSeconds);
+            } else {
+                // ETA is in the past, don't show it
+                eta = '';
             }
         } else if (status.start_time && status.current > 0 && status.total > 0) {
             // Fallback to client-side calculation
@@ -645,9 +648,16 @@ class ProgressManager {
                 }
             }
             
-            // Add ETA
+            // Add ETA or stuck warning
             if (eta) {
                 parts.push(`ETA: ${eta}`);
+            } else if (status.is_running && status.start_time) {
+                // Check if scan has been running for too long
+                const startTime = new Date(status.start_time);
+                const hoursRunning = (Date.now() - startTime) / (1000 * 60 * 60);
+                if (hoursRunning > 24) {
+                    parts.push(`WARNING: Scan stuck for ${Math.floor(hoursRunning)} hours`);
+                }
             }
             
             details = parts.join(' - ');
@@ -673,9 +683,16 @@ class ProgressManager {
                 parts.push(`Found ${status.changes_found} changed files`);
             }
             
-            // Add ETA
+            // Add ETA or stuck warning
             if (eta) {
                 parts.push(`ETA: ${eta}`);
+            } else if (status.is_running && status.start_time) {
+                // Check if scan has been running for too long
+                const startTime = new Date(status.start_time);
+                const hoursRunning = (Date.now() - startTime) / (1000 * 60 * 60);
+                if (hoursRunning > 24) {
+                    parts.push(`WARNING: Scan stuck for ${Math.floor(hoursRunning)} hours`);
+                }
             }
             
             details = parts.join(' - ');

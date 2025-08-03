@@ -414,13 +414,33 @@ def get_scan_status():
         phase_current = total_progress
         phase_total = total_progress
         
+    # Check if scan is stuck (running for more than 24 hours without completion)
+    is_stuck_scan = False
+    if scan_state.is_active and state_dict.get('start_time'):
+        try:
+            start_time_str = state_dict['start_time']
+            if isinstance(start_time_str, str):
+                start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+            else:
+                start_time = start_time_str
+            
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            
+            hours_running = (datetime.now(timezone.utc) - start_time).total_seconds() / 3600
+            if hours_running > 24:
+                is_stuck_scan = True
+                logger.warning(f"Detected stuck scan running for {hours_running:.1f} hours")
+        except Exception as e:
+            logger.warning(f"Could not check scan age: {e}")
+    
     # Calculate ETA if scan is running and we have progress
     eta = None
     files_per_second = 0
     logger.debug(f"ETA calculation: is_running={is_running}, start_time={state_dict.get('start_time')}, "
                  f"current={current_progress}, total={total_progress}")
     
-    if is_running and state_dict.get('start_time') and current_progress > 0:
+    if is_running and state_dict.get('start_time') and current_progress > 0 and not is_stuck_scan:
         try:
             # Handle both timezone-aware and naive datetimes
             start_time_str = state_dict['start_time']
@@ -532,8 +552,8 @@ def get_scan_status():
         'phase_total': phase_total,
         'progress_message': progress_message,
         
-        # ETA fields
-        'eta': eta,
+        # ETA fields - ensure we don't send None
+        'eta': eta if eta else None,  # Let jsonify handle None properly
         'files_per_second': round(files_per_second, 2) if files_per_second > 0 else 0
     }
     
