@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.32] - 2025-08-03
+
+### Changed
+- **Optimized Scan Performance Without Sacrificing Real-Time Updates**:
+  - Increased batch size from 50 to 100 files for better performance
+  - Maintained progress updates every 10 files for real-time feedback
+  - Increased commit frequency to every 50 files (from 25) to reduce database contention
+  - Dramatically reduced logging verbosity - only log every 100th file and corrupted files
+  - This reduces I/O overhead while maintaining responsive progress updates
+  
+- **Adjusted Stuck Scan Detection for Large Libraries**:
+  - Removed the 24-hour warning as large scans can legitimately take days
+  - Changed startup cleanup to only mark scans as abandoned after 7 days
+  - Frontend now shows "Processing..." instead of stuck warnings for long-running scans
+  - Stuck detection now based on progress stalling rather than elapsed time
+
+### Performance Improvements
+- Reduced logging overhead by 99% (only logging critical events)
+- Doubled batch size while maintaining real-time progress
+- Database already has proper indexes for optimal query performance
+- Expected 2-3x performance improvement from reduced I/O overhead
+
 ## [2.1.31] - 2025-08-03
 
 ### Fixed

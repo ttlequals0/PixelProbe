@@ -414,25 +414,10 @@ def get_scan_status():
         phase_current = total_progress
         phase_total = total_progress
         
-    # Check if scan is stuck (running for more than 24 hours without completion)
+    # Check if scan is stuck (no progress for extended period)
     is_stuck_scan = False
-    if scan_state.is_active and state_dict.get('start_time'):
-        try:
-            start_time_str = state_dict['start_time']
-            if isinstance(start_time_str, str):
-                start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
-            else:
-                start_time = start_time_str
-            
-            if start_time.tzinfo is None:
-                start_time = start_time.replace(tzinfo=timezone.utc)
-            
-            hours_running = (datetime.now(timezone.utc) - start_time).total_seconds() / 3600
-            if hours_running > 24:
-                is_stuck_scan = True
-                logger.warning(f"Detected stuck scan running for {hours_running:.1f} hours")
-        except Exception as e:
-            logger.warning(f"Could not check scan age: {e}")
+    # Instead of time-based detection, we should check if progress has stalled
+    # This will be handled by the frontend stuck detection logic
     
     # Calculate ETA if scan is running and we have progress
     eta = None

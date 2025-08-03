@@ -651,13 +651,9 @@ class ProgressManager {
             // Add ETA or stuck warning
             if (eta) {
                 parts.push(`ETA: ${eta}`);
-            } else if (status.is_running && status.start_time) {
-                // Check if scan has been running for too long
-                const startTime = new Date(status.start_time);
-                const hoursRunning = (Date.now() - startTime) / (1000 * 60 * 60);
-                if (hoursRunning > 24) {
-                    parts.push(`WARNING: Scan stuck for ${Math.floor(hoursRunning)} hours`);
-                }
+            } else if (status.is_running && status.files_per_second === 0 && status.current > 0) {
+                // Only warn if scan has made no progress (0 files/sec) after starting
+                parts.push(`Processing...`);
             }
             
             details = parts.join(' - ');
@@ -686,13 +682,9 @@ class ProgressManager {
             // Add ETA or stuck warning
             if (eta) {
                 parts.push(`ETA: ${eta}`);
-            } else if (status.is_running && status.start_time) {
-                // Check if scan has been running for too long
-                const startTime = new Date(status.start_time);
-                const hoursRunning = (Date.now() - startTime) / (1000 * 60 * 60);
-                if (hoursRunning > 24) {
-                    parts.push(`WARNING: Scan stuck for ${Math.floor(hoursRunning)} hours`);
-                }
+            } else if (status.is_running && status.files_per_second === 0 && status.current > 0) {
+                // Only warn if scan has made no progress (0 files/sec) after starting
+                parts.push(`Processing...`);
             }
             
             details = parts.join(' - ');

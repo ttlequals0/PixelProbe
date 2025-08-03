@@ -585,7 +585,14 @@ class PixelProbe:
         scan_output = []
         
         try:
-            logger.info(f"Scanning file: {file_path}")
+            # Only log every 100th file to reduce logging overhead
+            if hasattr(self, '_scan_count'):
+                self._scan_count += 1
+            else:
+                self._scan_count = 1
+                
+            if self._scan_count % 100 == 0:
+                logger.info(f"Scanning file #{self._scan_count}: {file_path}")
             
             # Update current scan tracking
             with self.scan_lock:
@@ -594,9 +601,6 @@ class PixelProbe:
             
             # Get basic file info first
             file_info = self.get_file_info(file_path)
-            
-            logger.info(f"File info - Size: {file_info['file_size']} bytes, Created: {file_info['creation_date']}")
-            logger.info(f"File type detected: {file_info['file_type']}")
             
             # Calculate file hash
             file_hash = self.calculate_file_hash(file_path)
@@ -615,21 +619,18 @@ class PixelProbe:
             extension = Path(file_path).suffix.lower()
             
             if extension in self.supported_image_formats:
-                logger.info(f"Checking image corruption for: {file_path}")
                 is_corrupted, details, tool, output, warnings = self._check_image_corruption(file_path)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
                 warning_details = warnings
             elif extension in self.supported_video_formats:
-                logger.info(f"Checking video corruption for: {file_path}")
                 is_corrupted, details, tool, output, warnings = self._check_video_corruption(file_path, deep_scan)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
                 warning_details = warnings
             elif extension in self.supported_audio_formats:
-                logger.info(f"Checking audio corruption for: {file_path}")
                 is_corrupted, details, tool, output, warnings = self._check_audio_corruption(file_path, deep_scan)
                 corruption_details.extend(details)
                 scan_tool = tool
@@ -637,7 +638,6 @@ class PixelProbe:
                 warning_details = warnings
             else:
                 # File type not supported for detailed scanning
-                logger.info(f"File type {extension} not supported for corruption checking: {file_path}")
                 scan_tool = "unsupported"
                 scan_output.append(f"File type {extension} not supported for corruption checking")
                 corruption_details.append(f"File type {extension} not supported for corruption checking")
@@ -645,11 +645,12 @@ class PixelProbe:
             
             scan_duration = time.time() - scan_start_time
             
-            status = "CORRUPTED" if is_corrupted else "HEALTHY"
-            logger.info(f"Scan result for {file_path}: {status} (took {scan_duration:.2f}s)")
-            
+            # Only log corrupted files and periodic status updates
             if is_corrupted:
-                logger.warning(f"Corruption details for {file_path}: {'; '.join(corruption_details)}")
+                status = "CORRUPTED"
+                logger.warning(f"CORRUPTED file found: {file_path} - {'; '.join(corruption_details)}")
+            elif self._scan_count % 100 == 0:
+                logger.info(f"Scan progress: {self._scan_count} files scanned")
             
             # Merge file info with scan results
             result = file_info.copy()

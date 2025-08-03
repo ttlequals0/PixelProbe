@@ -1549,7 +1549,7 @@ class ScanService:
             
             scanned = 0
             errors = 0
-            batch_size = 50  # Process files in smaller batches to avoid memory issues
+            batch_size = 100  # Moderate batch size to balance memory and performance
             last_commit_count = 0  # Track when we last committed
             
             # Process files in batches to avoid loading all into memory
@@ -1600,14 +1600,14 @@ class ScanService:
                         # Update progress with cumulative counts
                         current_total = total_scanned_so_far + scanned
                         
-                        # Update progress every 5 files or at start of each batch
-                        if scanned % 5 == 0 or scanned == 1 or scanned == batch_offset + 1:
+                        # Update progress every 10 files for real-time feedback
+                        if scanned % 10 == 0 or scanned == 1 or scanned == batch_offset + 1:
                             self.update_progress(current_total, total_to_scan, 
                                                file_result.file_path, 'scanning')
                         
-                        # Commit less frequently - every 25 files instead of every 10
-                        # This reduces database lock contention
-                        if scan_state and (scanned - last_commit_count) >= 25:
+                        # Commit every 50 files to balance real-time updates with performance
+                        # This reduces database lock contention while maintaining responsiveness
+                        if scan_state and (scanned - last_commit_count) >= 50:
                             try:
                                 scan_state.files_processed = current_total
                                 scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
