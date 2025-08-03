@@ -618,10 +618,15 @@ class ScanService:
     
     def cancel_scan(self) -> Dict:
         """Cancel the current scan"""
+        logger.info("cancel_scan() method called")
+        
         # Check both thread status AND database state
         scan_state = ScanState.get_or_create()
         is_thread_running = self.is_scan_running()
         is_db_active = scan_state.is_active and scan_state.phase in ['discovering', 'adding', 'scanning']
+        
+        logger.info(f"Cancel scan status - thread_running: {is_thread_running}, db_active: {is_db_active}, "
+                   f"scan_state.is_active: {scan_state.is_active}, phase: {scan_state.phase}")
         
         if not is_thread_running and not is_db_active:
             raise RuntimeError("No scan is currently running")
@@ -631,7 +636,7 @@ class ScanService:
             logger.warning("Scan appears to be stuck (database active but thread not running)")
         
         self.scan_cancelled = True
-        logger.info("Scan cancellation requested")
+        logger.info(f"Scan cancellation flag set to: {self.scan_cancelled}")
         
         # Update scan state in database
         try:

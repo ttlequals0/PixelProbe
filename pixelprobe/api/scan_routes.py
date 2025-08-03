@@ -553,10 +553,13 @@ def get_scan_status():
 @rate_limit("10 per minute")
 def cancel_scan():
     """Cancel the current scan"""
+    logger.info("Cancel scan endpoint called")
     try:
         result = current_app.scan_service.cancel_scan()
+        logger.info(f"Cancel scan successful: {result}")
         return jsonify(result)
     except RuntimeError as e:
+        logger.error(f"Cancel scan failed: {str(e)}")
         return jsonify({'error': str(e)}), 400
 
 @scan_bp.route('/scan-parallel', methods=['POST'])

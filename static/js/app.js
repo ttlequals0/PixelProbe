@@ -232,10 +232,18 @@ class APIClient {
 
     // Cancel operations
     async cancelScan() {
-        return this.request('/cancel-scan', {
-            method: 'POST',
-            body: JSON.stringify({})
-        });
+        console.log('Calling /api/cancel-scan endpoint...');
+        try {
+            const result = await this.request('/cancel-scan', {
+                method: 'POST',
+                body: JSON.stringify({})
+            });
+            console.log('Cancel scan response:', result);
+            return result;
+        } catch (error) {
+            console.error('Error cancelling scan:', error);
+            throw error;
+        }
     }
 
     async cancelCleanup() {
@@ -2568,15 +2576,23 @@ class PixelProbeApp {
     }
 
     async cancelCurrentOperation() {
+        console.log('Cancel button clicked');
         try {
             // Determine which operation is currently running and cancel it
             const operationType = this.progress.operationType;
+            console.log('Current operation type:', operationType);
             
             if (operationType === 'scan') {
                 const status = await this.api.getScanStatus();
-                if (status.is_scanning) {
-                    await this.api.cancelScan();
+                console.log('Scan status:', status);
+                if (status.is_scanning || status.is_running || status.is_active) {
+                    console.log('Calling cancel API...');
+                    const result = await this.api.cancelScan();
+                    console.log('Cancel result:', result);
                     this.showNotification('Scan cancellation requested', 'info');
+                } else {
+                    console.log('No scan running to cancel');
+                    this.showNotification('No scan is currently running', 'warning');
                 }
             } else if (operationType === 'cleanup') {
                 const status = await this.api.getCleanupStatus();
