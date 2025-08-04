@@ -162,7 +162,7 @@ def validate_command_args(args):
         raise ValueError("Command arguments must be a list")
     
     dangerous_patterns = [
-        r'[;|`$]',   # Shell metacharacters (removed & which is safe in filenames)
+        r'[;|`]',    # Shell metacharacters (removed & and $ which are safe in filenames with shell=False)
         r'\n|\r',    # Newlines
         r'\\x00',    # Null bytes
     ]

@@ -856,10 +856,18 @@ class PixelProbe:
             elif result.stderr:
                 # Check if this is just an EXIF/metadata warning (not actual corruption)
                 stderr_lower = result.stderr.lower()
-                if 'invalid tiff header in exif data' in stderr_lower:
-                    # EXIF metadata warnings don't indicate actual image corruption
-                    scan_output.append("FFmpeg image validation: PASSED (with EXIF warnings)")
-                    logger.info(f"FFmpeg EXIF warning (not corruption) for {file_path}: {result.stderr[:100]}")
+                # List of metadata/EXIF related keywords that don't indicate corruption
+                metadata_keywords = [
+                    'exif', 'metadata', 'app fields', 'tiff header', 'iptc', 
+                    'xmp', 'icc', 'color profile', 'photoshop', 'adobe',
+                    'orientation', 'thumbnail', 'makernote', 'gps info',
+                    'comment', 'copyright', 'artist', 'datetime'
+                ]
+                
+                if any(keyword in stderr_lower for keyword in metadata_keywords):
+                    # Metadata/EXIF warnings don't indicate actual image corruption
+                    scan_output.append("FFmpeg image validation: PASSED (with metadata warnings)")
+                    logger.info(f"FFmpeg metadata warning (not corruption) for {file_path}: {result.stderr[:100]}")
                 else:
                     # Other stderr output might be actual issues
                     corruption_details.append("FFmpeg image validation warnings")

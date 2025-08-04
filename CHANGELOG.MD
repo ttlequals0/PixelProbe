@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.36] - 2025-08-03
+
+### Fixed
+- **Security Validation**: Relaxed overly strict filename validation
+  - Allow `$` character in filenames (was blocking files like "Pu$$y Weed")
+  - Both `&` and `$` are now allowed since we use subprocess with shell=False
+  
+- **False Positive Image Corruption**: Fixed incorrect corruption detection for images with metadata issues
+  - All EXIF and metadata-related errors are now treated as warnings, not corruption
+  - Added comprehensive list of metadata keywords to identify benign warnings
+  - Includes: EXIF, metadata, APP fields, TIFF headers, IPTC, XMP, ICC profiles, etc.
+  - Images with metadata issues but valid pixel data are no longer marked as corrupted
+
+### Root Cause
+1. Security validation was too restrictive for legitimate filenames containing special characters
+2. FFmpeg metadata warnings were being misinterpreted as actual image corruption when the images displayed fine
+
 ## [2.1.35] - 2025-08-03
 
 ### Fixed
