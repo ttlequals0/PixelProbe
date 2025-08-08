@@ -108,10 +108,16 @@ class ScanService:
         if self.is_scan_running():
             raise RuntimeError("Another scan is already in progress")
         
-        # Validate directories
-        valid_dirs = [d for d in directories if os.path.exists(d)]
-        if not valid_dirs:
-            raise ValueError("No valid directories provided")
+        # Check for special pending files scan marker
+        is_pending_scan = len(directories) == 1 and directories[0] == 'PENDING_FILES_SCAN'
+        
+        # Validate directories (skip for pending scan)
+        if is_pending_scan:
+            valid_dirs = ['PENDING_FILES_SCAN']
+        else:
+            valid_dirs = [d for d in directories if os.path.exists(d)]
+            if not valid_dirs:
+                raise ValueError("No valid directories provided")
         
         # Initialize progress
         self.update_progress(0, 0, '', 'initializing')
@@ -169,52 +175,63 @@ class ScanService:
                     logger.info(f"Force rescan: {force_rescan}")
                     logger.info(f"Workers: {num_workers}")
                     
-                    # Phase 1: Discovery - Find only new files
-                    self.update_progress(0, 0, '', 'discovering')
-                    scan_state.update_progress(0, 0, phase='discovering')
-                    scan_state.progress_message = 'Phase 1 of 3: Discovering media files...'
-                    db.session.commit()
+                    # Check if this is a pending files scan
+                    is_pending_scan = valid_dirs == ['PENDING_FILES_SCAN']
                     
-                    if self.scan_cancelled:
-                        self._handle_scan_cancellation(scan_state)
-                        return
-                    
-                    # Get existing files to skip during discovery (optimized for large databases)
-                    from models import ScanResult
-                    logger.info("Starting file discovery with efficient database filtering...")
-                    
-                    # For large databases, we'll pass a callback function that checks the database
-                    # This avoids loading all paths into memory
-                    def check_file_exists(file_path):
-                        """Check if a file exists in the database"""
-                        return db.session.query(ScanResult).filter_by(file_path=file_path).first() is not None
-                    
-                    # We'll modify the discovery to use this callback
-                    # For now, let's load a reasonable subset to avoid the worst performance
-                    # Get count of existing files for logging
-                    existing_count = db.session.query(ScanResult).count()
-                    logger.info(f"Database contains {existing_count} existing files")
-                    
-                    # If database is small enough, load all paths for best performance
-                    if existing_count < 100000:
-                        logger.info("Loading all existing paths for fast discovery...")
-                        existing_files = set(row[0] for row in db.session.query(ScanResult.file_path).all())
+                    if is_pending_scan:
+                        # Skip discovery and adding phases for pending scan
+                        logger.info("=== PENDING FILES SCAN ===")
+                        logger.info("Skipping discovery and adding phases - scanning all pending files")
+                        all_files = []
+                        new_files_count = 0
                     else:
-                        # For very large databases, we'll check during the add phase
-                        logger.info("Large database detected - will handle duplicates during add phase")
-                        existing_files = set()  # Empty set, duplicates handled by INSERT OR IGNORE
-                    
-                    # Define progress callback for discovery
-                    def discovery_progress(files_checked, files_discovered):
-                        self.update_progress(files_checked, files_checked, '', 'discovering')
-                        scan_state.update_progress(files_checked, files_checked, phase='discovering', current_file='')
-                        scan_state.discovery_count = files_discovered
+                        # Phase 1: Discovery - Find only new files
+                        self.update_progress(0, 0, '', 'discovering')
+                        scan_state.update_progress(0, 0, phase='discovering')
+                        scan_state.progress_message = 'Phase 1 of 3: Discovering media files...'
                         db.session.commit()
+                        
+                        if self.scan_cancelled:
+                            self._handle_scan_cancellation(scan_state)
+                            return
                     
-                    # Discover only new files (not already in database)
-                    all_files = checker.discover_media_files(valid_dirs, existing_files=existing_files, progress_callback=discovery_progress)
-                    logger.info(f"File discovery completed. Found {len(all_files)} files to process")
-                    new_files_count = len(all_files)
+                    if not is_pending_scan:
+                        # Get existing files to skip during discovery (optimized for large databases)
+                        from models import ScanResult
+                        logger.info("Starting file discovery with efficient database filtering...")
+                        
+                        # For large databases, we'll pass a callback function that checks the database
+                        # This avoids loading all paths into memory
+                        def check_file_exists(file_path):
+                            """Check if a file exists in the database"""
+                            return db.session.query(ScanResult).filter_by(file_path=file_path).first() is not None
+                        
+                        # We'll modify the discovery to use this callback
+                        # For now, let's load a reasonable subset to avoid the worst performance
+                        # Get count of existing files for logging
+                        existing_count = db.session.query(ScanResult).count()
+                        logger.info(f"Database contains {existing_count} existing files")
+                        
+                        # If database is small enough, load all paths for best performance
+                        if existing_count < 100000:
+                            logger.info("Loading all existing paths for fast discovery...")
+                            existing_files = set(row[0] for row in db.session.query(ScanResult.file_path).all())
+                        else:
+                            # For very large databases, we'll check during the add phase
+                            logger.info("Large database detected - will handle duplicates during add phase")
+                            existing_files = set()  # Empty set, duplicates handled by INSERT OR IGNORE
+                        
+                        # Define progress callback for discovery
+                        def discovery_progress(files_checked, files_discovered):
+                            self.update_progress(files_checked, files_checked, '', 'discovering')
+                            scan_state.update_progress(files_checked, files_checked, phase='discovering', current_file='')
+                            scan_state.discovery_count = files_discovered
+                            db.session.commit()
+                        
+                        # Discover only new files (not already in database)
+                        all_files = checker.discover_media_files(valid_dirs, existing_files=existing_files, progress_callback=discovery_progress)
+                        logger.info(f"File discovery completed. Found {len(all_files)} files to process")
+                        new_files_count = len(all_files)
                     
                     if self.scan_cancelled:
                         self._handle_scan_cancellation(scan_state)
@@ -280,7 +297,13 @@ class ScanService:
                     
                     # Phase 3: Scanning - Check integrity of files that need scanning
                     # First count total files to scan
-                    if force_rescan:
+                    if is_pending_scan:
+                        # For pending scan, get ALL pending files regardless of directory
+                        total_scan_files = db.session.query(ScanResult).filter(
+                            ScanResult.scan_status == 'pending'
+                        ).count()
+                        logger.info(f"Pending files scan: found {total_scan_files} pending files to scan")
+                    elif force_rescan:
                         total_scan_files = db.session.query(ScanResult).filter(
                             db.or_(*[ScanResult.file_path.like(f"{d}%") for d in valid_dirs])
                         ).count()
@@ -1373,6 +1396,19 @@ class ScanService:
         """Create chunks based on directory structure for better organization"""
         chunks = []
         
+        # Check for special pending files scan
+        if directories == ['PENDING_FILES_SCAN']:
+            # Create a single chunk for all pending files
+            chunk_id = hashlib.md5(f"{scan_id}:PENDING_FILES".encode()).hexdigest()
+            chunk = ScanChunk(
+                scan_id=scan_id,
+                chunk_id=chunk_id,
+                directory_path='PENDING_FILES',
+                phase='pending',
+                status='pending'
+            )
+            return [chunk]
+        
         # Get all subdirectories up to 2 levels deep for chunking
         all_dirs = set()
         for base_dir in directories:
@@ -1453,11 +1489,19 @@ class ScanService:
                 return {'added': added, 'duplicates': duplicates}
                 
             elif phase == 'scanning':
-                # Scan files in this directory
-                files_to_scan = db.session.query(ScanResult).filter(
-                    ScanResult.file_path.like(f"{chunk.directory_path}%"),
-                    ScanResult.scan_status == 'pending'
-                ).all()
+                # Check if this is the special pending files chunk
+                if chunk.directory_path == 'PENDING_FILES':
+                    # Scan ALL pending files regardless of directory
+                    files_to_scan = db.session.query(ScanResult).filter(
+                        ScanResult.scan_status == 'pending'
+                    ).all()
+                    logger.info(f"Processing PENDING_FILES chunk: {len(files_to_scan)} pending files to scan")
+                else:
+                    # Scan files in this directory
+                    files_to_scan = db.session.query(ScanResult).filter(
+                        ScanResult.file_path.like(f"{chunk.directory_path}%"),
+                        ScanResult.scan_status == 'pending'
+                    ).all()
                 
                 scanned = 0
                 for file_result in files_to_scan:
@@ -1485,6 +1529,13 @@ class ScanService:
     
     def _get_chunk_file_count(self, chunk: ScanChunk, force_rescan: bool) -> int:
         """Get count of files to scan in a chunk without actually scanning them"""
+        # Check if this is the special pending files chunk
+        if chunk.directory_path == 'PENDING_FILES':
+            # Count ALL pending files regardless of directory
+            return db.session.query(ScanResult).filter(
+                ScanResult.scan_status == 'pending'
+            ).count()
+        
         chunk_path_pattern = chunk.directory_path.rstrip(os.sep) + os.sep + '%'
         
         if force_rescan:
@@ -1521,13 +1572,21 @@ class ScanService:
         db.session.commit()
         
         try:
-            # Query for files in this chunk's directory that need scanning
-            # Use proper path matching to avoid overlaps between chunks
-            # Ensure the path ends with a separator to avoid /path/to/dir matching /path/to/dir2
-            chunk_path_pattern = chunk.directory_path.rstrip(os.sep) + os.sep + '%'
-            
-            # Get count first to avoid loading all files into memory
-            if force_rescan:
+            # Check if this is the special pending files chunk
+            if chunk.directory_path == 'PENDING_FILES':
+                # Get ALL pending files regardless of directory
+                files_count = db.session.query(ScanResult).filter(
+                    ScanResult.scan_status == 'pending'
+                ).count()
+                logger.info(f"PENDING_FILES chunk: Found {files_count} pending files to scan")
+            else:
+                # Query for files in this chunk's directory that need scanning
+                # Use proper path matching to avoid overlaps between chunks
+                # Ensure the path ends with a separator to avoid /path/to/dir matching /path/to/dir2
+                chunk_path_pattern = chunk.directory_path.rstrip(os.sep) + os.sep + '%'
+                
+                # Get count first to avoid loading all files into memory
+                if force_rescan:
                 # Count all files in directory
                 files_count = db.session.query(ScanResult).filter(
                     db.or_(
@@ -1566,7 +1625,12 @@ class ScanService:
                     return
                 
                 # Get batch of files
-                if force_rescan:
+                if chunk.directory_path == 'PENDING_FILES':
+                    # Get batch of ALL pending files
+                    files_batch = db.session.query(ScanResult).filter(
+                        ScanResult.scan_status == 'pending'
+                    ).offset(batch_offset).limit(batch_size).all()
+                elif force_rescan:
                     files_batch = db.session.query(ScanResult).filter(
                         db.or_(
                             ScanResult.file_path == chunk.directory_path,

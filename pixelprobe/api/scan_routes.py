@@ -814,6 +814,42 @@ def recover_stuck_scan():
         logger.error(f"Error recovering stuck scan: {e}")
         return jsonify({'error': str(e)}), 500
 
+@scan_bp.route('/force-scan-pending', methods=['POST'])
+@rate_limit("2 per minute")
+def force_scan_pending():
+    """Force scan all pending files regardless of directory"""
+    try:
+        # Count pending files
+        pending_count = ScanResult.query.filter_by(scan_status='pending').count()
+        
+        if pending_count == 0:
+            return jsonify({
+                'message': 'No pending files to scan',
+                'pending_count': 0
+            })
+        
+        # Check if a scan is already running
+        if current_app.scan_service.is_scan_running():
+            return jsonify({'error': 'A scan is already in progress'}), 409
+        
+        # Start a special scan that processes ALL pending files
+        # We'll use a special marker directory that will be handled differently
+        result = current_app.scan_service.scan_directories(
+            directories=['PENDING_FILES_SCAN'],  # Special marker
+            force_rescan=False,
+            num_workers=1
+        )
+        
+        return jsonify({
+            'message': f'Started scan for {pending_count} pending files',
+            'pending_count': pending_count,
+            'status': result.get('status', 'started')
+        })
+        
+    except Exception as e:
+        logger.error(f"Error starting pending files scan: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @scan_bp.route('/reset-files-by-path', methods=['POST'])
 @rate_limit("5 per minute")
 def reset_files_by_path():
