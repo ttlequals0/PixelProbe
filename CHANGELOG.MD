@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.37] - 2025-08-08
+
+### Added
+- **New API Endpoint**: `/api/force-scan-pending` to force scan ALL pending files regardless of directory
+  - Addresses issue where pending files weren't being processed during normal scans
+  - Particularly useful for stuck pending files in subdirectories like `/immich/uploads/thumbs/`
+
+### Fixed
+- **Pending Files Not Scanning**: Fixed issue where 240,468 pending files were stuck and not being processed
+  - Normal scan was filtering pending files by scan directories, missing files outside the primary paths
+  - New endpoint bypasses directory filtering and processes ALL pending files in the database
+
 ## [2.1.36] - 2025-08-03
 
 ### Fixed
