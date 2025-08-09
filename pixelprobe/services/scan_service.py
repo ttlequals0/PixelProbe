@@ -151,10 +151,18 @@ class ScanService:
                     # This prevents UNIQUE constraint failures from previous failed scans
                     logger.info(f"Cleaning up old scan chunks for directories: {valid_dirs}")
                     for directory in valid_dirs:
-                        # Delete chunks for this directory and all subdirectories
-                        db.session.query(ScanChunk).filter(
-                            ScanChunk.directory_path.like(f"{directory}%")
-                        ).delete(synchronize_session=False)
+                        # Special handling for PENDING_FILES_SCAN
+                        if directory == 'PENDING_FILES_SCAN':
+                            # Delete the PENDING_FILES chunk (without _SCAN suffix)
+                            deleted = db.session.query(ScanChunk).filter(
+                                ScanChunk.directory_path == 'PENDING_FILES'
+                            ).delete(synchronize_session=False)
+                            logger.info(f"Deleted {deleted} PENDING_FILES chunks")
+                        else:
+                            # Delete chunks for this directory and all subdirectories
+                            db.session.query(ScanChunk).filter(
+                                ScanChunk.directory_path.like(f"{directory}%")
+                            ).delete(synchronize_session=False)
                     db.session.commit()
                     logger.info("Old scan chunks cleaned up successfully")
                     
@@ -1401,7 +1409,10 @@ class ScanService:
         # Check for special pending files scan
         if directories == ['PENDING_FILES_SCAN']:
             # Create a single chunk for all pending files
-            chunk_id = hashlib.md5(f"{scan_id}:PENDING_FILES".encode()).hexdigest()
+            # Include timestamp to ensure unique chunk_id even if scan_id is reused
+            import time
+            timestamp = str(time.time())
+            chunk_id = hashlib.md5(f"{scan_id}:PENDING_FILES:{timestamp}".encode()).hexdigest()
             chunk = ScanChunk(
                 scan_id=scan_id,
                 chunk_id=chunk_id,

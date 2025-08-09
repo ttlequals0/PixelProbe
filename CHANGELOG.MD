@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.41] - 2025-08-09
+
+### Fixed
+- **UNIQUE Constraint Error**: Fixed database constraint violation when running force-scan-pending multiple times
+  - Old PENDING_FILES chunks weren't being deleted properly (cleanup was looking for wrong path)
+  - Added timestamp to chunk_id generation to ensure uniqueness even if scan_id is reused
+  - Properly cleans up old PENDING_FILES chunks before creating new ones
+
+### My Reasoning
+- The cleanup was looking for 'PENDING_FILES_SCAN%' but the actual chunk had 'PENDING_FILES' as directory_path
+- This mismatch meant old chunks weren't deleted, causing constraint violations
+- Adding timestamp ensures unique chunk_ids even in edge cases
+
 ## [2.1.40] - 2025-08-09
 
 ### Fixed

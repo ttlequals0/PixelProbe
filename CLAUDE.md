@@ -37,5 +37,7 @@
 ### Docker Tagging Notes
 - dont tage  - ttlequals0/pixelprobe:2.0
 
+NEVER just agree with me ALWAYS state your reasons for choices you made. We are a TEAM
+
 ### Workspace Guidelines
 - only work in /Users/dkrachtus/repos/PixelProbe
