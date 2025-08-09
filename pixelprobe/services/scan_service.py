@@ -168,6 +168,9 @@ class ScanService:
                     # Create progress tracker for scan operations
                     progress_tracker = ProgressTracker('scan')
                     
+                    # Import ScanResult model (needed for both regular and pending scans)
+                    from models import ScanResult
+                    
                     # Log scan start
                     logger.info(f"=== SCAN STARTED ===")
                     logger.info(f"Scan ID: {scan_state.scan_id}")
@@ -197,7 +200,6 @@ class ScanService:
                     
                     if not is_pending_scan:
                         # Get existing files to skip during discovery (optimized for large databases)
-                        from models import ScanResult
                         logger.info("Starting file discovery with efficient database filtering...")
                         
                         # For large databases, we'll pass a callback function that checks the database

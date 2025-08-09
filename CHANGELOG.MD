@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.39] - 2025-08-09
+
+### Fixed
+- **UnboundLocalError in Pending Scan**: Fixed error where ScanResult model wasn't imported for pending files scan
+  - Moved ScanResult import to beginning of scan process so it's available for both regular and pending scans
+  - Fixes "cannot access local variable 'ScanResult' where it is not associated with a value" error
+
 ## [2.1.38] - 2025-08-08
 
 ### Fixed
