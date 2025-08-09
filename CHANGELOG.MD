@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.38] - 2025-08-08
+
+### Fixed
+- **Critical Indentation Error**: Fixed indentation error in scan_service.py that prevented the app from starting
+  - Line 1590-1610 had incorrect indentation after if/else statement
+  - App was failing with IndentationError on startup
+
 ## [2.1.37] - 2025-08-08
 
 ### Added

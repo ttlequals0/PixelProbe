@@ -1587,27 +1587,27 @@ class ScanService:
                 
                 # Get count first to avoid loading all files into memory
                 if force_rescan:
-                # Count all files in directory
-                files_count = db.session.query(ScanResult).filter(
-                    db.or_(
-                        ScanResult.file_path == chunk.directory_path,
-                        ScanResult.file_path.like(chunk_path_pattern)
-                    )
-                ).count()
-            else:
-                # Count only pending files
-                files_count = db.session.query(ScanResult).filter(
-                    db.or_(
-                        db.and_(
+                    # Count all files in directory
+                    files_count = db.session.query(ScanResult).filter(
+                        db.or_(
                             ScanResult.file_path == chunk.directory_path,
-                            ScanResult.scan_status == 'pending'
-                        ),
-                        db.and_(
-                            ScanResult.file_path.like(chunk_path_pattern),
-                            ScanResult.scan_status == 'pending'
+                            ScanResult.file_path.like(chunk_path_pattern)
                         )
-                    )
-                ).count()
+                    ).count()
+                else:
+                    # Count only pending files
+                    files_count = db.session.query(ScanResult).filter(
+                        db.or_(
+                            db.and_(
+                                ScanResult.file_path == chunk.directory_path,
+                                ScanResult.scan_status == 'pending'
+                            ),
+                            db.and_(
+                                ScanResult.file_path.like(chunk_path_pattern),
+                                ScanResult.scan_status == 'pending'
+                            )
+                        )
+                    ).count()
             
             logger.info(f"Chunk {chunk.chunk_id}: Found {files_count} files to scan in {chunk.directory_path}")
             
