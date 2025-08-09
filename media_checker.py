@@ -1765,6 +1765,11 @@ class PixelProbe:
             result = session.query(ScanResult).filter_by(file_path=file_path).first()
             
             if result and result.scan_date:
+                # Skip cache for pending files - they must be scanned
+                if result.scan_status == 'pending':
+                    session.close()
+                    return None
+                    
                 # Check if file hasn't changed (same hash and modification time)
                 if (result.file_hash == file_hash and 
                     result.last_modified and 
