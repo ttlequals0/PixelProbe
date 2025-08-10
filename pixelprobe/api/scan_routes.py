@@ -3,6 +3,7 @@ import pytz
 import os
 import threading
 import logging
+from datetime import datetime, timezone
 
 from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
@@ -335,7 +336,9 @@ def get_scan_status():
     
     # Debug logging - changed to INFO for visibility in production logs
     logger.info(f"API scan-status: scan_id={scan_state.id}, phase={scan_state.phase}, "
-                f"is_active={scan_state.is_active}, files_processed={scan_state.files_processed}")
+                f"is_active={scan_state.is_active}, files_processed={scan_state.files_processed}, "
+                f"estimated_total={scan_state.estimated_total}, current_file={scan_state.current_file}, "
+                f"start_time={scan_state.start_time}")
     
     # Prioritize database values when available, fall back to service values
     is_running = current_app.scan_service.is_scan_running()
@@ -368,21 +371,39 @@ def get_scan_status():
     
     if current_phase == 'discovering':
         phase_number = 1
-        progress_message = "Discovering files..."
+        # Use the actual progress message from database if available
+        progress_message = state_dict.get('progress_message', "Discovering files...")
         # For discovery, we don't know total files yet, so show indeterminate progress
         phase_current = 0
         phase_total = 0  # Will show base phase progress (0-33%)
         
     elif current_phase == 'adding':
         phase_number = 2  
-        progress_message = "Adding new files to database..."
+        # Use the actual progress message from database if available
+        progress_message = state_dict.get('progress_message', "Adding new files to database...")
         # Use current/total from database for adding phase
         phase_current = current_progress
         phase_total = total_progress
         
     elif current_phase == 'scanning':
         phase_number = 3
-        progress_message = "Checking file integrity..."
+        # Generate fresh progress message based on current data
+        current_file = state_dict.get('current_file', '')
+        if current_file:
+            # Extract just the filename for display
+            import os
+            filename = os.path.basename(current_file)
+            # Generate fresh progress message with current data
+            from utils import ProgressTracker
+            progress_tracker = ProgressTracker('scan')
+            progress_message = progress_tracker.get_progress_message(
+                'Phase 3 of 3: Scanning files',
+                current_progress,
+                total_progress,
+                filename
+            )
+        else:
+            progress_message = f"Phase 3 of 3: Scanning files - {current_progress} of {total_progress:,} files"
         # Use current/total from database for scanning phase  
         phase_current = current_progress
         phase_total = total_progress
@@ -393,38 +414,157 @@ def get_scan_status():
         phase_current = total_progress
         phase_total = total_progress
         
+    # Check if scan is stuck (no progress for extended period)
+    is_stuck_scan = False
+    # Instead of time-based detection, we should check if progress has stalled
+    # This will be handled by the frontend stuck detection logic
+    
     # Calculate ETA if scan is running and we have progress
     eta = None
     files_per_second = 0
-    if is_running and state_dict.get('start_time') and current_progress > 0:
-        from datetime import datetime, timezone
+    logger.debug(f"ETA calculation: is_running={is_running}, start_time={state_dict.get('start_time')}, "
+                 f"current={current_progress}, total={total_progress}")
+    
+    if is_running and state_dict.get('start_time') and current_progress > 0 and not is_stuck_scan:
         try:
-            start_time = datetime.fromisoformat(state_dict['start_time'].replace('Z', '+00:00'))
+            # Handle both timezone-aware and naive datetimes
+            start_time_str = state_dict['start_time']
+            if isinstance(start_time_str, str):
+                start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+            else:
+                # If it's already a datetime object
+                start_time = start_time_str
+            
+            # Make sure start_time is timezone-aware
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+                
             current_time = datetime.now(timezone.utc)
             elapsed_seconds = (current_time - start_time).total_seconds()
             
+            logger.debug(f"ETA calculation: elapsed_seconds={elapsed_seconds}")
+            
             if elapsed_seconds > 0:
-                files_per_second = current_progress / elapsed_seconds
+                # Use a rolling window approach for more accurate recent speed
+                # If we've been running for less than 5 minutes, use overall average
+                if elapsed_seconds < 300:
+                    files_per_second = current_progress / elapsed_seconds
+                else:
+                    # For longer scans, give more weight to recent progress
+                    # Assume last 10% of progress is representative of current speed
+                    recent_window = 0.1  # 10% window
+                    recent_progress = max(1, int(current_progress * recent_window))
+                    recent_time = elapsed_seconds * recent_window
+                    
+                    # Calculate weighted average (70% recent, 30% overall)
+                    recent_rate = recent_progress / recent_time if recent_time > 0 else 0
+                    overall_rate = current_progress / elapsed_seconds
+                    files_per_second = (recent_rate * 0.7) + (overall_rate * 0.3)
                 
-                if files_per_second > 0 and total_progress > current_progress:
-                    remaining_files = total_progress - current_progress
-                    eta_seconds = remaining_files / files_per_second
-                    eta_time = current_time.timestamp() + eta_seconds
-                    eta = datetime.fromtimestamp(eta_time, tz=timezone.utc).isoformat()
+                logger.debug(f"ETA calculation: files_per_second={files_per_second}, "
+                            f"remaining={total_progress - current_progress}")
+                
+                # Calculate ETA if we have a valid total and are not complete
+                # During discovery/adding phases, use an estimate based on current rate
+                if files_per_second > 0:
+                    if total_progress > 0 and total_progress > current_progress:
+                        # Normal case: we know the total
+                        remaining_files = total_progress - current_progress
+                        eta_seconds = remaining_files / files_per_second
+                        
+                        # Apply smoothing for more stable ETA
+                        # Use a minimum threshold to avoid jumping ETAs
+                        if eta_seconds < 30:  # Less than 30 seconds
+                            # Show "Less than 1 minute" instead of 0s
+                            eta_seconds = 60
+                        elif eta_seconds < 120:  # Less than 2 minutes
+                            # Round to nearest 30 seconds
+                            eta_seconds = round(eta_seconds / 30) * 30
+                        elif eta_seconds < 600:  # Less than 10 minutes
+                            # Round to nearest minute
+                            eta_seconds = round(eta_seconds / 60) * 60
+                        else:
+                            # For longer ETAs, round to nearest 5 minutes
+                            eta_seconds = round(eta_seconds / 300) * 300
+                        
+                        eta_time = current_time.timestamp() + eta_seconds
+                        eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
+                        logger.debug(f"ETA calculated (known total): {eta}, smoothed from {remaining_files / files_per_second:.1f}s")
+                    elif current_phase in ['discovering', 'adding'] and current_progress > 10:
+                        # During discovery/adding, estimate based on typical scan sizes
+                        # Use a heuristic: if we're discovering, assume we'll find similar number of files
+                        estimated_total = current_progress * 2  # Conservative estimate
+                        remaining_files = estimated_total - current_progress
+                        eta_seconds = remaining_files / files_per_second
+                        # Cap ETA to reasonable values (max 24 hours)
+                        eta_seconds = min(eta_seconds, 86400)
+                        # Apply same smoothing
+                        if eta_seconds < 60:
+                            eta_seconds = 60
+                        elif eta_seconds < 120:
+                            eta_seconds = round(eta_seconds / 30) * 30
+                        elif eta_seconds < 600:
+                            eta_seconds = round(eta_seconds / 60) * 60
+                        else:
+                            eta_seconds = round(eta_seconds / 300) * 300
+                        eta_time = current_time.timestamp() + eta_seconds
+                        eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
+                        logger.debug(f"ETA calculated (estimated): {eta}")
         except Exception as e:
-            logger.debug(f"Could not calculate ETA: {e}")
+            logger.warning(f"Could not calculate ETA: {e}")
+    
+    # Convert timestamps to configured timezone
+    start_time_tz = None
+    end_time_tz = None
+    
+    if state_dict.get('start_time'):
+        try:
+            start_time_str = state_dict['start_time']
+            if isinstance(start_time_str, str):
+                start_dt = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+            else:
+                start_dt = start_time_str
+            
+            # Make timezone-aware if needed
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+            
+            # Convert to configured timezone
+            start_time_tz = start_dt.astimezone(tz).isoformat()
+        except Exception as e:
+            logger.warning(f"Could not convert start_time to timezone: {e}")
+            start_time_tz = state_dict.get('start_time')
+    
+    if state_dict.get('end_time'):
+        try:
+            end_time_str = state_dict['end_time']
+            if isinstance(end_time_str, str):
+                end_dt = datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
+            else:
+                end_dt = end_time_str
+            
+            # Make timezone-aware if needed
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
+            
+            # Convert to configured timezone
+            end_time_tz = end_dt.astimezone(tz).isoformat()
+        except Exception as e:
+            logger.warning(f"Could not convert end_time to timezone: {e}")
+            end_time_tz = state_dict.get('end_time')
     
     # Build comprehensive status response with frontend-expected fields
     status = {
         'current': current_progress,
         'total': total_progress,
-        'file': service_status.get('file', state_dict.get('current_file', '')),
+        'file': state_dict.get('current_file', service_status.get('file', '')),
         'status': status_value,
         'is_running': is_running,
         'is_scanning': is_running,  # Legacy compatibility
+        'is_active': state_dict.get('is_active', False),  # Database active state
         'scan_id': state_dict.get('id'),
-        'start_time': state_dict.get('start_time'),
-        'end_time': state_dict.get('end_time'),
+        'start_time': start_time_tz,
+        'end_time': end_time_tz,
         'directories': state_dict.get('directories'),
         'force_rescan': state_dict.get('force_rescan'),
         'phase': current_phase,
@@ -436,10 +576,15 @@ def get_scan_status():
         'phase_total': phase_total,
         'progress_message': progress_message,
         
-        # ETA fields
-        'eta': eta,
+        # ETA fields - ensure we don't send None
+        'eta': eta if eta else None,  # Let jsonify handle None properly
         'files_per_second': round(files_per_second, 2) if files_per_second > 0 else 0
     }
+    
+    # Debug log the complete response
+    logger.info(f"API scan-status response: progress_message='{status['progress_message']}', "
+                f"file='{status['file']}', eta='{status['eta']}', "
+                f"current={status['current']}, total={status['total']}")
     
     return jsonify(status)
 
@@ -447,10 +592,13 @@ def get_scan_status():
 @rate_limit("10 per minute")
 def cancel_scan():
     """Cancel the current scan"""
+    logger.info("Cancel scan endpoint called")
     try:
         result = current_app.scan_service.cancel_scan()
+        logger.info(f"Cancel scan successful: {result}")
         return jsonify(result)
     except RuntimeError as e:
+        logger.error(f"Cancel scan failed: {str(e)}")
         return jsonify({'error': str(e)}), 400
 
 @scan_bp.route('/scan-parallel', methods=['POST'])
@@ -615,22 +763,91 @@ def reset_for_rescan():
 def recover_stuck_scan():
     """Attempt to recover from a stuck scan state"""
     try:
-        # Use scan service to reset stuck scans
-        result = current_app.scan_service.reset_stuck_scans()
-        
-        # Reset database scan state
+        # Check if scan is actually stuck (has progress but not running)
+        is_running = current_app.scan_service.is_scan_running()
         scan_state = ScanState.get_or_create()
-        if scan_state.phase == 'scanning':
-            scan_state.error_scan('Scan was stuck and has been recovered')
+        
+        # A scan is stuck if:
+        # 1. Database says it's active but service says it's not running
+        # 2. It's in scanning phase with files processed > 0
+        is_stuck = (scan_state.is_active and not is_running and 
+                   scan_state.phase in ['discovering', 'adding', 'scanning'] and
+                   scan_state.files_processed > 0)
+        
+        if not is_stuck:
+            return jsonify({
+                'message': 'No stuck scan detected',
+                'is_active': scan_state.is_active,
+                'is_running': is_running,
+                'phase': scan_state.phase
+            })
+        
+        logger.warning(f"Recovering stuck scan: phase={scan_state.phase}, files_processed={scan_state.files_processed}")
+        
+        # Mark the scan as errored
+        scan_state.error_scan('Scan was stuck and has been recovered')
+        db.session.commit()
+        
+        # Reset any files stuck in 'scanning' status
+        stuck_results = ScanResult.query.filter_by(scan_status='scanning').all()
+        stuck_count = len(stuck_results)
+        for result in stuck_results:
+            result.scan_status = 'pending'
+            result.error_message = 'Reset from stuck scanning state'
+        
+        if stuck_count > 0:
             db.session.commit()
+            logger.info(f"Reset {stuck_count} files from 'scanning' to 'pending' status")
+        
+        # Clear the service's internal state
+        current_app.scan_service.scan_cancelled = False
+        current_app.scan_service.current_scan_thread = None
         
         return jsonify({
             'message': 'Scan state recovered successfully',
-            'stuck_files_reset': result.get('count', 0)
+            'stuck_files_reset': stuck_count,
+            'previous_phase': scan_state.phase,
+            'files_processed': scan_state.files_processed
         })
         
     except Exception as e:
         logger.error(f"Error recovering stuck scan: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@scan_bp.route('/force-scan-pending', methods=['POST'])
+@rate_limit("2 per minute")
+def force_scan_pending():
+    """Force scan all pending files regardless of directory"""
+    try:
+        # Count pending files
+        pending_count = ScanResult.query.filter_by(scan_status='pending').count()
+        
+        if pending_count == 0:
+            return jsonify({
+                'message': 'No pending files to scan',
+                'pending_count': 0
+            })
+        
+        # Check if a scan is already running
+        if current_app.scan_service.is_scan_running():
+            return jsonify({'error': 'A scan is already in progress'}), 409
+        
+        # Start a special scan that processes ALL pending files
+        # We'll use a special marker directory that will be handled differently
+        result = current_app.scan_service.scan_directories(
+            directories=['PENDING_FILES_SCAN'],  # Special marker
+            force_rescan=False,
+            num_workers=1
+        )
+        
+        return jsonify({
+            'message': f'Started scan for {pending_count} pending files',
+            'pending_count': pending_count,
+            'status': result.get('status', 'started')
+        })
+        
+    except Exception as e:
+        logger.error(f"Error starting pending files scan: {e}")
         return jsonify({'error': str(e)}), 500
 
 @scan_bp.route('/reset-files-by-path', methods=['POST'])

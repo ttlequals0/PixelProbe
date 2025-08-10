@@ -8,6 +8,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
+
+# Try to import pillow-heif for better HEIC support
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    HEIF_SUPPORT = True
+except ImportError:
+    HEIF_SUPPORT = False
 import ffmpeg
 import tempfile
 import shutil
@@ -577,7 +585,14 @@ class PixelProbe:
         scan_output = []
         
         try:
-            logger.info(f"Scanning file: {file_path}")
+            # Only log every 100th file to reduce logging overhead
+            if hasattr(self, '_scan_count'):
+                self._scan_count += 1
+            else:
+                self._scan_count = 1
+                
+            if self._scan_count % 100 == 0:
+                logger.info(f"Scanning file #{self._scan_count}: {file_path}")
             
             # Update current scan tracking
             with self.scan_lock:
@@ -586,9 +601,6 @@ class PixelProbe:
             
             # Get basic file info first
             file_info = self.get_file_info(file_path)
-            
-            logger.info(f"File info - Size: {file_info['file_size']} bytes, Created: {file_info['creation_date']}")
-            logger.info(f"File type detected: {file_info['file_type']}")
             
             # Calculate file hash
             file_hash = self.calculate_file_hash(file_path)
@@ -607,21 +619,18 @@ class PixelProbe:
             extension = Path(file_path).suffix.lower()
             
             if extension in self.supported_image_formats:
-                logger.info(f"Checking image corruption for: {file_path}")
                 is_corrupted, details, tool, output, warnings = self._check_image_corruption(file_path)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
                 warning_details = warnings
             elif extension in self.supported_video_formats:
-                logger.info(f"Checking video corruption for: {file_path}")
                 is_corrupted, details, tool, output, warnings = self._check_video_corruption(file_path, deep_scan)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
                 warning_details = warnings
             elif extension in self.supported_audio_formats:
-                logger.info(f"Checking audio corruption for: {file_path}")
                 is_corrupted, details, tool, output, warnings = self._check_audio_corruption(file_path, deep_scan)
                 corruption_details.extend(details)
                 scan_tool = tool
@@ -629,7 +638,6 @@ class PixelProbe:
                 warning_details = warnings
             else:
                 # File type not supported for detailed scanning
-                logger.info(f"File type {extension} not supported for corruption checking: {file_path}")
                 scan_tool = "unsupported"
                 scan_output.append(f"File type {extension} not supported for corruption checking")
                 corruption_details.append(f"File type {extension} not supported for corruption checking")
@@ -637,11 +645,12 @@ class PixelProbe:
             
             scan_duration = time.time() - scan_start_time
             
-            status = "CORRUPTED" if is_corrupted else "HEALTHY"
-            logger.info(f"Scan result for {file_path}: {status} (took {scan_duration:.2f}s)")
-            
+            # Only log corrupted files and periodic status updates
             if is_corrupted:
-                logger.warning(f"Corruption details for {file_path}: {'; '.join(corruption_details)}")
+                status = "CORRUPTED"
+                logger.warning(f"CORRUPTED file found: {file_path} - {'; '.join(corruption_details)}")
+            elif self._scan_count % 100 == 0:
+                logger.info(f"Scan progress: {self._scan_count} files scanned")
             
             # Merge file info with scan results
             result = file_info.copy()
@@ -694,28 +703,42 @@ class PixelProbe:
         
         logger.info(f"Starting PIL verification for: {file_path}")
         
-        # Check if this is a GIF file
-        is_gif = file_path.lower().endswith('.gif')
-        pil_failed = False
-        pil_error = None
+        # Check file type
+        file_ext = os.path.splitext(file_path)[1].lower()
+        is_gif = file_ext == '.gif'
+        is_heic = file_ext in ['.heic', '.heif']
         
-        try:
-            with Image.open(file_path) as img:
-                img.verify()
-            logger.info(f"PIL verification passed for: {file_path}")
-            scan_output.append("PIL verification: PASSED")
-        except Exception as e:
-            pil_failed = True
-            pil_error = str(e)
-            scan_output.append(f"PIL verification: FAILED - {str(e)}")
-            logger.warning(f"PIL verification failed for {file_path}: {str(e)}")
+        # Check if HEIC is supported
+        if is_heic and not HEIF_SUPPORT:
+            scan_output.append("PIL verification: SKIPPED (HEIC support not available)")
+            logger.info(f"PIL HEIC support not available, skipping PIL verification for {file_path}")
+            pil_failed = False
+            pil_error = None
+        else:
+            pil_failed = False
+            pil_error = None
+            
+            try:
+                with Image.open(file_path) as img:
+                    img.verify()
+                logger.info(f"PIL verification passed for: {file_path}")
+                scan_output.append("PIL verification: PASSED")
+            except Exception as e:
+                pil_failed = True
+                pil_error = str(e)
+                scan_output.append(f"PIL verification: FAILED - {str(e)}")
+                logger.warning(f"PIL verification failed for {file_path}: {str(e)}")
         
         pil_load_failed = False
         pil_load_error = None
         
-        try:
-            with Image.open(file_path) as img:
-                img.load()
+        # Skip load test for HEIC if not supported
+        if is_heic and not HEIF_SUPPORT:
+            scan_output.append("PIL load test: SKIPPED (HEIC support not available)")
+        else:
+            try:
+                with Image.open(file_path) as img:
+                    img.load()
                 
                 if img.size[0] == 0 or img.size[1] == 0:
                     corruption_details.append("Invalid image dimensions")
@@ -727,13 +750,13 @@ class PixelProbe:
                 # Note: After load(), tile data is consumed and cleared in PIL - this is normal behavior
                 # Removed incorrect tile data check that was causing false positives
                 
-                img.transpose(Image.FLIP_LEFT_RIGHT)
-                scan_output.append("Transform test: PASSED")
-        
-        except Exception as e:
-            pil_load_failed = True
-            pil_load_error = str(e)
-            scan_output.append(f"PIL load/transform: FAILED - {str(e)}")
+                    img.transpose(Image.FLIP_LEFT_RIGHT)
+                    scan_output.append("Transform test: PASSED")
+            
+            except Exception as e:
+                pil_load_failed = True
+                pil_load_error = str(e)
+                scan_output.append(f"PIL load/transform: FAILED - {str(e)}")
         
         logger.info(f"Starting ImageMagick verification for: {file_path}")
         try:
@@ -810,18 +833,41 @@ class PixelProbe:
             )
             
             if result.returncode != 0 and result.stderr:
-                corruption_details.append("FFmpeg image validation failed")
-                is_corrupted = True
-                scan_tool = "ffmpeg"
-                scan_output.append(f"FFmpeg image validation: FAILED")
-                scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
+                # Check if this is a HEIC/HEIF file with known FFmpeg compatibility issues
+                file_ext = os.path.splitext(file_path)[1].lower()
+                stderr_lower = result.stderr.lower()
+                
+                if file_ext in ['.heic', '.heif'] and any(msg in stderr_lower for msg in [
+                    'moov atom not found',
+                    'invalid data found',
+                    'could not find codec parameters',
+                    'no decoder found',
+                    'unrecognized file format'
+                ]):
+                    # Known FFmpeg HEIC compatibility issue - check with other tools first
+                    scan_output.append("FFmpeg image validation: SKIPPED (HEIC compatibility)")
+                    logger.info(f"FFmpeg HEIC compatibility issue for {file_path}, relying on PIL/ImageMagick")
+                else:
+                    corruption_details.append("FFmpeg image validation failed")
+                    is_corrupted = True
+                    scan_tool = "ffmpeg"
+                    scan_output.append(f"FFmpeg image validation: FAILED")
+                    scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
             elif result.stderr:
                 # Check if this is just an EXIF/metadata warning (not actual corruption)
                 stderr_lower = result.stderr.lower()
-                if 'invalid tiff header in exif data' in stderr_lower:
-                    # EXIF metadata warnings don't indicate actual image corruption
-                    scan_output.append("FFmpeg image validation: PASSED (with EXIF warnings)")
-                    logger.info(f"FFmpeg EXIF warning (not corruption) for {file_path}: {result.stderr[:100]}")
+                # List of metadata/EXIF related keywords that don't indicate corruption
+                metadata_keywords = [
+                    'exif', 'metadata', 'app fields', 'tiff header', 'iptc', 
+                    'xmp', 'icc', 'color profile', 'photoshop', 'adobe',
+                    'orientation', 'thumbnail', 'makernote', 'gps info',
+                    'comment', 'copyright', 'artist', 'datetime'
+                ]
+                
+                if any(keyword in stderr_lower for keyword in metadata_keywords):
+                    # Metadata/EXIF warnings don't indicate actual image corruption
+                    scan_output.append("FFmpeg image validation: PASSED (with metadata warnings)")
+                    logger.info(f"FFmpeg metadata warning (not corruption) for {file_path}: {result.stderr[:100]}")
                 else:
                     # Other stderr output might be actual issues
                     corruption_details.append("FFmpeg image validation warnings")
@@ -861,6 +907,24 @@ class PixelProbe:
                 is_corrupted = False
                 warning_details = ["GIF header warning: Non-standard header detected (file may still be playable)"]
                 # Clear corruption details since we're treating it as a warning
+                corruption_details = []
+        
+        # Check if this is a HEIC/HEIF with compatibility issues that should be warnings
+        if is_heic and is_corrupted:
+            # Check if FFmpeg had compatibility issues
+            ffmpeg_heic_issue = any('SKIPPED (HEIC compatibility)' in line for line in scan_output)
+            
+            # Check if PIL couldn't handle HEIC
+            pil_heic_skipped = any('SKIPPED (HEIC support not available)' in line for line in scan_output)
+            
+            # Check if ImageMagick passed
+            imagemagick_passed = any('ImageMagick identify: PASSED' in line for line in scan_output)
+            
+            # If FFmpeg had HEIC issues but ImageMagick passed, it's likely a false positive
+            if (ffmpeg_heic_issue or pil_heic_skipped) and imagemagick_passed:
+                logger.info(f"Converting HEIC compatibility errors to warnings for {file_path}")
+                is_corrupted = False
+                warning_details = ["HEIC compatibility warning: FFmpeg/PIL may not fully support this HEIC file (image is valid)"]
                 corruption_details = []
         
         # Check if this is a WebP with EXIF issues that should be a warning instead
@@ -1701,6 +1765,11 @@ class PixelProbe:
             result = session.query(ScanResult).filter_by(file_path=file_path).first()
             
             if result and result.scan_date:
+                # Skip cache for pending files - they must be scanned
+                if result.scan_status == 'pending':
+                    session.close()
+                    return None
+                    
                 # Check if file hasn't changed (same hash and modification time)
                 if (result.file_hash == file_hash and 
                     result.last_modified and 

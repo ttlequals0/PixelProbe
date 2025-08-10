@@ -73,12 +73,12 @@ class ProgressTracker:
     def get_progress_message(self, phase_name, files_processed=0, total_files=0, current_file=None):
         """Generate consistent progress messages"""
         eta = self.estimate_time_remaining(files_processed, total_files)
-        eta_str = f" - ETA: {eta}" if eta else ""
+        eta_str = f" ETA: {eta}" if eta else ""
         
         if current_file:
-            return f"{phase_name}: Processing {files_processed}/{total_files} - {current_file}{eta_str}"
+            return f"{phase_name}: current file: {current_file} - {files_processed} of {total_files:,} files{eta_str}"
         else:
-            return f"{phase_name}: {files_processed}/{total_files} files processed{eta_str}"
+            return f"{phase_name}: {files_processed} of {total_files:,} files{eta_str}"
 
 
 def handle_db_errors(rollback_func=None):

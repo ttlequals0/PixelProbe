@@ -8,7 +8,9 @@ from pixelprobe.api.swagger import (
     api, scan_ns, stats_ns, maintenance_ns, admin_ns, export_ns,
     scan_directories_model, scan_status_model, stats_summary_model,
     file_changes_model, cleanup_status_model, export_request_model,
-    config_model, schedule_model, error_model, success_model
+    config_model, schedule_model, error_model, success_model,
+    reset_for_rescan_model, reset_result_model, reset_by_path_model,
+    stuck_scan_recovery_model
 )
 import logging
 
@@ -95,6 +97,176 @@ class CancelScan(Resource):
             return result
         except RuntimeError as e:
             return {'error': str(e)}, 400
+
+@scan_ns.route('/reset-for-rescan')
+class ResetForRescan(Resource):
+    @scan_ns.doc('reset_for_rescan')
+    @scan_ns.expect(reset_for_rescan_model)
+    @scan_ns.response(200, 'Files reset successfully', reset_result_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Reset files for rescanning based on criteria"""
+        from models import db, ScanResult
+        
+        data = request.get_json() or {}
+        reset_type = data.get('type', 'all')
+        file_ids = data.get('file_ids', [])
+        
+        try:
+            if reset_type == 'selected' and file_ids:
+                # Reset specific files
+                results = ScanResult.query.filter(ScanResult.id.in_(file_ids)).all()
+                count = len(results)
+                for result in results:
+                    result.scan_status = 'pending'
+                    result.is_corrupted = False
+                    result.marked_as_good = False
+                    result.error_message = None
+                    result.scan_output = None
+            
+            elif reset_type == 'corrupted':
+                # Reset all corrupted files
+                results = ScanResult.query.filter_by(is_corrupted=True, marked_as_good=False).all()
+                count = len(results)
+                for result in results:
+                    result.scan_status = 'pending'
+                    result.is_corrupted = False
+                    result.error_message = None
+                    result.scan_output = None
+            
+            elif reset_type == 'error':
+                # Reset all files with errors
+                results = ScanResult.query.filter_by(scan_status='error').all()
+                count = len(results)
+                for result in results:
+                    result.scan_status = 'pending'
+                    result.is_corrupted = False
+                    result.error_message = None
+                    result.scan_output = None
+            
+            else:  # all
+                # Reset all files
+                results = ScanResult.query.all()
+                count = len(results)
+                for result in results:
+                    result.scan_status = 'pending'
+                    result.is_corrupted = False
+                    result.marked_as_good = False
+                    result.error_message = None
+                    result.scan_output = None
+            
+            db.session.commit()
+            
+            return {
+                'message': f'Reset {count} files for rescanning',
+                'count': count,
+                'type': reset_type
+            }
+            
+        except Exception as e:
+            logger.error(f"Error resetting files for rescan: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/reset-stuck-scans')
+class ResetStuckScans(Resource):
+    @scan_ns.doc('reset_stuck_scans')
+    @scan_ns.response(200, 'Stuck scans reset', reset_result_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Reset files that are stuck in 'scanning' state"""
+        from models import db, ScanResult
+        
+        try:
+            # Find all results stuck in 'scanning' state
+            stuck_results = ScanResult.query.filter_by(scan_status='scanning').all()
+            count = len(stuck_results)
+            
+            # Reset them to 'pending'
+            for result in stuck_results:
+                result.scan_status = 'pending'
+                result.error_message = 'Reset from stuck scanning state'
+            
+            db.session.commit()
+            
+            return {
+                'message': f'Reset {count} stuck files',
+                'count': count
+            }
+        except Exception as e:
+            logger.error(f"Error resetting stuck scans: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/reset-files-by-path')
+class ResetFilesByPath(Resource):
+    @scan_ns.doc('reset_files_by_path')
+    @scan_ns.expect(reset_by_path_model)
+    @scan_ns.response(200, 'Files reset successfully', reset_result_model)
+    @scan_ns.response(400, 'No file paths provided', error_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Reset specific files by their paths"""
+        from models import db, ScanResult
+        
+        data = request.get_json() or {}
+        file_path = data.get('file_path')
+        file_paths = data.get('file_paths', [])
+        
+        if file_path:
+            file_paths = [file_path]
+        
+        if not file_paths:
+            return {'error': 'No file paths provided'}, 400
+        
+        try:
+            # Reset files by path
+            results = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+            count = len(results)
+            for result in results:
+                result.scan_status = 'pending'
+                result.is_corrupted = False
+                result.marked_as_good = False
+                result.error_message = None
+                result.scan_output = None
+            
+            db.session.commit()
+            
+            return {
+                'message': f'Reset {count} files for rescanning',
+                'count': count
+            }
+            
+        except Exception as e:
+            logger.error(f"Error resetting files by path: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/recover-stuck-scan')
+class RecoverStuckScan(Resource):
+    @scan_ns.doc('recover_stuck_scan')
+    @scan_ns.response(200, 'Scan recovered', stuck_scan_recovery_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Attempt to recover from a stuck scan state"""
+        from models import db, ScanState
+        
+        try:
+            # Use scan service to reset stuck scans
+            scan_service = current_app.scan_service
+            result = scan_service.reset_stuck_scans()
+            
+            # Reset database scan state
+            scan_state = ScanState.get_or_create()
+            if scan_state.phase == 'scanning':
+                scan_state.error_scan('Scan was stuck and has been recovered')
+                db.session.commit()
+            
+            return {
+                'message': 'Scan state recovered successfully',
+                'stuck_files_reset': result.get('count', 0)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error recovering stuck scan: {e}")
+            return {'error': str(e)}, 500
 
 # Stats endpoints
 @stats_ns.route('/summary')

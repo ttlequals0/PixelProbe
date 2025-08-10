@@ -116,4 +116,33 @@ schedule_model = api.model('Schedule', {
     'force_rescan': fields.Boolean(default=False, description='Force rescan of files')
 })
 
+# Reset models
+reset_for_rescan_model = api.model('ResetForRescan', {
+    'type': fields.String(
+        required=True, 
+        enum=['all', 'selected', 'corrupted', 'error'],
+        description='Type of reset: all (reset all files), selected (reset specific files), corrupted (reset corrupted files), error (reset error files)'
+    ),
+    'file_ids': fields.List(
+        fields.Integer, 
+        description='List of file IDs to reset (required only for type=selected)'
+    )
+})
+
+reset_result_model = api.model('ResetResult', {
+    'message': fields.String(description='Result message'),
+    'count': fields.Integer(description='Number of files reset'),
+    'type': fields.String(description='Type of reset performed')
+})
+
+reset_by_path_model = api.model('ResetByPath', {
+    'file_path': fields.String(description='Single file path to reset'),
+    'file_paths': fields.List(fields.String, description='List of file paths to reset')
+})
+
+stuck_scan_recovery_model = api.model('StuckScanRecovery', {
+    'message': fields.String(description='Recovery status message'),
+    'stuck_files_reset': fields.Integer(description='Number of stuck files that were reset')
+})
+
 # Route implementations will be imported in app.py after blueprint registration

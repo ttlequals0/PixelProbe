@@ -98,6 +98,7 @@ class TestScanManagementEndpoints:
             scan_state = ScanState.get_or_create()
             scan_state.is_active = True
             scan_state.phase = 'scanning'
+            scan_state.files_processed = 100  # Add files processed to make it stuck
             scan_state.start_time = datetime.now(timezone.utc)
             db.session.commit()
             

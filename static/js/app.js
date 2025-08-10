@@ -232,10 +232,18 @@ class APIClient {
 
     // Cancel operations
     async cancelScan() {
-        return this.request('/cancel-scan', {
-            method: 'POST',
-            body: JSON.stringify({})
-        });
+        console.log('Calling /api/cancel-scan endpoint...');
+        try {
+            const result = await this.request('/cancel-scan', {
+                method: 'POST',
+                body: JSON.stringify({})
+            });
+            console.log('Cancel scan response:', result);
+            return result;
+        } catch (error) {
+            console.error('Error cancelling scan:', error);
+            throw error;
+        }
     }
 
     async cancelCleanup() {
@@ -330,8 +338,10 @@ class ProgressManager {
     }
 
     show() {
+        console.log('ProgressManager.show() called, container exists:', !!this.progressContainer);
         if (this.progressContainer) {
             this.progressContainer.style.display = 'block';
+            console.log('Progress container display set to block');
             
             // Update progress title based on operation type
             const progressTitle = this.progressContainer.querySelector('.progress-title');
@@ -365,7 +375,7 @@ class ProgressManager {
         }
     }
 
-    update(percentage, text, details = '') {
+    update(percentage, text, details = '', isStuck = false) {
         if (this.progressBar) {
             this.progressBar.style.width = `${percentage}%`;
         }
@@ -376,15 +386,115 @@ class ProgressManager {
         const progressDetails = document.querySelector('.progress-details');
         if (progressDetails) {
             // Show both the main text and details if available
+            let detailsText = '';
             if (details) {
-                progressDetails.textContent = `${text} - ${details}`;
+                detailsText = `${text} - ${details}`;
             } else if (text) {
-                progressDetails.textContent = text;
+                detailsText = text;
+            }
+            
+            // Add recovery button if scan is stuck
+            if (isStuck && this.operationType === 'scan') {
+                progressDetails.innerHTML = `
+                    <div>${detailsText}</div>
+                    <div style="margin-top: 10px;">
+                        <button class="btn btn-warning" onclick="app.recoverStuckScan()">
+                            <i class="fas fa-wrench"></i> Recover Stuck Scan
+                        </button>
+                    </div>
+                `;
+            } else {
+                progressDetails.textContent = detailsText;
             }
         }
     }
 
+    async checkProgress() {
+        try {
+            let status;
+            let isRunning = false;
+            
+            // Get status based on operation type
+            if (this.operationType === 'scan') {
+                status = await this.api.getScanStatus();
+                // Use is_active from database state as primary indicator
+                const isActive = status.is_active !== undefined ? status.is_active : (status.phase === 'scanning' || status.phase === 'discovering' || status.phase === 'adding');
+                isRunning = status.is_scanning || status.is_running || isActive;
+                
+                // Check for stuck scan - has progress but not running AND progress hasn't changed
+                // Only check for stuck if database says not active AND service says not running
+                const isStuck = !isActive && !status.is_running && status.phase === 'scanning' && status.current > 0;
+                if (isStuck) {
+                    // Check if progress has actually changed since last check
+                    const lastProgress = this._lastProgress || {};
+                    const progressChanged = lastProgress.current !== status.current || 
+                                          lastProgress.file !== status.file;
+                    
+                    if (progressChanged) {
+                        // Progress is still changing, not actually stuck
+                        console.log('Progress changed, not stuck:', lastProgress.current, '->', status.current);
+                        this._stuckCounter = 0;
+                    } else {
+                        // Progress hasn't changed, increment stuck counter
+                        this._stuckCounter = (this._stuckCounter || 0) + 1;
+                        console.log('Progress unchanged, stuck counter:', this._stuckCounter);
+                    }
+                    
+                    // Only consider it stuck if progress hasn't changed for multiple checks
+                    const reallyStuck = this._stuckCounter >= 5; // 5 seconds of no progress
+                    
+                    if (reallyStuck) {
+                        console.warn('Scan confirmed stuck after', this._stuckCounter, 'checks:', status);
+                        // Treat stuck scan as still running so UI shows progress
+                        isRunning = true;
+                        // Add stuck indicator to progress message
+                        status.progress_message = '⚠️ SCAN STUCK: ' + (status.progress_message || 'Scan appears to have stopped unexpectedly');
+                        status._isStuck = true; // Add flag to pass to update method
+                    }
+                    
+                    // Store current progress for next check
+                    this._lastProgress = {
+                        current: status.current,
+                        file: status.file
+                    };
+                } else {
+                    // Not stuck - clear counters
+                    this._stuckCounter = 0;
+                    this._lastProgress = {
+                        current: status.current,
+                        file: status.file
+                    };
+                }
+            } else if (this.operationType === 'cleanup') {
+                status = await this.api.getCleanupStatus();
+                isRunning = status.is_running;
+            } else if (this.operationType === 'file-changes') {
+                status = await this.api.getFileChangesStatus();
+                isRunning = status.is_running;
+            }
+            
+            if (status) {
+                if (isRunning) {
+                    const progress = this.calculateProgress(status, this.operationType);
+                    this.update(progress.percentage, progress.text, progress.details, status._isStuck || false);
+                } else if (status.phase === 'complete' || status.phase === 'completed' || 
+                          status.phase === 'cancelled' || status.phase === 'error' ||
+                          status.status === 'completed') {
+                    // Operation is complete - show completion state
+                    this.complete(this.operationType, status);
+                } else {
+                    // Still showing last progress state
+                    const progress = this.calculateProgress(status, this.operationType);
+                    this.update(progress.percentage, progress.text, progress.details, status._isStuck || false);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to check progress:', error);
+        }
+    }
+
     async startMonitoring(operationType = 'scan') {
+        console.log(`Starting monitoring for ${operationType}`);
         this.operationType = operationType;
         this.show();
         
@@ -397,39 +507,11 @@ class ProgressManager {
             this.updateFileChangesButton(true);
         }
         
+        // Immediately check status once
+        await this.checkProgress();
+        
         this.checkInterval = setInterval(async () => {
-            try {
-                let status;
-                let isRunning = false;
-                
-                // Get status based on operation type
-                if (operationType === 'scan') {
-                    status = await this.api.getScanStatus();
-                    isRunning = status.is_scanning;
-                } else if (operationType === 'cleanup') {
-                    status = await this.api.getCleanupStatus();
-                    isRunning = status.is_running;
-                    // Debug log for cleanup status
-                    console.log('Cleanup status:', status);
-                } else if (operationType === 'file-changes') {
-                    status = await this.api.getFileChangesStatus();
-                    isRunning = status.is_running;
-                }
-                
-                if (isRunning) {
-                    const progress = this.calculateProgress(status, operationType);
-                    this.update(progress.percentage, progress.text, progress.details);
-                } else if (status.phase === 'complete' || status.phase === 'completed' || status.phase === 'cancelled' || status.phase === 'error') {
-                    // Operation is complete - show completion state
-                    this.complete(operationType, status);
-                } else {
-                    // Still initializing or in transition - keep showing progress
-                    const progress = this.calculateProgress(status, operationType);
-                    this.update(progress.percentage, progress.text, progress.details);
-                }
-            } catch (error) {
-                console.error(`Failed to check ${operationType} status:`, error);
-            }
+            await this.checkProgress();
         }, 1000); // Poll every 1 second
     }
     
@@ -485,7 +567,7 @@ class ProgressManager {
         
         // Calculate ETA if we have timing data
         // Prefer backend-provided ETA and speed
-        if (status.eta) {
+        if (status.eta && status.eta !== 'None' && status.eta !== null) {
             const etaDate = new Date(status.eta);
             const now = new Date();
             const remainingMs = etaDate - now;
@@ -493,6 +575,9 @@ class ProgressManager {
             if (remainingMs > 0) {
                 const remainingSeconds = Math.floor(remainingMs / 1000);
                 eta = this.formatTime(remainingSeconds);
+            } else {
+                // ETA is in the past, don't show it
+                eta = '';
             }
         } else if (status.start_time && status.current > 0 && status.total > 0) {
             // Fallback to client-side calculation
@@ -537,33 +622,9 @@ class ProgressManager {
                 
                 text = status.progress_message || `Phase ${phaseNumber} of ${totalPhases}`;
                 
-                // Build details string with all information
-                const parts = [];
-                
-                // Add file count
-                if (status.current > 0 && status.total > 0) {
-                    parts.push(`${status.current.toLocaleString()} of ${status.total.toLocaleString()} files`);
-                } else if (phaseCurrent > 0 && phaseTotal > 0) {
-                    parts.push(`${phaseCurrent.toLocaleString()} of ${phaseTotal.toLocaleString()} files`);
-                }
-                
-                // Add speed if available
-                if (status.files_per_second > 0) {
-                    parts.push(`${status.files_per_second} files/sec`);
-                }
-                
-                // Add current file
-                if (status.file || status.current_file) {
-                    const currentFile = status.file || status.current_file;
-                    parts.push(`Scanning: ${currentFile.split('/').pop()}`);
-                }
-                
-                // Add ETA
-                if (eta) {
-                    parts.push(`ETA: ${eta}`);
-                }
-                
-                details = parts.join(' - ');
+                // The backend now includes all progress details in the progress_message
+                // No need to build additional details string
+                details = '';
             }
         } else if (operationType === 'cleanup') {
             // Use the progress percentage directly from the backend
@@ -595,9 +656,12 @@ class ProgressManager {
                 }
             }
             
-            // Add ETA
+            // Add ETA or stuck warning
             if (eta) {
                 parts.push(`ETA: ${eta}`);
+            } else if (status.is_running && status.files_per_second === 0 && status.current > 0) {
+                // Only warn if scan has made no progress (0 files/sec) after starting
+                parts.push(`Processing...`);
             }
             
             details = parts.join(' - ');
@@ -623,9 +687,12 @@ class ProgressManager {
                 parts.push(`Found ${status.changes_found} changed files`);
             }
             
-            // Add ETA
+            // Add ETA or stuck warning
             if (eta) {
                 parts.push(`ETA: ${eta}`);
+            } else if (status.is_running && status.files_per_second === 0 && status.current > 0) {
+                // Only warn if scan has made no progress (0 files/sec) after starting
+                parts.push(`Processing...`);
             }
             
             details = parts.join(' - ');
@@ -635,16 +702,35 @@ class ProgressManager {
     }
 
     formatTime(seconds) {
+        // Handle edge cases
+        if (seconds <= 0) {
+            return 'calculating...';
+        }
+        
+        // For very short times, show "Less than 1 minute"
+        if (seconds < 60) {
+            return 'Less than 1 minute';
+        }
+        
         const hours = Math.floor(seconds / 3600);
         const mins = Math.floor((seconds % 3600) / 60);
         const secs = Math.floor(seconds % 60);
         
         if (hours > 0) {
+            if (hours > 24) {
+                const days = Math.floor(hours / 24);
+                const remainingHours = hours % 24;
+                return `${days}d ${remainingHours}h`;
+            }
             return `${hours}h ${mins}m`;
         } else if (mins > 0) {
+            // Don't show seconds for times over 5 minutes for cleaner display
+            if (mins >= 5) {
+                return `${mins}m`;
+            }
             return `${mins}m ${secs}s`;
         } else {
-            return `${secs}s`;
+            return 'Less than 1 minute';
         }
     }
 
@@ -1253,7 +1339,12 @@ class PixelProbeApp {
         try {
             // Check for ongoing scan
             const scanStatus = await this.api.getScanStatus();
-            if (scanStatus.is_scanning) {
+            console.log('Page load - Scan status:', scanStatus);
+            
+            // Check for active scan (remove stuck detection on page load - it will be handled by monitoring)
+            if (scanStatus.is_scanning || scanStatus.is_running || 
+                (scanStatus.phase === 'scanning' && scanStatus.current > 0)) {
+                console.log('Active scan detected on page load, starting monitoring...');
                 this.progress.operationType = 'scan';
                 this.progress.startMonitoring('scan');
                 return; // Only monitor one operation at a time
@@ -1295,6 +1386,33 @@ class PixelProbeApp {
             this.showNotification('Scan started', 'success');
         } catch (error) {
             this.showNotification('Failed to start scan', 'error');
+        }
+    }
+
+    async recoverStuckScan() {
+        try {
+            this.showNotification('Attempting to recover stuck scan...', 'info');
+            const response = await fetch('/api/recover-stuck-scan', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Failed to recover scan: ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            this.showNotification(result.message || 'Scan recovered successfully', 'success');
+            
+            // Reload the page to reset the UI
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } catch (error) {
+            console.error('Failed to recover stuck scan:', error);
+            this.showNotification(error.message || 'Failed to recover scan', 'error');
         }
     }
 
@@ -2477,15 +2595,23 @@ class PixelProbeApp {
     }
 
     async cancelCurrentOperation() {
+        console.log('Cancel button clicked');
         try {
             // Determine which operation is currently running and cancel it
             const operationType = this.progress.operationType;
+            console.log('Current operation type:', operationType);
             
             if (operationType === 'scan') {
                 const status = await this.api.getScanStatus();
-                if (status.is_scanning) {
-                    await this.api.cancelScan();
+                console.log('Scan status:', status);
+                if (status.is_scanning || status.is_running || status.is_active) {
+                    console.log('Calling cancel API...');
+                    const result = await this.api.cancelScan();
+                    console.log('Cancel result:', result);
                     this.showNotification('Scan cancellation requested', 'info');
+                } else {
+                    console.log('No scan running to cancel');
+                    this.showNotification('No scan is currently running', 'warning');
                 }
             } else if (operationType === 'cleanup') {
                 const status = await this.api.getCleanupStatus();
