@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.42] - 2025-08-10
+
+### Fixed
+- **Scan Stopping After ~100k Files**: Fixed overly aggressive duplicate detection that was aborting scans prematurely
+  - Changed duplicate detection logic to only abort on actual infinite loops
+  - Now properly handles cases where all discovered files already exist in database (normal behavior)
+  - Instead of aborting when all files are duplicates, only abort if processing more than 2x discovered files
+  - Fixes issue where scan would stop after ~100k files when there were 240k+ pending files to process
+
+### Changed
+- Duplicate detection now logs informational message instead of error when all files already exist
+- Safety check only triggers for actual infinite loop scenarios, not normal re-discovery of existing files
+
 ## [2.1.41] - 2025-08-09
 
 ### Fixed

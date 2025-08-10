@@ -289,13 +289,19 @@ class ScanService:
                             # Note: Commit is now done inside _add_files_batch_to_db
                             logger.info(f"Processed batch {batch_start//batch_size + 1}/{(len(all_files) + batch_size - 1)//batch_size}: Added {added_count} total, {duplicate_count} duplicates (batch end: {batch_end}/{len(all_files)})")
                             
-                            # Safety check: if too many duplicates, something is wrong
-                            # Check against total files actually processed (added + duplicates)
+                            # Safety check: Only abort if we're in an infinite loop situation
+                            # This happens when discovery keeps finding the same files repeatedly
+                            # But it's normal for all files to be duplicates if they already exist in DB
+                            # We should only abort if we're processing way more files than discovered
                             total_processed = added_count + duplicate_count
-                            if total_processed > 1000 and duplicate_count == total_processed:
-                                logger.error(f"All files are duplicates ({duplicate_count}/{total_processed}). Discovery phase may have failed.")
+                            if total_processed > new_files_count * 2 and new_files_count > 0:
+                                logger.error(f"Processing more files than discovered ({total_processed} > {new_files_count * 2}). Possible infinite loop.")
                                 logger.error("Aborting add phase to prevent infinite loop.")
                                 break
+                            
+                            # Log high duplicate rate but don't abort - it's normal for existing files
+                            if total_processed > 1000 and duplicate_count == total_processed:
+                                logger.info(f"All {duplicate_count} files already exist in database. This is normal for re-discovered files.")
                             
                             # Periodic checkpoint to prevent transaction log bloat
                             if batch_end % 50000 == 0:
