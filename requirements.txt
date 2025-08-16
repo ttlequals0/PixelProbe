@@ -16,3 +16,11 @@ APScheduler==3.10.4
 requests==2.31.0
 reportlab==4.0.7
 psutil==7.0.0
+
+# PostgreSQL support
+psycopg2-binary==2.9.9
+
+# Future Celery support (commented out for now)
+# celery==5.3.4
+# redis==5.0.1
+# flower==2.0.1

@@ -162,7 +162,7 @@ class MediaScheduler:
             logger.error(f"Failed to activate schedule {schedule.name}: {e}")
             
     def _run_periodic_scan(self):
-        """Run periodic scan on configured paths"""
+        """Run periodic scan on configured paths via HTTP self-call"""
         if not self.scan_lock.acquire(blocking=False):
             logger.warning("Periodic scan already in progress, skipping")
             return
@@ -183,17 +183,48 @@ class MediaScheduler:
                     logger.warning("No paths to scan after exclusions")
                     return
                     
-                # Run scan with deep check to detect changes
+                # Use HTTP self-call to trigger scan
                 import requests
-                requests.post('http://localhost:5000/api/scan-all', 
-                            json={'deep_scan': True, 'paths': filtered_paths},
-                            timeout=5)
                 
+                # Get the correct port from app config or environment
+                port = self.app.config.get('PORT', os.environ.get('PORT', 5000))
+                base_url = f'http://localhost:{port}'
+                
+                # Add internal request header
+                headers = {
+                    'X-Internal-Request': 'scheduler',
+                    'Content-Type': 'application/json'
+                }
+                
+                try:
+                    # Run scan with deep check to detect changes
+                    payload = {
+                        'scan_type': 'periodic',
+                        'paths': filtered_paths,
+                        'deep_scan': True
+                    }
+                    response = requests.post(f'{base_url}/api/start-scan',
+                                          json=payload,
+                                          headers=headers,
+                                          timeout=10)
+                    
+                    if response.status_code == 200:
+                        logger.info("Periodic scan started successfully")
+                    elif response.status_code == 409:
+                        logger.warning("Periodic scan skipped - another scan is already running")
+                    else:
+                        logger.error(f"Periodic scan API call failed: {response.status_code} - {response.text}")
+                        
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Failed to call API for periodic scan: {e}")
+                
+        except Exception as e:
+            logger.error(f"Failed to run periodic scan: {e}")
         finally:
             self.scan_lock.release()
             
     def _run_scheduled_scan(self, schedule_id: int):
-        """Run a scheduled scan"""
+        """Run a scheduled scan via HTTP self-call to avoid Flask context issues"""
         if not self.scan_lock.acquire(blocking=False):
             logger.warning(f"Scheduled scan {schedule_id} already in progress, skipping")
             return
@@ -226,20 +257,52 @@ class MediaScheduler:
                         filtered_paths.append(path)
                         
                 if filtered_paths:
-                    # Trigger scan through API endpoint based on scan type
+                    # Use HTTP self-calls to trigger scans, avoiding Flask context issues
                     import requests
                     
-                    if scan_type == 'orphan':
-                        # Run orphan cleanup
-                        requests.post('http://localhost:5000/api/cleanup-orphaned', timeout=5)
-                    elif scan_type == 'file_changes':
-                        # Run file changes scan
-                        requests.post('http://localhost:5000/api/file-changes', timeout=5)
-                    else:
-                        # Default to normal scan
-                        requests.post('http://localhost:5000/api/scan-all', 
-                                    json={'deep_scan': True, 'paths': filtered_paths},
-                                    timeout=5)
+                    # Get the correct port from app config or environment
+                    port = self.app.config.get('PORT', os.environ.get('PORT', 5000))
+                    base_url = f'http://localhost:{port}'
+                    
+                    # Add internal request header for identification
+                    headers = {
+                        'X-Internal-Request': 'scheduler',
+                        'Content-Type': 'application/json'
+                    }
+                    
+                    try:
+                        if scan_type == 'orphan':
+                            # Run orphan cleanup
+                            response = requests.post(f'{base_url}/api/cleanup-orphaned', 
+                                                    headers=headers,
+                                                    timeout=10)
+                        elif scan_type == 'file_changes':
+                            # Run file changes scan
+                            response = requests.post(f'{base_url}/api/file-changes', 
+                                                    headers=headers,
+                                                    timeout=10)
+                        else:
+                            # Default to normal scan with proper payload
+                            payload = {
+                                'scan_type': 'scheduled',
+                                'schedule_id': schedule_id,
+                                'paths': filtered_paths,
+                                'deep_scan': schedule.options and 'deep_scan' in schedule.options
+                            }
+                            response = requests.post(f'{base_url}/api/start-scan', 
+                                                    json=payload,
+                                                    headers=headers,
+                                                    timeout=10)
+                        
+                        if response.status_code == 200:
+                            logger.info(f"Scheduled scan {schedule_id} started successfully")
+                        elif response.status_code == 409:
+                            logger.warning(f"Scheduled scan {schedule_id} skipped - another scan is already running")
+                        else:
+                            logger.error(f"Scheduled scan {schedule_id} API call failed: {response.status_code} - {response.text}")
+                            
+                    except requests.exceptions.RequestException as e:
+                        logger.error(f"Failed to call API for scheduled scan {schedule_id}: {e}")
                     
         except Exception as e:
             logger.error(f"Failed to run scheduled scan {schedule_id}: {e}")

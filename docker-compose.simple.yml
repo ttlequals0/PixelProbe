@@ -11,8 +11,8 @@ services:
       - SECRET_KEY=development-secret-key
       - TZ=America/New_York
       - FLASK_ENV=development
-      - DATABASE_URL=sqlite:////data/media_checker.db
+      - DATABASE_URL=sqlite:////data/pixelprobe.db
     volumes:
       # Mount the database (update path as needed)
-      - ./instance/media_checker.db:/data/media_checker.db
+      - ./instance/media_checker.db:/data/pixelprobe.db
     restart: unless-stopped

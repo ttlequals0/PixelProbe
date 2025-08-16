@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 import json
 import uuid
 import logging
+import os
 
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,10 @@ db = SQLAlchemy()
 
 class ScanResult(db.Model):
     __tablename__ = 'scan_results'
+    
+    # Configuration for output rotation (can be overridden via environment)
+    MAX_OUTPUT_SIZE = int(os.getenv('MAX_OUTPUT_SIZE', '10000'))  # characters
+    OUTPUT_ROTATION_ENABLED = os.getenv('OUTPUT_ROTATION_ENABLED', 'true').lower() == 'true'
     
     id = db.Column(db.Integer, primary_key=True)
     file_path = db.Column(db.String(500), nullable=False, unique=True, index=True)
@@ -42,6 +47,9 @@ class ScanResult(db.Model):
     media_info = db.Column(db.Text, nullable=True)  # JSON string of media metadata
     file_exists = db.Column(db.Boolean, nullable=False, default=True, index=True)  # Whether file exists on disk
     
+    # Output rotation tracking
+    output_rotation_enabled = db.Column(db.Boolean, nullable=True)  # Per-record rotation setting
+    
     def to_dict(self):
         return {
             'id': self.id,
@@ -67,6 +75,44 @@ class ScanResult(db.Model):
             'media_info': self.media_info,
             'file_exists': self.file_exists
         }
+    
+    def append_output(self, new_output):
+        """
+        Append output to scan_output field with rotation if enabled.
+        Prevents unbounded memory growth during long scans.
+        """
+        if not new_output:
+            return
+        
+        # Check if rotation is enabled (globally or per-record)
+        rotation_enabled = self.output_rotation_enabled if self.output_rotation_enabled is not None else self.OUTPUT_ROTATION_ENABLED
+        
+        if not rotation_enabled:
+            # No rotation - just append
+            self.scan_output = (self.scan_output or '') + new_output
+            return
+        
+        current_output = self.scan_output or ''
+        combined_length = len(current_output) + len(new_output)
+        
+        if combined_length > self.MAX_OUTPUT_SIZE:
+            # Need to rotate - keep last 80% of allowed size
+            keep_size = int(self.MAX_OUTPUT_SIZE * 0.8)
+            
+            # Calculate how much of the old output to keep
+            if len(new_output) >= keep_size:
+                # New output is larger than what we want to keep
+                # Just keep the end of the new output
+                self.scan_output = '... [output rotated] ...\n' + new_output[-keep_size:]
+            else:
+                # Keep some old output plus all new output
+                old_keep_size = keep_size - len(new_output)
+                self.scan_output = '... [output rotated] ...\n' + current_output[-old_keep_size:] + new_output
+            
+            logger.debug(f"Rotated output for {self.file_path}: was {combined_length} chars, now {len(self.scan_output)} chars")
+        else:
+            # Still under limit - just append
+            self.scan_output = current_output + new_output
     
     def __repr__(self):
         return f'<ScanResult {self.file_path}>'

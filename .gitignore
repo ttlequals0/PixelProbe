@@ -131,6 +131,7 @@ Thumbs.db
 
 # Application specific
 media_checker.db
+pixelprobe.db
 *.db
 data/
 logs/
@@ -158,3 +159,5 @@ backup/
 # Claude AI specific files
 .claude/
 test_env/
+2.1_AUDIT_IMPLEMENTATION_PLAN.mdpixelprobe.db
+*.db

@@ -67,33 +67,29 @@ app = Flask(__name__)
 
 # Configure app
 # Require SECRET_KEY in production - no insecure fallback
-SECRET_KEY = os.environ.get('SECRET_KEY')
-if not SECRET_KEY:
-    logger.error("SECRET_KEY environment variable is required for security")
-    raise ValueError("SECRET_KEY environment variable must be set")
-app.config['SECRET_KEY'] = SECRET_KEY
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_pre_ping': True,
-    'pool_recycle': 300,
-    'pool_size': 10,
-    'max_overflow': 20,
-    'pool_timeout': 30,
-    'connect_args': {
-        'timeout': 30,
-        'check_same_thread': False,
-        'isolation_level': 'DEFERRED',
-    }
-}
+# Load configuration from config module
+from config import get_config
+config_name = os.getenv('FLASK_ENV', 'development')
+config_class = get_config(config_name)
+config_class.init_app(app)
+
+# Backward compatibility - keep old environment variable support
+if not app.config.get('SECRET_KEY'):
+    SECRET_KEY = os.environ.get('SECRET_KEY')
+    if not SECRET_KEY:
+        logger.error("SECRET_KEY environment variable is required for security")
+        raise ValueError("SECRET_KEY environment variable must be set")
+    app.config['SECRET_KEY'] = SECRET_KEY
+
+# Override database URL if provided via old environment variable
+if os.environ.get('DATABASE_URL'):
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 
 # Initialize extensions
 db.init_app(app)
 
-# Apply SQLite optimizations for large databases
-if 'sqlite' in app.config['SQLALCHEMY_DATABASE_URI']:
-    from pixelprobe.services.db_optimization import setup_sqlite_optimizations
-    setup_sqlite_optimizations(db)
+# PostgreSQL is now the only supported database
+# No SQLite optimizations needed
 
 CORS(app, resources={
     r"/api/*": {"origins": "*"},
