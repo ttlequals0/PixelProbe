@@ -159,6 +159,7 @@ class PostgreSQLMigrator:
             logger.info(f"Connected to SQLite database: {self.sqlite_path}")
             
             # Connect to PostgreSQL
+            # Use connection parameters directly to avoid URL encoding issues
             self.pg_conn = psycopg2.connect(
                 host=self.pg_config['host'],
                 port=self.pg_config['port'],

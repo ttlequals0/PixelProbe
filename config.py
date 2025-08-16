@@ -23,7 +23,9 @@ class Config:
     POSTGRES_USER = os.getenv('POSTGRES_USER', 'pixelprobe')
     POSTGRES_PASSWORD = os.getenv('POSTGRES_PASSWORD', '')
     
-    # Build PostgreSQL connection string
+    # Build PostgreSQL connection string with proper URL encoding
+    import urllib.parse
+    
     if not POSTGRES_PASSWORD:
         logger.warning("POSTGRES_PASSWORD not set - using PostgreSQL without password")
         SQLALCHEMY_DATABASE_URI = (
@@ -31,8 +33,10 @@ class Config:
             f"{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
         )
     else:
+        # URL encode the password to handle special characters
+        encoded_password = urllib.parse.quote(POSTGRES_PASSWORD, safe='')
         SQLALCHEMY_DATABASE_URI = (
-            f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@"
+            f"postgresql://{POSTGRES_USER}:{encoded_password}@"
             f"{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
         )
     
