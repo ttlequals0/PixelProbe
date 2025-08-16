@@ -26,6 +26,13 @@ def run_startup_migrations(db):
             'check_sql': "SELECT cancel_requested FROM file_changes_state LIMIT 0",
             'migration_sql': "ALTER TABLE file_changes_state ADD COLUMN cancel_requested BOOLEAN DEFAULT 0",
             'description': 'Adding cancel_requested to file_changes_state'
+        },
+        # Add output_rotation_enabled to scan_results (v2.2.4)
+        {
+            'table': 'scan_results',
+            'check_sql': "SELECT output_rotation_enabled FROM scan_results LIMIT 0",
+            'migration_sql': "ALTER TABLE scan_results ADD COLUMN output_rotation_enabled BOOLEAN",
+            'description': 'Adding output_rotation_enabled to scan_results'
         }
     ]
     

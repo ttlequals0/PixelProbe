@@ -53,7 +53,8 @@ class PostgreSQLMigrator:
                 'deep_scan': 'BOOLEAN DEFAULT FALSE',
                 'error_message': 'TEXT',
                 'media_info': 'TEXT',
-                'file_exists': 'BOOLEAN DEFAULT TRUE'
+                'file_exists': 'BOOLEAN DEFAULT TRUE',
+                'output_rotation_enabled': 'BOOLEAN'
             },
             'ignored_error_patterns': {
                 'id': 'INTEGER PRIMARY KEY',
@@ -73,80 +74,126 @@ class PostgreSQLMigrator:
             },
             'scan_schedules': {
                 'id': 'INTEGER PRIMARY KEY',
-                'schedule_name': 'VARCHAR(100)',  # Allow NULL for backward compatibility
-                'scan_type': 'VARCHAR(50) NOT NULL',
-                'cron_expression': 'VARCHAR(100)',
-                'enabled': 'BOOLEAN DEFAULT TRUE',
+                'name': 'VARCHAR(100) NOT NULL',
+                'cron_expression': 'VARCHAR(50) NOT NULL',
+                'scan_paths': 'TEXT',
+                'scan_type': 'VARCHAR(20) NOT NULL',
+                'force_rescan': 'BOOLEAN NOT NULL',
+                'is_active': 'BOOLEAN NOT NULL',
                 'last_run': 'TIMESTAMP',
                 'next_run': 'TIMESTAMP',
-                'created_at': 'TIMESTAMP WITH TIME ZONE',
-                'updated_at': 'TIMESTAMP WITH TIME ZONE',
-                'scan_paths': 'TEXT',
-                'options': 'TEXT'
+                'created_at': 'TIMESTAMP NOT NULL',
+                'created_date': 'TIMESTAMP NOT NULL'
             },
             'scan_chunks': {
-                'chunk_id': 'VARCHAR(100) PRIMARY KEY',
-                'scan_id': 'VARCHAR(50)',
-                'directory_path': 'TEXT',
-                'file_paths': 'TEXT',
-                'chunk_index': 'INTEGER',
-                'total_chunks': 'INTEGER',
-                'processed': 'BOOLEAN DEFAULT FALSE',
-                'created_at': 'TIMESTAMP',
-                'processed_at': 'TIMESTAMP'
+                'id': 'INTEGER PRIMARY KEY',
+                'scan_id': 'VARCHAR(36) NOT NULL',
+                'chunk_id': 'VARCHAR(100) NOT NULL UNIQUE',
+                'directory_path': 'VARCHAR(500) NOT NULL',
+                'phase': 'VARCHAR(20) NOT NULL',
+                'status': 'VARCHAR(20) NOT NULL',
+                'files_discovered': 'INTEGER NOT NULL',
+                'files_added': 'INTEGER NOT NULL',
+                'files_scanned': 'INTEGER NOT NULL',
+                'start_time': 'TIMESTAMP',
+                'end_time': 'TIMESTAMP',
+                'error_message': 'TEXT'
             },
             'scan_state': {
                 'id': 'INTEGER PRIMARY KEY',
-                'scan_id': 'VARCHAR(50) UNIQUE',
-                'scan_type': 'VARCHAR(50)',
-                'status': 'VARCHAR(50)',
-                'progress': 'FLOAT',
-                'total_files': 'INTEGER',
-                'scanned_files': 'INTEGER',
-                'corrupted_files': 'INTEGER',
-                'start_time': 'TIMESTAMP',
+                'scan_id': 'VARCHAR(36) NOT NULL UNIQUE',
+                'is_active': 'BOOLEAN NOT NULL',
+                'phase': 'VARCHAR(20) NOT NULL',
+                'phase_number': 'INTEGER NOT NULL',
+                'phase_current': 'INTEGER NOT NULL',
+                'phase_total': 'INTEGER NOT NULL',
+                'files_processed': 'INTEGER NOT NULL',
+                'estimated_total': 'INTEGER NOT NULL',
+                'discovery_count': 'INTEGER NOT NULL',
+                'start_time': 'TIMESTAMP NOT NULL',
                 'end_time': 'TIMESTAMP',
-                'error_message': 'TEXT',
-                'scan_paths': 'TEXT'
+                'current_file': 'VARCHAR(500)',
+                'progress_message': 'VARCHAR(200)',
+                'error_message': 'VARCHAR(500)',
+                'directories': 'TEXT',
+                'force_rescan': 'BOOLEAN NOT NULL',
+                'current_chunk_index': 'INTEGER NOT NULL',
+                'total_chunks': 'INTEGER NOT NULL',
+                'chunks_completed': 'TEXT'
             },
             'scan_configurations': {
                 'id': 'INTEGER PRIMARY KEY',
-                'config_key': 'VARCHAR(100) UNIQUE NOT NULL',
-                'config_value': 'TEXT',
-                'description': 'TEXT',
-                'created_at': 'TIMESTAMP WITH TIME ZONE',
-                'updated_at': 'TIMESTAMP WITH TIME ZONE'
+                'key': 'VARCHAR(50) UNIQUE',
+                'value': 'TEXT',
+                'description': 'VARCHAR(200)',
+                'updated_date': 'TIMESTAMP',
+                'path': 'VARCHAR(500) UNIQUE',
+                'is_active': 'BOOLEAN NOT NULL',
+                'created_at': 'TIMESTAMP'
             },
             'scan_reports': {
                 'id': 'INTEGER PRIMARY KEY',
-                'report_id': 'VARCHAR(50) UNIQUE NOT NULL',
-                'scan_id': 'VARCHAR(50)',
-                'report_type': 'VARCHAR(50)',
-                'file_path': 'VARCHAR(500)',
-                'created_at': 'TIMESTAMP',
-                'metadata': 'TEXT'
+                'report_id': 'VARCHAR(36) NOT NULL UNIQUE',
+                'scan_type': 'VARCHAR(50) NOT NULL',
+                'start_time': 'TIMESTAMP NOT NULL',
+                'end_time': 'TIMESTAMP',
+                'duration_seconds': 'FLOAT',
+                'directories_scanned': 'TEXT',
+                'force_rescan': 'BOOLEAN NOT NULL',
+                'num_workers': 'INTEGER NOT NULL',
+                'total_files_discovered': 'INTEGER NOT NULL',
+                'files_scanned': 'INTEGER NOT NULL',
+                'files_added': 'INTEGER NOT NULL',
+                'files_updated': 'INTEGER NOT NULL',
+                'files_corrupted': 'INTEGER NOT NULL',
+                'files_with_warnings': 'INTEGER NOT NULL',
+                'files_error': 'INTEGER NOT NULL',
+                'orphaned_records_found': 'INTEGER NOT NULL',
+                'orphaned_records_deleted': 'INTEGER NOT NULL',
+                'files_changed': 'INTEGER NOT NULL',
+                'files_corrupted_new': 'INTEGER NOT NULL',
+                'status': 'VARCHAR(20) NOT NULL',
+                'error_message': 'TEXT',
+                'scan_id': 'VARCHAR(36)',
+                'created_at': 'TIMESTAMP NOT NULL'
             },
             'cleanup_state': {
                 'id': 'INTEGER PRIMARY KEY',
-                'operation_id': 'VARCHAR(50) UNIQUE',
-                'status': 'VARCHAR(50)',
-                'total_orphaned': 'INTEGER',
-                'processed': 'INTEGER',
-                'deleted': 'INTEGER',
+                'cleanup_id': 'VARCHAR(36) NOT NULL UNIQUE',
+                'is_active': 'BOOLEAN NOT NULL',
+                'phase': 'VARCHAR(20) NOT NULL',
+                'phase_number': 'INTEGER NOT NULL',
+                'phase_current': 'INTEGER NOT NULL',
+                'phase_total': 'INTEGER NOT NULL',
+                'files_processed': 'INTEGER NOT NULL',
+                'total_files': 'INTEGER NOT NULL',
+                'orphaned_found': 'INTEGER NOT NULL',
                 'start_time': 'TIMESTAMP',
                 'end_time': 'TIMESTAMP',
-                'error_message': 'TEXT'
+                'current_file': 'VARCHAR(500)',
+                'progress_message': 'VARCHAR(200)',
+                'error_message': 'VARCHAR(500)',
+                'cancel_requested': 'BOOLEAN'
             },
             'file_changes_state': {
                 'id': 'INTEGER PRIMARY KEY',
-                'check_id': 'VARCHAR(50) UNIQUE',
-                'status': 'VARCHAR(50)',
-                'total_files': 'INTEGER',
-                'files_checked': 'INTEGER',
-                'changes_detected': 'INTEGER',
+                'check_id': 'VARCHAR(36) NOT NULL UNIQUE',
+                'is_active': 'BOOLEAN NOT NULL',
+                'phase': 'VARCHAR(20) NOT NULL',
+                'phase_number': 'INTEGER NOT NULL',
+                'phase_current': 'INTEGER NOT NULL',
+                'phase_total': 'INTEGER NOT NULL',
+                'files_processed': 'INTEGER NOT NULL',
+                'total_files': 'INTEGER NOT NULL',
+                'changes_found': 'INTEGER NOT NULL',
+                'corrupted_found': 'INTEGER NOT NULL',
                 'start_time': 'TIMESTAMP',
                 'end_time': 'TIMESTAMP',
-                'error_message': 'TEXT'
+                'current_file': 'VARCHAR(500)',
+                'progress_message': 'VARCHAR(200)',
+                'error_message': 'VARCHAR(500)',
+                'changed_files': 'TEXT',
+                'cancel_requested': 'BOOLEAN'
             }
         }
     
@@ -181,6 +228,25 @@ class PostgreSQLMigrator:
         try:
             # Create tables
             for table_name, columns in self.table_mappings.items():
+                # Check if table exists and get its columns
+                try:
+                    cursor.execute("""
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name = %s AND table_schema = 'public'
+                    """, (table_name,))
+                    existing_columns = {row[0] for row in cursor.fetchall()}
+                    expected_columns = set(columns.keys())
+                    
+                    # If table exists but has wrong structure, drop it
+                    if existing_columns and existing_columns != expected_columns:
+                        logger.warning(f"Table {table_name} exists with wrong structure, dropping and recreating")
+                        cursor.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")
+                        existing_columns = set()
+                        
+                except Exception:
+                    existing_columns = set()
+                
                 # Build CREATE TABLE statement
                 col_definitions = []
                 for col_name, col_type in columns.items():
@@ -203,14 +269,19 @@ class PostgreSQLMigrator:
                 "CREATE INDEX IF NOT EXISTS idx_scan_results_file_hash ON scan_results(file_hash)",
                 "CREATE INDEX IF NOT EXISTS idx_scan_results_marked_as_good ON scan_results(marked_as_good)",
                 "CREATE INDEX IF NOT EXISTS idx_scan_chunks_scan_id ON scan_chunks(scan_id)",
-                "CREATE INDEX IF NOT EXISTS idx_scan_chunks_processed ON scan_chunks(processed)",
+                "CREATE INDEX IF NOT EXISTS idx_scan_chunks_chunk_id ON scan_chunks(chunk_id)",
                 "CREATE INDEX IF NOT EXISTS idx_scan_state_scan_id ON scan_state(scan_id)",
-                "CREATE INDEX IF NOT EXISTS idx_scan_state_status ON scan_state(status)"
+                "CREATE INDEX IF NOT EXISTS idx_cleanup_state_cleanup_id ON cleanup_state(cleanup_id)",
+                "CREATE INDEX IF NOT EXISTS idx_file_changes_state_check_id ON file_changes_state(check_id)"
             ]
             
             for index_sql in indexes:
-                cursor.execute(index_sql)
-                logger.info(f"Created index: {index_sql.split('idx_')[1].split(' ')[0]}")
+                try:
+                    cursor.execute(index_sql)
+                    logger.info(f"Created index: {index_sql.split('idx_')[1].split(' ')[0]}")
+                except Exception as e:
+                    index_name = index_sql.split('idx_')[1].split(' ')[0] if 'idx_' in index_sql else 'unknown'
+                    logger.warning(f"Failed to create index {index_name}: {e}")
             
             self.pg_conn.commit()
             logger.info("PostgreSQL schema created successfully")
@@ -264,10 +335,13 @@ class PostgreSQLMigrator:
                     for i, col in enumerate(columns_to_migrate):
                         value = row[i]
                         # Convert SQLite boolean (0/1) to PostgreSQL boolean
-                        if isinstance(value, int) and col in ['is_corrupted', 'marked_as_good', 
-                                                              'has_warnings', 'deep_scan', 
-                                                              'file_exists', 'is_active', 
-                                                              'enabled', 'processed']:
+                        # Get column definition to check if it's a boolean field
+                        is_boolean_field = (
+                            col in self.table_mappings[table_name] and 
+                            'BOOLEAN' in self.table_mappings[table_name][col].upper()
+                        )
+                        
+                        if isinstance(value, int) and is_boolean_field:
                             value = bool(value)
                         # Handle NULL values
                         elif value is None:

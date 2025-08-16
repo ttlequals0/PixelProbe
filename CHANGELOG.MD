@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.4] - 2025-08-16
+
+### Fixed
+- **Missing Column Fix**: Added output_rotation_enabled column
+  - Fixed "column scan_results.output_rotation_enabled does not exist" error
+  - Added missing column to migration script
+  - Added startup migration to automatically add column if missing
+  - Fixes issue where data wouldn't display in web UI after PostgreSQL migration
+
+## [2.2.3] - 2025-08-16
+
+### Fixed
+- **Migration Script**: Fixed PostgreSQL migration script
+  - Fixed scan_chunks table structure validation
+  - Added table structure checking and recreation if needed
+  - Improved error handling for index creation
+  - Migration script now handles table mismatches gracefully
+
 ## [2.2.2] - 2025-08-16
 
 ### Fixed
