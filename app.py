@@ -311,16 +311,39 @@ def migrate_database():
         create_performance_indexes()
         
         # Add new columns if they don't exist
+        def get_table_columns(conn, table_name):
+            """Get column names for a table, compatible with both SQLite and PostgreSQL"""
+            try:
+                # Try PostgreSQL first
+                result = conn.execute(text("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = :table_name
+                """), {"table_name": table_name})
+                columns = [row[0] for row in result]
+                if columns:
+                    return columns
+            except Exception:
+                pass
+            
+            try:
+                # Fallback to SQLite PRAGMA
+                result = conn.execute(text(f"PRAGMA table_info({table_name})"))
+                columns = [row[1] for row in result]
+                return columns
+            except Exception as e:
+                logger.error(f"Failed to get columns for table {table_name}: {e}")
+                return []
+        
         with db.engine.connect() as conn:
             # Migrate scan_results table
-            result = conn.execute(text("PRAGMA table_info(scan_results)"))
-            columns = [row[1] for row in result]
+            columns = get_table_columns(conn, 'scan_results')
             
             migrations = [
-                ('has_warnings', "ALTER TABLE scan_results ADD COLUMN has_warnings BOOLEAN DEFAULT 0"),
+                ('has_warnings', "ALTER TABLE scan_results ADD COLUMN has_warnings BOOLEAN DEFAULT FALSE"),
                 ('discovered_date', "ALTER TABLE scan_results ADD COLUMN discovered_date TIMESTAMP"),
-                ('marked_as_good', "ALTER TABLE scan_results ADD COLUMN marked_as_good BOOLEAN DEFAULT 0"),
-                ('file_exists', "ALTER TABLE scan_results ADD COLUMN file_exists BOOLEAN DEFAULT 1"),
+                ('marked_as_good', "ALTER TABLE scan_results ADD COLUMN marked_as_good BOOLEAN DEFAULT FALSE"),
+                ('file_exists', "ALTER TABLE scan_results ADD COLUMN file_exists BOOLEAN DEFAULT TRUE"),
                 ('error_message', "ALTER TABLE scan_results ADD COLUMN error_message TEXT"),
                 ('media_info', "ALTER TABLE scan_results ADD COLUMN media_info TEXT")
             ]
@@ -332,12 +355,11 @@ def migrate_database():
                     conn.commit()
             
             # Migrate scan_configurations table
-            result = conn.execute(text("PRAGMA table_info(scan_configurations)"))
-            columns = [row[1] for row in result]
+            columns = get_table_columns(conn, 'scan_configurations')
             
             config_migrations = [
                 ('path', "ALTER TABLE scan_configurations ADD COLUMN path VARCHAR(500)"),
-                ('is_active', "ALTER TABLE scan_configurations ADD COLUMN is_active BOOLEAN DEFAULT 1"),
+                ('is_active', "ALTER TABLE scan_configurations ADD COLUMN is_active BOOLEAN DEFAULT TRUE"),
                 ('created_at', "ALTER TABLE scan_configurations ADD COLUMN created_at TIMESTAMP")
             ]
             
@@ -348,8 +370,7 @@ def migrate_database():
                     conn.commit()
             
             # Migrate ignored_error_patterns table
-            result = conn.execute(text("PRAGMA table_info(ignored_error_patterns)"))
-            columns = [row[1] for row in result]
+            columns = get_table_columns(conn, 'ignored_error_patterns')
             
             if 'created_at' not in columns:
                 logger.info("Adding created_at column to ignored_error_patterns table")
@@ -357,11 +378,10 @@ def migrate_database():
                 conn.commit()
             
             # Migrate scan_schedules table
-            result = conn.execute(text("PRAGMA table_info(scan_schedules)"))
-            columns = [row[1] for row in result]
+            columns = get_table_columns(conn, 'scan_schedules')
             
             schedule_migrations = [
-                ('force_rescan', "ALTER TABLE scan_schedules ADD COLUMN force_rescan BOOLEAN DEFAULT 0"),
+                ('force_rescan', "ALTER TABLE scan_schedules ADD COLUMN force_rescan BOOLEAN DEFAULT FALSE"),
                 ('created_at', "ALTER TABLE scan_schedules ADD COLUMN created_at TIMESTAMP")
             ]
             
@@ -372,12 +392,11 @@ def migrate_database():
                     conn.commit()
             
             # Migrate scan_state table
-            result = conn.execute(text("PRAGMA table_info(scan_state)"))
-            columns = [row[1] for row in result]
+            columns = get_table_columns(conn, 'scan_state')
             
             state_migrations = [
                 ('directories', "ALTER TABLE scan_state ADD COLUMN directories TEXT"),
-                ('force_rescan', "ALTER TABLE scan_state ADD COLUMN force_rescan BOOLEAN DEFAULT 0"),
+                ('force_rescan', "ALTER TABLE scan_state ADD COLUMN force_rescan BOOLEAN DEFAULT FALSE"),
                 ('current_chunk_index', "ALTER TABLE scan_state ADD COLUMN current_chunk_index INTEGER DEFAULT 0"),
                 ('total_chunks', "ALTER TABLE scan_state ADD COLUMN total_chunks INTEGER DEFAULT 0"),
                 ('chunks_completed', "ALTER TABLE scan_state ADD COLUMN chunks_completed TEXT")
@@ -390,14 +409,37 @@ def migrate_database():
                     conn.commit()
             
             # Check if scan_chunks table exists
-            tables = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
-            table_names = [row[0] for row in tables]
+            def get_table_names(conn):
+                """Get table names for the database, compatible with both SQLite and PostgreSQL"""
+                try:
+                    # Try PostgreSQL first
+                    result = conn.execute(text("""
+                        SELECT table_name 
+                        FROM information_schema.tables 
+                        WHERE table_schema = 'public'
+                    """))
+                    tables = [row[0] for row in result]
+                    if tables:
+                        return tables
+                except Exception:
+                    pass
+                
+                try:
+                    # Fallback to SQLite
+                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+                    tables = [row[0] for row in result]
+                    return tables
+                except Exception as e:
+                    logger.error(f"Failed to get table names: {e}")
+                    return []
+            
+            table_names = get_table_names(conn)
             
             if 'scan_chunks' not in table_names:
                 logger.info("Creating scan_chunks table for resumable scanning")
                 conn.execute(text("""
                     CREATE TABLE scan_chunks (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id SERIAL PRIMARY KEY,
                         scan_id VARCHAR(36) NOT NULL,
                         chunk_id VARCHAR(100) NOT NULL UNIQUE,
                         directory_path VARCHAR(500) NOT NULL,

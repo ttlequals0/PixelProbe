@@ -135,10 +135,10 @@ class ScanRepository(BaseRepository[ScanResult]):
                     SUM(CASE WHEN scan_status = 'pending' THEN 1 ELSE 0 END) as pending_files,
                     SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
                     SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
-                    SUM(CASE WHEN is_corrupted = 1 AND marked_as_good = 0 THEN 1 ELSE 0 END) as corrupted_files,
-                    SUM(CASE WHEN (is_corrupted = 0 OR marked_as_good = 1) THEN 1 ELSE 0 END) as healthy_files,
-                    SUM(CASE WHEN marked_as_good = 1 THEN 1 ELSE 0 END) as marked_as_good,
-                    SUM(CASE WHEN has_warnings = 1 AND marked_as_good = 0 THEN 1 ELSE 0 END) as warning_files
+                    SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,
+                    SUM(CASE WHEN (is_corrupted = FALSE OR marked_as_good = TRUE) THEN 1 ELSE 0 END) as healthy_files,
+                    SUM(CASE WHEN marked_as_good = TRUE THEN 1 ELSE 0 END) as marked_as_good,
+                    SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as warning_files
                 FROM scan_results
             """)
         ).fetchone()
