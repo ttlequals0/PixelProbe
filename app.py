@@ -81,8 +81,10 @@ if not app.config.get('SECRET_KEY'):
         raise ValueError("SECRET_KEY environment variable must be set")
     app.config['SECRET_KEY'] = SECRET_KEY
 
-# Override database URL if provided via old environment variable
+# Override database URL if provided via old environment variable (deprecated in v2.2.0)
+# NOTE: DATABASE_URL is deprecated. Use POSTGRES_* variables instead.
 if os.environ.get('DATABASE_URL'):
+    logger.warning("DATABASE_URL is deprecated in v2.2.0. Use POSTGRES_HOST, POSTGRES_USER, etc. instead.")
     app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 
 # Initialize extensions

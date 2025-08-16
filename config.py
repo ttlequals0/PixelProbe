@@ -23,25 +23,6 @@ class Config:
     POSTGRES_USER = os.getenv('POSTGRES_USER', 'pixelprobe')
     POSTGRES_PASSWORD = os.getenv('POSTGRES_PASSWORD', '')
     
-    # Build PostgreSQL connection string with proper URL encoding
-    import urllib.parse
-    
-    if not POSTGRES_PASSWORD:
-        logger.warning("POSTGRES_PASSWORD not set - using PostgreSQL without password")
-        SQLALCHEMY_DATABASE_URI = (
-            f"postgresql://{POSTGRES_USER}@"
-            f"{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-        )
-    else:
-        # URL encode the password to handle special characters
-        encoded_password = urllib.parse.quote(POSTGRES_PASSWORD, safe='')
-        SQLALCHEMY_DATABASE_URI = (
-            f"postgresql://{POSTGRES_USER}:{encoded_password}@"
-            f"{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-        )
-    
-    logger.info(f"Using PostgreSQL database: {POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}")
-    
     # SQLAlchemy configuration
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
@@ -53,12 +34,24 @@ class Config:
         'max_overflow': 40,
         'pool_timeout': 30,
         'echo': os.getenv('DATABASE_ECHO', 'false').lower() == 'true',
-        'connect_args': {
-            'connect_timeout': 10,
-            'application_name': 'pixelprobe',
-            'options': '-c statement_timeout=300000'  # 5 minute statement timeout
-        }
+        'connect_args': {}  # Will be populated in init_app if needed
     }
+    
+    # Build basic PostgreSQL connection string (will be refined in init_app)
+    if not POSTGRES_PASSWORD:
+        logger.warning("POSTGRES_PASSWORD not set - using PostgreSQL without password")
+        SQLALCHEMY_DATABASE_URI = (
+            f"postgresql://{POSTGRES_USER}@"
+            f"{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+        )
+    else:
+        # Default URL format - will be adjusted in init_app if password has special chars
+        SQLALCHEMY_DATABASE_URI = (
+            f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@"
+            f"{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+        )
+    
+    logger.info(f"Using PostgreSQL database: {POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}")
     
     # Application settings
     SCAN_PATHS = os.getenv('SCAN_PATHS', '/media').split(',')
@@ -87,10 +80,38 @@ class Config:
     @classmethod
     def init_app(cls, app):
         """Initialize application with configuration"""
-        # Set all configuration values on the app
+        # Set all configuration values first
         for key in dir(cls):
             if key.isupper():
                 app.config[key] = getattr(cls, key)
+        
+        # Handle PostgreSQL password - always use connect_args for consistency and security
+        if cls.POSTGRES_PASSWORD:
+            special_chars = ['@', '?', '#', '/', '\\', ':', ';', '%', '&', '!', '$']
+            has_special_chars = any(char in cls.POSTGRES_PASSWORD for char in special_chars)
+            
+            if has_special_chars:
+                logger.info("Password contains special characters, using connection parameters")
+            
+            logger.info(f"Connecting to PostgreSQL at {cls.POSTGRES_HOST}:{cls.POSTGRES_PORT}/{cls.POSTGRES_DB} as user {cls.POSTGRES_USER}")
+            
+            # Always use connect_args for password to avoid URL encoding issues
+            app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://"
+            
+            # Update engine options with connection parameters
+            engine_options = app.config['SQLALCHEMY_ENGINE_OPTIONS'].copy()
+            # Set the actual connection parameters
+            engine_options['connect_args'] = {
+                'user': cls.POSTGRES_USER,
+                'password': cls.POSTGRES_PASSWORD,
+                'host': cls.POSTGRES_HOST,
+                'port': int(cls.POSTGRES_PORT),
+                'dbname': cls.POSTGRES_DB,
+                'connect_timeout': 10,
+                'application_name': 'pixelprobe'
+            }
+            app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
+            logger.debug(f"Connection args set for user: {engine_options['connect_args'].get('user')}, host: {engine_options['connect_args'].get('host')}")
         
         # Log configuration (without sensitive data)
         logger.info(f"Database Type: PostgreSQL")
@@ -150,15 +171,35 @@ class TestingConfig(Config):
         'pool_size': 5,
         'max_overflow': 0,
         'pool_timeout': 10,
-        'connect_args': {
-            'connect_timeout': 5,
-            'application_name': 'pixelprobe_test'
-        }
+        'connect_args': {}  # Will be populated in init_app
     }
     
     # Disable output rotation in tests
     OUTPUT_ROTATION_ENABLED = False
     MAX_OUTPUT_SIZE = 1000
+    
+    @classmethod
+    def init_app(cls, app):
+        """Initialize testing app with configuration"""
+        # First apply parent configuration
+        super().init_app(app)
+        
+        # Override with testing database
+        app.config['POSTGRES_DB'] = cls.POSTGRES_DB
+        
+        # Update connect_args for test database
+        if cls.POSTGRES_PASSWORD:
+            engine_options = app.config['SQLALCHEMY_ENGINE_OPTIONS'].copy()
+            engine_options['connect_args'] = {
+                'user': cls.POSTGRES_USER,
+                'password': cls.POSTGRES_PASSWORD,
+                'host': cls.POSTGRES_HOST,
+                'port': int(cls.POSTGRES_PORT),
+                'dbname': cls.POSTGRES_DB,  # Use test database
+                'connect_timeout': 5,
+                'application_name': 'pixelprobe_test'
+            }
+            app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 
 
 # Configuration dictionary

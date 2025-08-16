@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2025-08-16
+
+### Fixed
+- **PostgreSQL Authentication**: Fixed password authentication with special characters
+  - Passwords containing @, ?, #, and other special characters now work correctly
+  - Uses SQLAlchemy connect_args for direct connection parameters instead of URL encoding
+  - Properly handles passwords in both production and testing configurations
+
 ## [2.2.0] - 2025-08-15
 
 ### Added
