@@ -159,5 +159,6 @@ backup/
 # Claude AI specific files
 .claude/
 test_env/
-2.1_AUDIT_IMPLEMENTATION_PLAN.mdpixelprobe.db
+2.1_AUDIT_IMPLEMENTATION_PLAN.md
+pixelprobe.db
 *.db

@@ -5,7 +5,7 @@ This handles the cancel_requested column that was added in v2.0.89.
 
 import logging
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def run_startup_migrations(db):
         try:
             # Try to select the column - if it fails, the column doesn't exist
             db.session.execute(text(migration['check_sql']))
-        except OperationalError:
+        except (OperationalError, ProgrammingError):
             # Column doesn't exist, add it
             try:
                 logger.info(f"Running migration: {migration['description']}")

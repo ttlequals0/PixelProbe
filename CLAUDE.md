@@ -34,6 +34,7 @@
 - Always run test suite before each build and make sure the app will actually start. 
 - NEVER skip failed test, ALWAYS fix the problem
 - NEVER skip tests because it takes too long ALWAYS wait for them to finish
+- ALWAYS keep 2.1_AUDIT_IMPLEMENTATION_PLAN.md
 ### Docker Tagging Notes
 - dont tage  - ttlequals0/pixelprobe:2.0
 
