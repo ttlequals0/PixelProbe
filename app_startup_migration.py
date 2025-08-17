@@ -56,11 +56,13 @@ def run_startup_migrations(db):
         except (OperationalError, ProgrammingError):
             # Column doesn't exist, add it
             try:
+                # Rollback any pending transaction first
+                db.session.rollback()
                 logger.info(f"Running migration: {migration['description']}")
                 db.session.execute(text(migration['migration_sql']))
                 db.session.commit()
                 logger.info(f"Migration successful: {migration['description']}")
-            except OperationalError as e:
+            except (OperationalError, ProgrammingError) as e:
                 if "duplicate column name" in str(e).lower():
                     logger.info(f"Column already exists, skipping: {migration['description']}")
                 else:

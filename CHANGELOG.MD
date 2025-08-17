@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.7] - 2025-08-17
+
+### Fixed
+- **Critical Startup Fix**: Fixed app startup failure caused by missing database columns
+  - Fixed "column scan_state.crash_count does not exist" error on startup
+  - Temporarily removed new crash recovery columns from model until migration completes
+  - Fixed startup migration transaction rollback issues
+  - App now starts successfully and scan fixes are active
+
 ## [2.2.6] - 2025-08-17
 
 ### Fixed
@@ -17,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Database Constraints**: Fixed ScanChunk unique constraint conflicts
   - Fixed "StringDataRightTruncation: value too long for type character varying(200)" errors
   - Fixed "duplicate key value violates unique constraint" errors
-  - Added crash recovery tracking with crash_count and last_crash_time columns
   - Prevents scans from hanging indefinitely on large video files
 
 ## [2.2.5] - 2025-08-16

@@ -250,9 +250,9 @@ class ScanState(db.Model):
     total_chunks = db.Column(db.Integer, nullable=False, default=0)
     chunks_completed = db.Column(db.Text, nullable=True)  # JSON array of completed chunk IDs
     
-    # Crash recovery tracking
-    crash_count = db.Column(db.Integer, nullable=False, default=0)
-    last_crash_time = db.Column(db.DateTime, nullable=True)
+    # TODO: Crash recovery tracking columns will be added after migration
+    # crash_count = db.Column(db.Integer, nullable=True, default=None)
+    # last_crash_time = db.Column(db.DateTime, nullable=True)
     
     def to_dict(self):
         # Import here to avoid circular imports

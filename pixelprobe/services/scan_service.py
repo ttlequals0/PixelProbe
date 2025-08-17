@@ -399,9 +399,7 @@ class ScanService:
                     # Enhanced crash recovery tracking
                     try:
                         if scan_state:
-                            # Update crash count and timestamp
-                            scan_state.crash_count = (scan_state.crash_count or 0) + 1
-                            scan_state.last_crash_time = datetime.now(timezone.utc)
+                            # Update crash info (temporarily without new columns until migration completes)
                             scan_state.error_message = str(e)[:1000]  # Truncate to avoid VARCHAR limit
                             
                             # Mark scan as crashed instead of just error
@@ -410,7 +408,7 @@ class ScanService:
                             scan_state.end_time = datetime.now(timezone.utc)
                             
                             db.session.commit()
-                            logger.info(f"Scan marked as crashed (crash #{scan_state.crash_count})")
+                            logger.info(f"Scan marked as crashed")
                     except Exception as recovery_error:
                         logger.error(f"Failed to update crash recovery info: {recovery_error}")
                     
