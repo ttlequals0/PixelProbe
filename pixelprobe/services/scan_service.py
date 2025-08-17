@@ -7,6 +7,7 @@ import json
 import threading
 import logging
 from datetime import datetime, timezone
+import time
 from typing import List, Dict, Optional, Tuple
 
 from flask import current_app
@@ -394,9 +395,25 @@ class ScanService:
                     logger.error(f"Error: {e}")
                     logger.error(f"=== END SCAN ERROR ===")
                     self.update_progress(0, 0, '', 'error')
-                    if scan_state:
-                        scan_state.error_scan(str(e))
-                        db.session.commit()
+                    
+                    # Enhanced crash recovery tracking
+                    try:
+                        if scan_state:
+                            # Update crash count and timestamp
+                            scan_state.crash_count = (scan_state.crash_count or 0) + 1
+                            scan_state.last_crash_time = datetime.now(timezone.utc)
+                            scan_state.error_message = str(e)[:1000]  # Truncate to avoid VARCHAR limit
+                            
+                            # Mark scan as crashed instead of just error
+                            scan_state.is_active = False
+                            scan_state.phase = 'crashed'
+                            scan_state.end_time = datetime.now(timezone.utc)
+                            
+                            db.session.commit()
+                            logger.info(f"Scan marked as crashed (crash #{scan_state.crash_count})")
+                    except Exception as recovery_error:
+                        logger.error(f"Failed to update crash recovery info: {recovery_error}")
+                    
                     raise
                 finally:
                     # Clear thread reference to allow new scans
@@ -479,7 +496,9 @@ class ScanService:
                         # Create chunks for each directory
                         chunks = []
                         for dir_path, files in files_by_dir.items():
-                            chunk_id = hashlib.md5(f"{scan_state.scan_id}:{dir_path}".encode()).hexdigest()
+                            # Add timestamp to ensure uniqueness
+                            timestamp = time.time()
+                            chunk_id = hashlib.md5(f"{scan_state.scan_id}:{dir_path}:{timestamp}".encode()).hexdigest()
                             chunk = ScanChunk(
                                 scan_id=scan_state.scan_id,
                                 chunk_id=chunk_id,
@@ -501,7 +520,8 @@ class ScanService:
                         scan_state.phase_total = total_files
                         scan_state.total_chunks = len(chunks)
                         scan_state.start_time = datetime.now(timezone.utc)
-                        scan_state.progress_message = f'Scanning {total_files} selected files across {len(chunks)} directories...'
+                        # Truncate message to avoid VARCHAR limit
+                        scan_state.progress_message = f'Scanning {total_files} files in {len(chunks)} dirs'[:200]
                         db.session.commit()
                         
                         # For selected files, we need a special chunk processor
@@ -1416,9 +1436,10 @@ class ScanService:
         if directories == ['PENDING_FILES_SCAN']:
             # Create a single chunk for all pending files
             # Include timestamp to ensure unique chunk_id even if scan_id is reused
-            import time
+            # Use current time with microseconds for uniqueness
             timestamp = str(time.time())
-            chunk_id = hashlib.md5(f"{scan_id}:PENDING_FILES:{timestamp}".encode()).hexdigest()
+            unique_id = f"{scan_id}:PENDING_FILES:{timestamp}:{datetime.now(timezone.utc).isoformat()}"
+            chunk_id = hashlib.md5(unique_id.encode()).hexdigest()
             chunk = ScanChunk(
                 scan_id=scan_id,
                 chunk_id=chunk_id,
@@ -1449,7 +1470,9 @@ class ScanService:
         
         # Create chunks for each directory
         for dir_path in sorted(all_dirs):
-            chunk_id = hashlib.md5(f"{scan_id}:{dir_path}".encode()).hexdigest()
+            # Add timestamp for uniqueness
+            timestamp = time.time()
+            chunk_id = hashlib.md5(f"{scan_id}:{dir_path}:{timestamp}".encode()).hexdigest()
             chunk = ScanChunk(
                 scan_id=scan_id,
                 chunk_id=chunk_id,

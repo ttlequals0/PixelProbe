@@ -241,14 +241,18 @@ class ScanState(db.Model):
     start_time = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     end_time = db.Column(db.DateTime, nullable=True)
     current_file = db.Column(db.String(500), nullable=True)
-    progress_message = db.Column(db.String(200), nullable=True)
-    error_message = db.Column(db.String(500), nullable=True)
+    progress_message = db.Column(db.String(1000), nullable=True)  # Increased from 200
+    error_message = db.Column(db.String(1000), nullable=True)  # Increased from 500
     directories = db.Column(db.Text, nullable=True)  # JSON array of directories being scanned
     force_rescan = db.Column(db.Boolean, nullable=False, default=False)
     # Resumable scan fields
     current_chunk_index = db.Column(db.Integer, nullable=False, default=0)
     total_chunks = db.Column(db.Integer, nullable=False, default=0)
     chunks_completed = db.Column(db.Text, nullable=True)  # JSON array of completed chunk IDs
+    
+    # Crash recovery tracking
+    crash_count = db.Column(db.Integer, nullable=False, default=0)
+    last_crash_time = db.Column(db.DateTime, nullable=True)
     
     def to_dict(self):
         # Import here to avoid circular imports
@@ -381,8 +385,8 @@ class CleanupState(db.Model):
     start_time = db.Column(db.DateTime(timezone=True), nullable=True)
     end_time = db.Column(db.DateTime(timezone=True), nullable=True)
     current_file = db.Column(db.String(500), nullable=True)
-    progress_message = db.Column(db.String(200), nullable=True)
-    error_message = db.Column(db.String(500), nullable=True)
+    progress_message = db.Column(db.String(1000), nullable=True)  # Increased from 200
+    error_message = db.Column(db.String(1000), nullable=True)  # Increased from 500
     cancel_requested = db.Column(db.Boolean, nullable=True, default=False)
     
     def to_dict(self):
@@ -407,8 +411,8 @@ class FileChangesState(db.Model):
     start_time = db.Column(db.DateTime(timezone=True), nullable=True)
     end_time = db.Column(db.DateTime(timezone=True), nullable=True)
     current_file = db.Column(db.String(500), nullable=True)
-    progress_message = db.Column(db.String(200), nullable=True)
-    error_message = db.Column(db.String(500), nullable=True)
+    progress_message = db.Column(db.String(1000), nullable=True)  # Increased from 200
+    error_message = db.Column(db.String(1000), nullable=True)  # Increased from 500
     changed_files = db.Column(db.Text, nullable=True)  # JSON list of changed files
     cancel_requested = db.Column(db.Boolean, nullable=True, default=False)
     
@@ -425,7 +429,7 @@ class ScanChunk(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     scan_id = db.Column(db.String(36), nullable=False, index=True)
-    chunk_id = db.Column(db.String(100), nullable=False, unique=True, index=True)
+    chunk_id = db.Column(db.String(100), nullable=False, index=True)  # Removed unique constraint
     directory_path = db.Column(db.String(500), nullable=False)
     phase = db.Column(db.String(20), nullable=False)  # discovering, adding, scanning
     status = db.Column(db.String(20), nullable=False, default='pending')  # pending, processing, completed, error
@@ -435,6 +439,9 @@ class ScanChunk(db.Model):
     start_time = db.Column(db.DateTime, nullable=True)
     end_time = db.Column(db.DateTime, nullable=True)
     error_message = db.Column(db.Text, nullable=True)
+    
+    # Add composite unique constraint
+    __table_args__ = (db.UniqueConstraint('scan_id', 'chunk_id', name='uq_scan_chunks_scan_chunk'),)
     
     def to_dict(self):
         return {

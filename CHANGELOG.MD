@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.6] - 2025-08-17
+
+### Fixed
+- **Critical Scan Issues Fix**: Comprehensive fix for scan failures and hangs
+  - **Database Schema**: Increased VARCHAR limits from 200 to 1000 chars for progress messages
+  - **Chunk ID Generation**: Fixed duplicate chunk_id violations by adding timestamps
+  - **Large File Handling**: Added 5GB file size limit and 5-minute timeout for hash calculation
+  - **Scan Thread Recovery**: Enhanced error recovery and crash detection
+  - **Status Reporting**: Improved crash detection and status reporting
+  - **Database Constraints**: Fixed ScanChunk unique constraint conflicts
+  - Fixed "StringDataRightTruncation: value too long for type character varying(200)" errors
+  - Fixed "duplicate key value violates unique constraint" errors
+  - Added crash recovery tracking with crash_count and last_crash_time columns
+  - Prevents scans from hanging indefinitely on large video files
+
 ## [2.2.5] - 2025-08-16
 
 ### Fixed

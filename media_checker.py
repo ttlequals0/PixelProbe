@@ -380,6 +380,12 @@ class PixelProbe:
             # Get file size to determine optimal chunk size
             file_size = os.path.getsize(file_path)
             
+            # Skip hash for extremely large files (>5GB) to prevent hanging
+            MAX_HASH_SIZE = 5 * 1024 * 1024 * 1024  # 5GB
+            if file_size > MAX_HASH_SIZE:
+                logger.warning(f"Skipping hash for very large file (>{MAX_HASH_SIZE/1024/1024/1024}GB): {file_path}")
+                return f"SKIPPED_LARGE_FILE_{file_size}"
+            
             # Use larger chunks for better performance (1MB instead of 4KB)
             # This reduces the number of read operations significantly
             chunk_size = 1024 * 1024  # 1MB chunks
@@ -387,6 +393,9 @@ class PixelProbe:
             # For very large files (>1GB), use even larger chunks
             if file_size > 1024 * 1024 * 1024:
                 chunk_size = 4 * 1024 * 1024  # 4MB chunks
+            
+            # Maximum time allowed for hashing (5 minutes)
+            MAX_HASH_TIME = 300
             
             with open(file_path, "rb") as f:
                 while True:
@@ -396,9 +405,14 @@ class PixelProbe:
                     hash_sha256.update(chunk)
                     bytes_processed += len(chunk)
                     
+                    # Check for timeout
+                    elapsed = time.time() - start_time
+                    if elapsed > MAX_HASH_TIME:
+                        logger.warning(f"Hash calculation timeout for {file_path} after {elapsed:.1f}s")
+                        return f"TIMEOUT_HASH_{bytes_processed}"
+                    
                     # Log progress for large files every 100MB
                     if bytes_processed % (100 * 1024 * 1024) == 0:
-                        elapsed = time.time() - start_time
                         mb_processed = bytes_processed / (1024 * 1024)
                         mb_per_sec = mb_processed / elapsed if elapsed > 0 else 0
                         logger.info(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s ({mb_per_sec:.1f}MB/s)")

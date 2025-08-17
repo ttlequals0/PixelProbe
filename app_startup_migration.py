@@ -33,6 +33,19 @@ def run_startup_migrations(db):
             'check_sql': "SELECT output_rotation_enabled FROM scan_results LIMIT 0",
             'migration_sql': "ALTER TABLE scan_results ADD COLUMN output_rotation_enabled BOOLEAN",
             'description': 'Adding output_rotation_enabled to scan_results'
+        },
+        # Add crash recovery columns to scan_state (v2.2.6)
+        {
+            'table': 'scan_state',
+            'check_sql': "SELECT crash_count FROM scan_state LIMIT 0",
+            'migration_sql': "ALTER TABLE scan_state ADD COLUMN crash_count INTEGER DEFAULT 0",
+            'description': 'Adding crash_count to scan_state'
+        },
+        {
+            'table': 'scan_state',
+            'check_sql': "SELECT last_crash_time FROM scan_state LIMIT 0",
+            'migration_sql': "ALTER TABLE scan_state ADD COLUMN last_crash_time TIMESTAMP",
+            'description': 'Adding last_crash_time to scan_state'
         }
     ]
     
