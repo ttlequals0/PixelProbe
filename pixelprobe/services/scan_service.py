@@ -313,6 +313,9 @@ class ScanService:
                                 gc.collect()
                                 # Expire all objects in session to free memory
                                 db.session.expunge_all()
+                                # Re-attach scan_state to session after cleanup
+                                if scan_state:
+                                    scan_state = db.session.merge(scan_state)
                         
                         db.session.commit()
                         logger.info(f"Add phase completed. Added {added_count} new files out of {new_files_count} discovered")
@@ -1744,6 +1747,9 @@ class ScanService:
                                     gc.collect()
                                     # Expire old objects to prevent memory buildup
                                     db.session.expunge_all()
+                                    # Re-attach scan_state to session after cleanup
+                                    if scan_state:
+                                        scan_state = db.session.merge(scan_state)
                             except Exception as e:
                                 logger.error(f"Failed to update progress for file {file_result.file_path}: {e}")
                                 # Try to recover the database session

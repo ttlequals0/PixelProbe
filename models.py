@@ -355,9 +355,21 @@ class ScanState(db.Model):
             except:
                 pass
         
-        # Ensure the scan is marked as active when we have actual progress
-        if self.phase in ['discovering', 'adding', 'scanning'] and total_files > 0:
-            self.is_active = True
+            # Ensure the scan is marked as active when we have actual progress
+            # Check if instance is attached to session first
+            try:
+                current_phase = self.phase
+                if current_phase in ['discovering', 'adding', 'scanning'] and total_files > 0:
+                    self.is_active = True
+            except Exception as e:
+                logger.warning(f"Could not access scan state phase, re-attaching to session: {e}")
+                # Try to re-attach to session
+                try:
+                    self = db.session.merge(self)
+                    if self.phase in ['discovering', 'adding', 'scanning'] and total_files > 0:
+                        self.is_active = True
+                except Exception as re_attach_error:
+                    logger.error(f"Failed to re-attach scan state to session: {re_attach_error}")
         
         try:
             db.session.commit()
