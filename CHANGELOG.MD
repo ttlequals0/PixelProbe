@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.11] - 2025-08-18
+
+### Fixed
+- **CRITICAL Session Management Fix**: Removed aggressive session cleanup that was causing thread death
+  - **Root Cause Identified**: The `db.session.expunge_all()` calls added in previous versions were detaching SQLAlchemy objects, causing silent thread death around 400k+ files
+  - **Session Cleanup Removal**: Removed both the 50k interval checkpoint cleanup and 1k interval memory management cleanup
+  - **Simplified Approach**: Reverted to letting SQLAlchemy handle session lifecycle naturally without aggressive intervention
+  - **Thread Stability**: This was the actual cause of scanning stopping at ~400k files - not database connection issues or memory problems
+  - **User Feedback Integration**: Responded to user feedback that "this worked in previous versions" by identifying and removing the regression
+  - This is the REAL fix for the 400k file performance cliff that has been causing issues since v2.2.8
+
 ## [2.2.10] - 2025-08-18
 
 ### Fixed
