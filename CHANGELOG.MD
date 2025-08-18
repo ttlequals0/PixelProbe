@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Full Traceback Logging**: Added comprehensive error logging with full tracebacks to diagnose future issues
   - Resolves the recurring 400k file performance cliff that has plagued multiple versions (2.1.8, 2.1.9, 2.2.6, 2.2.8)
   - Scans should now continue reliably past 500k+ files without thread death
+- **System Stats API Fix**: Fixed 500 Internal Server Error in system-info endpoint
+  - **PostgreSQL Compatibility**: Fixed SQLite-specific julianday() function usage that was breaking on PostgreSQL
+  - **Database Type Detection**: Added automatic detection of database dialect instead of hardcoding 'sqlite'
+  - **Fallback Strategy**: Added database-specific query fallbacks for better compatibility
+  - **Enhanced Error Handling**: Added multiple fallback strategies for robust system info retrieval
+  - System stats modal now works correctly with both PostgreSQL and SQLite databases
 
 ## [2.2.9] - 2025-08-18
 
