@@ -6,7 +6,23 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.2.0** - Major PostgreSQL migration with enhanced performance, memory leak prevention, and improved scheduled scans.
+**Version 2.2.7** - Critical scan engine fixes with enhanced performance, large file handling, and database improvements.
+
+## 🚀 What's New in Version 2.2.7
+
+### 🔧 Critical Scan Engine Fixes
+- **Database Constraints**: Fixed `StringDataRightTruncation` and `UniqueViolation` errors that caused scan failures
+- **Large File Handling**: Added 5GB file size limits and 5-minute timeouts to prevent indefinite hangs
+- **Chunk ID Uniqueness**: Enhanced chunk ID generation with timestamps to prevent duplicate key conflicts  
+- **Progress Messages**: Increased VARCHAR limits from 200 to 1000 characters to prevent truncation errors
+- **Error Recovery**: Improved scan thread crash recovery and status reporting
+- **Startup Reliability**: Fixed app startup issues caused by database migration timing
+
+### 🎯 Key Benefits
+- **No More Stuck Scans**: Eliminates the "100% complete with pending files" issue
+- **Large File Support**: Handles multi-GB video files without hanging
+- **Database Stability**: Resolves PostgreSQL constraint violations that crashed scans
+- **Clean Restarts**: Fresh database start recommended for optimal performance
 
 ## 🚀 What's New in Version 2.2.0
 
@@ -93,6 +109,26 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
    ```
 
 For detailed migration instructions, see [MIGRATION_v2.2.0.md](MIGRATION_v2.2.0.md).
+
+### ⚠️ Migration Recommendation (v2.2.7+)
+
+**Starting Fresh Recommended**: While migration from previous versions is supported, we recommend starting with a fresh database for v2.2.7+ due to significant scan engine improvements:
+
+- **Clean Start Benefits**: Eliminates any corrupted scan states from previous database constraint issues
+- **Full Fix Coverage**: Ensures all v2.2.7 scan improvements are active from the beginning
+- **No Legacy Issues**: Avoids potential conflicts from old chunk IDs or stuck pending items
+
+**Fresh Start Procedure**:
+```bash
+# Stop container and remove database volume
+docker-compose down
+docker volume rm pixelprobe_postgres_data
+
+# Start fresh with v2.2.7+
+docker-compose up -d
+```
+
+**Migration Still Supported**: If you have important scan history to preserve, the migration tools still work, but you may need to manually clean up any stuck scan states.
 
 ## 🎉 What's New in Version 2.1.0
 
