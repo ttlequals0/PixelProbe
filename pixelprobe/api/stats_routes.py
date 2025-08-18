@@ -194,22 +194,51 @@ def get_system_info():
             }
             monitored_paths.append(path_info)
         
-        # Database performance statistics
-        db_perf_query = db.session.execute(
-            text("""
-                SELECT 
-                    COUNT(*) as total_scans,
-                    AVG(CASE 
-                        WHEN scan_status = 'completed' 
-                        THEN julianday('now') - julianday(scan_date) 
-                        ELSE NULL 
-                    END) as avg_days_since_scan,
-                    MIN(scan_date) as oldest_scan,
-                    MAX(scan_date) as newest_scan
-                FROM scan_results
-                WHERE scan_status = 'completed'
-            """)
-        ).fetchone()
+        # Database performance statistics - with database-specific fallbacks
+        try:
+            # Try PostgreSQL-specific query first
+            db_perf_query = db.session.execute(
+                text("""
+                    SELECT 
+                        COUNT(*) as total_scans,
+                        AVG(CASE 
+                            WHEN scan_status = 'completed' 
+                            THEN EXTRACT(EPOCH FROM (NOW() - scan_date)) / 86400.0
+                            ELSE NULL 
+                        END) as avg_days_since_scan,
+                        MIN(scan_date) as oldest_scan,
+                        MAX(scan_date) as newest_scan
+                    FROM scan_results
+                    WHERE scan_status = 'completed'
+                """)
+            ).fetchone()
+        except Exception as e:
+            logger.warning(f"PostgreSQL-specific query failed, trying SQLite fallback: {e}")
+            try:
+                # Fallback to SQLite-specific query
+                db_perf_query = db.session.execute(
+                    text("""
+                        SELECT 
+                            COUNT(*) as total_scans,
+                            AVG(CASE 
+                                WHEN scan_status = 'completed' 
+                                THEN julianday('now') - julianday(scan_date) 
+                                ELSE NULL 
+                            END) as avg_days_since_scan,
+                            MIN(scan_date) as oldest_scan,
+                            MAX(scan_date) as newest_scan
+                        FROM scan_results
+                        WHERE scan_status = 'completed'
+                    """)
+                ).fetchone()
+            except Exception as e2:
+                logger.warning(f"SQLite fallback also failed, using basic query: {e2}")
+                # Final fallback to basic ORM queries
+                total_scans = ScanResult.query.filter_by(scan_status='completed').count()
+                avg_days_since_scan = 0
+                oldest_scan = None
+                newest_scan = None
+                db_perf_query = (total_scans, avg_days_since_scan, oldest_scan, newest_scan)
         
         total_scans = db_perf_query[0] or 0
         avg_days_since_scan = db_perf_query[1] or 0
@@ -235,13 +264,26 @@ def get_system_info():
             except:
                 pass
         
+        # Detect database type
+        db_type = 'unknown'
+        try:
+            db_dialect = db.engine.dialect.name
+            if 'postgresql' in db_dialect:
+                db_type = 'postgresql'
+            elif 'sqlite' in db_dialect:
+                db_type = 'sqlite'
+            else:
+                db_type = db_dialect
+        except:
+            db_type = 'unknown'
+        
         # Build response
         system_info = {
             'version': __version__,
             'timezone': APP_TIMEZONE,
             'current_time': datetime.now(tz).isoformat(),
             'database': {
-                'type': 'sqlite',
+                'type': db_type,
                 'total_files': db_total_files,
                 'completed_files': db_completed_files,
                 'pending_files': db_pending_files,
