@@ -319,22 +319,41 @@ class ScanState(db.Model):
         db.session.commit()
     
     def update_progress(self, files_processed, total_files, phase=None, current_file=None):
-        """Update scan progress"""
-        self.files_processed = files_processed
-        self.estimated_total = total_files
-        
-        # Handle phase transitions explicitly
-        if phase:
-            self.phase = phase
-            logger.info(f"Scan phase updated to: {phase}")
-        elif total_files > 0 and self.phase in ['idle', 'discovering']:
-            # Auto-transition to scanning if we have files to process
-            self.phase = 'scanning'
-            logger.info(f"Auto-transitioned scan phase to: scanning "
-                       f"(files_processed={files_processed}, total={total_files})")
+        """Update scan progress with safer transaction handling"""
+        try:
+            self.files_processed = files_processed
+            self.estimated_total = total_files
             
-        if current_file is not None:  # Allow empty string to clear current file
-            self.current_file = current_file
+            # Handle phase transitions explicitly
+            if phase:
+                self.phase = phase
+                logger.info(f"Scan phase updated to: {phase}")
+            elif total_files > 0 and self.phase in ['idle', 'discovering']:
+                # Auto-transition to scanning if we have files to process
+                self.phase = 'scanning'
+                logger.info(f"Auto-transitioned scan phase to: scanning "
+                           f"(files_processed={files_processed}, total={total_files})")
+                
+            if current_file is not None:  # Allow empty string to clear current file
+                self.current_file = current_file
+                
+            # Attempt to commit changes with retry logic
+            for retry in range(3):
+                try:
+                    db.session.commit()
+                    break
+                except Exception as e:
+                    logger.warning(f"Failed to update scan progress (attempt {retry + 1}/3): {e}")
+                    db.session.rollback()
+                    if retry == 2:
+                        logger.error(f"Failed to update scan progress after 3 attempts: {e}")
+                        raise
+        except Exception as e:
+            logger.error(f"Error in update_progress: {e}")
+            try:
+                db.session.rollback()
+            except:
+                pass
         
         # Ensure the scan is marked as active when we have actual progress
         if self.phase in ['discovering', 'adding', 'scanning'] and total_files > 0:

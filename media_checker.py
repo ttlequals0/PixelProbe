@@ -136,6 +136,55 @@ class PixelProbe:
         self.excluded_paths = excluded_paths or []
         self.excluded_extensions = excluded_extensions or []
         self.database_path = database_path
+        # Database session management - reuse connections
+        self._db_engine = None
+        self._db_session_factory = None
+        self._init_database_connection()
+        
+    def _init_database_connection(self):
+        """Initialize database connection pool for reuse"""
+        if self.database_path:
+            try:
+                from sqlalchemy import create_engine
+                from sqlalchemy.orm import sessionmaker
+                # Optimized connection pool settings matching main app
+                # Parse database URI to extract connection parameters
+                if self.database_path.startswith('postgresql://'):
+                    # Use same settings as main app for consistency
+                    self._db_engine = create_engine(
+                        self.database_path,
+                        pool_size=5,
+                        pool_pre_ping=True,
+                        pool_recycle=3600,
+                        max_overflow=10,
+                        pool_timeout=30,
+                        connect_args={
+                            'connect_timeout': 10,
+                            'application_name': 'pixelprobe_checker'
+                        }
+                    )
+                else:
+                    # SQLite or other database
+                    self._db_engine = create_engine(
+                        self.database_path,
+                        pool_size=5,
+                        pool_pre_ping=True,
+                        pool_recycle=3600,
+                        max_overflow=10,
+                        pool_timeout=30
+                    )
+                self._db_session_factory = sessionmaker(bind=self._db_engine)
+                logger.info("Database connection pool initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize database connection: {e}")
+                self._db_engine = None
+                self._db_session_factory = None
+    
+    def _get_db_session(self):
+        """Get a database session from the pool"""
+        if self._db_session_factory:
+            return self._db_session_factory()
+        return None
     
     def discover_media_files(self, directories, max_files=None, existing_files=None, progress_callback=None):
         """Phase 1: Discover all supported files and return their paths (parallel version)"""
@@ -1766,14 +1815,12 @@ class PixelProbe:
         if not self.database_path:
             return None
             
+        session = None
         try:
-            from sqlalchemy import create_engine
-            from sqlalchemy.orm import sessionmaker
             from models import ScanResult
-            
-            engine = create_engine(self.database_path)
-            Session = sessionmaker(bind=engine)
-            session = Session()
+            session = self._get_db_session()
+            if not session:
+                return None
             
             # Check for existing scan result
             result = session.query(ScanResult).filter_by(file_path=file_path).first()
@@ -1805,12 +1852,13 @@ class PixelProbe:
                         'has_warnings': result.has_warnings,
                         'warning_details': result.warning_details
                     }
-                    session.close()
                     return cached_data
             
-            session.close()
         except Exception as e:
             logger.error(f"Error checking cache for {file_path}: {e}")
+        finally:
+            if session:
+                session.close()
         
         return None
     
@@ -1819,15 +1867,15 @@ class PixelProbe:
         if not self.database_path:
             return
             
+        session = None
         try:
-            from sqlalchemy import create_engine
-            from sqlalchemy.orm import sessionmaker
             from models import ScanResult
             from datetime import datetime, timezone
             
-            engine = create_engine(self.database_path)
-            Session = sessionmaker(bind=engine)
-            session = Session()
+            session = self._get_db_session()
+            if not session:
+                logger.warning(f"No database session available for caching {file_path}")
+                return
             
             # Check for existing record
             db_result = session.query(ScanResult).filter_by(file_path=file_path).first()
@@ -1854,24 +1902,29 @@ class PixelProbe:
             db_result.file_exists = True
             
             session.commit()
-            session.close()
             logger.info(f"Saved scan result to cache for {file_path}")
         except Exception as e:
             logger.error(f"Error saving to cache for {file_path}: {e}")
+            if session:
+                try:
+                    session.rollback()
+                except:
+                    pass
+        finally:
+            if session:
+                session.close()
     
     def _check_ignored_patterns(self, error_output):
         """Check if error output contains any ignored patterns"""
         if not self.database_path or not error_output:
             return False
             
+        session = None
         try:
-            from sqlalchemy import create_engine
-            from sqlalchemy.orm import sessionmaker
             from models import IgnoredErrorPattern
-            
-            engine = create_engine(self.database_path)
-            Session = sessionmaker(bind=engine)
-            session = Session()
+            session = self._get_db_session()
+            if not session:
+                return False
             
             # Get active ignored patterns
             patterns = session.query(IgnoredErrorPattern).filter_by(is_active=True).all()
@@ -1880,11 +1933,12 @@ class PixelProbe:
             for pattern in patterns:
                 if pattern.pattern.lower() in error_output.lower():
                     logger.info(f"Error output matches ignored pattern: {pattern.pattern}")
-                    session.close()
                     return True
             
-            session.close()
         except Exception as e:
             logger.error(f"Error checking ignored patterns: {e}")
+        finally:
+            if session:
+                session.close()
         
         return False

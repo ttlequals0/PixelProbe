@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.8] - 2025-08-18
+
+### Fixed
+- **Critical Scanning Failures Fix**: Comprehensive fix for database connection and scanning issues
+  - **Database Connection Pool**: Fixed media_checker creating separate connections for each file
+  - **Connection Pool Management**: Added proper connection pooling with 5 connections, pre-ping, and recycling
+  - **Memory Management**: Added garbage collection every 1000 files and session cleanup every 50000 files
+  - **Transaction Safety**: Added retry logic and rollback handling for database operations
+  - **Phase Oscillation**: Fixed scan getting stuck between phase 2 and 3 due to database errors
+  - **Scan Stopping**: Fixed scans stopping randomly at ~400k files due to connection exhaustion
+  - **Cache Failures**: Fixed scan results not being saved due to PostgreSQL connection timeouts
+  - **Session Management**: Added proper session closure and error recovery
+  - Files are now properly scanned AND results are saved to the database
+  - Scans can now handle millions of files without stopping or memory issues
+
 ## [2.2.7] - 2025-08-17
 
 ### Fixed

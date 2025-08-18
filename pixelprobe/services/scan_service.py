@@ -304,10 +304,15 @@ class ScanService:
                             if total_processed > 1000 and duplicate_count == total_processed:
                                 logger.info(f"All {duplicate_count} files already exist in database. This is normal for re-discovered files.")
                             
-                            # Periodic checkpoint to prevent transaction log bloat
+                            # Periodic checkpoint to prevent transaction log bloat and memory issues
                             if batch_end % 50000 == 0:
                                 logger.info(f"Checkpoint at {batch_end} files - committing transaction")
                                 db.session.commit()
+                                # Force garbage collection and session cleanup to prevent memory leaks
+                                import gc
+                                gc.collect()
+                                # Expire all objects in session to free memory
+                                db.session.expunge_all()
                         
                         db.session.commit()
                         logger.info(f"Add phase completed. Added {added_count} new files out of {new_files_count} discovered")
@@ -1732,6 +1737,13 @@ class ScanService:
                                 )
                                 db.session.commit()
                                 last_commit_count = scanned
+                                
+                                # Memory management - cleanup every 1000 files
+                                if scanned % 1000 == 0:
+                                    import gc
+                                    gc.collect()
+                                    # Expire old objects to prevent memory buildup
+                                    db.session.expunge_all()
                             except Exception as e:
                                 logger.error(f"Failed to update progress for file {file_result.file_path}: {e}")
                                 # Try to recover the database session
