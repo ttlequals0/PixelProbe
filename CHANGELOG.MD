@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Scan Stopping**: Fixed scans stopping randomly at ~400k files due to connection exhaustion
   - **Cache Failures**: Fixed scan results not being saved due to PostgreSQL connection timeouts
   - **Session Management**: Added proper session closure and error recovery
+  - **DetachedInstanceError Fix**: Fixed critical crash at 50k file intervals due to ScanState objects being detached from SQLAlchemy session after memory cleanup
+  - **Session Re-attachment**: Added db.session.merge() calls to re-attach scan_state after expunge_all() operations
   - Files are now properly scanned AND results are saved to the database
   - Scans can now handle millions of files without stopping or memory issues
 
