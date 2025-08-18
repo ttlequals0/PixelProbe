@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.10] - 2025-08-18
+
+### Fixed
+- **REAL 400k File Performance Fix**: Fixed actual root cause of silent thread death
+  - **Silent Thread Death**: Fixed scan processing thread dying silently around 400k-500k files without any error logging
+  - **Exception Handler Bug**: Fixed DetachedInstanceError in the exception handler itself that was masking the real errors and killing threads
+  - **Comprehensive Error Handling**: Added defensive exception handling around all scan_state property access to prevent secondary crashes
+  - **Thread Crash Recovery**: Enhanced crash recovery to properly re-attach detached SQLAlchemy instances before updating scan status
+  - **Progress Update Safety**: Added error handling around progress updates to prevent thread death during batch processing
+  - **Full Traceback Logging**: Added comprehensive error logging with full tracebacks to diagnose future issues
+  - Resolves the recurring 400k file performance cliff that has plagued multiple versions (2.1.8, 2.1.9, 2.2.6, 2.2.8)
+  - Scans should now continue reliably past 500k+ files without thread death
+
 ## [2.2.9] - 2025-08-18
 
 ### Fixed

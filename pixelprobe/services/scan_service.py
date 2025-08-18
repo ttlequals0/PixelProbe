@@ -6,6 +6,7 @@ import os
 import json
 import threading
 import logging
+import traceback
 from datetime import datetime, timezone
 import time
 from typing import List, Dict, Optional, Tuple
@@ -283,9 +284,19 @@ class ScanService:
                             added_count += batch_added
                             duplicate_count += batch_duplicates
                             
-                            # Update progress
-                            self.update_progress(batch_end, new_files_count, batch_files[-1] if batch_files else '', 'adding')
-                            scan_state.update_progress(batch_end, new_files_count, current_file=batch_files[-1] if batch_files else '')
+                            # Update progress with error handling to prevent thread death
+                            try:
+                                self.update_progress(batch_end, new_files_count, batch_files[-1] if batch_files else '', 'adding')
+                                scan_state.update_progress(batch_end, new_files_count, current_file=batch_files[-1] if batch_files else '')
+                            except Exception as progress_error:
+                                logger.error(f"Error updating progress for batch {batch_start}-{batch_end}: {progress_error}")
+                                logger.error(f"Progress error traceback: {traceback.format_exc()}")
+                                # Re-attach scan_state if detached
+                                try:
+                                    _ = scan_state.id
+                                except Exception:
+                                    scan_state = db.session.merge(scan_state)
+                                    logger.info("Re-attached detached scan_state during progress update")
                             
                             # Note: Commit is now done inside _add_files_batch_to_db
                             logger.info(f"Processed batch {batch_start//batch_size + 1}/{(len(all_files) + batch_size - 1)//batch_size}: Added {added_count} total, {duplicate_count} duplicates (batch end: {batch_end}/{len(all_files)})")
@@ -399,14 +410,33 @@ class ScanService:
                 except Exception as e:
                     logger.error(f"=== SCAN ERROR ===")
                     logger.error(f"Scan ID: {scan_state_id}")
-                    logger.error(f"Phase at error: {scan_state.phase if scan_state else 'unknown'}")
+                    # Safely get phase without risking DetachedInstanceError that kills the thread
+                    try:
+                        phase = scan_state.phase if scan_state else 'unknown'
+                    except Exception:
+                        phase = 'unknown (detached)'
+                    logger.error(f"Phase at error: {phase}")
                     logger.error(f"Error: {e}")
+                    logger.error(f"Error type: {type(e).__name__}")
                     logger.error(f"=== END SCAN ERROR ===")
-                    self.update_progress(0, 0, '', 'error')
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    try:
+                        self.update_progress(0, 0, '', 'error')
+                    except Exception as progress_error:
+                        logger.error(f"Failed to update progress on error: {progress_error}")
                     
                     # Enhanced crash recovery tracking
                     try:
                         if scan_state:
+                            # Re-attach scan_state if it's detached to prevent secondary errors
+                            try:
+                                # Test if scan_state is attached by accessing a property
+                                _ = scan_state.id
+                            except Exception:
+                                # Re-attach the detached instance
+                                scan_state = db.session.merge(scan_state)
+                                logger.info("Re-attached detached scan_state for crash recovery")
+                            
                             # Update crash info (temporarily without new columns until migration completes)
                             scan_state.error_message = str(e)[:1000]  # Truncate to avoid VARCHAR limit
                             
