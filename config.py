@@ -64,7 +64,7 @@ class Config:
     MAX_OUTPUT_SIZE = int(os.getenv('MAX_OUTPUT_SIZE', '10000'))  # For output rotation
     OUTPUT_ROTATION_ENABLED = os.getenv('OUTPUT_ROTATION_ENABLED', 'true').lower() == 'true'
     
-    # Celery configuration (for future implementation)
+    # P1 Celery configuration (scaffolded for future implementation)
     CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
     CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
     CELERY_TASK_SERIALIZER = 'json'
@@ -85,33 +85,30 @@ class Config:
             if key.isupper():
                 app.config[key] = getattr(cls, key)
         
-        # Handle PostgreSQL password - always use connect_args for consistency and security
+        # Handle PostgreSQL password - provide complete URI for PixelProbe compatibility
         if cls.POSTGRES_PASSWORD:
-            special_chars = ['@', '?', '#', '/', '\\', ':', ';', '%', '&', '!', '$']
-            has_special_chars = any(char in cls.POSTGRES_PASSWORD for char in special_chars)
-            
-            if has_special_chars:
-                logger.info("Password contains special characters, using connection parameters")
+            from urllib.parse import quote_plus
             
             logger.info(f"Connecting to PostgreSQL at {cls.POSTGRES_HOST}:{cls.POSTGRES_PORT}/{cls.POSTGRES_DB} as user {cls.POSTGRES_USER}")
             
-            # Always use connect_args for password to avoid URL encoding issues
-            app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://"
+            # URL-encode the password to handle special characters safely
+            encoded_password = quote_plus(cls.POSTGRES_PASSWORD)
+            complete_uri = (
+                f"postgresql://{cls.POSTGRES_USER}:{encoded_password}@"
+                f"{cls.POSTGRES_HOST}:{cls.POSTGRES_PORT}/{cls.POSTGRES_DB}"
+            )
             
-            # Update engine options with connection parameters
+            # Use the complete URI for both Flask and PixelProbe compatibility
+            app.config['SQLALCHEMY_DATABASE_URI'] = complete_uri
+            
+            # Update engine options for Flask app optimizations
             engine_options = app.config['SQLALCHEMY_ENGINE_OPTIONS'].copy()
-            # Set the actual connection parameters
             engine_options['connect_args'] = {
-                'user': cls.POSTGRES_USER,
-                'password': cls.POSTGRES_PASSWORD,
-                'host': cls.POSTGRES_HOST,
-                'port': int(cls.POSTGRES_PORT),
-                'dbname': cls.POSTGRES_DB,
                 'connect_timeout': 10,
                 'application_name': 'pixelprobe'
             }
             app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
-            logger.debug(f"Connection args set for user: {engine_options['connect_args'].get('user')}, host: {engine_options['connect_args'].get('host')}")
+            logger.debug(f"Complete database URI configured for {cls.POSTGRES_USER}@{cls.POSTGRES_HOST}:{cls.POSTGRES_PORT}/{cls.POSTGRES_DB}")
         
         # Log configuration (without sensitive data)
         logger.info(f"Database Type: PostgreSQL")

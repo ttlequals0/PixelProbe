@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.12] - 2025-08-18
+
+### Fixed
+- **CRITICAL Database Connection Fix**: Fixed incomplete database URI causing ALL scan types to fail
+  - **Root Cause Found**: Config was passing incomplete `"postgresql://"` URI to PixelProbe, causing connection failures 
+  - **All Scan Types Affected**: Full scan, file-specific scan, orphan cleanup, file changes detection - ALL were broken
+  - **Database URI Construction**: Fixed to provide complete URI with URL-encoded password for both Flask and PixelProbe
+  - **Scanning Thread Death**: The real cause was database connection failure during scan phase transition, not session management
+  - **Results Not Saved**: Files were being processed but results couldn't be saved due to broken database connection
+  - **15+ Previous "Fixes"**: This addresses the recurring scanning issues that have been "fixed" multiple times since v2.2.8
+  - All scan types should now work properly as database connections are established correctly
+
+### Added  
+- **P1 Scaffolding**: Kept Redis configuration for planned Celery implementation per 2.1_AUDIT_IMPLEMENTATION_PLAN.md
+  - Redis is scaffolded for P1 task queue implementation but currently unused
+  - Clear documentation added to distinguish between scaffolding and active components
+
 ## [2.2.11] - 2025-08-18
 
 ### Fixed

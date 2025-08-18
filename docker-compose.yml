@@ -21,7 +21,7 @@ services:
     networks:
       - pixelprobe-network
 
-  # Redis for Celery (future implementation)
+  # Redis for P1 Celery implementation (currently unused but scaffolded)
   redis:
     image: redis:7-alpine
     container_name: pixelprobe-redis
@@ -50,7 +50,7 @@ services:
       POSTGRES_USER: pixelprobe
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       
-      # Celery configuration (future)
+      # P1 Celery configuration (scaffolded for future implementation)
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       
@@ -94,19 +94,6 @@ services:
       retries: 3
       start_period: 40s
 
-  # Flower for Celery monitoring (optional - future implementation)
-  # flower:
-  #   image: mher/flower:latest
-  #   container_name: pixelprobe-flower
-  #   environment:
-  #     CELERY_BROKER_URL: redis://redis:6379/0
-  #     FLOWER_PORT: 5555
-  #   ports:
-  #     - "5555:5555"
-  #   depends_on:
-  #     - redis
-  #   networks:
-  #     - pixelprobe-network
 
 networks:
   pixelprobe-network:
