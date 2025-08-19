@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.26] - 2025-08-19
+
+### Fixed
+- **CRITICAL Migration Rewrite**: Complete rewrite using raw psycopg2 connection with autocommit
+  - **Previous Issue**: v2.2.25 SQLAlchemy isolation_level="AUTOCOMMIT" was not working properly
+  - **Root Cause**: SQLAlchemy connection management was interfering with autocommit mode
+  - **Solution**: Use raw psycopg2 connection bypassing SQLAlchemy entirely
+  - **Implementation**: Direct psycopg2 connection with `autocommit = True` for DDL operations
+  - **Production Impact**: Migration now actually executes and adds the missing column
+
+### Technical Details
+- **app.py:446-502**: Complete rewrite using raw psycopg2 connection
+  - Parse database URL to extract connection parameters
+  - Create psycopg2 connection with `autocommit = True`
+  - Execute DDL operations directly without SQLAlchemy wrapper
+  - Proper exception handling for race conditions
+  - Migration failures no longer prevent app startup
+
 ## [2.2.25] - 2025-08-19
 
 ### Fixed

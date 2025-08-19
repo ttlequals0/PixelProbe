@@ -443,70 +443,63 @@ def migrate_database():
                 conn.commit()
             
             # Check for missing celery_task_id column (v2.2.15+ requirement)
-            # CRITICAL FIX v2.2.25: Use raw connection with autocommit for DDL operations
-            migration_conn = None
-            migration_engine = None
+            # CRITICAL FIX v2.2.26: Use raw psycopg2 connection with autocommit
+            import psycopg2
+            from urllib.parse import urlparse
+            
             try:
-                # Get a fresh engine with isolation level for DDL operations
-                from sqlalchemy import create_engine
-                migration_engine = create_engine(
-                    app.config['SQLALCHEMY_DATABASE_URI'],
-                    isolation_level="AUTOCOMMIT"  # CRITICAL: DDL operations need autocommit
-                )
-                migration_conn = migration_engine.connect()
+                # Parse the database URL to get connection parameters
+                db_url = urlparse(app.config['SQLALCHEMY_DATABASE_URI'])
                 
-                try:
-                    # Check if column exists using information_schema
-                    result = migration_conn.execute(text("""
+                # Create raw psycopg2 connection with autocommit
+                raw_conn = psycopg2.connect(
+                    host=db_url.hostname,
+                    port=db_url.port or 5432,
+                    database=db_url.path[1:],  # Remove leading slash
+                    user=db_url.username,
+                    password=db_url.password
+                )
+                raw_conn.autocommit = True  # CRITICAL: Enable autocommit for DDL
+                
+                with raw_conn.cursor() as cursor:
+                    # Check if column exists
+                    cursor.execute("""
                         SELECT column_name 
                         FROM information_schema.columns 
                         WHERE table_name = 'scan_state' AND column_name = 'celery_task_id'
-                    """))
-                    column_exists = result.fetchone() is not None
+                    """)
+                    column_exists = cursor.fetchone() is not None
                     
                     if column_exists:
                         logger.info("celery_task_id column already exists")
                     else:
                         logger.info("Adding missing celery_task_id column to scan_state table")
                         
-                        # Execute ALTER TABLE with autocommit enabled
+                        # Add column with autocommit enabled
                         try:
-                            migration_conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)"))
+                            cursor.execute("ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)")
                             logger.info("celery_task_id column added successfully")
+                        except psycopg2.errors.DuplicateColumn:
+                            logger.info("celery_task_id column was added by another worker (race condition handled)")
                         except Exception as alter_ex:
-                            # Check if it's because column already exists (race condition)
-                            if "already exists" in str(alter_ex).lower() or "duplicate column" in str(alter_ex).lower():
-                                logger.info("celery_task_id column was added by another worker (race condition handled)")
-                            else:
-                                logger.error(f"Failed to add celery_task_id column: {alter_ex}")
+                            logger.error(f"Failed to add celery_task_id column: {alter_ex}")
                         
-                        # Try to create index separately (also with autocommit)
+                        # Try to create index
                         try:
-                            migration_conn.execute(text("CREATE INDEX idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
+                            cursor.execute("CREATE INDEX idx_scan_state_celery_task_id ON scan_state(celery_task_id)")
                             logger.info("Index on celery_task_id created successfully")
+                        except psycopg2.errors.DuplicateTable:
+                            logger.info("Index already exists")
                         except Exception as idx_ex:
-                            if "already exists" in str(idx_ex).lower():
-                                logger.info("Index already exists")
-                            else:
-                                logger.warning(f"Could not create index: {idx_ex}")
-                            
-                except Exception as inner_ex:
-                    logger.error(f"Migration execution failed: {inner_ex}")
+                            logger.warning(f"Could not create index: {idx_ex}")
+                
+                raw_conn.close()
+                logger.info("Migration completed successfully")
                     
-            except Exception as col_ex:
-                logger.error(f"Migration connection failed: {col_ex}")
-            finally:
-                # CRITICAL: Always close the migration connection and dispose engine
-                if migration_conn:
-                    try:
-                        migration_conn.close()
-                    except:
-                        pass
-                if migration_engine:
-                    try:
-                        migration_engine.dispose()
-                    except:
-                        pass
+            except Exception as migration_ex:
+                logger.error(f"Migration failed: {migration_ex}")
+                # Don't let migration failure prevent app startup
+                pass
         
         logger.info("Database migration completed successfully")
         
