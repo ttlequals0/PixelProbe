@@ -65,13 +65,15 @@ class Config:
     OUTPUT_ROTATION_ENABLED = os.getenv('OUTPUT_ROTATION_ENABLED', 'true').lower() == 'true'
     
     # P1 Celery task queue configuration (now implemented)
+    # Celery 5.x requires lowercase config keys - keep both for compatibility
     CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-    CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
-    CELERY_TASK_SERIALIZER = 'json'
-    CELERY_RESULT_SERIALIZER = 'json'
-    CELERY_ACCEPT_CONTENT = ['json']
-    CELERY_TIMEZONE = 'UTC'
-    CELERY_ENABLE_UTC = True
+    broker_url = CELERY_BROKER_URL  # New style for Celery 5.x
+    result_backend = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+    task_serializer = 'json'
+    result_serializer = 'json'
+    accept_content = ['json']
+    timezone = 'UTC'
+    enable_utc = True
     
     # Monitoring
     ENABLE_MONITORING = os.getenv('ENABLE_MONITORING', 'false').lower() == 'true'

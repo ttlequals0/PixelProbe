@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.28] - 2025-08-19
+
+### Fixed
+- **Celery 5.x Configuration Fix**: Fixed Celery config using old 4.x style keys
+  - **Error**: "Cannot mix new and old setting keys, please rename the following settings"
+  - **Root Cause**: Config used uppercase keys like `CELERY_RESULT_BACKEND` instead of lowercase `result_backend`
+  - **Solution**: Added Celery 5.x lowercase config keys while keeping uppercase for compatibility
+  - **Impact**: Celery broker connection now succeeds and tasks actually queue
+  - **Production Impact**: Celery distributed processing finally works end-to-end
+
+### Technical Details
+- **config.py:68-76**: Updated Celery configuration with both old and new style keys
+  - Added lowercase keys: `broker_url`, `result_backend`, `task_serializer`, etc.
+  - Kept uppercase `CELERY_BROKER_URL` for backward compatibility
+  - Celery 5.x now properly initializes without config errors
+
 ## [2.2.27] - 2025-08-19
 
 ### Fixed
