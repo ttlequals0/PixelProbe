@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.25] - 2025-08-19
+
+### Fixed
+- **CRITICAL App Startup Hang Fix**: Fixed app hanging after "Adding missing celery_task_id column" log
+  - **Root Cause**: Migration connection wasn't using autocommit, causing ALTER TABLE to hang in pending transaction
+  - **Error**: App would log "Adding missing celery_task_id column" then stop completely at line 49
+  - **PostgreSQL Impact**: Column never actually added, continuous "column does not exist" errors
+  - **Solution**: Use `isolation_level="AUTOCOMMIT"` for DDL operations
+  - **Production Impact**: App now starts successfully and completes migration
+
+### Technical Details
+- **app.py:446-509**: Complete fix using AUTOCOMMIT isolation level for DDL operations
+  - Migration engine now created with `isolation_level="AUTOCOMMIT"`
+  - DDL operations (ALTER TABLE, CREATE INDEX) execute immediately
+  - Proper engine disposal to prevent connection leaks
+  - No more hanging transactions or app startup failures
+
+### Verified Issues from ALL Logs
+- **pixelprobe_logs.txt**: App hangs at line 49 after migration log - FIXED
+- **pixelprobe-postgres_logs.txt**: Continuous "column scan_state.celery_task_id does not exist" errors - FIXED
+- **pixelprobe-celery-worker_logs.txt**: Worker starts successfully (no issues)
+- **pixelprobe-flower_logs.txt**: Warning about --broker argument placement (cosmetic, still works)
+- **pixelprobe-redis_logs.txt**: Redis running normally (no issues)
+
 ## [2.2.24] - 2025-08-19
 
 ### Fixed

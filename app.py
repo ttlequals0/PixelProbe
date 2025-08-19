@@ -443,15 +443,18 @@ def migrate_database():
                 conn.commit()
             
             # Check for missing celery_task_id column (v2.2.15+ requirement)
-            # CRITICAL FIX v2.2.24: Complete rewrite to fix transaction management
+            # CRITICAL FIX v2.2.25: Use raw connection with autocommit for DDL operations
             migration_conn = None
+            migration_engine = None
             try:
-                # Get a fresh connection completely separate from the main connection
+                # Get a fresh engine with isolation level for DDL operations
                 from sqlalchemy import create_engine
-                migration_engine = create_engine(app.config['SQLALCHEMY_DATABASE_URI'])
+                migration_engine = create_engine(
+                    app.config['SQLALCHEMY_DATABASE_URI'],
+                    isolation_level="AUTOCOMMIT"  # CRITICAL: DDL operations need autocommit
+                )
                 migration_conn = migration_engine.connect()
                 
-                # Use raw SQL execution without transaction wrapper
                 try:
                     # Check if column exists using information_schema
                     result = migration_conn.execute(text("""
@@ -466,7 +469,7 @@ def migrate_database():
                     else:
                         logger.info("Adding missing celery_task_id column to scan_state table")
                         
-                        # Execute ALTER TABLE directly without explicit transaction management
+                        # Execute ALTER TABLE with autocommit enabled
                         try:
                             migration_conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)"))
                             logger.info("celery_task_id column added successfully")
@@ -477,7 +480,7 @@ def migrate_database():
                             else:
                                 logger.error(f"Failed to add celery_task_id column: {alter_ex}")
                         
-                        # Try to create index separately
+                        # Try to create index separately (also with autocommit)
                         try:
                             migration_conn.execute(text("CREATE INDEX idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
                             logger.info("Index on celery_task_id created successfully")
@@ -497,6 +500,10 @@ def migrate_database():
                 if migration_conn:
                     try:
                         migration_conn.close()
+                    except:
+                        pass
+                if migration_engine:
+                    try:
                         migration_engine.dispose()
                     except:
                         pass
