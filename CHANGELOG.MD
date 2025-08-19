@@ -9,15 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **CRITICAL File Status Logic Fix**: Fixed files being marked as "Healthy" instead of "Pending" during ADD phase
-  - **Root Cause**: Line 1302 in scan_service.py was setting `'is_corrupted': False` during file discovery
+  - **Root Cause**: Lines 1302 & 1315 in scan_service.py were setting `'is_corrupted': False` during file discovery
   - **Correct Behavior**: Files should be `'is_corrupted': None` until actually scanned
-  - **Data Impact**: Existing files in database may show as "Healthy" when they should be "Pending"
+  - **File Lifecycle**: ADD phase → Pending, SCAN phase → Healthy/Corrupted based on actual results
   - **Model Definition**: `is_corrupted = NULL` means "not scanned yet" per models.py:28
-  - **Stats Fix**: Files are now properly categorized as Pending until scan phase completes
   - **All File Types**: Affects both regular files and files with discovery errors
 
-### Note
-- Existing database records may need manual correction: UPDATE scan_results SET is_corrupted = NULL WHERE scan_status = 'pending'
+### Fixed
+- **Stats Calculation Logic**: Completely rewrote file categorization logic in stats_routes.py
+  - **Pending Files**: `scan_status = 'pending' OR is_corrupted IS NULL`
+  - **Healthy Files**: `is_corrupted = FALSE AND scan_status = 'completed' OR marked_as_good = TRUE`
+  - **Corrupted Files**: `is_corrupted = TRUE AND marked_as_good = FALSE AND (has_warnings = FALSE OR has_warnings IS NULL)`
+  - **Fixed Both**: Main stats query and fallback individual queries
+  - **All Endpoints**: Fixed `/api/stats` and `/api/system-info` calculations
+
+### Verified
+- **Test Scenarios**: Verified with 1 pending, 1 healthy, 1 corrupted file - all correctly categorized
+- **End-to-End**: Files properly transition from Pending → Healthy/Corrupted throughout lifecycle
+- **No Regression**: Database connection fix from v2.2.12 maintained
+
+### Impact
+- **Production Issue**: Resolves 488k files incorrectly showing as "Healthy" when they should be "Pending"
+- **User Experience**: Stats now accurately reflect scan progress and file states
+- **Data Integrity**: Files only marked as healthy after actual verification
+
+### Data Migration Required
+```sql
+-- Fix existing records that should be pending
+UPDATE scan_results SET is_corrupted = NULL WHERE scan_status = 'pending';
+
+-- Verify counts after migration
+SELECT 
+    scan_status,
+    CASE 
+        WHEN is_corrupted IS NULL THEN 'pending'
+        WHEN is_corrupted = FALSE THEN 'healthy' 
+        WHEN is_corrupted = TRUE THEN 'corrupted'
+    END as status,
+    COUNT(*) 
+FROM scan_results 
+GROUP BY scan_status, is_corrupted;
+```
 
 ## [2.2.12] - 2025-08-18
 
