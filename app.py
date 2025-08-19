@@ -94,6 +94,8 @@ db.init_app(app)
 from celery_config import create_celery, init_celery
 celery = create_celery(app)
 init_celery(app, celery)
+# CRITICAL: Attach celery to app so scan_routes can find it
+app.celery = celery
 
 # PostgreSQL is the only supported database (v2.2.0+)
 

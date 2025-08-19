@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.27] - 2025-08-19
+
+### Fixed
+- **CRITICAL Celery Integration Fix**: Fixed Celery tasks not being used - always falling back to ThreadPoolExecutor
+  - **Root Cause**: `app.celery` was never set, so `check_celery_available()` always returned False
+  - **Error**: "Celery not available, using direct scan service" even with Celery running
+  - **Solution**: Attach celery object to app with `app.celery = celery`
+  - **Impact**: Celery tasks now actually execute instead of using ThreadPoolExecutor fallback
+  - **Production Impact**: Distributed task processing now works as intended
+
+### Technical Details
+- **app.py:98**: Added `app.celery = celery` to attach Celery instance to Flask app
+  - Enables `current_app.celery` access in scan_routes.py
+  - `check_celery_available()` now correctly detects Celery
+  - Scan tasks now queue to Celery workers instead of local threads
+
+### Verified Issues
+- **Flower Dashboard**: Shows worker connected but no tasks - FIXED
+- **Celery Worker**: Running but idle with no tasks - FIXED  
+- **Scan Routes**: Always using ThreadPoolExecutor fallback - FIXED
+
 ## [2.2.26] - 2025-08-19
 
 ### Fixed
