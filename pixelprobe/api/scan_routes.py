@@ -17,6 +17,22 @@ from pixelprobe.utils.security import (
 
 logger = logging.getLogger(__name__)
 
+
+def check_celery_available():
+    """Check if Celery is available and broker is reachable"""
+    celery_enabled = current_app.config.get('CELERY_BROKER_URL') and hasattr(current_app, 'celery')
+    
+    if celery_enabled:
+        # Test Celery broker connection before using
+        try:
+            current_app.celery.control.ping(timeout=1.0)
+        except Exception as e:
+            logger.warning(f"Celery broker connection failed: {e}. Falling back to direct scan service.")
+            celery_enabled = False
+    
+    return celery_enabled
+
+
 # Get timezone from environment variable, default to UTC
 APP_TIMEZONE = os.environ.get('TZ', 'UTC')
 try:
@@ -238,10 +254,43 @@ def scan_file():
         AuditLogger.log_security_event('path_traversal_attempt', str(e), 'warning')
         return jsonify({'error': 'Invalid file path'}), 400
     
-    # Use scan service
+    # P1 Implementation: Use Celery task queue for single file scans
     try:
-        result = current_app.scan_service.scan_single_file(validated_path, force_rescan=True)
-        return jsonify(result)
+        # Check if Celery is available and test connection
+        celery_enabled = check_celery_available()
+        
+        if celery_enabled:
+            # Use Celery task queue
+            from pixelprobe.tasks import scan_media_task
+            from uuid import uuid4
+            
+            # Generate scan ID
+            scan_id = str(uuid4())
+            
+            # Queue the single file scan task
+            task = scan_media_task.delay(
+                scan_id=scan_id,
+                paths=[validated_path],
+                scan_type='single',
+                force_rescan=True
+            )
+            
+            logger.info(f"Queued single file scan task {task.id} for {validated_path}")
+            
+            return jsonify({
+                'status': 'queued',
+                'scan_id': scan_id,
+                'task_id': task.id,
+                'file_path': validated_path,
+                'message': 'Single file scan queued successfully using Celery task queue',
+                'celery_enabled': True
+            })
+        else:
+            # Fallback to direct scan service
+            result = current_app.scan_service.scan_single_file(validated_path, force_rescan=True)
+            result['celery_enabled'] = False
+            return jsonify(result)
+            
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 409
     except FileNotFoundError as e:
@@ -290,14 +339,47 @@ def scan_all():
     
     AuditLogger.log_action('scan_all', {'directories': validated_dirs, 'force_rescan': force_rescan})
     
-    # Use scan service
+    # P1 Implementation: Use Celery task queue instead of direct scan service
     try:
-        result = current_app.scan_service.scan_directories(
-            validated_dirs, 
-            force_rescan=force_rescan, 
-            num_workers=1
-        )
-        return jsonify(result)
+        # Check if Celery is available
+        celery_enabled = check_celery_available()
+        
+        if celery_enabled:
+            # Use Celery task queue
+            from pixelprobe.tasks import scan_media_task
+            from uuid import uuid4
+            
+            # Generate scan ID
+            scan_id = str(uuid4())
+            
+            # Queue the scan task
+            task = scan_media_task.delay(
+                scan_id=scan_id,
+                paths=validated_dirs,
+                scan_type='full',
+                force_rescan=force_rescan
+            )
+            
+            logger.info(f"Queued full scan task {task.id} for scan_id {scan_id}")
+            
+            return jsonify({
+                'status': 'queued',
+                'scan_id': scan_id,
+                'task_id': task.id,
+                'message': 'Scan queued successfully using Celery task queue',
+                'celery_enabled': True
+            })
+        else:
+            # Fallback to direct scan service (backward compatibility)
+            logger.info("Celery not available, using direct scan service")
+            result = current_app.scan_service.scan_directories(
+                validated_dirs, 
+                force_rescan=force_rescan, 
+                num_workers=1
+            )
+            result['celery_enabled'] = False
+            return jsonify(result)
+            
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 409
     except ValueError as e:
@@ -617,13 +699,46 @@ def scan_parallel():
         # Scan specific files only
         logger.info(f"Scanning {len(file_paths)} specific files")
         try:
-            result = current_app.scan_service.scan_files(
-                file_paths, 
-                force_rescan=force_rescan,
-                deep_scan=deep_scan,
-                num_workers=num_workers
-            )
-            return jsonify(result)
+            # P1 Implementation: Use Celery task queue for file scanning
+            celery_enabled = check_celery_available()
+            
+            if celery_enabled:
+                # Use Celery task queue
+                from pixelprobe.tasks import scan_files_task
+                from uuid import uuid4
+                
+                # Generate scan ID
+                scan_id = str(uuid4())
+                
+                # Queue the file scan task
+                task = scan_files_task.delay(
+                    scan_id=scan_id,
+                    file_paths=file_paths,
+                    force_rescan=force_rescan,
+                    deep_scan=deep_scan
+                )
+                
+                logger.info(f"Queued file scan task {task.id} for {len(file_paths)} files")
+                
+                return jsonify({
+                    'status': 'queued',
+                    'scan_id': scan_id,
+                    'task_id': task.id,
+                    'file_count': len(file_paths),
+                    'message': 'File scan queued successfully using Celery task queue',
+                    'celery_enabled': True
+                })
+            else:
+                # Fallback to direct scan service
+                result = current_app.scan_service.scan_files(
+                    file_paths, 
+                    force_rescan=force_rescan,
+                    deep_scan=deep_scan,
+                    num_workers=num_workers
+                )
+                result['celery_enabled'] = False
+                return jsonify(result)
+                
         except RuntimeError as e:
             return jsonify({'error': str(e)}), 409
         except ValueError as e:
@@ -657,15 +772,52 @@ def scan_parallel():
     
     AuditLogger.log_action('scan_parallel', {'directories': validated_dirs, 'force_rescan': force_rescan, 'num_workers': num_workers})
     
-    # Use scan service with parallel workers
+    # P1 Implementation: Use Celery task queue for parallel directory scanning
     try:
-        result = current_app.scan_service.scan_directories(
-            validated_dirs, 
-            force_rescan=force_rescan, 
-            num_workers=num_workers,
-            deep_scan=deep_scan
-        )
-        return jsonify(result)
+        # Check if Celery is available
+        celery_enabled = check_celery_available()
+        
+        if celery_enabled:
+            # Use Celery task queue for parallel scanning
+            from pixelprobe.tasks import scan_media_task
+            from uuid import uuid4
+            
+            # Generate scan ID
+            scan_id = str(uuid4())
+            
+            # Determine scan type based on options
+            scan_type = 'deep' if deep_scan else 'parallel'
+            
+            # Queue the scan task
+            task = scan_media_task.delay(
+                scan_id=scan_id,
+                paths=validated_dirs,
+                scan_type=scan_type,
+                force_rescan=force_rescan
+            )
+            
+            logger.info(f"Queued parallel scan task {task.id} for scan_id {scan_id}")
+            
+            return jsonify({
+                'status': 'queued',
+                'scan_id': scan_id,
+                'task_id': task.id,
+                'scan_type': scan_type,
+                'directories': validated_dirs,
+                'message': 'Parallel scan queued successfully using Celery task queue',
+                'celery_enabled': True
+            })
+        else:
+            # Fallback to direct scan service with parallel workers
+            result = current_app.scan_service.scan_directories(
+                validated_dirs, 
+                force_rescan=force_rescan, 
+                num_workers=num_workers,
+                deep_scan=deep_scan
+            )
+            result['celery_enabled'] = False
+            return jsonify(result)
+            
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 409
     except ValueError as e:
@@ -832,19 +984,50 @@ def force_scan_pending():
         if current_app.scan_service.is_scan_running():
             return jsonify({'error': 'A scan is already in progress'}), 409
         
-        # Start a special scan that processes ALL pending files
-        # We'll use a special marker directory that will be handled differently
-        result = current_app.scan_service.scan_directories(
-            directories=['PENDING_FILES_SCAN'],  # Special marker
-            force_rescan=False,
-            num_workers=1
-        )
+        # P1 Implementation: Use Celery task queue for pending files scan
+        celery_enabled = check_celery_available()
         
-        return jsonify({
-            'message': f'Started scan for {pending_count} pending files',
-            'pending_count': pending_count,
-            'status': result.get('status', 'started')
-        })
+        if celery_enabled:
+            # Use Celery task queue for pending scan
+            from pixelprobe.tasks import scan_media_task
+            from uuid import uuid4
+            
+            # Generate scan ID
+            scan_id = str(uuid4())
+            
+            # Queue the pending files scan task using special marker
+            task = scan_media_task.delay(
+                scan_id=scan_id,
+                paths=['PENDING_FILES_SCAN'],  # Special marker for pending files
+                scan_type='pending',
+                force_rescan=False
+            )
+            
+            logger.info(f"Queued pending files scan task {task.id} for {pending_count} files")
+            
+            return jsonify({
+                'status': 'queued',
+                'scan_id': scan_id,
+                'task_id': task.id,
+                'message': f'Pending files scan queued for {pending_count} files using Celery task queue',
+                'pending_count': pending_count,
+                'celery_enabled': True
+            })
+        else:
+            # Fallback to direct scan service
+            result = current_app.scan_service.scan_directories(
+                directories=['PENDING_FILES_SCAN'],  # Special marker
+                force_rescan=False,
+                num_workers=1
+            )
+            
+            result['celery_enabled'] = False
+            result['pending_count'] = pending_count
+            return jsonify({
+                'message': f'Started scan for {pending_count} pending files',
+                'pending_count': pending_count,
+                'status': result.get('status', 'started')
+            })
         
     except Exception as e:
         logger.error(f"Error starting pending files scan: {e}")

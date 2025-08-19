@@ -90,6 +90,11 @@ if os.environ.get('DATABASE_URL'):
 # Initialize extensions
 db.init_app(app)
 
+# P1 Implementation: Initialize Celery task queue
+from celery_config import create_celery, init_celery
+celery = create_celery(app)
+init_celery(app, celery)
+
 # PostgreSQL is now the only supported database
 # No SQLite optimizations needed
 

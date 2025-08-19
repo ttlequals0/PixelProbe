@@ -245,6 +245,8 @@ class ScanState(db.Model):
     error_message = db.Column(db.String(1000), nullable=True)  # Increased from 500
     directories = db.Column(db.Text, nullable=True)  # JSON array of directories being scanned
     force_rescan = db.Column(db.Boolean, nullable=False, default=False)
+    # P1 Celery task queue integration
+    celery_task_id = db.Column(db.String(36), nullable=True, index=True)  # Celery task ID for monitoring
     # Resumable scan fields
     current_chunk_index = db.Column(db.Integer, nullable=False, default=0)
     total_chunks = db.Column(db.Integer, nullable=False, default=0)

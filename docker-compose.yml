@@ -37,7 +37,7 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.2.0
+    image: ttlequals0/pixelprobe:2.2.15
     container_name: pixelprobe-app
     environment:
       # Security
@@ -93,6 +93,63 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # P1 Celery Worker for distributed task processing
+  celery-worker:
+    image: ttlequals0/pixelprobe:2.2.15
+    container_name: pixelprobe-celery-worker
+    command: python celery_worker.py
+    environment:
+      # Celery configuration
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_LOG_LEVEL: ${CELERY_LOG_LEVEL:-INFO}
+      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
+      
+      # Database connection (worker needs database access)
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: pixelprobe
+      POSTGRES_USER: pixelprobe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      
+      # Worker-specific settings
+      SECRET_KEY: ${SECRET_KEY}
+      FLASK_ENV: ${FLASK_ENV:-production}
+      
+    volumes:
+      # Media files access (read-only for scanning)
+      - ${MEDIA_PATH:-./media}:/media:ro
+      
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    
+    networks:
+      - pixelprobe-network
+    
+    restart: unless-stopped
+
+  # P1 Flower monitoring dashboard (optional)
+  flower:
+    image: ttlequals0/pixelprobe:2.2.15
+    container_name: pixelprobe-flower
+    command: python flower_monitor.py
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      FLOWER_PORT: 5555
+    ports:
+      - "${FLOWER_PORT:-5555}:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - pixelprobe-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
 
 
 networks:

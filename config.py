@@ -64,7 +64,7 @@ class Config:
     MAX_OUTPUT_SIZE = int(os.getenv('MAX_OUTPUT_SIZE', '10000'))  # For output rotation
     OUTPUT_ROTATION_ENABLED = os.getenv('OUTPUT_ROTATION_ENABLED', 'true').lower() == 'true'
     
-    # P1 Celery configuration (scaffolded for future implementation)
+    # P1 Celery task queue configuration (now implemented)
     CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
     CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
     CELERY_TASK_SERIALIZER = 'json'
