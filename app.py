@@ -443,8 +443,9 @@ def migrate_database():
                 conn.commit()
             
             # Check for missing celery_task_id column (v2.2.15+ requirement)
-            # Use information_schema instead of failing SELECT to avoid transaction abort
+            # CRITICAL FIX v2.2.21: Proper transaction handling for concurrent workers
             try:
+                # Check if column exists using information_schema
                 result = conn.execute(text("""
                     SELECT column_name 
                     FROM information_schema.columns 
@@ -453,17 +454,26 @@ def migrate_database():
                 column_exists = result.fetchone() is not None
                 
                 if column_exists:
-                    logger.info("celery_task_id column exists")
+                    logger.info("celery_task_id column already exists")
                 else:
                     logger.info("Adding missing celery_task_id column to scan_state table")
-                    # Add PostgreSQL column (only database supported since v2.2.0)
-                    conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)"))
-                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
-                    conn.commit()
-                    logger.info("celery_task_id column added successfully")
+                    try:
+                        # Try to add the column - may fail if another worker adds it
+                        conn.execute(text("ALTER TABLE scan_state ADD COLUMN IF NOT EXISTS celery_task_id VARCHAR(36)"))
+                        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
+                        conn.commit()
+                        logger.info("celery_task_id column added successfully")
+                    except Exception as alter_ex:
+                        # Check if it's because column already exists (race condition)
+                        if "already exists" in str(alter_ex).lower() or "duplicate column" in str(alter_ex).lower():
+                            logger.info("celery_task_id column was added by another worker (race condition handled)")
+                            conn.rollback()
+                        else:
+                            logger.error(f"Failed to add celery_task_id column: {alter_ex}")
+                            conn.rollback()
                     
             except Exception as col_ex:
-                logger.error(f"Failed to add celery_task_id column: {col_ex}")
+                logger.error(f"Migration check failed: {col_ex}")
                 conn.rollback()
         
         logger.info("Database migration completed successfully")
@@ -502,25 +512,34 @@ def create_performance_indexes():
 
 # Initialize on startup for better Docker compatibility
 with app.app_context():
+    # CRITICAL: create_tables() MUST run first to ensure migration happens
+    # before any model queries. This runs migrate_database() which adds
+    # the celery_task_id column that the ScanState model expects.
     create_tables()
     init_services()
     scheduler.init_app(app)
     
     # Clean up any stuck scans from previous runs (7+ days old)
-    from datetime import datetime, timezone, timedelta
-    from models import ScanState
-    stuck_scans = ScanState.query.filter(
-        ScanState.is_active == True,
-        ScanState.start_time < datetime.now(timezone.utc) - timedelta(days=7)
-    ).all()
-    
-    for scan in stuck_scans:
-        logger.warning(f"Found very old scan {scan.id} from {scan.start_time}, marking as errored")
-        scan.error_scan("Scan was abandoned from previous application run")
-    
-    if stuck_scans:
-        db.session.commit()
-        logger.info(f"Cleaned up {len(stuck_scans)} abandoned scans")
+    # NOTE: This query happens AFTER migration, so celery_task_id column exists
+    try:
+        from datetime import datetime, timezone, timedelta
+        from models import ScanState
+        stuck_scans = ScanState.query.filter(
+            ScanState.is_active == True,
+            ScanState.start_time < datetime.now(timezone.utc) - timedelta(days=7)
+        ).all()
+        
+        for scan in stuck_scans:
+            logger.warning(f"Found very old scan {scan.id} from {scan.start_time}, marking as errored")
+            scan.error_scan("Scan was abandoned from previous application run")
+        
+        if stuck_scans:
+            db.session.commit()
+            logger.info(f"Cleaned up {len(stuck_scans)} abandoned scans")
+    except Exception as e:
+        # If the query fails (e.g., column doesn't exist yet), log but don't crash
+        logger.warning(f"Could not clean up stuck scans on startup: {e}")
+        # This is not critical for app startup, so we continue
 
 if __name__ == '__main__':
     # Start the application (initialization already done above)

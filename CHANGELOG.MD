@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.21] - 2025-08-19
+
+### Fixed
+- **CRITICAL Production Crash Fix**: Fixed app startup failure due to race condition in database migration
+  - **Root Cause**: Multiple Gunicorn workers trying to query `ScanState` model before `celery_task_id` column migration completed
+  - **Error**: `column scan_state.celery_task_id does not exist` when querying stuck scans at startup
+  - **Race Condition**: Multiple workers simultaneously trying to add the same column causing transaction conflicts
+  - **Resolution**: 
+    - Added `IF NOT EXISTS` clause to PostgreSQL ALTER TABLE statement
+    - Improved transaction handling to properly rollback on race conditions
+    - Added try-catch around stuck scan cleanup to prevent startup failure
+    - Better handling of concurrent worker migrations
+  - **Production Impact**: App now starts successfully even with multiple workers racing to migrate
+
+### Enhanced
+- **Migration Robustness**: Improved database migration to handle concurrent worker scenarios
+  - **Transaction Management**: Removed manual BEGIN/COMMIT that conflicted with SQLAlchemy
+  - **Race Condition Handling**: Gracefully handles "column already exists" errors from concurrent workers
+  - **Startup Resilience**: Stuck scan cleanup wrapped in try-catch to prevent startup failures
+  - **Worker Safety**: All 4 Gunicorn workers can now safely attempt migration simultaneously
+
+### Technical Details
+- **app.py:445-477**: Rewrote celery_task_id migration with proper concurrent worker handling
+- **app.py:514-532**: Added exception handling around stuck scan cleanup query
+- **PostgreSQL Compatibility**: Uses `ADD COLUMN IF NOT EXISTS` for idempotent migrations
+- **Error Recovery**: Proper rollback on all migration failures without aborting transactions
+
 ## [2.2.20] - 2025-08-19
 
 ### Fixed
