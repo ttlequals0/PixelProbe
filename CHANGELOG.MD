@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.33] - 2025-08-19
+
+### Fixed
+- **Stuck Scan Detection and Recovery**
+  - **Issue**: Scans could get stuck if Celery worker restarted during execution
+  - **Symptoms**: 409 Conflict error when trying to start new scans
+  - **Root Cause**: Orphaned scan state with `is_active=True` but no running task
+  - **Solution**: Enhanced `is_scan_running()` to detect and clean up stuck scans
+  - **Features Added**:
+    - Automatic detection of orphaned Celery tasks
+    - Timeout detection (10 minutes without progress)
+    - Automatic cleanup of completed but not updated tasks
+    - Proper handling of worker restarts
+
+### Technical Details
+- **pixelprobe/api/scan_routes.py:82-144**: Rewrote `is_scan_running()` function
+  - Checks if scan has made progress in last 10 minutes
+  - Verifies Celery task state (PENDING, STARTED, SUCCESS, FAILURE, etc.)
+  - Automatically marks orphaned scans as 'crashed'
+  - Cleans up completed tasks that didn't update database
+  - Returns `False` if task can't be verified instead of blocking forever
+
 ## [2.2.32] - 2025-08-19
 
 ### Fixed - CRITICAL Celery Execution Issues
