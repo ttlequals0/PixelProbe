@@ -443,10 +443,14 @@ def migrate_database():
                 conn.commit()
             
             # Check for missing celery_task_id column (v2.2.15+ requirement)
-            # CRITICAL FIX v2.2.22: Proper migration without IF NOT EXISTS for compatibility
+            # CRITICAL FIX v2.2.23: Ensure no open transactions on failure
+            migration_conn = None
             try:
+                # Use a separate connection for migration to avoid transaction issues
+                migration_conn = db.engine.connect()
+                
                 # Check if column exists using information_schema
-                result = conn.execute(text("""
+                result = migration_conn.execute(text("""
                     SELECT column_name 
                     FROM information_schema.columns 
                     WHERE table_name = 'scan_state' AND column_name = 'celery_task_id'
@@ -457,36 +461,45 @@ def migrate_database():
                     logger.info("celery_task_id column already exists")
                 else:
                     logger.info("Adding missing celery_task_id column to scan_state table")
+                    
+                    # Start explicit transaction for the ALTER TABLE
+                    trans = migration_conn.begin()
                     try:
                         # Try to add the column - may fail if another worker adds it
-                        # Don't use IF NOT EXISTS as it's not supported in all PostgreSQL versions
-                        conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)"))
-                        conn.commit()
+                        migration_conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)"))
+                        trans.commit()
                         logger.info("celery_task_id column added successfully")
                         
-                        # Try to create index separately (can fail if already exists)
+                        # Try to create index in a new transaction
+                        trans = migration_conn.begin()
                         try:
-                            conn.execute(text("CREATE INDEX idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
-                            conn.commit()
+                            migration_conn.execute(text("CREATE INDEX idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
+                            trans.commit()
                             logger.info("Index on celery_task_id created successfully")
                         except Exception as idx_ex:
+                            trans.rollback()
                             if "already exists" in str(idx_ex).lower():
                                 logger.info("Index already exists")
                             else:
                                 logger.warning(f"Could not create index: {idx_ex}")
-                            conn.rollback()
                             
                     except Exception as alter_ex:
+                        trans.rollback()
                         # Check if it's because column already exists (race condition)
                         if "already exists" in str(alter_ex).lower() or "duplicate column" in str(alter_ex).lower():
                             logger.info("celery_task_id column was added by another worker (race condition handled)")
                         else:
                             logger.error(f"Failed to add celery_task_id column: {alter_ex}")
-                        conn.rollback()
                     
             except Exception as col_ex:
                 logger.error(f"Migration check failed: {col_ex}")
-                conn.rollback()
+            finally:
+                # CRITICAL: Always close the migration connection to prevent "unexpected EOF"
+                if migration_conn:
+                    try:
+                        migration_conn.close()
+                    except:
+                        pass
         
         logger.info("Database migration completed successfully")
         

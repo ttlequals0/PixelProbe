@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.23] - 2025-08-19
+
+### Fixed
+- **CRITICAL Connection Management Fix**: Fixed "unexpected EOF on client connection with an open transaction" errors
+  - **Root Cause**: App crashes during migration left database connections with open transactions
+  - **Solution**: Use separate connection for migration with explicit transaction management
+  - **Connection Cleanup**: Added finally block to always close migration connection even on failure
+  - **Transaction Safety**: Each operation (column add, index create) in its own transaction
+  - **Production Impact**: Prevents zombie connections and transaction locks in PostgreSQL
+
+### Fixed
+- **Celery Deprecation Warning**: Added `broker_connection_retry_on_startup` configuration
+  - Resolves Celery 6.0 compatibility warning about broker connection retries
+  - Ensures proper connection retry behavior on worker startup
+
+### Enhanced
+- **Migration Robustness**: Complete rewrite of celery_task_id migration
+  - Uses dedicated connection for migration to isolate from main app connection
+  - Explicit transaction management with proper commit/rollback
+  - Always closes connection in finally block to prevent connection leaks
+  - Better separation of column and index creation with independent transactions
+
+### Technical Details
+- **app.py:447-502**: Complete rewrite of migration with dedicated connection management
+- **celery_config.py:71**: Added broker_connection_retry_on_startup for Celery 6.0 compatibility
+
 ## [2.2.22] - 2025-08-19
 
 ### Fixed  

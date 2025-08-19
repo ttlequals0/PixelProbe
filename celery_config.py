@@ -66,6 +66,9 @@ def create_celery(app=None):
         # Result backend settings
         'result_expires': 3600,  # Results expire after 1 hour
         'result_persistent': True,
+        
+        # Connection retry settings (Celery 6.0 compatibility)
+        'broker_connection_retry_on_startup': True,  # Fix deprecation warning
     })
     
     # Flask app context integration
