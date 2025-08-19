@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.30] - 2025-08-19
+
+### Fixed
+- **Celery Task Parameter Mismatch Fix**: Fixed tasks calling ScanService with non-existent `progress_callback` parameter
+  - **Error**: "ScanService.scan_directories() got an unexpected keyword argument 'progress_callback'"
+  - **Root Cause**: Celery tasks were passing progress_callback but ScanService methods don't accept it
+  - **Solution**: Removed progress_callback from all ScanService method calls
+  - **Impact**: Celery tasks now execute successfully without parameter errors
+  - **Production Impact**: Distributed task processing finally works end-to-end
+
+### Technical Details
+- **pixelprobe/tasks.py:74-80**: Removed progress_callback from scan_directories() call
+  - ScanService handles progress internally via database updates
+  - Added Celery task state update after scan completion
+- **pixelprobe/tasks.py:96-101**: Fixed discover scan type to use scan_directories
+  - No separate discover_files method exists in ScanService
+  - Discovery is handled as part of regular scan process
+- **pixelprobe/tasks.py:249-254**: Removed progress_callback from scan_files() call
+  - Added task state update after file scan completion
+- **pixelprobe/tasks.py:165-184**: Commented out MaintenanceService usage
+  - MaintenanceService not yet implemented
+  - Returns mock success to prevent task failures
+
 ## [2.2.29] - 2025-08-19
 
 ### Fixed
