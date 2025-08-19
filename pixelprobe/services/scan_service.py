@@ -16,7 +16,6 @@ from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState, ScanReport, ScanChunk
 from utils import ProgressTracker
 from sqlalchemy import text
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 import hashlib
 
 logger = logging.getLogger(__name__)
@@ -1320,123 +1319,31 @@ class ScanService:
         # Bulk insert with duplicate handling
         if files_to_insert:
             try:
-                # For SQLite, use INSERT OR IGNORE
-                if 'sqlite' in str(db.engine.url):
-                    # Separate files with errors from successful ones
-                    files_with_errors = [f for f in files_to_insert if 'error_message' in f]
-                    files_without_errors = [f for f in files_to_insert if 'error_message' not in f]
-                    
-                    # Insert files without errors (most common case)
-                    if files_without_errors:
-                        # For SQLite with INSERT OR IGNORE, we need to check which files were actually inserted
-                        # First, get the file paths we're trying to insert
-                        file_paths_to_insert = [f['file_path'] for f in files_without_errors]
-                        
-                        # Check which ones already exist
-                        # For large batches, check in smaller chunks to avoid query size limits
-                        existing_before = set()
-                        chunk_size = 500  # Increased chunk size for better performance
-                        for i in range(0, len(file_paths_to_insert), chunk_size):
-                            chunk_paths = file_paths_to_insert[i:i+chunk_size]
-                            try:
-                                existing_chunk = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
-                                    ScanResult.file_path.in_(chunk_paths)
-                                ).all())
-                                existing_before.update(existing_chunk)
-                            except Exception as e:
-                                logger.warning(f"Error checking existing files in batch {i//chunk_size}: {e}")
-                                # Fall back to smaller chunks if this fails
-                                for j in range(i, min(i + chunk_size, len(file_paths_to_insert)), 50):
-                                    try:
-                                        small_chunk = file_paths_to_insert[j:j+50]
-                                        existing_small = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
-                                            ScanResult.file_path.in_(small_chunk)
-                                        ).all())
-                                        existing_before.update(existing_small)
-                                    except Exception as e2:
-                                        logger.error(f"Failed to check files {j}-{j+50}: {e2}")
-                        
-                        # Execute the INSERT OR IGNORE using bulk insert
-                        from sqlalchemy import insert
-                        stmt = insert(ScanResult).values(files_without_errors)
-                        # For SQLite, use INSERT OR IGNORE
-                        stmt = stmt.prefix_with("OR IGNORE")
-                        db.session.execute(stmt)
-                        db.session.commit()
-                        
-                        # Check which ones exist now
-                        # For large batches, check in smaller chunks to avoid query size limits
-                        existing_after = set()
-                        for i in range(0, len(file_paths_to_insert), chunk_size):
-                            chunk_paths = file_paths_to_insert[i:i+chunk_size]
-                            try:
-                                existing_chunk = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
-                                    ScanResult.file_path.in_(chunk_paths)
-                                ).all())
-                                existing_after.update(existing_chunk)
-                            except Exception as e:
-                                logger.warning(f"Error checking inserted files in batch {i//chunk_size}: {e}")
-                                # Try smaller chunks
-                                for j in range(i, min(i + chunk_size, len(file_paths_to_insert)), 50):
-                                    try:
-                                        small_chunk = file_paths_to_insert[j:j+50]
-                                        existing_small = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
-                                            ScanResult.file_path.in_(small_chunk)
-                                        ).all())
-                                        existing_after.update(existing_small)
-                                    except Exception as e2:
-                                        logger.error(f"Failed to verify files {j}-{j+50}: {e2}")
-                        
-                        # Calculate actual added
-                        actual_added = len(existing_after) - len(existing_before)
-                        added_count += actual_added
-                        
-                        # Track duplicates for files without errors
-                        duplicate_count += len(existing_before)
-                        
-                        logger.info(f"Batch insert: attempted {len(files_without_errors)}, already existed {len(existing_before)}, actually added {actual_added}")
-                    
-                    # Insert files with errors separately
-                    if files_with_errors:
-                        # Get file paths for error files
-                        error_file_paths = [f['file_path'] for f in files_with_errors]
-                        
-                        # Check which ones already exist
-                        existing_error_before = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
-                            ScanResult.file_path.in_(error_file_paths)
-                        ).all())
-                        
-                        # Execute bulk insert for files with errors
-                        from sqlalchemy import insert
-                        stmt_error = insert(ScanResult).values(files_with_errors)
-                        # For SQLite, use INSERT OR IGNORE
-                        stmt_error = stmt_error.prefix_with("OR IGNORE")
-                        db.session.execute(stmt_error)
-                        db.session.commit()
-                        
-                        # Check which ones exist now
-                        existing_error_after = set(row[0] for row in db.session.query(ScanResult.file_path).filter(
-                            ScanResult.file_path.in_(error_file_paths)
-                        ).all())
-                        
-                        actual_added = len(existing_error_after) - len(existing_error_before)
-                        added_count += actual_added
-                        
-                        # Track duplicates for files with errors
-                        duplicate_count += len(existing_error_before)
-                        
-                        logger.info(f"Error batch insert: attempted {len(files_with_errors)}, already existed {len(existing_error_before)}, actually added {actual_added}")
-                else:
-                    # For other databases, insert one by one (less efficient)
-                    for file_data in files_to_insert:
-                        try:
-                            scan_result = ScanResult(**file_data)
-                            db.session.add(scan_result)
-                            db.session.flush()
-                            added_count += 1
-                        except IntegrityError:
-                            db.session.rollback()
-                            duplicate_count += 1
+                # PostgreSQL bulk insert with ON CONFLICT handling
+                from sqlalchemy.dialects.postgresql import insert
+                stmt = insert(ScanResult).values(files_to_insert)
+                stmt = stmt.on_conflict_do_nothing(index_elements=['file_path'])
+                
+                # Get count before insert
+                file_paths_to_insert = [f['file_path'] for f in files_to_insert]
+                existing_before = db.session.query(ScanResult.file_path).filter(
+                    ScanResult.file_path.in_(file_paths_to_insert)
+                ).count()
+                
+                # Execute bulk insert
+                db.session.execute(stmt)
+                db.session.commit()
+                
+                # Calculate actual added
+                existing_after = db.session.query(ScanResult.file_path).filter(
+                    ScanResult.file_path.in_(file_paths_to_insert)
+                ).count()
+                
+                actual_added = existing_after - existing_before
+                added_count += actual_added
+                duplicate_count += len(files_to_insert) - actual_added
+                
+                logger.info(f"Batch insert: attempted {len(files_to_insert)}, actually added {actual_added}, duplicates {duplicate_count}")
                             
             except Exception as e:
                 logger.error(f"Error during batch insert: {e}")

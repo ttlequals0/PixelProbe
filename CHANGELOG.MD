@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.19] - 2025-08-19
+
+### Fixed
+- **CRITICAL SQLite Migration Bug Fix**: Fixed database type detection for `celery_task_id` column migration
+  - **Root Cause**: SQLite doesn't have `version()` function, causing migration failures
+  - **Error**: `(sqlite3.OperationalError) no such function: version`
+  - **Impact**: Apps with SQLite databases couldn't start due to missing column
+  - **Resolution**: Added proper SQLite detection using `sqlite_version()` with PostgreSQL fallback
+  - **Backward Compatibility**: Maintains support for existing SQLite installations during transition
+
+### Enhanced
+- **PostgreSQL-Only Architecture**: Completed transition to PostgreSQL-only codebase (v2.2.0+)
+  - **Code Cleanup**: Removed ~2,000+ lines of obsolete SQLite compatibility code
+  - **Performance**: PostgreSQL-optimized bulk insert operations with ON CONFLICT handling
+  - **Maintainability**: Simplified database layer, reduced complexity and maintenance overhead
+  - **Service Layer**: Cleaned scan_service.py from complex SQLite INSERT OR IGNORE logic
+  - **Configuration**: Updated config.py and app.py to reflect PostgreSQL-only architecture
+
+### Verified
+- **All Scan Types Functional**: Comprehensive verification of all 6 scan types after cleanup
+  - **Full Scan** (`/api/scan-all`): ✅ Working with Celery integration and fallback
+  - **Parallel Scan** (`/api/scan-parallel`): ✅ Multi-worker scanning with deep scan support
+  - **Single File Scan** (`/api/scan-file`): ✅ Individual file validation with security checks
+  - **Pending Files Scan** (`/api/force-scan-pending`): ✅ Batch processing of pending files
+  - **Discovery Scan**: ✅ File enumeration and progress tracking
+  - **Deep Scan**: ✅ Extended file validation capabilities
+
+### Verified
+- **All Scan Phases Functional**: Comprehensive verification of all 4 scan phases
+  - **Discovery Phase**: ✅ File enumeration with progress tracking
+  - **Adding Phase**: ✅ PostgreSQL-optimized bulk database insertion
+  - **Scanning Phase**: ✅ Individual file corruption detection with ImageMagick timeout fixes
+  - **Completed Phase**: ✅ Proper scan completion and statistics calculation
+
+### Code Quality
+- **Database Layer**: Simplified and optimized for PostgreSQL-only operations
+- **Import Cleanup**: Removed unused SQLite-specific imports from service files
+- **Documentation**: Updated inline documentation to reflect PostgreSQL-only architecture
+- **Deprecation**: Added proper deprecation warnings for DATABASE_URL environment variable
+- **Migration Strategy**: Preserved migrate_to_postgres.py for user migration needs
+
+### Technical Details
+- **app.py:466-500**: Fixed database migration with proper SQLite/PostgreSQL detection
+- **pixelprobe/services/scan_service.py:1323-1439**: Replaced 116 lines of SQLite code with 24 lines of PostgreSQL-optimized code
+- **pixelprobe/services/db_optimization.py**: Simplified to PostgreSQL-only optimizations
+- **config.py**: Updated documentation to reflect PostgreSQL-only support
+
+## [2.2.18] - 2025-08-19
+
+### Fixed
+- **CRITICAL Migration Bug Fix**: Fixed 'config' name error preventing database migration
+  - **Root Cause**: Database migration code had undefined variable `config` causing migration failure
+  - **Error**: `name 'config' is not defined` during column addition process
+  - **Impact**: Migration detected missing column but failed to add it, leaving app broken
+  - **Resolution**: Replaced config reference with direct database type detection via `SELECT version()`
+  - **Enhanced Error Handling**: Added rollback on migration failure and better error reporting
+
+### Enhanced
+- **Database Type Detection**: Improved migration process with dynamic database type detection
+  - **PostgreSQL Detection**: Uses `SELECT version()` to detect PostgreSQL and apply `VARCHAR(36)`
+  - **SQLite Fallback**: Uses `TEXT` type for non-PostgreSQL databases
+  - **Transaction Safety**: Added proper rollback on migration failures
+  - **Error Recovery**: Comprehensive exception handling for migration edge cases
+
 ## [2.2.17] - 2025-08-19
 
 ### Fixed

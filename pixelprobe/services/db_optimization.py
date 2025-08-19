@@ -1,52 +1,22 @@
 """
-Database optimization utilities for handling large file databases
+Database optimization utilities for PostgreSQL
+PostgreSQL-only support since v2.2.0+
 """
 
 import logging
-from sqlalchemy import text, event
+from sqlalchemy import event
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import Pool
 
 logger = logging.getLogger(__name__)
 
 def setup_database_optimizations(db):
-    """Configure database for optimal performance with large databases"""
+    """Configure PostgreSQL for optimal performance with large databases"""
     
     @event.listens_for(Engine, "connect")
     def set_database_optimizations(dbapi_connection, connection_record):
-        """Set database optimizations for better performance"""
-        db_type = str(dbapi_connection).lower()
-        
-        if 'sqlite' in db_type:
-            cursor = dbapi_connection.cursor()
-            
-            # Enable Write-Ahead Logging for better concurrency
-            cursor.execute("PRAGMA journal_mode = WAL")
-            
-            # Reduce fsync operations for better write performance
-            cursor.execute("PRAGMA synchronous = NORMAL")
-            
-            # Increase cache size (negative = KB, default is -2000 = 2MB)
-            # Set to 64MB for better performance with large databases
-            cursor.execute("PRAGMA cache_size = -65536")
-            
-            # Increase page size for better performance with large files
-            cursor.execute("PRAGMA page_size = 4096")
-            
-            # Enable memory-mapped I/O (256MB)
-            cursor.execute("PRAGMA mmap_size = 268435456")
-            
-            # Optimize for faster inserts
-            cursor.execute("PRAGMA temp_store = MEMORY")
-            
-            # Enable foreign key constraints
-            cursor.execute("PRAGMA foreign_keys = ON")
-            
-            cursor.close()
-            logger.info("SQLite optimizations applied")
-        elif 'postgresql' in db_type:
-            # PostgreSQL optimizations are handled via connection pool settings in config.py
-            logger.info("PostgreSQL optimizations applied via connection pool settings")
+        """Set PostgreSQL optimizations for better performance"""
+        # PostgreSQL optimizations are handled via connection pool settings in config.py
+        logger.info("PostgreSQL optimizations applied via connection pool settings")
     
     @event.listens_for(Pool, "connect")
     def set_pool_optimizations(dbapi_connection, connection_record):

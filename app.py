@@ -81,10 +81,10 @@ if not app.config.get('SECRET_KEY'):
         raise ValueError("SECRET_KEY environment variable must be set")
     app.config['SECRET_KEY'] = SECRET_KEY
 
-# Override database URL if provided via old environment variable (deprecated in v2.2.0)
-# NOTE: DATABASE_URL is deprecated. Use POSTGRES_* variables instead.
+# Legacy DATABASE_URL support for backward compatibility (will be removed in v2.3.0)
 if os.environ.get('DATABASE_URL'):
-    logger.warning("DATABASE_URL is deprecated in v2.2.0. Use POSTGRES_HOST, POSTGRES_USER, etc. instead.")
+    logger.warning("DATABASE_URL is deprecated since v2.2.0. Use POSTGRES_HOST, POSTGRES_USER, etc. instead.")
+    logger.warning("DATABASE_URL support will be removed in v2.3.0.")
     app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 
 # Initialize extensions
@@ -95,8 +95,7 @@ from celery_config import create_celery, init_celery
 celery = create_celery(app)
 init_celery(app, celery)
 
-# PostgreSQL is now the only supported database
-# No SQLite optimizations needed
+# PostgreSQL is the only supported database (v2.2.0+)
 
 CORS(app, resources={
     r"/api/*": {"origins": "*"},
@@ -317,24 +316,14 @@ def migrate_database():
         
         # Add new columns if they don't exist
         def get_table_columns(conn, table_name):
-            """Get column names for a table, compatible with both SQLite and PostgreSQL"""
+            """Get column names for a PostgreSQL table"""
             try:
-                # Try PostgreSQL first
                 result = conn.execute(text("""
                     SELECT column_name 
                     FROM information_schema.columns 
                     WHERE table_name = :table_name
                 """), {"table_name": table_name})
                 columns = [row[0] for row in result]
-                if columns:
-                    return columns
-            except Exception:
-                pass
-            
-            try:
-                # Fallback to SQLite PRAGMA
-                result = conn.execute(text(f"PRAGMA table_info({table_name})"))
-                columns = [row[1] for row in result]
                 return columns
             except Exception as e:
                 logger.error(f"Failed to get columns for table {table_name}: {e}")
@@ -415,23 +404,13 @@ def migrate_database():
             
             # Check if scan_chunks table exists
             def get_table_names(conn):
-                """Get table names for the database, compatible with both SQLite and PostgreSQL"""
+                """Get table names for PostgreSQL database"""
                 try:
-                    # Try PostgreSQL first
                     result = conn.execute(text("""
                         SELECT table_name 
                         FROM information_schema.tables 
                         WHERE table_schema = 'public'
                     """))
-                    tables = [row[0] for row in result]
-                    if tables:
-                        return tables
-                except Exception:
-                    pass
-                
-                try:
-                    # Fallback to SQLite
-                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
                     tables = [row[0] for row in result]
                     return tables
                 except Exception as e:
@@ -469,14 +448,15 @@ def migrate_database():
                 logger.info("celery_task_id column exists")
             except Exception:
                 logger.info("Adding missing celery_task_id column to scan_state table")
-                if config.database_type == 'postgresql':
+                try:
+                    # Add PostgreSQL column (only database supported since v2.2.0)
                     conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
-                else:
-                    conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id TEXT"))
-                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
-                conn.commit()
-                logger.info("celery_task_id column added successfully")
+                    conn.commit()
+                    logger.info("celery_task_id column added successfully")
+                except Exception as col_ex:
+                    logger.error(f"Failed to add celery_task_id column: {col_ex}")
+                    conn.rollback()
         
         logger.info("Database migration completed successfully")
         

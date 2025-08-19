@@ -1,6 +1,6 @@
 """
 Configuration module for PixelProbe
-Supports both SQLite and PostgreSQL databases
+PostgreSQL-only database support (v2.2.0+)
 """
 import os
 import logging
