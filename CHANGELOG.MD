@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.24] - 2025-08-19
+
+### Fixed
+- **CRITICAL Migration Transaction Fix**: Complete rewrite of migration to fix SQLAlchemy transaction errors
+  - **Error**: "This connection has already initialized a SQLAlchemy Transaction() object"
+  - **Root Cause**: Using the main connection `conn` which already had a transaction from the parent migration
+  - **Solution**: Create completely separate engine and connection for celery_task_id migration
+  - **Impact**: Migration now actually executes and adds the missing column
+
+### Fixed
+- **Flower Dashboard Command Fix**: Fixed "No such command 'celery'" error
+  - **Error**: Flower dashboard failed with "No such command 'celery'"  
+  - **Cause**: v2.2.23 incorrectly tried to run 'celery' as first argument
+  - **Solution**: Use 'flower' command directly with broker and port arguments
+  - **Impact**: Flower monitoring dashboard now starts successfully
+
+### Fixed
+- **Database Column Missing**: The celery_task_id column was never being added
+  - **Issue**: All queries for ScanState were failing with "column does not exist"
+  - **Solution**: Migration now properly adds the column using separate connection
+  - **API Impact**: /api/scan-status and other endpoints now work correctly
+
+### Technical Details
+- **app.py:447-502**: Complete rewrite using separate engine and connection for migration
+- **scripts/flower_monitor.py:53-61**: Fixed Flower command arguments to use 'flower' directly
+- **Connection Management**: Migration uses independent engine with proper disposal
+
 ## [2.2.23] - 2025-08-19
 
 ### Fixed

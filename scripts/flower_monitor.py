@@ -50,14 +50,12 @@ def main():
     if url_prefix:
         logger.info(f"With prefix: http://localhost:{port}{url_prefix}")
     
-    # Build Flower command arguments correctly
-    # The correct format for Celery 5.x is: celery [celery_args] flower [flower_args]
+    # Build Flower command arguments
+    # For Celery 5.x, just use 'flower' command directly
     flower_args = [
-        'celery',
-        '-A', 'celery_config',  # Specify the app
-        '--broker', broker_url,
         'flower',
-        f'--port={port}',  # Use = format for flower args
+        f'--broker={broker_url}',
+        f'--port={port}',
         '--max_tasks=10000',
         '--tasks_columns=name,uuid,state,args,kwargs,result,received,started,runtime,worker'
     ]
@@ -65,7 +63,7 @@ def main():
     if url_prefix:
         flower_args.append(f'--url_prefix={url_prefix}')
     
-    # Start Flower
+    # Start Flower using the celery app's start method
     try:
         celery_app.start(flower_args)
     except KeyboardInterrupt:
