@@ -75,8 +75,8 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                 directories=paths,
                 force_rescan=force_rescan,
                 num_workers=num_workers,
-                deep_scan=deep_scan
-                # progress_callback parameter removed - ScanService doesn't accept it
+                deep_scan=deep_scan,
+                async_mode=False  # Run synchronously in Celery task
             )
             
             # Update Celery task state based on result
@@ -97,7 +97,8 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                 directories=paths,
                 force_rescan=False,  # Don't force rescan for discovery
                 num_workers=1,
-                deep_scan=False
+                deep_scan=False,
+                async_mode=False  # Run synchronously in Celery task
             )
         elif scan_type == 'single':
             # Single file scan
@@ -246,8 +247,8 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, deep_scan=Fal
         result = scan_service.scan_files(
             file_paths=file_paths,
             force_rescan=force_rescan,
-            deep_scan=deep_scan
-            # progress_callback parameter removed - ScanService doesn't accept it
+            deep_scan=deep_scan,
+            async_mode=False  # Run synchronously in Celery task
         )
         
         # Update Celery task state based on result

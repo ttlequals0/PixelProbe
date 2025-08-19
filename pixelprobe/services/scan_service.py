@@ -104,7 +104,7 @@ class ScanService:
         return {'status': 'started', 'message': 'Scan started', 'file_path': file_path}
     
     def scan_directories(self, directories: List[str], force_rescan: bool = False, 
-                        num_workers: int = 1, deep_scan: bool = False) -> Dict:
+                        num_workers: int = 1, deep_scan: bool = False, async_mode: bool = True) -> Dict:
         """Scan multiple directories"""
         if self.is_scan_running():
             raise RuntimeError("Another scan is already in progress")
@@ -450,20 +450,50 @@ class ScanService:
                     self.current_scan_thread = None
                     logger.info("Scan thread cleaned up")
         
-        self.current_scan_thread = threading.Thread(target=run_scan, name="DirectoryScan")
-        logger.info(f"Starting directory scan thread: {self.current_scan_thread.name}")
-        self.current_scan_thread.start()
-        
-        return {
-            'status': 'started',
-            'message': 'Scan started',
-            'directories': valid_dirs,
-            'force_rescan': force_rescan,
-            'num_workers': num_workers
-        }
+        if async_mode:
+            # Run in a separate thread (for direct API calls)
+            self.current_scan_thread = threading.Thread(target=run_scan, name="DirectoryScan")
+            logger.info(f"Starting directory scan thread: {self.current_scan_thread.name}")
+            self.current_scan_thread.start()
+            
+            return {
+                'status': 'started',
+                'message': 'Scan started',
+                'directories': valid_dirs,
+                'force_rescan': force_rescan,
+                'num_workers': num_workers
+            }
+        else:
+            # Run synchronously (for Celery tasks)
+            logger.info("Running scan synchronously for Celery task")
+            try:
+                run_scan()
+                # Get final scan state for results
+                final_scan_state = ScanState.query.get(scan_state_id)
+                if final_scan_state:
+                    return {
+                        'status': 'completed',
+                        'message': 'Scan completed',
+                        'directories': valid_dirs,
+                        'force_rescan': force_rescan,
+                        'num_workers': num_workers,
+                        'files_processed': final_scan_state.files_processed,
+                        'phase': final_scan_state.phase
+                    }
+                else:
+                    return {
+                        'status': 'completed',
+                        'message': 'Scan completed',
+                        'directories': valid_dirs,
+                        'force_rescan': force_rescan,
+                        'num_workers': num_workers
+                    }
+            finally:
+                # Ensure thread reference is cleared even in sync mode
+                self.current_scan_thread = None
     
     def scan_files(self, file_paths: List[str], force_rescan: bool = False,
-                   deep_scan: bool = False, num_workers: int = 1) -> Dict:
+                   deep_scan: bool = False, num_workers: int = 1, async_mode: bool = True) -> Dict:
         """Scan specific files only"""
         if self.is_scan_running():
             raise RuntimeError("Another scan is already in progress")
@@ -586,18 +616,50 @@ class ScanService:
                     self.current_scan_thread = None
                     logger.info("File scan thread cleaned up")
         
-        self.current_scan_thread = threading.Thread(target=run_scan, name="FileListScan")
-        logger.info(f"Starting file list scan thread: {self.current_scan_thread.name}")
-        self.current_scan_thread.start()
-        
-        return {
-            'status': 'started',
-            'message': f'Scan started for {len(valid_files)} files',
-            'files': len(valid_files),
-            'force_rescan': force_rescan,
-            'deep_scan': deep_scan,
-            'num_workers': num_workers
-        }
+        if async_mode:
+            # Run in a separate thread (for direct API calls)
+            self.current_scan_thread = threading.Thread(target=run_scan, name="FileListScan")
+            logger.info(f"Starting file list scan thread: {self.current_scan_thread.name}")
+            self.current_scan_thread.start()
+            
+            return {
+                'status': 'started',
+                'message': f'Scan started for {len(valid_files)} files',
+                'files': len(valid_files),
+                'force_rescan': force_rescan,
+                'deep_scan': deep_scan,
+                'num_workers': num_workers
+            }
+        else:
+            # Run synchronously (for Celery tasks)
+            logger.info("Running file scan synchronously for Celery task")
+            try:
+                run_scan()
+                # Get final scan state for results
+                final_scan_state = ScanState.query.get(scan_state_id)
+                if final_scan_state:
+                    return {
+                        'status': 'completed',
+                        'message': f'Scan completed for {len(valid_files)} files',
+                        'files': len(valid_files),
+                        'force_rescan': force_rescan,
+                        'deep_scan': deep_scan,
+                        'num_workers': num_workers,
+                        'files_processed': final_scan_state.files_processed,
+                        'phase': final_scan_state.phase
+                    }
+                else:
+                    return {
+                        'status': 'completed',
+                        'message': f'Scan completed for {len(valid_files)} files',
+                        'files': len(valid_files),
+                        'force_rescan': force_rescan,
+                        'deep_scan': deep_scan,
+                        'num_workers': num_workers
+                    }
+            finally:
+                # Ensure thread reference is cleared even in sync mode
+                self.current_scan_thread = None
     
     def resume_scan(self, scan_id: str = None) -> Dict:
         """Resume a previously interrupted scan"""
@@ -1341,7 +1403,7 @@ class ScanService:
                 
                 actual_added = existing_after - existing_before
                 added_count += actual_added
-                duplicate_count += len(files_to_insert) - actual_added
+                duplicate_count = len(files_to_insert) - actual_added
                 
                 logger.info(f"Batch insert: attempted {len(files_to_insert)}, actually added {actual_added}, duplicates {duplicate_count}")
                             

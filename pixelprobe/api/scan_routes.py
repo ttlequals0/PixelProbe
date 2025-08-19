@@ -80,8 +80,30 @@ def exempt_from_rate_limit(f):
     return wrapped
 
 def is_scan_running():
-    """Check if a scan is currently running"""
-    return current_app.scan_service.is_scan_running()
+    """Check if a scan is currently running (thread or Celery)"""
+    # Check thread-based scans
+    if current_app.scan_service.is_scan_running():
+        return True
+    
+    # Check database for active Celery-based scans
+    try:
+        active_scan = ScanState.query.filter_by(is_active=True).first()
+        if active_scan and active_scan.phase not in ['idle', 'completed', 'error']:
+            # Verify if Celery task is still running
+            if active_scan.celery_task_id and check_celery_available():
+                try:
+                    from celery.result import AsyncResult
+                    result = AsyncResult(active_scan.celery_task_id, app=current_app.celery)
+                    if result.state in ['PENDING', 'STARTED', 'RETRY']:
+                        return True
+                except Exception as e:
+                    logger.warning(f"Could not check Celery task status: {e}")
+            # If no Celery task or can't check, rely on phase status
+            return True
+    except Exception as e:
+        logger.error(f"Error checking scan state: {e}")
+    
+    return False
 
 @scan_bp.route('/scan-results')
 def get_scan_results():
@@ -306,6 +328,10 @@ def scan_all():
     """Start scanning all media files in configured directories"""
     if request.method == 'OPTIONS':
         return '', 200
+    
+    # Check if a scan is already running (thread or Celery)
+    if is_scan_running():
+        return jsonify({'error': 'A scan is already in progress'}), 409
     
     # Get scan configuration
     data = request.get_json() or {}
@@ -687,6 +713,10 @@ def cancel_scan():
 @rate_limit("2 per minute")
 def scan_parallel():
     """Start a parallel scan with multiple workers"""
+    # Check if a scan is already running (thread or Celery)
+    if is_scan_running():
+        return jsonify({'error': 'A scan is already in progress'}), 409
+    
     data = request.get_json() or {}
     force_rescan = data.get('force_rescan', False)
     num_workers = data.get('num_workers', 4)
@@ -980,8 +1010,8 @@ def force_scan_pending():
                 'pending_count': 0
             })
         
-        # Check if a scan is already running
-        if current_app.scan_service.is_scan_running():
+        # Check if a scan is already running (thread or Celery)
+        if is_scan_running():
             return jsonify({'error': 'A scan is already in progress'}), 409
         
         # P1 Implementation: Use Celery task queue for pending files scan
@@ -1068,6 +1098,54 @@ def reset_files_by_path():
     except Exception as e:
         logger.error(f"Error resetting files by path: {e}")
         return jsonify({'error': str(e)}), 500
+
+@scan_bp.route('/worker-status')
+@exempt_from_rate_limit
+def get_worker_status():
+    """Get Celery worker status and information"""
+    try:
+        if not check_celery_available():
+            return jsonify({
+                'status': 'disabled',
+                'message': 'Celery is not configured',
+                'workers': []
+            })
+        
+        # Get worker stats from Celery
+        stats = current_app.celery.control.inspect().stats()
+        active_tasks = current_app.celery.control.inspect().active()
+        
+        if not stats:
+            return jsonify({
+                'status': 'offline',
+                'message': 'No workers are currently connected',
+                'workers': []
+            })
+        
+        workers = []
+        for worker_name, worker_stats in stats.items():
+            worker_info = {
+                'name': worker_name,
+                'status': 'online',
+                'pool': worker_stats.get('pool', {}).get('implementation', 'unknown'),
+                'max_concurrency': worker_stats.get('pool', {}).get('max-concurrency', 0),
+                'current_tasks': len(active_tasks.get(worker_name, [])) if active_tasks else 0,
+                'total_tasks': worker_stats.get('total', {})
+            }
+            workers.append(worker_info)
+        
+        return jsonify({
+            'status': 'online',
+            'message': f'{len(workers)} worker(s) connected',
+            'workers': workers
+        })
+    except Exception as e:
+        logger.error(f"Error getting worker status: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Could not retrieve worker status: {str(e)}',
+            'workers': []
+        })
 
 @scan_bp.route('/scan-output/<int:result_id>')
 def get_scan_output(result_id):

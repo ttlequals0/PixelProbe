@@ -5,6 +5,86 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.32] - 2025-08-19
+
+### Fixed - CRITICAL Celery Execution Issues
+- **Celery Tasks Running Asynchronously Instead of Synchronously**
+  - **Issue**: Celery tasks were starting threads and returning immediately
+  - **Root Cause**: `scan_directories()` and `scan_files()` were creating background threads
+  - **Impact**: Multiple scans running simultaneously, batch processing duplicated
+  - **Solution**: Added `async_mode` parameter to control execution mode
+  - **Production Impact**: Celery tasks now run to completion before returning
+
+- **Batch Processing Duplicate Execution**
+  - **Issue**: Every batch was being processed exactly twice
+  - **Symptoms**: Logs showed duplicate "Processing batch starting at X" entries
+  - **Root Cause**: Two scan threads running simultaneously due to async issue above
+  - **Solution**: Fixed by making Celery tasks run synchronously
+  
+- **Duplicate Count Accumulation Bug**
+  - **Issue**: Duplicate counts were incorrectly accumulated instead of set
+  - **Location**: `pixelprobe/services/scan_service.py:1344`
+  - **Fix**: Changed `duplicate_count +=` to `duplicate_count =`
+  - **Impact**: Correct duplicate file reporting
+
+### Technical Details
+- **pixelprobe/services/scan_service.py**:
+  - Added `async_mode: bool = True` parameter to `scan_directories()` and `scan_files()`
+  - When `async_mode=False`, runs synchronously and waits for completion
+  - When `async_mode=True`, starts thread and returns immediately (API behavior)
+  - Fixed duplicate count bug in `_add_files_batch_to_db()` at line 1374
+
+- **pixelprobe/tasks.py**:
+  - Updated all `scan_service` calls to use `async_mode=False`
+  - Ensures Celery tasks wait for scan completion before returning
+  - Task returns actual scan results instead of just "started" status
+
+### Production Impact
+- **Scan Reliability**: Scans now run to completion without duplication
+- **Resource Usage**: Single scan thread instead of multiple competing threads
+- **Progress Tracking**: Accurate progress without duplicate processing
+- **Celery Integration**: Tasks properly wait for completion and return results
+
+## [2.2.31] - 2025-08-19
+
+### Fixed
+- **Scan Concurrency Control**: Prevented multiple scans from running simultaneously
+  - **Issue**: Multiple scans could be started concurrently, causing resource conflicts
+  - **Root Cause**: Thread-based scan check didn't account for Celery-based scans
+  - **Solution**: Enhanced `is_scan_running()` to check both thread state and database ScanState
+  - **Impact**: Only one scan can run at a time, preventing resource conflicts
+  - **Production Impact**: More stable scanning with proper resource management
+
+- **Worker Status Reporting**: Added proper Celery worker status endpoint
+  - **Issue**: Worker status showing as "offline" incorrectly
+  - **Solution**: Added `/api/worker-status` endpoint to report Celery worker health
+  - **Returns**: Worker count, status (online/offline/disabled), and task information
+  - **Production Impact**: Accurate worker status monitoring in UI
+
+### Technical Details
+- **pixelprobe/api/scan_routes.py:82-106**: Enhanced `is_scan_running()` function
+  - Checks both thread-based scans via `scan_service.is_scan_running()`
+  - Queries database for active ScanState with non-idle/completed phase
+  - Verifies Celery task status if task_id exists
+  - Returns true if any scan mechanism is active
+  
+- **pixelprobe/api/scan_routes.py:313-315**: Added scan check to `/scan-all` endpoint
+  - Prevents new scan if one is already running
+  - Returns 409 Conflict with error message
+  
+- **pixelprobe/api/scan_routes.py:716-718**: Added scan check to `/scan-parallel` endpoint
+  - Same concurrency control as scan-all
+  
+- **pixelprobe/api/scan_routes.py:987-988**: Updated `/force-scan-pending` check
+  - Uses unified `is_scan_running()` instead of just thread check
+  
+- **pixelprobe/api/scan_routes.py:1102-1148**: Added `/worker-status` endpoint
+  - Reports Celery worker availability and health
+  - Shows worker count, pool type, concurrency, and active tasks
+  - Returns 'disabled' if Celery not configured
+  - Returns 'offline' if no workers connected
+  - Returns 'online' with worker details if healthy
+
 ## [2.2.30] - 2025-08-19
 
 ### Fixed
