@@ -1299,7 +1299,7 @@ class ScanService:
                     'last_modified': mod_time,
                     'discovered_date': datetime.now(timezone.utc),
                     'scan_status': 'pending',
-                    'is_corrupted': False,
+                    'is_corrupted': None,
                     'marked_as_good': False,
                     'file_exists': True
                 })
@@ -1312,7 +1312,7 @@ class ScanService:
                     'discovered_date': datetime.now(timezone.utc),
                     'scan_status': 'error',
                     'error_message': str(e),
-                    'is_corrupted': False,
+                    'is_corrupted': None,
                     'marked_as_good': False,
                     'file_exists': True
                 })

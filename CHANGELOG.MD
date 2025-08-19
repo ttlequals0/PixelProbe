@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.13] - 2025-08-18
+
+### Fixed
+- **CRITICAL File Status Logic Fix**: Fixed files being marked as "Healthy" instead of "Pending" during ADD phase
+  - **Root Cause**: Line 1302 in scan_service.py was setting `'is_corrupted': False` during file discovery
+  - **Correct Behavior**: Files should be `'is_corrupted': None` until actually scanned
+  - **Data Impact**: Existing files in database may show as "Healthy" when they should be "Pending"
+  - **Model Definition**: `is_corrupted = NULL` means "not scanned yet" per models.py:28
+  - **Stats Fix**: Files are now properly categorized as Pending until scan phase completes
+  - **All File Types**: Affects both regular files and files with discovery errors
+
+### Note
+- Existing database records may need manual correction: UPDATE scan_results SET is_corrupted = NULL WHERE scan_status = 'pending'
+
 ## [2.2.12] - 2025-08-18
 
 ### Fixed
