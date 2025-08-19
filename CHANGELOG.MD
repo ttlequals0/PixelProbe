@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.17] - 2025-08-19
+
+### Fixed
+- **CRITICAL Database Migration Fix**: Fixed missing celery_task_id column causing app crashes
+  - **Root Cause**: PostgreSQL database was missing the `celery_task_id` column added in v2.2.15
+  - **Error**: `psycopg2.errors.UndefinedColumn: column scan_state.celery_task_id does not exist`
+  - **Automatic Migration**: Added startup check to automatically add missing column
+  - **Database Safety**: Enhanced migration process to prevent future schema issues
+  - **Production Fix**: App now starts successfully and auto-migrates missing columns
+
+### Enhanced
+- **Startup Migration Process**: Improved database migration with column existence checks
+  - **PostgreSQL Support**: `ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)`
+  - **SQLite Support**: `ALTER TABLE scan_state ADD COLUMN celery_task_id TEXT`
+  - **Index Creation**: Automatic index creation for performance
+  - **Error Recovery**: Graceful handling of missing schema elements
+
 ## [2.2.16] - 2025-08-19
 
 ### Fixed

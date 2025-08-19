@@ -462,6 +462,21 @@ def migrate_database():
                 conn.execute(text("CREATE INDEX idx_scan_chunks_chunk_id ON scan_chunks(chunk_id)"))
                 conn.execute(text("CREATE INDEX idx_scan_chunks_status ON scan_chunks(status)"))
                 conn.commit()
+            
+            # Check for missing celery_task_id column (v2.2.15+ requirement)
+            try:
+                conn.execute(text("SELECT celery_task_id FROM scan_state LIMIT 0"))
+                logger.info("celery_task_id column exists")
+            except Exception:
+                logger.info("Adding missing celery_task_id column to scan_state table")
+                if config.database_type == 'postgresql':
+                    conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
+                else:
+                    conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id TEXT"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
+                conn.commit()
+                logger.info("celery_task_id column added successfully")
         
         logger.info("Database migration completed successfully")
         
