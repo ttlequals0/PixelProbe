@@ -822,6 +822,21 @@ class PixelProbe:
                 scan_output.append(f"PIL load/transform: FAILED - {str(e)}")
         
         logger.info(f"Starting ImageMagick verification for: {file_path}")
+        
+        # Calculate timeout based on file type and size
+        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+        file_size_mb = file_size / (1024 * 1024)
+        
+        # Base timeout: 30s for most files, 90s for GIFs, scale with file size
+        if is_gif:
+            # GIFs can be complex with many frames - use longer timeout
+            imagemagick_timeout = min(90 + int(file_size_mb / 10), 180)  # 90s base + 1s per 10MB, max 3 minutes
+        else:
+            # Regular images - shorter timeout
+            imagemagick_timeout = min(30 + int(file_size_mb / 5), 120)   # 30s base + 1s per 5MB, max 2 minutes
+        
+        logger.info(f"ImageMagick timeout set to {imagemagick_timeout}s for {file_size_mb:.1f}MB {file_ext.upper()} file")
+        
         try:
             result = safe_subprocess_run(
                 ['identify', '-verbose', file_path],
@@ -829,7 +844,7 @@ class PixelProbe:
                 text=True,
                 encoding='utf-8',
                 errors='replace',  # Replace undecodable bytes with � character
-                timeout=30
+                timeout=imagemagick_timeout
             )
             
             if result.returncode != 0:
@@ -872,11 +887,22 @@ class PixelProbe:
                 logger.info(f"ImageMagick verification passed for: {file_path}")
         
         except subprocess.TimeoutExpired:
-            corruption_details.append("ImageMagick identify timeout")
-            is_corrupted = True
-            scan_tool = "imagemagick"
-            scan_output.append("ImageMagick identify: TIMEOUT")
-            logger.warning(f"ImageMagick timeout for: {file_path}")
+            # ImageMagick timeout should be a warning, not corruption
+            # Only mark as corrupted if other tools also failed
+            timeout_msg = f"ImageMagick identify timeout ({imagemagick_timeout}s) - file may be very complex"
+            
+            # If PIL passed, treat timeout as warning rather than corruption
+            if not pil_failed and not pil_load_failed:
+                warning_details.append(timeout_msg)
+                scan_output.append("ImageMagick identify: TIMEOUT (treating as warning - PIL verification passed)")
+                logger.warning(f"ImageMagick timeout for {file_path} - treating as warning since PIL passed")
+            else:
+                # PIL also failed, more likely to be actual corruption
+                corruption_details.append("ImageMagick identify timeout")
+                is_corrupted = True
+                scan_tool = "imagemagick"
+                scan_output.append("ImageMagick identify: TIMEOUT (corruption likely - PIL also failed)")
+                logger.warning(f"ImageMagick timeout for {file_path} - marking as corrupted since PIL also failed")
         except FileNotFoundError:
             scan_output.append("ImageMagick: NOT FOUND")
             logger.warning("ImageMagick not found, skipping advanced image checks")
@@ -888,11 +914,13 @@ class PixelProbe:
             logger.warning(f"ImageMagick error for {file_path}: {str(e)}")
         
         try:
+            # Use same timeout scaling as ImageMagick for consistency
+            ffmpeg_image_timeout = min(30 + int(file_size_mb / 5), 120)  # 30s base + 1s per 5MB, max 2 minutes
             result = safe_subprocess_run(
                 ['ffmpeg', '-v', 'error', '-i', file_path, '-f', 'null', '-'],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=ffmpeg_image_timeout
             )
             
             if result.returncode != 0 and result.stderr:

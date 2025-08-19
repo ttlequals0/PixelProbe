@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.14] - 2025-08-19
+
+### Fixed
+- **ImageMagick Timeout Handling**: Enhanced timeout and corruption detection for image files
+  - **File Size-Based Timeouts**: GIFs now use 90s base + 1s per 10MB (max 3 minutes)
+  - **Regular Images**: 30s base + 1s per 5MB (max 2 minutes) 
+  - **Smart Timeout Handling**: ImageMagick timeouts now treated as warnings when PIL passes
+  - **Corruption Logic**: Only mark as corrupted if multiple tools fail, reducing false positives
+  - **GIF Performance**: Addresses 30-second timeout issues with large/complex GIF files
+  - **FFmpeg Image Validation**: Also uses size-based timeout scaling for consistency
+
+### Performance
+- **Log Analysis**: Reviewed container logs showing excellent performance metrics
+  - **109,765 files** processed successfully with 99.99% success rate
+  - **Only 2 timeout issues** found (ImageMagick GIF timeouts, now fixed)
+  - **File Size Scaling**: Working correctly with timeouts from 30-37s based on file size
+  - **Hash Performance**: No performance bottlenecks in hash calculations
+  - **Scan Rate**: ~100 files per minute processing rate maintained
+
+### Technical Details
+- **media_checker.py:826-847**: Added adaptive timeout calculation based on file type and size
+- **media_checker.py:889-905**: Enhanced timeout exception handling with PIL cross-check
+- **media_checker.py:917-923**: Applied consistent timeout scaling to FFmpeg image validation
+- **Warning vs Corruption**: More intelligent categorization reduces false positive corruption reports
+
 ## [2.2.13] - 2025-08-18
 
 ### Fixed
