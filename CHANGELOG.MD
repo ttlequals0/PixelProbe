@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.29] - 2025-08-19
+
+### Fixed
+- **Celery Flask Context Fix**: Fixed "Working outside of application context" errors in Celery tasks
+  - **Error**: Tasks failing with RuntimeError about missing Flask app context
+  - **Root Cause**: Worker was importing standalone Celery instance without Flask initialization
+  - **Solution**: Import Celery from app.py which has Flask context properly configured
+  - **Impact**: Celery tasks now execute successfully with database access
+  - **Production Impact**: Distributed task processing now fully functional
+
+### Technical Details
+- **celery_worker.py:29**: Changed from `from celery_config import celery_app` to `from app import celery as celery_app`
+  - Worker now uses Flask-initialized Celery instance
+  - Tasks have access to Flask app context and database
+  - ContextTask wrapper in init_celery() now properly wraps task execution
+
 ## [2.2.28] - 2025-08-19
 
 ### Fixed

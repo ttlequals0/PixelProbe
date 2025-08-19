@@ -24,8 +24,9 @@ from celery import Celery
 # Add the project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Import Celery configuration
-from celery_config import celery_app
+# Import Celery from the main app which has Flask context
+# CRITICAL: Must import from app.py to get the Flask-initialized Celery instance
+from app import celery as celery_app
 
 # Configure logging
 logging.basicConfig(
