@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.20] - 2025-08-19
+
+### Fixed
+- **CRITICAL Production Database Migration Fix**: Fixed PostgreSQL transaction abort during column migration
+  - **Root Cause**: Using `SELECT celery_task_id FROM scan_state` to check column existence caused transaction abort when column doesn't exist
+  - **Error**: `current transaction is aborted, commands ignored until end of transaction block`
+  - **Impact**: Production app crash loop - column migration never succeeded, app couldn't start
+  - **Resolution**: Use `information_schema.columns` to check column existence without transaction abort
+  - **Production Status**: App now starts successfully and migrates missing columns automatically
+
+### Technical Details
+- **app.py:447-467**: Replaced failing SELECT check with information_schema query
+- **PostgreSQL Compatibility**: Proper transaction handling for column existence checks
+- **Migration Safety**: No more transaction aborts during schema updates
+
 ## [2.2.19] - 2025-08-19
 
 ### Fixed

@@ -443,20 +443,28 @@ def migrate_database():
                 conn.commit()
             
             # Check for missing celery_task_id column (v2.2.15+ requirement)
+            # Use information_schema instead of failing SELECT to avoid transaction abort
             try:
-                conn.execute(text("SELECT celery_task_id FROM scan_state LIMIT 0"))
-                logger.info("celery_task_id column exists")
-            except Exception:
-                logger.info("Adding missing celery_task_id column to scan_state table")
-                try:
+                result = conn.execute(text("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'scan_state' AND column_name = 'celery_task_id'
+                """))
+                column_exists = result.fetchone() is not None
+                
+                if column_exists:
+                    logger.info("celery_task_id column exists")
+                else:
+                    logger.info("Adding missing celery_task_id column to scan_state table")
                     # Add PostgreSQL column (only database supported since v2.2.0)
                     conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
                     conn.commit()
                     logger.info("celery_task_id column added successfully")
-                except Exception as col_ex:
-                    logger.error(f"Failed to add celery_task_id column: {col_ex}")
-                    conn.rollback()
+                    
+            except Exception as col_ex:
+                logger.error(f"Failed to add celery_task_id column: {col_ex}")
+                conn.rollback()
         
         logger.info("Database migration completed successfully")
         
