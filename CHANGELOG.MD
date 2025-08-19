@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.22] - 2025-08-19
+
+### Fixed  
+- **PostgreSQL Compatibility Fix**: Removed `IF NOT EXISTS` clause that isn't supported in all PostgreSQL versions
+  - **Issue**: `ALTER TABLE ADD COLUMN IF NOT EXISTS` requires PostgreSQL 9.6+
+  - **Solution**: Use standard ALTER TABLE with proper exception handling for race conditions
+  - **Index Creation**: Separated index creation with its own error handling
+  - **Backward Compatibility**: Now works with older PostgreSQL versions
+  
+### Enhanced
+- **Better Error Handling**: Improved separation of column and index creation errors
+  - Column creation commits immediately if successful
+  - Index creation handled separately with its own transaction
+  - More granular error messages for debugging
+
+### Technical Details
+- **app.py:461-485**: Split column and index creation into separate transactions
+- **app.py:468-477**: Added dedicated index creation with proper error handling
+
 ## [2.2.21] - 2025-08-19
 
 ### Fixed

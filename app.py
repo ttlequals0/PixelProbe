@@ -443,7 +443,7 @@ def migrate_database():
                 conn.commit()
             
             # Check for missing celery_task_id column (v2.2.15+ requirement)
-            # CRITICAL FIX v2.2.21: Proper transaction handling for concurrent workers
+            # CRITICAL FIX v2.2.22: Proper migration without IF NOT EXISTS for compatibility
             try:
                 # Check if column exists using information_schema
                 result = conn.execute(text("""
@@ -459,18 +459,30 @@ def migrate_database():
                     logger.info("Adding missing celery_task_id column to scan_state table")
                     try:
                         # Try to add the column - may fail if another worker adds it
-                        conn.execute(text("ALTER TABLE scan_state ADD COLUMN IF NOT EXISTS celery_task_id VARCHAR(36)"))
-                        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
+                        # Don't use IF NOT EXISTS as it's not supported in all PostgreSQL versions
+                        conn.execute(text("ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)"))
                         conn.commit()
                         logger.info("celery_task_id column added successfully")
+                        
+                        # Try to create index separately (can fail if already exists)
+                        try:
+                            conn.execute(text("CREATE INDEX idx_scan_state_celery_task_id ON scan_state(celery_task_id)"))
+                            conn.commit()
+                            logger.info("Index on celery_task_id created successfully")
+                        except Exception as idx_ex:
+                            if "already exists" in str(idx_ex).lower():
+                                logger.info("Index already exists")
+                            else:
+                                logger.warning(f"Could not create index: {idx_ex}")
+                            conn.rollback()
+                            
                     except Exception as alter_ex:
                         # Check if it's because column already exists (race condition)
                         if "already exists" in str(alter_ex).lower() or "duplicate column" in str(alter_ex).lower():
                             logger.info("celery_task_id column was added by another worker (race condition handled)")
-                            conn.rollback()
                         else:
                             logger.error(f"Failed to add celery_task_id column: {alter_ex}")
-                            conn.rollback()
+                        conn.rollback()
                     
             except Exception as col_ex:
                 logger.error(f"Migration check failed: {col_ex}")
