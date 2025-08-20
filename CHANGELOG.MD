@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.34] - 2025-08-20
+
+### Fixed
+- **Datetime Comparison Bug in Scan State Check**
+  - **Issue**: "can't subtract offset-naive and offset-aware datetimes" error
+  - **Location**: `is_scan_running()` function when checking stale scans
+  - **Root Cause**: Database `start_time` could be timezone-naive
+  - **Solution**: Added timezone handling to ensure all datetime comparisons use UTC
+  - **Impact**: Scan state checks now work correctly without throwing exceptions
+
+### Verified Working
+- **Batch Processing**: Each batch processed exactly once (no duplicates)
+- **Celery Synchronous Execution**: Tasks run to completion before returning
+- **Stuck Scan Recovery**: Properly detects and cleans up orphaned scans
+- **Performance**: Processing ~170,000 files in ~8 minutes with stable memory usage
+
 ## [2.2.33] - 2025-08-19
 
 ### Fixed

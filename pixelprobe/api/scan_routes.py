@@ -92,7 +92,12 @@ def is_scan_running():
             # Check if scan is stale (no progress for more than 5 minutes)
             if active_scan.start_time:
                 from datetime import datetime, timezone, timedelta
-                time_since_start = datetime.now(timezone.utc) - active_scan.start_time
+                # Ensure start_time is timezone-aware
+                start_time = active_scan.start_time
+                if start_time.tzinfo is None:
+                    # If naive, assume UTC
+                    start_time = start_time.replace(tzinfo=timezone.utc)
+                time_since_start = datetime.now(timezone.utc) - start_time
                 
                 # If scan has been running for more than 10 minutes without progress update
                 if time_since_start > timedelta(minutes=10):
