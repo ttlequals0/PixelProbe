@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.35] - 2025-08-20
+
+### Fixed
+- **Celery Task Timeout Issue for Large Scans**
+  - **Issue**: Celery tasks were hitting 10-minute hard timeout, killing scan tasks mid-execution
+  - **Symptoms**: Database updates not visible in UI, scan stuck at same progress
+  - **Root Cause**: Default Celery timeout of 600s was too short for processing 1M+ files
+  - **Solution**: Removed timeout limits for scan tasks to allow completion
+  - **Impact**: Scans can now run to completion regardless of dataset size
+
+- **Progress Not Saved When Celery Task Killed**
+  - **Issue**: Progress commits only happened every 50,000 files
+  - **Symptoms**: If task killed, up to 50k files of progress could be lost
+  - **Solution**: Reduced checkpoint interval to 10,000 files for more frequent saves
+  - **Impact**: Better progress persistence and recovery from task failures
+
+### Enhanced
+- **MAX_WORKERS Configuration Documentation**
+  - Added clear documentation explaining the difference between:
+    - MAX_WORKERS: Controls ThreadPoolExecutor workers for parallel file corruption checking within each task
+    - Celery workers: Controlled by docker-compose concurrency for distributed task processing
+  - Both are needed: Celery distributes tasks, MAX_WORKERS parallelizes work within each task
+
+### Clarified
+- **"All Files Already Exist" Messages**
+  - This is normal behavior when re-scanning directories
+  - Files are discovered, checked for duplicates, then scanned for corruption
+  - The "adding" phase correctly identifies existing files as duplicates
+  - Actual corruption scanning happens in the "scanning" phase
+
 ## [2.2.34] - 2025-08-20
 
 ### Fixed

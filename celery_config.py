@@ -52,8 +52,10 @@ def create_celery(app=None):
         # Retry and timeout settings
         'task_acks_late': True,
         'task_reject_on_worker_lost': True,
-        'task_soft_time_limit': 300,  # 5 minutes soft limit
-        'task_time_limit': 600,       # 10 minutes hard limit
+        # Note: Timeouts disabled for scan tasks to allow processing large datasets
+        # Individual tasks can override these if needed
+        'task_soft_time_limit': None,  # No soft limit by default
+        'task_time_limit': None,        # No hard limit by default
         
         # Worker settings
         'worker_prefetch_multiplier': 1,  # One task per worker at a time

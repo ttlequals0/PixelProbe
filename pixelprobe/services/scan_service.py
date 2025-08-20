@@ -314,8 +314,9 @@ class ScanService:
                             if total_processed > 1000 and duplicate_count == total_processed:
                                 logger.info(f"All {duplicate_count} files already exist in database. This is normal for re-discovered files.")
                             
-                            # Periodic checkpoint to prevent transaction log bloat
-                            if batch_end % 50000 == 0:
+                            # More frequent commits for Celery tasks to save progress
+                            # Commit every 10,000 files to ensure progress is saved if task is killed
+                            if batch_end % 10000 == 0:
                                 logger.info(f"Checkpoint at {batch_end} files - committing transaction")
                                 db.session.commit()
                                 # Simple garbage collection without aggressive session cleanup

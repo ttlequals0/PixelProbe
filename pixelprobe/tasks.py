@@ -20,7 +20,8 @@ from models import db, ScanState, ScanResult
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60, 
+                 soft_time_limit=None, time_limit=None)  # No timeout for scan tasks
 def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
     """
     Main media scanning task
@@ -148,7 +149,8 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             raise exc
 
 
-@celery_app.task(bind=True, max_retries=2)
+@celery_app.task(bind=True, max_retries=2,
+                 soft_time_limit=None, time_limit=None)  # No timeout for cleanup tasks
 def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
     """
     Background task for cleaning up orphaned database records
@@ -206,7 +208,8 @@ def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
             raise exc
 
 
-@celery_app.task(bind=True, max_retries=2)
+@celery_app.task(bind=True, max_retries=2,
+                 soft_time_limit=None, time_limit=None)  # No timeout for file scan tasks
 def scan_files_task(self, scan_id, file_paths, force_rescan=False, deep_scan=False):
     """
     Background task for scanning specific files

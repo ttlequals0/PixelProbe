@@ -59,6 +59,10 @@ class Config:
     EXCLUDED_EXTENSIONS = os.getenv('EXCLUDED_EXTENSIONS', '.txt,.log,.md').split(',')
     
     # Performance settings
+    # MAX_WORKERS: Controls ThreadPoolExecutor workers for parallel file corruption checking
+    # This is different from Celery workers (controlled by docker-compose concurrency)
+    # - MAX_WORKERS applies within each scan task for parallel file validation
+    # - Celery workers handle distributed task processing across multiple containers
     MAX_WORKERS = int(os.getenv('MAX_WORKERS', '10'))
     BATCH_SIZE = int(os.getenv('BATCH_SIZE', '100'))
     MAX_OUTPUT_SIZE = int(os.getenv('MAX_OUTPUT_SIZE', '10000'))  # For output rotation
