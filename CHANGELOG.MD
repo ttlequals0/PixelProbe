@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.36] - 2025-08-20
+
+### Fixed
+- **Stuck Scan Detection Timeout**
+  - **Issue**: Scan stuck for 21+ hours wasn't being detected as stuck
+  - **Root Cause**: Timeout check was only 10 minutes, but with v2.2.35 removing timeouts, scans can run longer
+  - **Solution**: Increased stuck detection to 30 minutes (still reasonable for no progress)
+  - **Impact**: Stuck scans are now properly detected and can be cleared
+
+### Added
+- **Emergency Recovery Endpoint**: `/api/scan/recovery`
+  - Force cleanup of stuck scan states when automatic detection fails
+  - Consolidates multiple recovery endpoints into one
+  - Provides manual override for emergency situations
+
+### Deprecated
+- Started API consolidation to reduce endpoint duplication
+  - `/reset-stuck-scans` → Use `/scan/recovery` instead
+  - `/recover-stuck-scan` → Use `/scan/recovery` instead
+  - `/scan-all` → Use `/scan` instead (backward compatible)
+  - Full consolidation plan documented in API_CONSOLIDATION_PLAN.md
+
+### Developer Notes
+- Created consolidation plan to reduce 15+ scan endpoints to ~8
+- Phase 1: Deprecation notices (v2.2.36)
+- Phase 2: New consolidated endpoints (v2.3.0)
+- Phase 3: Remove deprecated endpoints (v3.0.0)
+
 ## [2.2.35] - 2025-08-20
 
 ### Fixed

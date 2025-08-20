@@ -99,18 +99,15 @@ def is_scan_running():
                     start_time = start_time.replace(tzinfo=timezone.utc)
                 time_since_start = datetime.now(timezone.utc) - start_time
                 
-                # If scan has been running for more than 10 minutes without progress update
-                if time_since_start > timedelta(minutes=10):
-                    # Check if progress has been updated recently
-                    last_update = active_scan.phase_current
-                    if last_update == active_scan.files_processed:
-                        # No progress in last check, mark as crashed
-                        logger.warning(f"Scan {active_scan.scan_id} appears stuck - marking as crashed")
-                        active_scan.is_active = False
-                        active_scan.phase = 'crashed'
-                        active_scan.error_message = 'Scan appears stuck - no progress detected'
-                        db.session.commit()
-                        return False
+                # If scan has been running for more than 30 minutes, it's likely stuck
+                # (Our timeout fix in v2.2.35 removed the 10-minute limit, but 30 min is still too long for no progress)
+                if time_since_start > timedelta(minutes=30):
+                    logger.warning(f"Scan {active_scan.scan_id} has been running for {time_since_start} - marking as crashed")
+                    active_scan.is_active = False
+                    active_scan.phase = 'crashed'
+                    active_scan.error_message = f'Scan stuck for {time_since_start} - no progress detected'
+                    db.session.commit()
+                    return False
             
             # Verify if Celery task is still running
             if active_scan.celery_task_id and check_celery_available():
@@ -361,7 +358,8 @@ def scan_file():
     except FileNotFoundError as e:
         return jsonify({'error': str(e)}), 404
 
-@scan_bp.route('/scan-all', methods=['POST', 'OPTIONS'])
+@scan_bp.route('/scan', methods=['POST', 'OPTIONS'])  # Main scan endpoint
+@scan_bp.route('/scan-all', methods=['POST', 'OPTIONS'])  # Deprecated - kept for backward compatibility
 @rate_limit("2 per minute")
 @validate_json_input({
     'force_rescan': {'required': False, 'type': bool},
@@ -752,6 +750,50 @@ def cancel_scan():
         logger.error(f"Cancel scan failed: {str(e)}")
         return jsonify({'error': str(e)}), 400
 
+@scan_bp.route('/force-cleanup-scan', methods=['POST'])
+@scan_bp.route('/scan/recovery', methods=['POST'])  # New consolidated endpoint
+@rate_limit("5 per minute")
+def force_cleanup_scan():
+    """Force cleanup of stuck scan states - emergency recovery endpoint
+    
+    Note: This consolidates multiple recovery endpoints:
+    - /reset-stuck-scans (deprecated)
+    - /recover-stuck-scan (deprecated)
+    - /force-cleanup-scan (kept for compatibility)
+    """
+    logger.warning("Force cleanup scan endpoint called - emergency recovery")
+    try:
+        # Find all active scans
+        active_scans = ScanState.query.filter_by(is_active=True).all()
+        cleaned_count = 0
+        
+        for scan in active_scans:
+            logger.warning(f"Force cleaning up scan {scan.scan_id} in phase {scan.phase}")
+            scan.is_active = False
+            scan.phase = 'crashed'
+            scan.error_message = 'Force cleaned up by admin'
+            scan.end_time = datetime.now(timezone.utc)
+            cleaned_count += 1
+        
+        # Also stop any thread-based scans
+        if current_app.scan_service.is_scan_running():
+            current_app.scan_service.cancel_scan()
+            logger.warning("Cancelled thread-based scan")
+        
+        db.session.commit()
+        
+        message = f"Force cleaned up {cleaned_count} stuck scan(s)"
+        logger.warning(message)
+        return jsonify({
+            'status': 'success',
+            'message': message,
+            'cleaned_count': cleaned_count
+        })
+    except Exception as e:
+        logger.error(f"Force cleanup failed: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
 @scan_bp.route('/scan-parallel', methods=['POST'])
 @rate_limit("2 per minute")
 def scan_parallel():
@@ -899,7 +941,7 @@ def scan_parallel():
 @scan_bp.route('/reset-stuck-scans', methods=['POST'])
 @rate_limit("5 per minute")
 def reset_stuck_scans():
-    """Reset files that are stuck in 'scanning' state"""
+    """[DEPRECATED - Use /scan/recovery instead] Reset files that are stuck in 'scanning' state"""
     try:
         # Find all results stuck in 'scanning' state
         stuck_results = ScanResult.query.filter_by(scan_status='scanning').all()
@@ -986,7 +1028,7 @@ def reset_for_rescan():
 @scan_bp.route('/recover-stuck-scan', methods=['POST'])
 @rate_limit("5 per minute")
 def recover_stuck_scan():
-    """Attempt to recover from a stuck scan state"""
+    """[DEPRECATED - Use /scan/recovery instead] Attempt to recover from a stuck scan state"""
     try:
         # Check if scan is actually stuck (has progress but not running)
         is_running = current_app.scan_service.is_scan_running()
