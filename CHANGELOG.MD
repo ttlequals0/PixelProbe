@@ -15,9 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Impact**: Scans can now run indefinitely until completion
   
 - **Docker Image Version Mismatch**
-  - **Issue**: docker-compose.yml using old v2.2.15 images for celery-worker and flower
-  - **Solution**: Updated to use v2.2.36 (and now v2.2.37) images
-  - **Impact**: Workers now run with all recent fixes
+  - **Issue**: docker-compose.yml using old v2.2.15 images for ALL services (main app, celery-worker, flower)
+  - **Solution**: Updated all services to use v2.2.37 images
+  - **Impact**: All services now run with recent fixes including timeout removal
 
 ### Root Cause Analysis
 - **Why scans never reached "scanning" phase**: Task was killed at 10 minutes while still in "adding" phase

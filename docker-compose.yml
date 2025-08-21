@@ -37,7 +37,7 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.2.15
+    image: ttlequals0/pixelprobe:2.2.37
     container_name: pixelprobe-app
     environment:
       # Security
