@@ -940,8 +940,20 @@ def scan_parallel():
 @scan_bp.route('/reset-stuck-scans', methods=['POST'])
 @rate_limit("5 per minute")
 def reset_stuck_scans():
-    """[DEPRECATED - Use /scan/recovery instead] Reset files that are stuck in 'scanning' state"""
+    """[DEPRECATED - Use /scan/recovery instead] Reset files that are stuck in 'scanning' state and clear active scan state"""
     try:
+        # CRITICAL: Also reset any active scan state to allow new scans
+        active_scans = ScanState.query.filter_by(is_active=True).all()
+        scan_state_count = 0
+        
+        for scan in active_scans:
+            logger.warning(f"Resetting stuck scan state {scan.scan_id} in phase {scan.phase}")
+            scan.is_active = False
+            scan.phase = 'crashed'
+            scan.error_message = 'Reset due to stuck scan'
+            scan.end_time = datetime.now(timezone.utc)
+            scan_state_count += 1
+        
         # Find all results stuck in 'scanning' state
         stuck_results = ScanResult.query.filter_by(scan_status='scanning').all()
         count = len(stuck_results)
@@ -953,9 +965,14 @@ def reset_stuck_scans():
         
         db.session.commit()
         
+        # Also ensure the scan service knows no scan is running
+        if hasattr(current_app, 'scan_service'):
+            current_app.scan_service.current_scan_id = None
+        
         return jsonify({
-            'message': f'Reset {count} stuck files',
-            'count': count
+            'message': f'Reset {count} stuck files and {scan_state_count} active scans',
+            'count': count,
+            'scan_states_reset': scan_state_count
         })
     except Exception as e:
         logger.error(f"Error resetting stuck scans: {e}")

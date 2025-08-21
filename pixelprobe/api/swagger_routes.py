@@ -173,10 +173,23 @@ class ResetStuckScans(Resource):
     @scan_ns.response(200, 'Stuck scans reset', reset_result_model)
     @scan_ns.response(500, 'Internal error', error_model)
     def post(self):
-        """Reset files that are stuck in 'scanning' state"""
-        from models import db, ScanResult
+        """Reset files that are stuck in 'scanning' state and clear active scan state"""
+        from models import db, ScanResult, ScanState
+        from datetime import datetime, timezone
         
         try:
+            # CRITICAL: Also reset any active scan state to allow new scans
+            active_scans = ScanState.query.filter_by(is_active=True).all()
+            scan_state_count = 0
+            
+            for scan in active_scans:
+                logger.warning(f"Resetting stuck scan state {scan.scan_id} in phase {scan.phase}")
+                scan.is_active = False
+                scan.phase = 'crashed'
+                scan.error_message = 'Reset due to stuck scan'
+                scan.end_time = datetime.now(timezone.utc)
+                scan_state_count += 1
+            
             # Find all results stuck in 'scanning' state
             stuck_results = ScanResult.query.filter_by(scan_status='scanning').all()
             count = len(stuck_results)
@@ -188,9 +201,15 @@ class ResetStuckScans(Resource):
             
             db.session.commit()
             
+            # Also ensure the scan service knows no scan is running
+            from flask import current_app
+            if hasattr(current_app, 'scan_service'):
+                current_app.scan_service.current_scan_id = None
+            
             return {
-                'message': f'Reset {count} stuck files',
-                'count': count
+                'message': f'Reset {count} stuck files and {scan_state_count} active scans',
+                'count': count,
+                'scan_states_reset': scan_state_count
             }
         except Exception as e:
             logger.error(f"Error resetting stuck scans: {e}")
@@ -266,6 +285,60 @@ class RecoverStuckScan(Resource):
             
         except Exception as e:
             logger.error(f"Error recovering stuck scan: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/force-cleanup-scan')
+class ForceCleanupScan(Resource):
+    @scan_ns.doc('force_cleanup_scan')
+    @scan_ns.response(200, 'Scan forcefully cleaned up')
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Force cleanup of all active scans - emergency recovery"""
+        from models import db, ScanState
+        from datetime import datetime, timezone
+        
+        try:
+            logger.warning("Force cleanup scan endpoint called - emergency recovery")
+            
+            # Find all active scans
+            active_scans = ScanState.query.filter_by(is_active=True).all()
+            cleaned_count = 0
+            
+            for scan in active_scans:
+                logger.warning(f"Force cleaning up scan {scan.scan_id} in phase {scan.phase}")
+                scan.is_active = False
+                scan.phase = 'crashed'
+                scan.error_message = 'Force cleaned up by admin'
+                scan.end_time = datetime.now(timezone.utc)
+                cleaned_count += 1
+            
+            # Reset any stuck files
+            from models import ScanResult
+            stuck_results = ScanResult.query.filter_by(scan_status='scanning').all()
+            files_reset = 0
+            
+            for result in stuck_results:
+                result.scan_status = 'pending'
+                result.error_message = 'Reset during force cleanup'
+                files_reset += 1
+            
+            db.session.commit()
+            
+            # Clear scan service state
+            if hasattr(current_app, 'scan_service'):
+                current_app.scan_service.current_scan_id = None
+                current_app.scan_service.is_running = False
+            
+            logger.warning(f"Force cleanup completed: {cleaned_count} scans stopped, {files_reset} files reset")
+            
+            return {
+                'message': f'Force cleanup completed: {cleaned_count} scans stopped, {files_reset} files reset',
+                'scans_cleaned': cleaned_count,
+                'files_reset': files_reset
+            }
+            
+        except Exception as e:
+            logger.error(f"Error during force cleanup: {e}")
             return {'error': str(e)}, 500
 
 # Stats endpoints

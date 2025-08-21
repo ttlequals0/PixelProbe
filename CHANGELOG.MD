@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.40] - 2025-08-21
+
+### Fixed
+- **Stuck Scan Prevention Issue**
+  - **Issue**: New scans returning 409 Conflict due to stuck scan state from v2.2.38
+  - **Root Cause**: `/reset-stuck-scans` endpoint only reset file states, not ScanState
+  - **Symptoms**: Can't start new scan after previous scan stuck in "adding" phase
+  - **Solution**:
+    - Fixed `/reset-stuck-scans` to also reset active ScanState records
+    - Added `/force-cleanup-scan` endpoint to Swagger API
+    - Both endpoints now properly clear all scan states
+  - **Impact**: Users can now properly recover from stuck scans
+
+### Added
+- `/api/v1/scan/force-cleanup-scan` endpoint in Swagger for emergency recovery
+- Improved stuck scan recovery to reset both file and scan states
+
 ## [2.2.39] - 2025-08-21
 
 ### Fixed
