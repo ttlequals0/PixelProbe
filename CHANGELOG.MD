@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.39] - 2025-08-21
+
+### Fixed
+- **Database Visibility Issue Between Celery and Main App**
+  - **Issue**: UI not showing scan progress updates from Celery worker
+  - **Root Cause**: Celery worker uses separate database connection from main app
+  - **Symptoms**: Scan progressing in logs but UI shows "discovering" with 0 files
+  - **Solution**:
+    - Added explicit commits after ScanService operations in Celery tasks
+    - Modified API to close/recreate session for fresh data from other processes
+    - Ensures database changes from Celery workers are visible to main app
+  - **Impact**: UI now properly shows real-time scan progress
+
+### Technical Details
+- ScanService creates its own database connection separate from Flask-SQLAlchemy
+- Celery workers run in separate processes with their own database sessions
+- PostgreSQL default isolation level (READ COMMITTED) requires explicit session handling
+- Fix ensures cross-process database visibility without changing isolation levels
+
 ## [2.2.38] - 2025-08-21
 
 ### Fixed

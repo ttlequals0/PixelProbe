@@ -459,17 +459,16 @@ def get_scan_status():
     # Get progress from scan service
     service_status = current_app.scan_service.get_scan_progress()
     
-    # Force fresh database read - bypass session cache for threading
-    # This ensures we see updates made by worker threads
+    # Force fresh database read - bypass session cache for Celery workers
+    # This ensures we see updates made by Celery worker processes
     try:
-        # Clear any cached objects to ensure fresh read
-        db.session.expunge_all()
-        # First try to get active scan
+        # CRITICAL: For Celery workers in separate processes, we need to close and recreate session
+        # to ensure we see committed changes from other processes
+        db.session.close()
+        
+        # First try to get active scan with fresh session
         scan_state = db.session.query(ScanState).filter_by(is_active=True).first()
-        if scan_state:
-            # Force refresh from database to get latest worker thread updates
-            db.session.refresh(scan_state)
-        else:
+        if not scan_state:
             # No active scan, get the most recent one for status display
             scan_state = db.session.query(ScanState).order_by(ScanState.id.desc()).first()
             if not scan_state:

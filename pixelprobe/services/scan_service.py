@@ -394,6 +394,8 @@ class ScanService:
                     
                     # Explicit commit to ensure database state is updated
                     db.session.commit()
+                    # Force flush to ensure changes are written immediately
+                    db.session.flush()
                     logger.info(f"Scan state transitioned to 'scanning' phase "
                                f"with {total_scan_files} files")
                     

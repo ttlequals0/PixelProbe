@@ -80,6 +80,10 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                 async_mode=False  # Run synchronously in Celery task
             )
             
+            # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible
+            # ScanService uses its own connection, so we need to ensure Flask session sees updates
+            db.session.commit()
+            
             # Update Celery task state based on result
             current_task.update_state(
                 state='PROGRESS',
@@ -101,6 +105,10 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                 deep_scan=False,
                 async_mode=False  # Run synchronously in Celery task
             )
+            
+            # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible
+            db.session.commit()
+            
         elif scan_type == 'single':
             # Single file scan
             if paths and len(paths) == 1:
@@ -108,6 +116,9 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                     file_path=paths[0],
                     force_rescan=force_rescan
                 )
+                
+                # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible
+                db.session.commit()
             else:
                 raise ValueError("Single scan requires exactly one file path")
         else:
