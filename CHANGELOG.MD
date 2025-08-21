@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.37] - 2025-08-21
+
+### Fixed
+- **CRITICAL Celery Worker Timeout Fix**
+  - **Issue**: Celery tasks still timing out at 600s despite v2.2.35 config changes
+  - **Root Cause**: celery_worker.py had hardcoded `--time-limit 600` and `--soft-time-limit 300` command line arguments
+  - **Solution**: Removed hardcoded timeout arguments from worker startup script
+  - **Impact**: Scans can now run indefinitely until completion
+  
+- **Docker Image Version Mismatch**
+  - **Issue**: docker-compose.yml using old v2.2.15 images for celery-worker and flower
+  - **Solution**: Updated to use v2.2.36 (and now v2.2.37) images
+  - **Impact**: Workers now run with all recent fixes
+
+### Root Cause Analysis
+- **Why scans never reached "scanning" phase**: Task was killed at 10 minutes while still in "adding" phase
+- **Database commits were working**: Checkpoints every 10k files were successful
+- **UI updates showed progress**: But scan never completed due to timeout
+- **With 1M+ files**: Only ~243k files processed before timeout kill
+
+### Production Impact
+- Large scans (1M+ files) can now complete successfully
+- No more 409 Conflict errors from stuck scans killed by timeout
+- Proper phase transitions: discovering → adding → scanning → completed
+
 ## [2.2.36] - 2025-08-20
 
 ### Fixed

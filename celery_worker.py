@@ -61,8 +61,8 @@ def main():
             '--hostname', f'pixelprobe-worker@%h',
             '--max-tasks-per-child', '50',
             '--max-memory-per-child', '500000',  # 500MB limit per child
-            '--time-limit', '600',  # 10 minutes hard limit
-            '--soft-time-limit', '300',  # 5 minutes soft limit
+            # Timeouts removed for scan tasks - they can run as long as needed
+            # Individual tasks can set their own timeouts if needed
             '--without-gossip',
             '--without-mingle',
             '--without-heartbeat'

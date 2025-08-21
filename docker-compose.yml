@@ -96,7 +96,7 @@ services:
 
   # P1 Celery Worker for distributed task processing
   celery-worker:
-    image: ttlequals0/pixelprobe:2.2.15
+    image: ttlequals0/pixelprobe:2.2.37
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:
@@ -134,7 +134,7 @@ services:
 
   # P1 Flower monitoring dashboard (optional)
   flower:
-    image: ttlequals0/pixelprobe:2.2.15
+    image: ttlequals0/pixelprobe:2.2.37
     container_name: pixelprobe-flower
     command: python flower_monitor.py
     environment:
