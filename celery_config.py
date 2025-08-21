@@ -50,7 +50,7 @@ def create_celery(app=None):
         'task_default_routing_key': 'pixelprobe',
         
         # Retry and timeout settings
-        'task_acks_late': True,
+        'task_acks_late': False,  # Acknowledge immediately to prevent redelivery
         'task_reject_on_worker_lost': True,
         # Note: Timeouts disabled for scan tasks to allow processing large datasets
         # Individual tasks can override these if needed
@@ -66,8 +66,15 @@ def create_celery(app=None):
         'task_send_sent_event': True,
         
         # Result backend settings
-        'result_expires': 3600,  # Results expire after 1 hour
+        'result_expires': 86400,  # Results expire after 24 hours
         'result_persistent': True,
+        
+        # Redis visibility timeout for long-running tasks
+        'broker_transport_options': {
+            'visibility_timeout': 86400,  # 24 hours for large scans
+            'fanout_prefix': True,
+            'fanout_patterns': True
+        },
         
         # Connection retry settings (Celery 6.0 compatibility)
         'broker_connection_retry_on_startup': True,  # Fix deprecation warning

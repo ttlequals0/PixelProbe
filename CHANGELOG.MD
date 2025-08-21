@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.38] - 2025-08-21
+
+### Fixed
+- **CRITICAL Celery Task Redelivery Issue**
+  - **Issue**: Tasks were being redelivered every hour, causing duplicate processing
+  - **Root Cause**: `task_acks_late: True` + Redis default visibility timeout of 1 hour
+  - **Symptoms**: Same task processed by multiple workers simultaneously, never completing
+  - **Solution**: 
+    - Changed `task_acks_late` to `False` - acknowledge tasks immediately
+    - Added `visibility_timeout: 86400` (24 hours) for long-running tasks
+    - Extended `result_expires` to 24 hours
+  - **Impact**: Large scans can now complete without interruption
+
+### Why Scans Never Reached "Scanning" Phase
+- Task ID `96545e9f-570e-42b5-acb4-349917ecb247` received at 21:11
+- Same task redelivered at 22:12 (after 1 hour timeout)
+- Worker-7 processing batch 594/1052 while Worker-8 processing batch 199/1052
+- Neither worker could complete before next redelivery
+- With 925,841 pending files waiting to be scanned, the scanning phase was never reached
+
+### Production Impact
+- **No more duplicate processing**: Tasks acknowledged immediately
+- **Phase transitions will work**: discovering → adding → scanning (925,841 files) → completed
+- **Large datasets supported**: Can process millions of files over many hours
+- **No more stuck scans**: Single worker processes task to completion
+
 ## [2.2.37] - 2025-08-21
 
 ### Fixed
