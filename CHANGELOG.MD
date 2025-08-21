@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.41] - 2025-08-21
+
+### Fixed
+- **Large database duplicate detection issue**
+  - **Issue**: Scan stuck for hours re-processing 1M+ files that already exist in database
+  - **Root Cause**: For databases >100k files, discovery phase wasn't loading existing files for duplicate detection
+  - **Solution**: Load existing file paths in chunks for large databases to properly exclude them during discovery
+  - **Impact**: Discovery phase now correctly skips existing files even with millions of records
+
+### Added
+- **Smart file prioritization by modification time**
+  - Newly discovered files are sorted by modification time (newest first)
+  - Ensures recently added files are processed before older files
+  - Helps catch new content quickly without waiting for full scan completion
+
+### Removed
+- **Cleaned up duplicate Swagger scan endpoints**
+  - Removed `/scan/reset-stuck-scans` - duplicate of `/scan/force-cleanup-scan`
+  - Removed `/scan/recover-stuck-scan` - duplicate of `/scan/force-cleanup-scan`  
+  - Removed `/scan/reset-files-by-path` - rarely needed, overly specific
+  - Removed `/scan/reset-for-rescan` - use scan with `force_rescan=true` instead
+
+### Simplified
+- **Swagger scan API now has only essential endpoints:**
+  - `/scan/directories` - Start scanning (main endpoint)
+  - `/scan/cancel` - Cancel running scan
+  - `/scan/status` - Get scan status
+  - `/scan/force-cleanup-scan` - Emergency recovery (consolidated all recovery functions)
+
+### Note
+- Keep `/scan/force-cleanup-scan` as the single recovery endpoint - it's the most comprehensive
+- Regular API endpoints in `/api/` remain unchanged for backward compatibility
+
 ## [2.2.40] - 2025-08-21
 
 ### Fixed

@@ -223,14 +223,22 @@ class ScanService:
                         existing_count = db.session.query(ScanResult).count()
                         logger.info(f"Database contains {existing_count} existing files")
                         
-                        # If database is small enough, load all paths for best performance
+                        # Load existing file paths for duplicate detection during discovery
+                        # For large databases, load in chunks to avoid memory issues
                         if existing_count < 100000:
                             logger.info("Loading all existing paths for fast discovery...")
                             existing_files = set(row[0] for row in db.session.query(ScanResult.file_path).all())
                         else:
-                            # For very large databases, we'll check during the add phase
-                            logger.info("Large database detected - will handle duplicates during add phase")
-                            existing_files = set()  # Empty set, duplicates handled by INSERT OR IGNORE
+                            # For large databases, still load paths but in chunks to manage memory
+                            logger.info(f"Large database detected ({existing_count} files) - loading paths in chunks...")
+                            existing_files = set()
+                            chunk_size = 50000
+                            for offset in range(0, existing_count, chunk_size):
+                                chunk = db.session.query(ScanResult.file_path).limit(chunk_size).offset(offset).all()
+                                existing_files.update(row[0] for row in chunk)
+                                if offset % 100000 == 0:
+                                    logger.info(f"Loaded {min(offset + chunk_size, existing_count)}/{existing_count} existing file paths...")
+                            logger.info(f"Loaded {len(existing_files)} existing file paths for duplicate detection")
                         
                         # Define progress callback for discovery
                         def discovery_progress(files_checked, files_discovered):
@@ -242,6 +250,31 @@ class ScanService:
                         # Discover only new files (not already in database)
                         all_files = checker.discover_media_files(valid_dirs, existing_files=existing_files, progress_callback=discovery_progress)
                         logger.info(f"File discovery completed. Found {len(all_files)} files to process")
+                        
+                        # SMART PRIORITIZATION: Sort files by modification time (newest first)
+                        # This ensures recently added/modified files are processed first
+                        if all_files:
+                            logger.info("Sorting files by modification time (newest first)...")
+                            import os
+                            files_with_mtime = []
+                            for filepath in all_files:
+                                try:
+                                    mtime = os.path.getmtime(filepath)
+                                    files_with_mtime.append((filepath, mtime))
+                                except OSError:
+                                    # If we can't get mtime, add with timestamp 0 (process last)
+                                    files_with_mtime.append((filepath, 0))
+                            
+                            # Sort by mtime descending (newest first)
+                            files_with_mtime.sort(key=lambda x: x[1], reverse=True)
+                            all_files = [f[0] for f in files_with_mtime]
+                            
+                            # Log info about the files being processed
+                            if files_with_mtime:
+                                newest = datetime.fromtimestamp(files_with_mtime[0][1], tz=timezone.utc)
+                                oldest = datetime.fromtimestamp(files_with_mtime[-1][1], tz=timezone.utc) if files_with_mtime[-1][1] > 0 else None
+                                logger.info(f"Files sorted - Newest: {newest}, Oldest: {oldest}")
+                        
                         new_files_count = len(all_files)
                     
                     if self.scan_cancelled:
