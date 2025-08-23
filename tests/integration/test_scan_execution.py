@@ -12,16 +12,16 @@ from models import db, ScanState, ScanResult, ScanChunk
 class TestScanExecution:
     """Test actual scan execution, not just endpoint availability"""
     
-    def test_scan_can_start_when_no_active_scan(self, client, app, db):
+    def test_scan_can_start_when_no_active_scan(self, client, app, db, test_data_dir):
         """Test that a scan can start when no scan is active"""
         with app.app_context():
             # Ensure no active scans
             ScanState.query.update({'is_active': False})
             db.session.commit()
             
-            # Try to start a scan
+            # Try to start a scan with an actual test directory
             response = client.post('/api/scan-all', 
-                                  json={'directories': ['/test'], 'force_rescan': False})
+                                  json={'directories': [test_data_dir['test_dir']], 'force_rescan': False})
             
             # Should succeed (200) or return that Celery is not available (503)
             assert response.status_code in [200, 503], \
@@ -31,7 +31,7 @@ class TestScanExecution:
                 data = response.get_json()
                 assert 'scan_id' in data or 'message' in data
     
-    def test_scan_prevents_concurrent_execution(self, client, app, db):
+    def test_scan_prevents_concurrent_execution(self, client, app, db, test_data_dir):
         """Test that only one scan can run at a time"""
         with app.app_context():
             # Create an active scan
@@ -45,7 +45,7 @@ class TestScanExecution:
             
             # Try to start another scan
             response = client.post('/api/scan-all',
-                                  json={'directories': ['/test']})
+                                  json={'directories': [test_data_dir['test_dir']]})
             
             # Should return 409 Conflict
             assert response.status_code == 409
@@ -53,7 +53,7 @@ class TestScanExecution:
             assert 'error' in data
             assert 'already in progress' in data['error'].lower()
     
-    def test_stale_scan_detection_and_cleanup(self, client, app, db):
+    def test_stale_scan_detection_and_cleanup(self, client, app, db, test_data_dir):
         """Test that stale scans are detected and can be cleaned up"""
         with app.app_context():
             from datetime import datetime, timezone, timedelta
@@ -80,10 +80,10 @@ class TestScanExecution:
                 
                 # Now a new scan should be able to start
                 response = client.post('/api/scan-all',
-                                      json={'directories': ['/test']})
+                                      json={'directories': [test_data_dir['test_dir']]})
                 assert response.status_code in [200, 503]
     
-    def test_scan_cancel_actually_stops_scan(self, client, app, db):
+    def test_scan_cancel_actually_stops_scan(self, client, app, db, test_data_dir):
         """Test that cancel-scan actually stops the running scan"""
         with app.app_context():
             # Create an active scan
@@ -106,10 +106,10 @@ class TestScanExecution:
             
             # Now a new scan should be able to start
             response = client.post('/api/scan-all',
-                                  json={'directories': ['/test']})
+                                  json={'directories': [test_data_dir['test_dir']]})
             assert response.status_code in [200, 503]
     
-    def test_scan_phase_transitions(self, client, app, db):
+    def test_scan_phase_transitions(self, client, app, db, test_data_dir):
         """Test that scan phases transition correctly"""
         with app.app_context():
             # Create a scan in discovering phase
@@ -155,10 +155,10 @@ class TestScanExecution:
             
             # Now a new scan should be able to start
             response = client.post('/api/scan-all',
-                                  json={'directories': ['/test']})
+                                  json={'directories': [test_data_dir['test_dir']]})
             assert response.status_code in [200, 503]
     
-    def test_scan_parallel_endpoint_execution(self, client, app, db):
+    def test_scan_parallel_endpoint_execution(self, client, app, db, test_data_dir):
         """Test the parallel scan endpoint can actually execute"""
         with app.app_context():
             # Ensure no active scans
@@ -167,7 +167,7 @@ class TestScanExecution:
             
             # Try parallel scan
             response = client.post('/api/scan-parallel',
-                                  json={'directories': ['/test'], 'num_workers': 2})
+                                  json={'directories': [test_data_dir['test_dir']], 'num_workers': 2})
             
             # Should work or indicate Celery not available
             assert response.status_code in [200, 503]
@@ -176,7 +176,7 @@ class TestScanExecution:
                 data = response.get_json()
                 assert 'scan_id' in data or 'message' in data
     
-    def test_scan_parallel_v2_endpoint_execution(self, client, app, db):
+    def test_scan_parallel_v2_endpoint_execution(self, client, app, db, test_data_dir):
         """Test the enhanced parallel scan v2 endpoint"""
         with app.app_context():
             # Ensure no active scans
@@ -185,7 +185,7 @@ class TestScanExecution:
             
             # Try parallel scan v2
             response = client.post('/api/scan-parallel-v2',
-                                  json={'directories': ['/test']})
+                                  json={'directories': [test_data_dir['test_dir']]})
             
             # Should work or indicate Celery not available
             assert response.status_code in [200, 503]
@@ -288,7 +288,7 @@ class TestScanStateRecovery:
             scan = ScanState.query.filter_by(scan_id='stuck-scan').first()
             assert scan.is_active is False or scan.phase in ['completed', 'error']
     
-    def test_force_cleanup_endpoint(self, client, app, db):
+    def test_force_cleanup_endpoint(self, client, app, db, test_data_dir):
         """Test force cleanup of all active scans"""
         with app.app_context():
             # Create multiple active scans (shouldn't happen but test recovery)
@@ -312,5 +312,5 @@ class TestScanStateRecovery:
                 
                 # New scan should be able to start
                 response = client.post('/api/scan-all',
-                                      json={'directories': ['/test']})
+                                      json={'directories': [test_data_dir['test_dir']]})
                 assert response.status_code in [200, 503]
