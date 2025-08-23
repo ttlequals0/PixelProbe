@@ -89,23 +89,41 @@ def is_scan_running():
     try:
         active_scan = ScanState.query.filter_by(is_active=True).first()
         if active_scan and active_scan.phase not in ['idle', 'completed', 'error', 'crashed']:
-            # Check if scan is stale (no progress for more than 5 minutes)
-            if active_scan.start_time:
-                from datetime import datetime, timezone, timedelta
-                # Ensure start_time is timezone-aware
-                start_time = active_scan.start_time
-                if start_time.tzinfo is None:
-                    # If naive, assume UTC
-                    start_time = start_time.replace(tzinfo=timezone.utc)
-                time_since_start = datetime.now(timezone.utc) - start_time
+            # Check if scan is stale (no progress update)
+            from datetime import datetime, timezone, timedelta
+            
+            # Use last_update if available, otherwise use start_time
+            check_time = active_scan.last_update or active_scan.start_time
+            
+            if check_time:
+                # Ensure timezone-aware
+                if check_time.tzinfo is None:
+                    check_time = check_time.replace(tzinfo=timezone.utc)
                 
-                # If scan has been running for more than 30 minutes, it's likely stuck
-                # (Our timeout fix in v2.2.35 removed the 10-minute limit, but 30 min is still too long for no progress)
-                if time_since_start > timedelta(minutes=30):
-                    logger.warning(f"Scan {active_scan.scan_id} has been running for {time_since_start} - marking as crashed")
+                now = datetime.now(timezone.utc)
+                time_since_update = now - check_time
+                
+                # Check for stuck scan based on phase
+                stuck_threshold = timedelta(minutes=10)  # Default 10 minutes
+                
+                # Adding phase can get stuck - use shorter timeout
+                if active_scan.phase == 'adding':
+                    stuck_threshold = timedelta(minutes=5)
+                    
+                    # Also check if files_processed hasn't changed
+                    if hasattr(active_scan, '_last_files_processed'):
+                        if active_scan.files_processed == active_scan._last_files_processed:
+                            logger.warning(f"Scan stuck in adding phase at {active_scan.files_processed} files")
+                            stuck_threshold = timedelta(minutes=2)  # Even shorter if no progress
+                
+                if time_since_update > stuck_threshold:
+                    logger.warning(f"Scan {active_scan.scan_id} stuck in phase '{active_scan.phase}' (no update for {time_since_update})")
+                    logger.warning(f"Files processed: {active_scan.files_processed}/{active_scan.estimated_total}")
+                    
+                    # Mark as crashed and allow new scan
                     active_scan.is_active = False
                     active_scan.phase = 'crashed'
-                    active_scan.error_message = f'Scan stuck for {time_since_start} - no progress detected'
+                    active_scan.error_message = f'Scan stuck in {active_scan.phase} phase - no progress for {time_since_update}'
                     db.session.commit()
                     return False
             

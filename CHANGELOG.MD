@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.44] - 2025-08-23
+
+### Critical Fixes  
+- **Fixed Stuck Scan Detection** - Scans stuck in "adding" phase are now properly detected and auto-recovered
+- **Improved Stuck Scan Recovery** - Better detection using last_update time instead of just start_time
+- **Added Comprehensive Scan Execution Tests** - Tests that verify scans can actually start, run, and complete
+- **Fixed 409 Conflict Error** - Scans stuck at 429,000 files are now auto-recovered after 5-10 minutes of no progress
+
+### Why Tests Were Missing This
+- Tests only checked endpoint availability (200 status), not actual execution
+- Tests didn't verify scan state management or concurrent scan prevention
+- Tests didn't check if scans could complete or be cancelled
+- New tests added to catch these critical issues
+
 ## [2.2.43] - 2025-08-23
 
 ### Fixed
