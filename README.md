@@ -215,6 +215,15 @@ This major release includes 80 versions worth of improvements since 2.0.53:
 - **Database Tools**: Migration and repair utilities
 - **CI/CD Ready**: Docker multi-stage builds
 
+## 📚 Documentation
+
+- **[Docker Setup Guide](docs/DOCKER_SETUP.md)** - Complete Docker Compose setup with container explanations
+- **[System Architecture](docs/SYSTEM_ARCHITECTURE.md)** - Container architecture, Celery queues, and data flow
+- **[API Documentation](docs/api/README.md)** - Complete REST API reference  
+- **[Architecture Overview](docs/ARCHITECTURE.md)** - Application layers and design
+- **[Performance Tuning](docs/PERFORMANCE_TUNING.md)** - Optimization strategies
+- **[Developer Guide](docs/developer/README.md)** - Development setup and guidelines
+
 ## ✨ Features
 
 - **🎬 Comprehensive Media Support**: Detects corruption in videos (MP4, MKV, AVI, MOV, etc.) and images (JPEG, PNG, GIF, etc.)
