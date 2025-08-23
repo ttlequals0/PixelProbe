@@ -12,7 +12,7 @@ from models import db, ScanState, ScanResult, ScanChunk
 class TestScanExecution:
     """Test actual scan execution, not just endpoint availability"""
     
-    def test_scan_can_start_when_no_active_scan(self, client, app):
+    def test_scan_can_start_when_no_active_scan(self, client, app, db):
         """Test that a scan can start when no scan is active"""
         with app.app_context():
             # Ensure no active scans
@@ -31,7 +31,7 @@ class TestScanExecution:
                 data = response.get_json()
                 assert 'scan_id' in data or 'message' in data
     
-    def test_scan_prevents_concurrent_execution(self, client, app):
+    def test_scan_prevents_concurrent_execution(self, client, app, db):
         """Test that only one scan can run at a time"""
         with app.app_context():
             # Create an active scan
@@ -53,7 +53,7 @@ class TestScanExecution:
             assert 'error' in data
             assert 'already in progress' in data['error'].lower()
     
-    def test_stale_scan_detection_and_cleanup(self, client, app):
+    def test_stale_scan_detection_and_cleanup(self, client, app, db):
         """Test that stale scans are detected and can be cleaned up"""
         with app.app_context():
             from datetime import datetime, timezone, timedelta
@@ -83,7 +83,7 @@ class TestScanExecution:
                                       json={'directories': ['/test']})
                 assert response.status_code in [200, 503]
     
-    def test_scan_cancel_actually_stops_scan(self, client, app):
+    def test_scan_cancel_actually_stops_scan(self, client, app, db):
         """Test that cancel-scan actually stops the running scan"""
         with app.app_context():
             # Create an active scan
@@ -109,7 +109,7 @@ class TestScanExecution:
                                   json={'directories': ['/test']})
             assert response.status_code in [200, 503]
     
-    def test_scan_phase_transitions(self, client, app):
+    def test_scan_phase_transitions(self, client, app, db):
         """Test that scan phases transition correctly"""
         with app.app_context():
             # Create a scan in discovering phase
@@ -158,7 +158,7 @@ class TestScanExecution:
                                   json={'directories': ['/test']})
             assert response.status_code in [200, 503]
     
-    def test_scan_parallel_endpoint_execution(self, client, app):
+    def test_scan_parallel_endpoint_execution(self, client, app, db):
         """Test the parallel scan endpoint can actually execute"""
         with app.app_context():
             # Ensure no active scans
@@ -176,7 +176,7 @@ class TestScanExecution:
                 data = response.get_json()
                 assert 'scan_id' in data or 'message' in data
     
-    def test_scan_parallel_v2_endpoint_execution(self, client, app):
+    def test_scan_parallel_v2_endpoint_execution(self, client, app, db):
         """Test the enhanced parallel scan v2 endpoint"""
         with app.app_context():
             # Ensure no active scans
@@ -222,7 +222,7 @@ class TestScanExecution:
                 data = response.get_json()
                 assert 'message' in data or 'scan_id' in data
     
-    def test_file_changes_scan_execution(self, client, app):
+    def test_file_changes_scan_execution(self, client, app, db):
         """Test that file changes scan can execute"""
         with app.app_context():
             # Ensure no active scans
@@ -239,7 +239,7 @@ class TestScanExecution:
                 data = response.get_json()
                 assert 'message' in data or 'task_id' in data
     
-    def test_orphan_cleanup_execution(self, client, app):
+    def test_orphan_cleanup_execution(self, client, app, db):
         """Test that orphan cleanup can execute"""
         with app.app_context():
             # Ensure no active scans  
@@ -260,7 +260,7 @@ class TestScanExecution:
 class TestScanStateRecovery:
     """Test scan state recovery mechanisms"""
     
-    def test_stuck_scan_recovery_endpoint(self, client, app):
+    def test_stuck_scan_recovery_endpoint(self, client, app, db):
         """Test that stuck scan recovery endpoint works"""
         with app.app_context():
             from datetime import datetime, timezone
@@ -288,7 +288,7 @@ class TestScanStateRecovery:
             scan = ScanState.query.filter_by(scan_id='stuck-scan').first()
             assert scan.is_active is False or scan.phase in ['completed', 'error']
     
-    def test_force_cleanup_endpoint(self, client, app):
+    def test_force_cleanup_endpoint(self, client, app, db):
         """Test force cleanup of all active scans"""
         with app.app_context():
             # Create multiple active scans (shouldn't happen but test recovery)
