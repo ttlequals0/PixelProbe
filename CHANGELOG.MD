@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.45] - 2025-08-23
+
+### Fixed
+- **Fixed Parallel Discovery Getting Stuck**
+  - **Issue**: Discovery phase would hang indefinitely when processing large directories (600k+ files)
+  - **Root Cause**: 
+    - Discovery tasks were not properly loading exclusions from database
+    - Trying to access Flask app context from Celery workers without proper setup
+    - Timeout was too short (5 minutes) for very large directories
+  - **Solution**:
+    - Load exclusions in orchestrator and pass them as parameters to discovery tasks
+    - Added proper exclusion handling in discovery task (paths and extensions)
+    - Increased discovery timeout to 10 minutes with partial result recovery
+    - Added SoftTimeLimitExceeded exception handling
+    - Simplified parallel discovery to one task per main directory path
+  - **Impact**: Discovery phase now completes successfully even for 1M+ file directories
+
 ## [2.2.44] - 2025-08-23
 
 ### Critical Fixes  

@@ -223,14 +223,18 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
             raise exc
 
 
-@celery_app.task(bind=True)
-def discover_directory_task(self, directory: str, scan_id: str):
+@celery_app.task(bind=True, soft_time_limit=120, time_limit=180)
+def discover_directory_task(self, directory: str, scan_id: str, 
+                           excluded_paths: List[str] = None, 
+                           excluded_extensions: List[str] = None):
     """
     Discover files in a single directory - runs on a separate Celery worker
     
     Args:
         directory: Directory path to discover
         scan_id: Scan identifier for tracking
+        excluded_paths: List of paths to exclude
+        excluded_extensions: List of extensions to exclude
         
     Returns:
         List of discovered file paths
@@ -239,59 +243,78 @@ def discover_directory_task(self, directory: str, scan_id: str):
     
     try:
         import os
-        from flask import current_app
+        import time
+        from celery.exceptions import SoftTimeLimitExceeded
         from media_checker import PixelProbe
-        from models import Exclusion
         
         discovered_files = []
+        excluded_paths = excluded_paths or []
+        excluded_extensions = excluded_extensions or []
         
-        # Load exclusions from database
-        excluded_paths = []
-        excluded_extensions = []
-        
-        try:
-            # Get active path exclusions
-            path_exclusions = Exclusion.query.filter_by(
-                exclusion_type='path',
-                is_active=True
-            ).all()
-            excluded_paths = [e.value for e in path_exclusions]
-            
-            # Get active extension exclusions
-            ext_exclusions = Exclusion.query.filter_by(
-                exclusion_type='extension',
-                is_active=True
-            ).all()
-            excluded_extensions = [e.value for e in ext_exclusions]
-            
-            if excluded_paths:
-                logger.info(f"Excluding paths: {excluded_paths}")
-            if excluded_extensions:
-                logger.info(f"Excluding extensions: {excluded_extensions}")
-                
-        except Exception as e:
-            logger.warning(f"Could not load exclusions from database: {e}")
-        
-        # Initialize media checker with exclusions
+        # Initialize media checker for file type detection only
         checker = PixelProbe(
-            database_path=None,  # No DB needed for discovery
-            excluded_paths=excluded_paths,
-            excluded_extensions=excluded_extensions
+            database_path=None  # No DB needed for discovery
         )
         
-        # Walk directory and discover files
-        for root, dirs, files in os.walk(directory):
-            # Skip excluded directories
-            dirs[:] = [d for d in dirs if not any(
-                os.path.join(root, d).startswith(exc) for exc in excluded_paths
-            )]
-            
-            for file in files:
-                file_path = os.path.join(root, file)
-                if checker._is_supported_file(file_path):
-                    discovered_files.append(file_path)
+        # Track progress
+        start_time = time.time()
+        last_log_time = start_time
+        files_checked = 0
         
-        logger.info(f"Worker discovered {len(discovered_files)} files in {directory}")
+        # Walk directory and discover files with progress reporting
+        try:
+            for root, dirs, files in os.walk(directory):
+                # Skip excluded directories
+                dirs[:] = [d for d in dirs if not any(
+                    os.path.join(root, d).startswith(exc) for exc in excluded_paths
+                )]
+                
+                for file in files:
+                    files_checked += 1
+                    
+                    # Report progress every 1000 files or every 10 seconds
+                    current_time = time.time()
+                    if files_checked % 1000 == 0 or (current_time - last_log_time) > 10:
+                        logger.info(f"Discovery progress in {directory}: checked {files_checked} files, found {len(discovered_files)} media files")
+                        last_log_time = current_time
+                        
+                        # Update task state for monitoring
+                        self.update_state(
+                            state='PROGRESS',
+                            meta={
+                                'directory': directory,
+                                'files_checked': files_checked,
+                                'files_found': len(discovered_files),
+                                'elapsed_time': current_time - start_time
+                            }
+                        )
+                    
+                    file_path = os.path.join(root, file)
+                    
+                    # Skip excluded extensions
+                    ext = os.path.splitext(file)[1].lower()
+                    if ext in excluded_extensions:
+                        continue
+                    
+                    # Skip excluded paths
+                    if any(file_path.startswith(exc) for exc in excluded_paths):
+                        continue
+                    
+                    # Check if file is supported media type
+                    if checker._is_supported_file(file_path):
+                        discovered_files.append(file_path)
+                        
+        except SoftTimeLimitExceeded:
+            logger.warning(f"Discovery task for {directory} timed out after checking {files_checked} files")
+            # Return what we found so far
+            
+        except Exception as e:
+            logger.error(f"Error during directory walk of {directory}: {e}")
+            # Return what we found so far
+        
+        elapsed_time = time.time() - start_time
+        logger.info(f"Worker discovered {len(discovered_files)} files in {directory} "
+                   f"(checked {files_checked} total files in {elapsed_time:.2f} seconds)")
         return discovered_files
         
     except Exception as e:
@@ -358,33 +381,24 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
             if not paths:
                 raise ValueError("Paths required for full/parallel scan")
             
+            # Load exclusions from database
+            from models import Exclusion
+            exclusions = Exclusion.query.filter_by(is_active=True).all()
+            excluded_paths = [exc.pattern for exc in exclusions if exc.exclusion_type == 'path']
+            excluded_extensions = [exc.pattern for exc in exclusions if exc.exclusion_type == 'extension']
+            
+            logger.info(f"Loaded {len(excluded_paths)} path exclusions and {len(excluded_extensions)} extension exclusions")
+            
             # Create discovery tasks for each path
             discovery_tasks = []
             for path in paths:
                 # For each path, create sub-tasks for major subdirectories
                 if os.path.exists(path):
-                    # Get first-level subdirectories for parallel discovery
-                    try:
-                        subdirs = [os.path.join(path, d) for d in os.listdir(path) 
-                                  if os.path.isdir(os.path.join(path, d))]
-                        
-                        if subdirs:
-                            # Create task for each subdirectory
-                            for subdir in subdirs[:20]:  # Limit to 20 subdirs per path to avoid too many tasks
-                                discovery_tasks.append(
-                                    discover_directory_task.s(subdir, scan_id)
-                                )
-                        else:
-                            # No subdirectories, scan the path itself
-                            discovery_tasks.append(
-                                discover_directory_task.s(path, scan_id)
-                            )
-                    except Exception as e:
-                        logger.error(f"Error listing directory {path}: {e}")
-                        # Fallback to scanning the whole path
-                        discovery_tasks.append(
-                            discover_directory_task.s(path, scan_id)
-                        )
+                    # Always add the main path as a discovery task
+                    discovery_tasks.append(
+                        discover_directory_task.s(path, scan_id, excluded_paths, excluded_extensions)
+                    )
+                    logger.info(f"Added discovery task for {path}")
             
             if discovery_tasks:
                 logger.info(f"Launching {len(discovery_tasks)} parallel discovery tasks")
@@ -393,15 +407,29 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
                 job = group(discovery_tasks)
                 result = job.apply_async()
                 
-                # Wait for all discovery tasks to complete
-                discovery_results = result.get(timeout=300)  # 5 minute timeout
-                
-                # Combine all discovered files
-                for task_files in discovery_results:
-                    if task_files:
-                        discovered_files.extend(task_files)
-                
-                logger.info(f"Parallel discovery complete: found {len(discovered_files)} total files")
+                # Wait for all discovery tasks to complete with longer timeout for large directories
+                try:
+                    discovery_results = result.get(timeout=600)  # 10 minute timeout
+                    
+                    # Combine all discovered files
+                    for task_files in discovery_results:
+                        if task_files:
+                            discovered_files.extend(task_files)
+                    
+                    logger.info(f"Parallel discovery complete: found {len(discovered_files)} total files")
+                    
+                except Exception as e:
+                    logger.error(f"Error getting discovery results: {e}")
+                    # Try to get partial results
+                    for task_result in result.results:
+                        try:
+                            if task_result and task_result.ready():
+                                task_files = task_result.get(timeout=1)
+                                if task_files:
+                                    discovered_files.extend(task_files)
+                        except:
+                            continue
+                    logger.warning(f"Partial discovery results: found {len(discovered_files)} files before timeout")
                 
                 # Filter out files already in database
                 if discovered_files:
