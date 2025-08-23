@@ -6,23 +6,32 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.2.7** - Critical scan engine fixes with enhanced performance, large file handling, and database improvements.
+**Version 2.2.45** - Enhanced parallel scanning with all Celery workers, fixed discovery phase issues, and improved stuck scan recovery.
 
-## 🚀 What's New in Version 2.2.7
+## 🚀 What's New in Version 2.2.45
 
-### 🔧 Critical Scan Engine Fixes
-- **Database Constraints**: Fixed `StringDataRightTruncation` and `UniqueViolation` errors that caused scan failures
-- **Large File Handling**: Added 5GB file size limits and 5-minute timeouts to prevent indefinite hangs
-- **Chunk ID Uniqueness**: Enhanced chunk ID generation with timestamps to prevent duplicate key conflicts  
-- **Progress Messages**: Increased VARCHAR limits from 200 to 1000 characters to prevent truncation errors
-- **Error Recovery**: Improved scan thread crash recovery and status reporting
-- **Startup Reliability**: Fixed app startup issues caused by database migration timing
+### 🚀 Parallel Scanning System
+- **Full Worker Utilization**: All configured Celery workers (8+) are now used instead of just 3
+- **Parallel Discovery**: File discovery phase now runs in parallel across multiple workers
+- **Smart Task Distribution**: Work is divided into chunks and distributed across all available workers
+- **Enhanced Performance**: 3-8x faster scanning for large media libraries (1M+ files)
+
+### 🔧 Critical Fixes
+- **Discovery Phase Fix**: Fixed discovery phase hanging on large directories (600k+ files)
+- **Stuck Scan Recovery**: Automatic detection and recovery of scans stuck in "adding" phase
+- **Exclusion Handling**: User-configured exclusions are now properly passed to all workers
+- **Semicolon Support**: Files with semicolons in names (HTML entities) can now be scanned
+
+### 📊 Export API Enhancements  
+- **Multiple Formats**: Export scan results as CSV, JSON, or PDF
+- **GET Support**: Export endpoint now supports both GET and POST requests
+- **Format Selection**: Specify output format via query parameter or request body
 
 ### 🎯 Key Benefits
-- **No More Stuck Scans**: Eliminates the "100% complete with pending files" issue
-- **Large File Support**: Handles multi-GB video files without hanging
-- **Database Stability**: Resolves PostgreSQL constraint violations that crashed scans
-- **Clean Restarts**: Fresh database start recommended for optimal performance
+- **No More Stuck Scans**: Automatic recovery after 5-10 minutes of no progress
+- **Faster Processing**: Utilizes all available CPU cores through proper worker distribution
+- **Better Large Library Support**: Handles 1M+ file libraries without hanging
+- **Improved Reliability**: Better error handling and partial result recovery
 
 ## 🚀 What's New in Version 2.2.0
 
@@ -76,7 +85,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
          - postgres_data:/var/lib/postgresql/data
    
      mediachecker:
-       image: ttlequals0/pixelprobe:2.2.0
+       image: ttlequals0/pixelprobe:2.2.45
        environment:
          POSTGRES_HOST: postgres
          POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
