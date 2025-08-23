@@ -252,6 +252,9 @@ class ScanState(db.Model):
     total_chunks = db.Column(db.Integer, nullable=False, default=0)
     chunks_completed = db.Column(db.Text, nullable=True)  # JSON array of completed chunk IDs
     
+    # Progress tracking
+    last_update = db.Column(db.DateTime, nullable=True)  # Track last progress update for stuck scan detection
+    
     # TODO: Crash recovery tracking columns will be added after migration
     # crash_count = db.Column(db.Integer, nullable=True, default=None)
     # last_crash_time = db.Column(db.DateTime, nullable=True)
@@ -294,6 +297,7 @@ class ScanState(db.Model):
         self.phase = 'discovering'
         self.is_active = True  # Ensure scan is marked as active
         self.start_time = datetime.now(timezone.utc)
+        self.last_update = datetime.now(timezone.utc)  # Initialize last_update
         self.end_time = None  # Clear any previous end time
         self.directories = json.dumps(directories) if isinstance(directories, list) else directories
         self.force_rescan = force_rescan
@@ -325,6 +329,9 @@ class ScanState(db.Model):
         try:
             self.files_processed = files_processed
             self.estimated_total = total_files
+            
+            # Update last_update timestamp for stuck scan detection
+            self.last_update = datetime.now(timezone.utc)
             
             # Handle phase transitions explicitly
             if phase:

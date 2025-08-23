@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.46] - 2025-08-23
+
+### Critical Production Fixes
+- **Fixed Database Schema Issues**
+  - Added missing `last_update` column to `scan_state` table
+  - Added missing `files_processed` column to `scan_chunks` table 
+  - Created migration scripts for production database updates
+  - Fixed stuck scan detection to properly use `last_update` field
+
+- **Fixed Database Transaction Errors**
+  - Resolved "lost synchronization with server" PostgreSQL errors
+  - Fixed transaction state management in Celery workers
+  - Added proper session rollback handling
+  - Fixed "no transaction in progress" warnings
+
+- **Fixed SQL Query Errors**
+  - Fixed "Could not locate column in row for column 'count(*)'" error
+  - Corrected database query result handling in scan service
+  - Fixed NoSuchColumnError during discovery phase
+
+- **Improved Progress Tracking**
+  - Added `last_update` timestamp to track scan progress
+  - Updated `update_progress` to maintain last_update time
+  - Initialized `last_update` when starting new scans
+  - Better stuck scan detection using last_update timestamp
+
+### Added
+- Migration script: `migrations/fix_v2_2_46_issues.py`
+- Emergency fix script: `scripts/fix_database_schema.py`
+
+### Docker Image
+- Version: ttlequals0/pixelprobe:2.2.46
+
 ## [2.2.45] - 2025-08-23
 
 ### Fixed
