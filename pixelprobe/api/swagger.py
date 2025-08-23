@@ -64,6 +64,22 @@ scan_status_model = api.model('ScanStatus', {
     'progress_message': fields.String(description='Progress message with ETA')
 })
 
+parallel_scan_model = api.model('ParallelScan', {
+    'directories': fields.List(fields.String, required=True, description='List of directories to scan'),
+    'force_rescan': fields.Boolean(default=False, description='Force rescan of already scanned files'),
+    'deep_scan': fields.Boolean(default=False, description='Perform deep scan for better accuracy')
+})
+
+parallel_scan_response_model = api.model('ParallelScanResponse', {
+    'status': fields.String(description='Scan launch status'),
+    'scan_id': fields.String(description='Unique scan identifier'),
+    'task_id': fields.String(description='Celery task ID'),
+    'message': fields.String(description='Status message'),
+    'celery_workers': fields.Integer(description='Number of available Celery workers'),
+    'scan_type': fields.String(description='Type of scan'),
+    'directories': fields.List(fields.String, description='Directories being scanned')
+})
+
 # Stats models
 stats_summary_model = api.model('StatsSummary', {
     'overview': fields.Raw(description='Overview statistics'),
@@ -99,7 +115,10 @@ cleanup_status_model = api.model('CleanupStatus', {
 
 # Export models
 export_request_model = api.model('ExportRequest', {
-    'file_ids': fields.List(fields.Integer, description='Optional list of file IDs to export')
+    'format': fields.String(description='Export format (csv, json, pdf)', enum=['csv', 'json', 'pdf'], default='csv'),
+    'filter': fields.String(description='Filter type', enum=['all', 'corrupted', 'healthy', 'pending', 'error'], default='all'),
+    'search': fields.String(description='Search term to filter file paths'),
+    'file_ids': fields.List(fields.Integer, description='Optional list of specific file IDs to export')
 })
 
 # Configuration models

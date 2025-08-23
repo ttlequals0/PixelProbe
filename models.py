@@ -464,11 +464,13 @@ class ScanChunk(db.Model):
     scan_id = db.Column(db.String(36), nullable=False, index=True)
     chunk_id = db.Column(db.String(100), nullable=False, index=True)  # Removed unique constraint
     directory_path = db.Column(db.String(500), nullable=False)
-    phase = db.Column(db.String(20), nullable=False)  # discovering, adding, scanning
+    phase = db.Column(db.String(20), nullable=False, default='scanning')  # discovering, adding, scanning
     status = db.Column(db.String(20), nullable=False, default='pending')  # pending, processing, completed, error
     files_discovered = db.Column(db.Integer, nullable=False, default=0)
     files_added = db.Column(db.Integer, nullable=False, default=0)
     files_scanned = db.Column(db.Integer, nullable=False, default=0)
+    files_processed = db.Column(db.Integer, nullable=False, default=0)
+    is_complete = db.Column(db.Boolean, nullable=False, default=False)
     start_time = db.Column(db.DateTime, nullable=True)
     end_time = db.Column(db.DateTime, nullable=True)
     error_message = db.Column(db.Text, nullable=True)

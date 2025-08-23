@@ -112,12 +112,25 @@ def download_file(result_id):
     logger.info(f"Starting download of file: {result.file_path}")
     return send_file(result.file_path, as_attachment=True)
 
-@export_bp.route('/export-csv', methods=['GET', 'POST'])
-def export_csv():
-    """Export scan results to CSV, JSON, or PDF"""
+@export_bp.route('/export', methods=['GET', 'POST'])
+def export_scan_results():
+    """Export scan results to CSV, JSON, or PDF
+    
+    GET Parameters:
+        format: Output format ('csv', 'json', 'pdf') - defaults to 'csv'
+        filter: Filter type ('all', 'corrupted', 'healthy', 'pending')
+        search: Search term to filter files
+    
+    POST Body:
+        format: Output format ('csv', 'json', 'pdf')
+        filter: Filter type ('all', 'corrupted', 'healthy', 'pending')
+        search: Search term
+        file_ids: Array of specific file IDs to export
+    """
     try:
         # Determine export format and get appropriate results
         format_type = 'csv'  # Default format
+        
         if request.method == 'POST':
             data = request.get_json() or {}
             format_type = data.get('format', 'csv').lower()
@@ -166,10 +179,49 @@ def export_csv():
                 export_type = filter_type if filter_type != 'all' else 'all'
                 logger.info(f"Exporting {len(results)} scan results to {format_type.upper()} (filter: {filter_type}, search: '{search}')")
         else:
-            # GET request - export all files (CSV by default)
-            results = ScanResult.query.all()
-            export_type = "all"
-            logger.info(f"Exporting {len(results)} scan results to {format_type.upper()} (all results via GET)")
+            # GET request - support format, filter, and search parameters
+            format_type = request.args.get('format', 'csv').lower()
+            filter_type = request.args.get('filter', 'all')
+            search = request.args.get('search', '')
+            
+            # Validate format
+            if format_type not in ['csv', 'json', 'pdf']:
+                format_type = 'csv'
+            
+            # Build query based on filter
+            query = ScanResult.query
+            
+            # Apply search filter if provided
+            if search:
+                query = query.filter(ScanResult.file_path.contains(search))
+            
+            # Apply status filter
+            if filter_type == 'corrupted':
+                query = query.filter(ScanResult.is_corrupted == True)
+            elif filter_type == 'healthy':
+                query = query.filter(
+                    db.or_(
+                        ScanResult.is_corrupted == False,
+                        ScanResult.marked_as_good == True
+                    )
+                )
+            elif filter_type == 'pending':
+                query = query.filter(ScanResult.scan_status == 'pending')
+            elif filter_type == 'error':
+                query = query.filter(
+                    db.and_(
+                        ScanResult.is_corrupted == True,
+                        db.or_(
+                            ScanResult.marked_as_good == None,
+                            ScanResult.marked_as_good == False
+                        )
+                    )
+                )
+            # 'all' filter - no additional filtering needed
+            
+            results = query.all()
+            export_type = filter_type if filter_type != 'all' else 'all'
+            logger.info(f"Exporting {len(results)} scan results to {format_type.upper()} (filter: {filter_type}, search: '{search}' via GET)")
         
         # Create filename with timestamp and export type
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

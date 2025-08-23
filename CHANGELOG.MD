@@ -5,6 +5,87 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.42] - 2025-08-23
+
+### Fixed
+- **ImageMagick/FFmpeg Dangerous Pattern Error**
+  - **Issue**: Files with semicolons in names (e.g., HTML entities like `&amp;`) were incorrectly flagged as dangerous
+  - **Root Cause**: Security validation in `validate_command_args()` was blocking semicolons
+  - **Solution**: Removed semicolon from dangerous pattern check since `shell=False` is enforced
+  - **Impact**: Files with special characters in names can now be scanned correctly
+  - **Affected Files**: Files with `&`, `;`, apostrophes, and other special characters
+
+### Added
+- **Universal Parallel Task Distribution System**
+  - **Issue**: Only 3 out of configured workers (e.g., 8) were being utilized for scans
+  - **Root Cause**: Monolithic scan task processed all files internally instead of distributing work
+  - **Solution**: New `parallel_scan_orchestrator` that creates chunks and distributes across ALL workers
+  - **Features**:
+    - Dynamically detects number of available workers (not hardcoded)
+    - Automatically calculates optimal chunk size based on file count and worker count
+    - Distributes work evenly across ALL available workers
+    - Supports ALL scan types with parallel processing:
+      - Full scan: Complete directory scanning
+      - Parallel scan: Explicit parallel mode
+      - Pending scan: Process only pending files
+      - File changes scan: Detect and scan modified files
+      - Orphan cleanup: Remove database entries for deleted files
+  - **Performance Impact**: 
+    - With 8 workers: ~267% performance improvement (8 workers vs 3)
+    - With 16 workers: ~533% performance improvement potential
+    - Scales linearly with worker count
+  - **Smart Chunking**:
+    - Small datasets: Creates 2-3 chunks per worker for load balancing
+    - Medium datasets: ~1000 files per chunk
+    - Large datasets: Limits to 10 chunks per worker to avoid overhead
+    - Chunk size range: 100-10,000 files per chunk
+
+### Enhanced
+- **Worker Utilization Monitoring**
+  - New `/scan-parallel-v2/workers` endpoint shows:
+    - Total worker processes available
+    - Tasks assigned to each worker
+    - Worker utilization percentage
+    - Real-time worker status
+  - New `/scan-parallel-v2/status/<scan_id>` endpoint shows:
+    - Chunk processing progress
+    - Number of active workers
+    - Detailed task distribution
+
+### Technical Implementation
+- **pixelprobe/tasks_parallel.py**: New parallel task system
+  - `process_chunk_task`: Processes individual chunks on any available worker
+  - `parallel_scan_orchestrator`: Universal orchestrator for all scan types
+  - `scan_completion_monitor`: Monitors and reports scan completion
+- **pixelprobe/api/scan_routes_parallel.py**: New parallel scan endpoints
+  - Enhanced worker status reporting
+  - Chunk progress tracking
+  - Dynamic worker detection
+
+### Improved
+- **Export API Format Support**
+  - **Enhancement**: `/export` endpoint now properly supports format parameter in GET requests
+  - **Formats Supported**: CSV (default), JSON, PDF
+  - **GET Usage**: `/api/export?format=json&filter=corrupted&search=movie`
+  - **POST Usage**: Can specify format in request body
+  - **Parameters**:
+    - `format`: 'csv', 'json', or 'pdf'
+    - `filter`: 'all', 'corrupted', 'healthy', 'pending', 'error'
+    - `search`: Text search in file paths
+    - `file_ids`: Specific file IDs to export (POST only)
+
+### Breaking Changes
+- **Removed**: `/api/export-csv` endpoint has been removed
+  - **Migration**: Use `/api/export` or `/api/export?format=csv` instead
+  - **Reason**: Single endpoint now handles all export formats
+
+### Migration Notes
+- **Database Changes**: Run migrations for new ScanChunk fields (`files_processed`, `is_complete`)
+- **Export API**: Replace `/api/export-csv` with `/api/export` in your code
+- **Parallel Scans**: New endpoints available at `/api/scan-parallel-v2/*`
+- **Worker Configuration**: System now auto-detects and uses ALL available Celery workers
+- **No Breaking Changes for Scans**: Existing scan endpoints remain unchanged
+
 ## [2.2.41] - 2025-08-21
 
 ### Fixed

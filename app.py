@@ -28,6 +28,7 @@ from pixelprobe.api.admin_routes import admin_bp, set_scheduler
 from pixelprobe.api.export_routes import export_bp
 from pixelprobe.api.maintenance_routes import maintenance_bp
 from pixelprobe.api.reports_routes import reports_bp
+from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
 
 # Import OpenAPI/Swagger documentation
 try:
@@ -168,6 +169,7 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(export_bp)
 app.register_blueprint(maintenance_bp)
 app.register_blueprint(reports_bp)
+app.register_blueprint(parallel_scan_bp)
 
 # Register Swagger blueprint if available
 if SWAGGER_AVAILABLE:
