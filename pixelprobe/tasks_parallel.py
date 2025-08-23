@@ -223,6 +223,82 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
             raise exc
 
 
+@celery_app.task(bind=True)
+def discover_directory_task(self, directory: str, scan_id: str):
+    """
+    Discover files in a single directory - runs on a separate Celery worker
+    
+    Args:
+        directory: Directory path to discover
+        scan_id: Scan identifier for tracking
+        
+    Returns:
+        List of discovered file paths
+    """
+    logger.info(f"Worker {self.request.id} discovering files in {directory}")
+    
+    try:
+        import os
+        from flask import current_app
+        from media_checker import PixelProbe
+        from models import Exclusion
+        
+        discovered_files = []
+        
+        # Load exclusions from database
+        excluded_paths = []
+        excluded_extensions = []
+        
+        try:
+            # Get active path exclusions
+            path_exclusions = Exclusion.query.filter_by(
+                exclusion_type='path',
+                is_active=True
+            ).all()
+            excluded_paths = [e.value for e in path_exclusions]
+            
+            # Get active extension exclusions
+            ext_exclusions = Exclusion.query.filter_by(
+                exclusion_type='extension',
+                is_active=True
+            ).all()
+            excluded_extensions = [e.value for e in ext_exclusions]
+            
+            if excluded_paths:
+                logger.info(f"Excluding paths: {excluded_paths}")
+            if excluded_extensions:
+                logger.info(f"Excluding extensions: {excluded_extensions}")
+                
+        except Exception as e:
+            logger.warning(f"Could not load exclusions from database: {e}")
+        
+        # Initialize media checker with exclusions
+        checker = PixelProbe(
+            database_path=None,  # No DB needed for discovery
+            excluded_paths=excluded_paths,
+            excluded_extensions=excluded_extensions
+        )
+        
+        # Walk directory and discover files
+        for root, dirs, files in os.walk(directory):
+            # Skip excluded directories
+            dirs[:] = [d for d in dirs if not any(
+                os.path.join(root, d).startswith(exc) for exc in excluded_paths
+            )]
+            
+            for file in files:
+                file_path = os.path.join(root, file)
+                if checker._is_supported_file(file_path):
+                    discovered_files.append(file_path)
+        
+        logger.info(f"Worker discovered {len(discovered_files)} files in {directory}")
+        return discovered_files
+        
+    except Exception as e:
+        logger.error(f"Error discovering files in {directory}: {e}")
+        return []
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
                                scan_type: str = 'full', force_rescan: bool = False, 
@@ -238,6 +314,7 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
     - Orphan cleanup: Remove orphaned entries
     
     All scan types are distributed across all available workers for maximum performance.
+    Discovery phase is also parallelized across workers.
     
     Args:
         scan_id: Unique scan identifier
@@ -253,12 +330,8 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
     
     try:
         from flask import current_app
-        from pixelprobe.services.scan_service import ScanService
+        from celery import group
         import os
-        
-        # Initialize scan service for discovery
-        database_uri = current_app.config['SQLALCHEMY_DATABASE_URI']
-        scan_service = ScanService(database_uri)
         
         # Update scan state
         scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
@@ -281,10 +354,71 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         discovered_files = []
         
         if scan_type in ['full', 'parallel']:
-            # Regular directory scan
+            # Parallel directory discovery across Celery workers
             if not paths:
                 raise ValueError("Paths required for full/parallel scan")
-            discovered_files = scan_service._discover_files(paths, force_rescan)
+            
+            # Create discovery tasks for each path
+            discovery_tasks = []
+            for path in paths:
+                # For each path, create sub-tasks for major subdirectories
+                if os.path.exists(path):
+                    # Get first-level subdirectories for parallel discovery
+                    try:
+                        subdirs = [os.path.join(path, d) for d in os.listdir(path) 
+                                  if os.path.isdir(os.path.join(path, d))]
+                        
+                        if subdirs:
+                            # Create task for each subdirectory
+                            for subdir in subdirs[:20]:  # Limit to 20 subdirs per path to avoid too many tasks
+                                discovery_tasks.append(
+                                    discover_directory_task.s(subdir, scan_id)
+                                )
+                        else:
+                            # No subdirectories, scan the path itself
+                            discovery_tasks.append(
+                                discover_directory_task.s(path, scan_id)
+                            )
+                    except Exception as e:
+                        logger.error(f"Error listing directory {path}: {e}")
+                        # Fallback to scanning the whole path
+                        discovery_tasks.append(
+                            discover_directory_task.s(path, scan_id)
+                        )
+            
+            if discovery_tasks:
+                logger.info(f"Launching {len(discovery_tasks)} parallel discovery tasks")
+                
+                # Execute discovery tasks in parallel
+                job = group(discovery_tasks)
+                result = job.apply_async()
+                
+                # Wait for all discovery tasks to complete
+                discovery_results = result.get(timeout=300)  # 5 minute timeout
+                
+                # Combine all discovered files
+                for task_files in discovery_results:
+                    if task_files:
+                        discovered_files.extend(task_files)
+                
+                logger.info(f"Parallel discovery complete: found {len(discovered_files)} total files")
+                
+                # Filter out files already in database
+                if discovered_files:
+                    existing_files = set()
+                    # Load existing paths in chunks to avoid memory issues
+                    chunk_size = 10000
+                    for i in range(0, len(discovered_files), chunk_size):
+                        chunk = discovered_files[i:i+chunk_size]
+                        existing = ScanResult.query.filter(
+                            ScanResult.file_path.in_(chunk)
+                        ).with_entities(ScanResult.file_path).all()
+                        existing_files.update([r[0] for r in existing])
+                    
+                    # Filter to only new files
+                    new_files = [f for f in discovered_files if f not in existing_files]
+                    logger.info(f"Filtered to {len(new_files)} new files (excluded {len(existing_files)} existing)")
+                    discovered_files = new_files
             
         elif scan_type == 'pending':
             # Get all pending files from database

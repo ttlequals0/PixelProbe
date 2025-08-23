@@ -10,7 +10,7 @@ from pixelprobe.api.swagger import (
     file_changes_model, cleanup_status_model, export_request_model,
     config_model, schedule_model, error_model, success_model,
     reset_for_rescan_model, reset_result_model, reset_by_path_model,
-    stuck_scan_recovery_model
+    stuck_scan_recovery_model, parallel_scan_model, parallel_scan_response_model
 )
 import logging
 
@@ -97,6 +97,53 @@ class CancelScan(Resource):
             return result
         except RuntimeError as e:
             return {'error': str(e)}, 400
+
+@scan_ns.route('/parallel-v2')
+class ParallelScanV2(Resource):
+    @scan_ns.doc('parallel_scan_v2')
+    @scan_ns.expect(parallel_scan_model)
+    @scan_ns.response(200, 'Parallel scan started', parallel_scan_response_model)
+    @scan_ns.response(400, 'Invalid request', error_model)
+    @scan_ns.response(503, 'Celery workers not available', error_model)
+    def post(self):
+        """Start enhanced parallel scan that distributes work across all Celery workers"""
+        from pixelprobe.api.scan_routes_parallel import scan_parallel_v2
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='POST',
+            json=request.get_json()
+        ):
+            return scan_parallel_v2()
+
+@scan_ns.route('/parallel-v2/status/<scan_id>')
+class ParallelScanStatus(Resource):
+    @scan_ns.doc('get_parallel_scan_status')
+    @scan_ns.response(200, 'Scan status retrieved')
+    @scan_ns.response(404, 'Scan not found', error_model)
+    def get(self, scan_id):
+        """Get detailed status of a parallel scan including chunk progress"""
+        from pixelprobe.api.scan_routes_parallel import get_parallel_scan_status
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='GET'
+        ):
+            return get_parallel_scan_status(scan_id)
+
+@scan_ns.route('/parallel-v2/workers')
+class WorkerStatus(Resource):
+    @scan_ns.doc('get_worker_status')
+    @scan_ns.response(200, 'Worker status retrieved')
+    def get(self):
+        """Get detailed status of all Celery workers"""
+        from pixelprobe.api.scan_routes_parallel import get_worker_status
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='GET'
+        ):
+            return get_worker_status()
 
 # Removed /reset-for-rescan endpoint - rarely needed functionality
 # Users can achieve the same result by running a scan with force_rescan=true
@@ -305,21 +352,66 @@ class Schedules(Resource):
         return {'message': 'Schedule created', 'id': schedule.id}
 
 # Export endpoints
-@export_ns.route('/csv')
-class ExportCSV(Resource):
-    @export_ns.doc('export_csv')
-    @export_ns.expect(export_request_model)
+@export_ns.route('')
+class Export(Resource):
+    @export_ns.doc('export_scan_results')
+    @export_ns.expect(export_request_model, validate=False)
+    @export_ns.param('format', 'Export format (csv, json, pdf)', type='string', enum=['csv', 'json', 'pdf'], default='csv')
+    @export_ns.param('filter', 'Filter type', type='string', enum=['all', 'corrupted', 'healthy', 'pending', 'error'], default='all')
+    @export_ns.param('search', 'Search term to filter file paths', type='string')
+    @export_ns.response(200, 'Export successful')
+    @export_ns.response(400, 'Invalid request', error_model)
+    def get(self):
+        """Export scan results with GET parameters"""
+        # Import here to avoid circular dependency
+        from pixelprobe.api.export_routes import export_scan_results
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            query_string=request.query_string,
+            method='GET'
+        ):
+            return export_scan_results()
+    
     def post(self):
-        """Export scan results to CSV"""
-        export_service = current_app.export_service
-        data = request.get_json() or {}
-        
-        file_ids = data.get('file_ids')
-        csv_data = export_service.export_to_csv(file_ids)
-        
-        from flask import Response
-        return Response(
-            csv_data,
-            mimetype='text/csv',
-            headers={'Content-Disposition': 'attachment; filename=pixelprobe_export.csv'}
-        )
+        """Export scan results with POST body"""
+        # Import here to avoid circular dependency
+        from pixelprobe.api.export_routes import export_scan_results
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='POST',
+            json=request.get_json()
+        ):
+            return export_scan_results()
+
+@export_ns.route('/view/<int:result_id>')
+class ViewFile(Resource):
+    @export_ns.doc('view_file')
+    @export_ns.response(200, 'File streamed successfully')
+    @export_ns.response(404, 'File not found', error_model)
+    def get(self, result_id):
+        """View/stream a media file (supports range requests for video streaming)"""
+        from pixelprobe.api.export_routes import view_file
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            headers=request.headers,
+            method='GET'
+        ):
+            return view_file(result_id)
+
+@export_ns.route('/download/<int:result_id>')
+class DownloadFile(Resource):
+    @export_ns.doc('download_file')
+    @export_ns.response(200, 'File download started')
+    @export_ns.response(404, 'File not found', error_model)
+    def get(self, result_id):
+        """Download a media file"""
+        from pixelprobe.api.export_routes import download_file
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='GET'
+        ):
+            return download_file(result_id)

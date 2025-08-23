@@ -92,20 +92,20 @@ class TestStatsEndpoints:
         assert 'features' in data
 
 
-class TestExportEndpoints:
+class TestExportEndpointsOriginal:
     """Test export API endpoints"""
     
     def test_export_csv(self, client, mock_scan_result):
         """Test CSV export functionality"""
-        response = client.post('/api/export-csv',
+        response = client.post('/api/export',
                              json={'format': 'csv', 'filter': 'all'})
         assert response.status_code == 200
-        assert response.content_type == 'text/csv'
+        assert response.content_type == 'text/csv; charset=utf-8'
         assert b'File Path' in response.data
     
     def test_export_json(self, client, mock_scan_result):
         """Test JSON export functionality"""
-        response = client.post('/api/export-csv',
+        response = client.post('/api/export',
                              json={'format': 'json', 'filter': 'all'})
         assert response.status_code == 200
         assert response.content_type == 'application/json'
@@ -114,20 +114,21 @@ class TestExportEndpoints:
         assert isinstance(data, list)
         assert any(item['file_path'] == '/test/video.mp4' for item in data)
     
-    @patch('pixelprobe.api.export_routes.SimpleDocTemplate')
-    def test_export_pdf(self, mock_doc, client, mock_scan_result):
+    def test_export_pdf(self, client, mock_scan_result):
         """Test PDF export functionality"""
-        # Mock PDF generation
-        mock_doc_instance = Mock()
-        mock_doc.return_value = mock_doc_instance
-        
-        response = client.post('/api/export-csv',
+        response = client.post('/api/export',
                              json={'format': 'pdf', 'filter': 'all'})
         
-        # Should attempt PDF generation
-        assert mock_doc.called
-        # Should return PDF content type
-        assert response.status_code == 200 or response.status_code == 500  # 500 if reportlab not installed
+        # PDF export may fail if reportlab is not installed
+        # We accept either 200 (success) or 500 (library not installed)
+        assert response.status_code in [200, 500]
+        
+        if response.status_code == 200:
+            assert response.content_type == 'application/pdf'
+        else:
+            # Should return error about missing reportlab
+            data = response.get_json()
+            assert 'error' in data
 
 
 class TestReportEndpoints:
@@ -203,8 +204,8 @@ class TestExportEndpoints:
     """Test export API endpoints"""
     
     def test_export_csv(self, client, mock_scan_result):
-        """Test POST /api/export-csv endpoint"""
-        response = client.post('/api/export-csv', json={})
+        """Test POST /api/export endpoint with CSV format"""
+        response = client.post('/api/export', json={'format': 'csv'})
         assert response.status_code == 200
         assert response.content_type == 'text/csv; charset=utf-8'
         
@@ -215,12 +216,33 @@ class TestExportEndpoints:
     
     def test_export_csv_with_filters(self, client, mock_corrupted_result):
         """Test CSV export with filters"""
-        response = client.post('/api/export-csv',
-                             json={'filter': 'corrupted'})
+        response = client.post('/api/export',
+                             json={'format': 'csv', 'filter': 'corrupted'})
         assert response.status_code == 200
         
         csv_data = response.data.decode('utf-8')
         assert mock_corrupted_result.file_path in csv_data
+    
+    def test_export_get_csv(self, client, mock_scan_result):
+        """Test GET /api/export endpoint with CSV format"""
+        response = client.get('/api/export?format=csv')
+        assert response.status_code == 200
+        assert response.content_type == 'text/csv; charset=utf-8'
+        
+        # Check CSV content
+        csv_data = response.data.decode('utf-8')
+        assert 'File Path' in csv_data
+        assert mock_scan_result.file_path in csv_data
+    
+    def test_export_get_json(self, client, mock_scan_result):
+        """Test GET /api/export endpoint with JSON format"""
+        response = client.get('/api/export?format=json')
+        assert response.status_code == 200
+        assert response.content_type == 'application/json'
+        
+        data = response.get_json()
+        assert isinstance(data, list)
+        assert any(item['file_path'] == mock_scan_result.file_path for item in data)
 
 
 class TestMaintenanceEndpoints:

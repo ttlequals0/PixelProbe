@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.43] - 2025-08-23
+
+### Fixed
+- **Swagger Documentation for Export and Parallel Scan Endpoints**
+  - Added proper Swagger documentation for enhanced `/export` endpoint with GET/POST support
+  - Added Swagger documentation for parallel scan v2 endpoints:
+    - `/scan/parallel-v2` - Start enhanced parallel scan
+    - `/scan/parallel-v2/status/<scan_id>` - Get scan status with chunk progress
+    - `/scan/parallel-v2/workers` - Get worker status and utilization
+  - Added Swagger documentation for file view/download endpoints:
+    - `/export/view/<result_id>` - Stream media files with range support
+    - `/export/download/<result_id>` - Download media files
+  - Fixed export endpoint to properly show CSV/JSON/PDF format options
+  - Updated export model to include all supported parameters
+
 ## [2.2.42] - 2025-08-23
 
 ### Fixed

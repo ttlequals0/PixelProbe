@@ -36,6 +36,7 @@
 - NEVER skip tests because it takes too long ALWAYS wait for them to finish
 - ALWAYS keep 2.1_AUDIT_IMPLEMENTATION_PLAN.md
 - Always work from the latest versioned branch
+- NEVER commit directly to main or master branches
 ### Docker Tagging Notes
 - dont tage  - ttlequals0/pixelprobe:2.0
 
