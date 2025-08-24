@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.2.48] - 2025-08-24
 
+### CRITICAL FIX - Phase 3 Scanning
+- **Fixed Phase 3 Never Starting**
+  - Root cause: Missing `is_complete` column in `scan_chunks` table
+  - Impact: Scans would complete Phase 1 (discovery) and Phase 2 (adding) but crash when trying to create scan chunks for Phase 3
+  - Solution: Added `is_complete` column to all migration scripts
+  - User action required: Apply database migration before upgrading
+
 ### Documentation and Organization
 - **Reorganized Project Structure**
   - Moved all migration scripts to `tools/` directory
@@ -19,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Created `apply_migration.sql` for direct SQL execution
   - Added `MIGRATION_GUIDE.md` for troubleshooting lock issues
   - Fixed transaction handling in migration scripts
+  - **CRITICAL**: Added `is_complete` column migration for Phase 3 fix
 
 - **Documentation Improvements**  
   - Created `docs/README.md` as central documentation index
@@ -27,12 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated all documentation references
 
 ### Bug Fixes
+- **CRITICAL**: Fixed Phase 3 scanning failure due to missing `is_complete` column
 - Fixed migration script transaction already begun error
 - Fixed import path for app_startup_migration
 - Improved test database initialization
 
 ### Docker Image
 - Version: ttlequals0/pixelprobe:2.2.48
+- **IMPORTANT**: Apply database migration before deploying this version
 
 ## [2.2.47] - 2025-08-23
 

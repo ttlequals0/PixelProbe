@@ -270,16 +270,17 @@ class TestScanStateRecovery:
     def test_stuck_scan_recovery_endpoint(self, client, app, db):
         """Test that stuck scan recovery endpoint works"""
         with app.app_context():
-            from datetime import datetime, timezone
+            from datetime import datetime, timezone, timedelta
             
-            # Create a stuck scan
+            # Create a stuck scan from over an hour ago
             stuck_scan = ScanState(
                 scan_id='stuck-scan',
                 phase='adding',
                 is_active=True,
                 files_processed=429000,
                 estimated_total=600230,
-                start_time=datetime.now(timezone.utc)
+                start_time=datetime.now(timezone.utc) - timedelta(hours=2),
+                last_update=datetime.now(timezone.utc) - timedelta(hours=2)
             )
             db.session.add(stuck_scan)
             db.session.commit()
@@ -293,7 +294,7 @@ class TestScanStateRecovery:
             
             # Verify scan is no longer stuck
             scan = ScanState.query.filter_by(scan_id='stuck-scan').first()
-            assert scan.is_active is False or scan.phase in ['completed', 'error']
+            assert scan.is_active is False or scan.phase in ['completed', 'error', 'crashed']
     
     def test_force_cleanup_endpoint(self, client, app, db, test_data_dir):
         """Test force cleanup of all active scans"""
