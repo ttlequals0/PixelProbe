@@ -1,6 +1,6 @@
 # PixelProbe Tools Directory
 
-This directory contains utility scripts for database maintenance, false positive fixes, and data analysis.
+This directory contains utility scripts for database maintenance, migrations, patches, and system administration.
 
 ## Quick Start
 
@@ -51,6 +51,24 @@ python tools/script_name.py --execute
 |--------|---------|--------|
 | `analyze_gif_header_errors.py` | Analyze GIF error patterns | Statistics and patterns |
 | `analyze_webp_errors.py` | Analyze WebP issues | Error distribution |
+
+### 🔄 Migration Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|--------|
+| `migrate_to_postgres.py` | Migrate SQLite to PostgreSQL | Full database migration |
+| `migrate_db.py` | Apply v2.2.46/47 schema updates | Inside container |
+| `migrate_db_safe.py` | Safe migration with lock handling | Handles database locks |
+| `apply_migration.sql` | Direct SQL migration | Fallback option |
+| `app_startup_migration.py` | Runtime migrations | Auto-run on startup |
+| `run_migration.py` | Legacy migration runner | Wrapper script |
+
+### ⚙️ System Utilities
+
+| Script | Purpose | Usage |
+|--------|---------|--------|
+| `update_version.py` | Update version number | `python update_version.py 2.2.47` |
+| `patches/v2_2_47_fixes.py` | v2.2.47 specific fixes | Applied patches |
 
 ### ⚠️ Utility Scripts
 
