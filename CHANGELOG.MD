@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed migration script transaction already begun error
 - Fixed import path for app_startup_migration
 - Improved test database initialization
+- Fixed stuck scan recovery test to handle different detection behaviors
 
 ### Docker Image
 - Version: ttlequals0/pixelprobe:2.2.48
