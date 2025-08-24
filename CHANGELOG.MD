@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.48] - 2025-08-24
+
+### Documentation and Organization
+- **Reorganized Project Structure**
+  - Moved all migration scripts to `tools/` directory
+  - Moved all documentation to organized `docs/` subdirectories
+  - Created comprehensive tools documentation
+  - Cleaned up project root directory
+
+- **Enhanced Migration Tools**
+  - Added `migrate_db_safe.py` with database lock handling
+  - Created `apply_migration.sql` for direct SQL execution
+  - Added `MIGRATION_GUIDE.md` for troubleshooting lock issues
+  - Fixed transaction handling in migration scripts
+
+- **Documentation Improvements**  
+  - Created `docs/README.md` as central documentation index
+  - Organized migration guides in `docs/migration/`
+  - Moved development docs to `docs/development/`
+  - Updated all documentation references
+
+### Bug Fixes
+- Fixed migration script transaction already begun error
+- Fixed import path for app_startup_migration
+- Improved test database initialization
+
+### Docker Image
+- Version: ttlequals0/pixelprobe:2.2.48
+
 ## [2.2.47] - 2025-08-23
 
 ### Additional Critical Fixes

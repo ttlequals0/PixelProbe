@@ -6,7 +6,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.2.47** - Complete database reliability fixes, connection pool recovery, and transaction management improvements.
+**Version 2.2.48** - Enhanced migration tools, comprehensive documentation organization, and improved project structure.
 
 ## 🚀 What's New in Version 2.2.47
 
@@ -85,7 +85,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
          - postgres_data:/var/lib/postgresql/data
    
      mediachecker:
-       image: ttlequals0/pixelprobe:2.2.47
+       image: ttlequals0/pixelprobe:2.2.48
        environment:
          POSTGRES_HOST: postgres
          POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
