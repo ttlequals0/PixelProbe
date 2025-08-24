@@ -2,7 +2,7 @@
 
 ## Quick Start
 
-This guide explains the Docker Compose setup for PixelProbe v2.2.45 and what each container does.
+This guide explains the Docker Compose setup for PixelProbe v2.2.47 and what each container does.
 
 ## Container Overview
 
@@ -56,7 +56,7 @@ services:
 
   # Main Web Application - Serves UI and API
   mediachecker:
-    image: ttlequals0/pixelprobe:2.2.45
+    image: ttlequals0/pixelprobe:2.2.47
     container_name: pixelprobe-web
     ports:
       - "5000:5000"  # Required: web interface access
@@ -101,7 +101,7 @@ services:
 
   # Celery Worker - Processes scan tasks in parallel
   celery-worker:
-    image: ttlequals0/pixelprobe:2.2.45
+    image: ttlequals0/pixelprobe:2.2.47
     container_name: pixelprobe-celery
     command: celery -A celery_app worker --loglevel=info --concurrency=8
     environment:

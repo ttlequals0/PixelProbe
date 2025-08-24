@@ -10,7 +10,7 @@
 
 ## Overview
 
-PixelProbe v2.2.45 is a distributed media corruption detection system built on a microservices architecture using Docker containers. The system leverages Celery for distributed task processing, Redis for message queuing, and PostgreSQL for persistent storage.
+PixelProbe v2.2.47 is a distributed media corruption detection system built on a microservices architecture using Docker containers. The system leverages Celery for distributed task processing, Redis for message queuing, and PostgreSQL for persistent storage.
 
 ## Container Architecture
 
@@ -45,7 +45,7 @@ PixelProbe v2.2.45 is a distributed media corruption detection system built on a
 ### Container Descriptions
 
 #### 1. Web Application Container (`mediachecker`)
-- **Image**: `ttlequals0/pixelprobe:2.2.45`
+- **Image**: `ttlequals0/pixelprobe:2.2.47`
 - **Purpose**: Serves the web UI and REST API
 - **Responsibilities**:
   - Handle HTTP requests from users
@@ -59,7 +59,7 @@ PixelProbe v2.2.45 is a distributed media corruption detection system built on a
   - APScheduler for scheduled tasks
 
 #### 2. Celery Worker Container (`celery-worker`)
-- **Image**: `ttlequals0/pixelprobe:2.2.45` (same image, different entry point)
+- **Image**: `ttlequals0/pixelprobe:2.2.47` (same image, different entry point)
 - **Purpose**: Process background tasks in parallel
 - **Responsibilities**:
   - Execute media scanning tasks
@@ -273,7 +273,7 @@ BATCH_SIZE: 100
 1. **Add More Workers**:
 ```yaml
 celery-worker-2:
-  image: ttlequals0/pixelprobe:2.2.45
+  image: ttlequals0/pixelprobe:2.2.47
   command: celery -A celery_app worker
   scale: 4  # Creates 4 instances
 ```
@@ -412,7 +412,7 @@ services:
       retries: 5
 
   mediachecker:
-    image: ttlequals0/pixelprobe:2.2.45
+    image: ttlequals0/pixelprobe:2.2.47
     ports:
       - "5000:5000"
     environment:
@@ -430,7 +430,7 @@ services:
         condition: service_healthy
 
   celery-worker:
-    image: ttlequals0/pixelprobe:2.2.45
+    image: ttlequals0/pixelprobe:2.2.47
     command: celery -A celery_app worker --loglevel=info --concurrency=8
     environment:
       POSTGRES_HOST: postgres
