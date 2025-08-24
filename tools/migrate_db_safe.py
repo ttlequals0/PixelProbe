@@ -13,43 +13,46 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def kill_blocking_connections(conn, db_name):
+def kill_blocking_connections(engine, db_name):
     """Kill any blocking connections to allow migration"""
     try:
-        # Get current connection PID
-        result = conn.execute(text("SELECT pg_backend_pid()"))
-        current_pid = result.scalar()
-        
-        # Terminate other connections that might be blocking
-        logger.info("Checking for blocking connections...")
-        result = conn.execute(text("""
-            SELECT pid, state, query 
-            FROM pg_stat_activity 
-            WHERE datname = :db_name 
-            AND pid != :current_pid
-            AND state != 'idle'
-        """), {'db_name': db_name, 'current_pid': current_pid})
-        
-        blocking = result.fetchall()
-        if blocking:
-            logger.warning(f"Found {len(blocking)} potentially blocking connections")
-            for pid, state, query in blocking:
-                logger.info(f"  PID {pid}: {state} - {query[:50]}...")
-                
-            # Ask user before killing connections
-            response = input("\nTerminate blocking connections? (y/n): ")
-            if response.lower() == 'y':
-                conn.execute(text("""
-                    SELECT pg_terminate_backend(pid)
-                    FROM pg_stat_activity
-                    WHERE datname = :db_name
-                    AND pid != :current_pid
-                    AND state != 'idle'
-                """), {'db_name': db_name, 'current_pid': current_pid})
-                logger.info("Terminated blocking connections")
-                time.sleep(1)  # Give time for connections to close
-        else:
-            logger.info("No blocking connections found")
+        # Use a separate connection for this check
+        with engine.connect() as conn:
+            # Get current connection PID
+            result = conn.execute(text("SELECT pg_backend_pid()"))
+            current_pid = result.scalar()
+            
+            # Terminate other connections that might be blocking
+            logger.info("Checking for blocking connections...")
+            result = conn.execute(text("""
+                SELECT pid, state, query 
+                FROM pg_stat_activity 
+                WHERE datname = :db_name 
+                AND pid != :current_pid
+                AND state != 'idle'
+            """), {'db_name': db_name, 'current_pid': current_pid})
+            
+            blocking = result.fetchall()
+            if blocking:
+                logger.warning(f"Found {len(blocking)} potentially blocking connections")
+                for pid, state, query in blocking:
+                    logger.info(f"  PID {pid}: {state} - {query[:50]}...")
+                    
+                # Ask user before killing connections
+                response = input("\nTerminate blocking connections? (y/n): ")
+                if response.lower() == 'y':
+                    conn.execute(text("""
+                        SELECT pg_terminate_backend(pid)
+                        FROM pg_stat_activity
+                        WHERE datname = :db_name
+                        AND pid != :current_pid
+                        AND state != 'idle'
+                    """), {'db_name': db_name, 'current_pid': current_pid})
+                    logger.info("Terminated blocking connections")
+                    conn.commit()  # Commit the termination
+                    time.sleep(1)  # Give time for connections to close
+            else:
+                logger.info("No blocking connections found")
             
     except Exception as e:
         logger.warning(f"Could not check blocking connections: {e}")
@@ -99,9 +102,11 @@ def run_migration():
             }
         )
         
+        # Check for blocking connections (uses its own connection)
+        kill_blocking_connections(engine, db_name)
+        
+        # Now proceed with migration using a fresh connection
         with engine.connect() as conn:
-            # Check for blocking connections
-            kill_blocking_connections(conn, db_name)
             
             # Use separate transactions for each operation
             migrations_pending = []
