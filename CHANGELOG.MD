@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.47] - 2025-08-23
+
+### Additional Critical Fixes
+- **Fixed Database Connection Issues**
+  - Added connection pool recovery for "lost synchronization" errors
+  - Implemented automatic retry logic for failed transactions
+  - Added connection disposal and recreation on critical errors
+  - Created `DatabaseConnectionManager` for robust connection handling
+
+- **Fixed Query Result Errors**
+  - Fixed "ResourceClosedError: This result object does not return rows"
+  - Fixed "NoSuchColumnError: Could not locate column in row for column 'count(*)'"
+  - Added safe_count() method for reliable count queries
+  - Improved query result handling to prevent auto-close issues
+
+- **Fixed Transaction State Management**
+  - Added automatic rollback on "transaction is aborted" errors
+  - Implemented transaction recovery decorator
+  - Better session cleanup after errors
+  - Prevents cascade transaction failures
+
+- **Added Connection Recovery Features**
+  - Connection pool with automatic bad connection removal
+  - Statement timeout configuration (5 minutes)
+  - Pool pre-ping to test connections before use
+  - Connection recycling after 1 hour
+
+### Added Files
+- `pixelprobe/database/connection_manager.py` - Robust connection management
+- `patches/v2_2_47_fixes.py` - Runtime patches for connection issues
+
+### Docker Image
+- Version: ttlequals0/pixelprobe:2.2.47
+
 ## [2.2.46] - 2025-08-23
 
 ### Critical Production Fixes
