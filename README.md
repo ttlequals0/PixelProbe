@@ -695,22 +695,14 @@ See [tools/README.md](tools/README.md) for detailed documentation on each tool.
 
 ## Documentation
 
-### API Documentation
-- **[API Reference](docs/api/README.md)** - Complete API documentation with endpoints, request/response examples
-- **[OpenAPI Specification](docs/api/openapi.yaml)** - OpenAPI 3.0 specification for API integration
-- **[Integration Guide](docs/examples/integration-guide.md)** - Examples for integrating PixelProbe into your workflows
+Complete documentation is organized in the **[docs/](docs/README.md)** directory.
 
-### Developer Documentation
-- **[Developer Guide](docs/developer/README.md)** - Setup, architecture, and contribution guidelines
-- **[Architecture Overview](docs/ARCHITECTURE.md)** - System design and component architecture
-- **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Detailed code organization and module descriptions
-- **[Performance Tuning](docs/PERFORMANCE_TUNING.md)** - Optimization guide for large-scale deployments
-
-### Tools and Utilities
-- **[Tools Documentation](TOOLS_AND_SCRIPTS.md)** - Comprehensive guide to all maintenance tools and scripts
-- **[Migration Tools](tools/README.md)** - Database migration and maintenance utilities
-- **Safe Migration Script** - `tools/migrate_db_safe.py` handles database locks during migrations
-- **PostgreSQL Migration** - `tools/migrate_to_postgres.py` for SQLite to PostgreSQL migration
+### Quick Links
+- **[API Reference](docs/api/README.md)** - Complete API documentation
+- **[Migration Guides](docs/migration/)** - Database migration instructions  
+- **[Tools & Scripts](docs/maintenance/TOOLS_AND_SCRIPTS.md)** - Maintenance utilities
+- **[Architecture](docs/ARCHITECTURE.md)** - System design and components
+- **[Developer Guide](docs/developer/README.md)** - Contributing guidelines
 
 ### API Client Examples
 - **[Python Client](docs/examples/python-client.py)** - Full-featured Python client with CLI
