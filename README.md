@@ -706,6 +706,12 @@ See [tools/README.md](tools/README.md) for detailed documentation on each tool.
 - **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Detailed code organization and module descriptions
 - **[Performance Tuning](docs/PERFORMANCE_TUNING.md)** - Optimization guide for large-scale deployments
 
+### Tools and Utilities
+- **[Tools Documentation](TOOLS_AND_SCRIPTS.md)** - Comprehensive guide to all maintenance tools and scripts
+- **[Migration Tools](tools/README.md)** - Database migration and maintenance utilities
+- **Safe Migration Script** - `tools/migrate_db_safe.py` handles database locks during migrations
+- **PostgreSQL Migration** - `tools/migrate_to_postgres.py` for SQLite to PostgreSQL migration
+
 ### API Client Examples
 - **[Python Client](docs/examples/python-client.py)** - Full-featured Python client with CLI
 - **[Node.js Client](docs/examples/nodejs-client.js)** - JavaScript/Node.js client implementation
