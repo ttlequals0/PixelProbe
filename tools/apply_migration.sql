@@ -10,7 +10,10 @@ UPDATE scan_state SET last_update = start_time WHERE last_update IS NULL;
 -- 3. Add files_processed column to scan_chunks if missing
 ALTER TABLE scan_chunks ADD COLUMN IF NOT EXISTS files_processed INTEGER DEFAULT 0 NOT NULL;
 
--- 4. Update existing rows with files_scanned as files_processed
+-- 4. Add is_complete column to scan_chunks if missing (CRITICAL FIX)
+ALTER TABLE scan_chunks ADD COLUMN IF NOT EXISTS is_complete BOOLEAN DEFAULT FALSE NOT NULL;
+
+-- 5. Update existing rows with files_scanned as files_processed
 UPDATE scan_chunks SET files_processed = files_scanned WHERE files_processed = 0;
 
 -- 5. Clean up stuck scans (optional - be careful)

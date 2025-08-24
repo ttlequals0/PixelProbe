@@ -129,9 +129,12 @@ class TestScanExecution:
             data = response.get_json()
             assert data['phase'] == 'discovering'
             
-            # Simulate phase transition to adding
-            scan.phase = 'adding'
-            scan.estimated_total = 1000
+            # Simulate phase transition to adding  
+            # Use direct query to update to avoid session issues
+            ScanState.query.filter_by(scan_id='phase-test').update({
+                'phase': 'adding',
+                'estimated_total': 1000
+            })
             db.session.commit()
             
             response = client.get('/api/scan-status')
@@ -140,7 +143,9 @@ class TestScanExecution:
             assert data['phase'] == 'adding'
             
             # Simulate phase transition to scanning
-            scan.phase = 'scanning'
+            ScanState.query.filter_by(scan_id='phase-test').update({
+                'phase': 'scanning'
+            })
             db.session.commit()
             
             response = client.get('/api/scan-status')
@@ -149,8 +154,10 @@ class TestScanExecution:
             assert data['phase'] == 'scanning'
             
             # Complete the scan
-            scan.phase = 'completed'
-            scan.is_active = False
+            ScanState.query.filter_by(scan_id='phase-test').update({
+                'phase': 'completed',
+                'is_active': False
+            })
             db.session.commit()
             
             # Now a new scan should be able to start
@@ -278,7 +285,7 @@ class TestScanStateRecovery:
             db.session.commit()
             
             # Try recovery
-            response = client.post('/api/stuck-scan-recovery')
+            response = client.post('/api/recover-stuck-scan')
             assert response.status_code == 200
             
             data = response.get_json()

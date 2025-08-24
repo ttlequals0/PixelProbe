@@ -49,6 +49,7 @@ def create_test_app():
     from pixelprobe.api.export_routes import export_bp
     from pixelprobe.api.maintenance_routes import maintenance_bp
     from pixelprobe.api.reports_routes import reports_bp
+    from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
     from scheduler import MediaScheduler
     
     test_app.register_blueprint(scan_bp)
@@ -57,6 +58,7 @@ def create_test_app():
     test_app.register_blueprint(export_bp)
     test_app.register_blueprint(maintenance_bp)
     test_app.register_blueprint(reports_bp)
+    test_app.register_blueprint(parallel_scan_bp)
     
     # Exempt API endpoints from CSRF
     csrf.exempt(scan_bp)
@@ -65,6 +67,7 @@ def create_test_app():
     csrf.exempt(export_bp)
     csrf.exempt(maintenance_bp)
     csrf.exempt(reports_bp)
+    csrf.exempt(parallel_scan_bp)
     
     # Set up scheduler without initializing (to avoid DB access before tables exist)
     scheduler = MediaScheduler()

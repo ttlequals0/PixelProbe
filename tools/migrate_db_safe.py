@@ -153,9 +153,30 @@ def run_migration():
                 trans.rollback()
                 logger.error(f"   ❌ Failed to check column: {e}")
             
+            # 3. Check is_complete column (CRITICAL - needed for phase 3)
+            logger.info("\n3. Checking scan_chunks.is_complete column...")
+            trans = conn.begin()
+            try:
+                result = conn.execute(text("""
+                    SELECT column_name FROM information_schema.columns 
+                    WHERE table_name = 'scan_chunks' AND column_name = 'is_complete'
+                """))
+                
+                if not result.fetchone():
+                    logger.info("   Column missing, will add...")
+                    migrations_pending.append(('is_complete',
+                        "ALTER TABLE scan_chunks ADD COLUMN is_complete BOOLEAN DEFAULT FALSE NOT NULL",
+                        None))
+                else:
+                    logger.info("   ✅ is_complete column already exists")
+                trans.commit()
+            except Exception as e:
+                trans.rollback()
+                logger.error(f"   ❌ Failed to check column: {e}")
+            
             # Apply pending migrations with timeout
             if migrations_pending:
-                logger.info(f"\n3. Applying {len(migrations_pending)} migrations...")
+                logger.info(f"\n4. Applying {len(migrations_pending)} migrations...")
                 
                 for name, create_sql, update_sql in migrations_pending:
                     logger.info(f"\n   Adding {name} column...")
@@ -196,8 +217,8 @@ def run_migration():
                         else:
                             logger.error(f"   ❌ Failed to add {name}: {e}")
             
-            # 3. Clean up stuck scans (non-blocking)
-            logger.info("\n4. Cleaning up stuck scans...")
+            # 5. Clean up stuck scans (non-blocking)
+            logger.info("\n5. Cleaning up stuck scans...")
             trans = conn.begin()
             try:
                 # Use shorter timeout for cleanup
@@ -225,8 +246,8 @@ def run_migration():
                 else:
                     logger.error(f"   ❌ Cleanup failed: {e}")
             
-            # 5. Final verification
-            logger.info("\n5. Verifying migration...")
+            # 6. Final verification
+            logger.info("\n6. Verifying migration...")
             success = True
             
             trans = conn.begin()
@@ -253,6 +274,17 @@ def run_migration():
                     logger.warning("   ⚠️ scan_chunks.files_processed: MISSING (manual fix needed)")
                     success = False
                 
+                # Check is_complete
+                result = conn.execute(text("""
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'scan_chunks' AND column_name = 'is_complete'
+                """))
+                if result.fetchone():
+                    logger.info("   ✅ scan_chunks.is_complete: OK")
+                else:
+                    logger.warning("   ⚠️ scan_chunks.is_complete: MISSING (manual fix needed)")
+                    success = False
+                
                 trans.commit()
             except Exception as e:
                 trans.rollback()
@@ -272,6 +304,7 @@ def run_migration():
                 logger.info("Run these SQL commands when the database is idle:")
                 logger.info("\n  ALTER TABLE scan_state ADD COLUMN IF NOT EXISTS last_update TIMESTAMP;")
                 logger.info("  ALTER TABLE scan_chunks ADD COLUMN IF NOT EXISTS files_processed INTEGER DEFAULT 0;")
+                logger.info("  ALTER TABLE scan_chunks ADD COLUMN IF NOT EXISTS is_complete BOOLEAN DEFAULT FALSE;")
                 logger.info("\nThen restart the container:")
                 logger.info("  docker-compose restart pixelprobe")
             
