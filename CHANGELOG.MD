@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.49] - 2025-08-25
+
+### Bug Fixes
+- **Fixed false-positive warnings for HEVC Main 10 (10-bit) files**
+  - These are valid files that just require proper hardware/software support
+  - Removed unnecessary warning flags for 10-bit HEVC content
+  - Only actual corruption or decode errors will be flagged
+  - Users should rescan HEVC files to clear existing warnings
+
+- **Fixed UI number display bug showing "61 million files"**
+  - Added proper number formatting with toLocaleString()
+  - Large file counts now display correctly with proper formatting
+  - Fixes JavaScript number precision issues in progress display
+
+- **Fixed scan concurrency issues**
+  - Added proper locking to prevent multiple scans running simultaneously
+  - Created database constraints to enforce single active scan
+  - Fixed race condition between Celery task queueing and database updates
+
+### Tools Added
+- Added `fix_scan_concurrency.py` to clean up stuck scans and add database constraints
+- Added `fix_hevc_warnings.py` to clear existing false-positive HEVC warnings (optional)
+
+### Docker Image
+- Version: ttlequals0/pixelprobe:2.2.49
+- Platform: linux/amd64
+
 ## [2.2.48] - 2025-08-24
 
 ### CRITICAL FIX - Phase 3 Scanning
