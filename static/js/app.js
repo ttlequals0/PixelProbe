@@ -637,7 +637,7 @@ class ProgressManager {
             
             // Add file count for cleanup
             if (status.current > 0 && status.total > 0) {
-                parts.push(`${status.current} of ${status.total} files`);
+                parts.push(`${status.current.toLocaleString()} of ${status.total.toLocaleString()} files`);
             }
             
             if (status.current_file) {
@@ -676,7 +676,7 @@ class ProgressManager {
             
             // Add file count
             if (status.current > 0 && status.total > 0) {
-                parts.push(`${status.current} of ${status.total} files`);
+                parts.push(`${status.current.toLocaleString()} of ${status.total.toLocaleString()} files`);
             }
             
             if (status.current_file) {

@@ -1079,10 +1079,10 @@ class PixelProbe:
                     scan_output.append(f"Pixel format: {pix_fmt}")
                     logger.info(f"HEVC Main 10 detected in {file_path}: profile={codec_profile}, pix_fmt={pix_fmt}")
                     
-                    # HEVC Main 10 requires 10-bit support - mark as warning if detected
+                    # HEVC Main 10 is a valid format, not a warning
+                    # Only actual corruption or decode errors should be flagged
                     if '10' in pix_fmt:  # e.g., yuv420p10le
-                        warning_details.append("HEVC Main 10 profile (10-bit) - requires hardware/software support for proper playback")
-                        logger.warning(f"HEVC Main 10 10-bit video detected in {file_path} - may have playback issues on some systems")
+                        logger.debug(f"HEVC Main 10 10-bit video detected in {file_path} - valid format")
                 else:
                     scan_output.append(f"Video stream: {codec_name}")
                     if codec_profile:
