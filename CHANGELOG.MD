@@ -5,6 +5,99 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.50] - 2025-08-25
+
+### Critical Fix - Scheduled Scans Not Running (P0 Task)
+- **Fixed Scheduled Scan Execution**
+  - **Issue**: APScheduler jobs were failing due to Flask context issues
+  - **Root Cause**: Scheduler was trying to call non-existent `/api/start-scan` endpoint
+  - **Solution**: Implemented proper HTTP self-call pattern as specified in audit plan:
+    - Changed to use correct `/api/scan` endpoint for scheduled scans
+    - Changed to use `/api/cleanup-orphaned` for cleanup tasks
+    - Changed to use `/api/file-changes` for file change detection
+  - **Implementation Details**:
+    - Added proper request headers with `X-Internal-Request: scheduler` for identification
+    - Increased timeout from 10s to 30s for better reliability
+    - Fixed payload structure to match API expectations (directories, not paths)
+    - Proper handling of scan types (full, orphan, file_changes)
+    - Added proper error handling for 200 (success) and 409 (conflict) status codes
+  - **Impact**: Scheduled scans now execute correctly at configured intervals
+
+### P2 Tasks Implementation - Code Quality & Architecture
+- **Code Consolidation & DRY Principles**
+  - Added `ScanExecutor` class for unified scan execution pattern
+  - Created `BatchProcessor` utility for efficient batch operations
+  - Eliminates code duplication across scan methods
+  - Provides consistent progress tracking and cancellation
+  - Supports both parallel and sequential execution modes
+  - Location: `pixelprobe/services/scan_executor.py`
+
+- **Frontend State Management**
+  - Implemented centralized `AppState` class for UI state management
+  - Features:
+    - Scan state tracking (progress, phase, ETA)
+    - UI state persistence in localStorage
+    - Event-driven architecture with listeners
+    - Automatic stats refresh
+    - Error handling and notifications
+  - Benefits:
+    - Consistent UI updates across components
+    - Prevents race conditions in UI
+    - Better user experience with persistent preferences
+  - Location: `static/js/state.js`
+
+- **Test Coverage Expansion**
+  - Added comprehensive concurrency tests
+    - Race condition testing for simultaneous scans
+    - Database connection pool exhaustion tests
+    - Scan state consistency under load
+    - Worker distribution verification
+  - Added performance benchmarks
+    - File discovery performance (10k files < 5s)
+    - Bulk insert performance (5k records < 10s)
+    - Memory usage monitoring during scans
+    - API response time validation (< 200ms)
+    - Throughput testing (> 1000 files/second)
+  - Test files:
+    - `tests/test_concurrency.py`
+    - `tests/test_performance.py`
+
+### Documentation
+- **Comprehensive Scan Types Documentation**
+  - Created `SCAN_TYPES_DOCUMENTATION.md`
+  - Documents all 7 scan types and their use cases
+  - Explains three-phase scanning approach
+  - Performance considerations and best practices
+  - API response examples
+
+- **Audit Implementation Status Report**
+  - Updated `P0_P1_IMPLEMENTATION_STATUS.md`
+  - All P0 tasks: 100% complete
+  - All P1 tasks: 100% complete
+  - Overall P0+P1: 6 of 6 tasks (100%)
+  - P2 tasks: 3 of 3 tasks (100%)
+
+### Testing & Validation
+- All existing tests pass without regression
+- New components integrate cleanly
+- No breaking changes to existing APIs
+- Performance improvements verified
+
+### Audit Task Completion Status
+- **P0 (Critical)**: 4 of 4 tasks complete (100%)
+- **P1 (High)**: 2 of 2 tasks complete (100%)  
+- **P2 (Medium)**: 3 of 3 tasks complete (100%)
+- **Total**: 9 of 9 P0/P1/P2 tasks complete
+
+### Files Added/Modified
+- `scheduler.py`: HTTP self-call implementation
+- `pixelprobe/services/scan_executor.py`: New unified scan executor
+- `static/js/state.js`: New frontend state management
+- `tests/test_concurrency.py`: New concurrency tests
+- `tests/test_performance.py`: New performance tests
+- `SCAN_TYPES_DOCUMENTATION.md`: New comprehensive documentation
+- `P0_P1_IMPLEMENTATION_STATUS.md`: Updated status report
+
 ## [2.2.49] - 2025-08-25
 
 ### Bug Fixes

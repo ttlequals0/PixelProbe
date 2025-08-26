@@ -9,6 +9,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from models import db, ScanSchedule, ScanResult
 from sqlalchemy import text
 import threading
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -184,8 +185,6 @@ class MediaScheduler:
                     return
                     
                 # Use HTTP self-call to trigger scan
-                import requests
-                
                 # Get the correct port from app config or environment
                 port = self.app.config.get('PORT', os.environ.get('PORT', 5000))
                 base_url = f'http://localhost:{port}'
@@ -199,14 +198,15 @@ class MediaScheduler:
                 try:
                     # Run scan with deep check to detect changes
                     payload = {
-                        'scan_type': 'periodic',
-                        'paths': filtered_paths,
-                        'deep_scan': True
+                        'scan_type': 'full',
+                        'directories': filtered_paths,
+                        'force_rescan': False,
+                        'source': 'scheduled_periodic'
                     }
-                    response = requests.post(f'{base_url}/api/start-scan',
+                    response = requests.post(f'{base_url}/api/scan',
                                           json=payload,
                                           headers=headers,
-                                          timeout=10)
+                                          timeout=30)
                     
                     if response.status_code == 200:
                         logger.info("Periodic scan started successfully")
@@ -244,7 +244,7 @@ class MediaScheduler:
                 if not scan_paths:
                     scan_paths = os.environ.get('SCAN_PATHS', '/media').split(',')
                     
-                logger.info(f"Running scheduled scan '{schedule.name}' (type: {getattr(schedule, 'scan_type', 'normal')}) on paths: {scan_paths}")
+                logger.info(f"Running scheduled scan '{schedule.name}' (type: {scan_type}) on paths: {scan_paths}")
                 
                 # Get scan type (default to 'normal' for backward compatibility)
                 scan_type = getattr(schedule, 'scan_type', 'normal')
@@ -258,8 +258,6 @@ class MediaScheduler:
                         
                 if filtered_paths:
                     # Use HTTP self-calls to trigger scans, avoiding Flask context issues
-                    import requests
-                    
                     # Get the correct port from app config or environment
                     port = self.app.config.get('PORT', os.environ.get('PORT', 5000))
                     base_url = f'http://localhost:{port}'
@@ -275,24 +273,24 @@ class MediaScheduler:
                             # Run orphan cleanup
                             response = requests.post(f'{base_url}/api/cleanup-orphaned', 
                                                     headers=headers,
-                                                    timeout=10)
+                                                    timeout=30)
                         elif scan_type == 'file_changes':
                             # Run file changes scan
                             response = requests.post(f'{base_url}/api/file-changes', 
                                                     headers=headers,
-                                                    timeout=10)
+                                                    timeout=30)
                         else:
                             # Default to normal scan with proper payload
                             payload = {
-                                'scan_type': 'scheduled',
-                                'schedule_id': schedule_id,
-                                'paths': filtered_paths,
-                                'deep_scan': schedule.options and 'deep_scan' in schedule.options
+                                'scan_type': 'full',
+                                'directories': filtered_paths,
+                                'force_rescan': schedule.force_rescan if hasattr(schedule, 'force_rescan') else False,
+                                'source': f'scheduled_{schedule_id}'
                             }
-                            response = requests.post(f'{base_url}/api/start-scan', 
+                            response = requests.post(f'{base_url}/api/scan', 
                                                     json=payload,
                                                     headers=headers,
-                                                    timeout=10)
+                                                    timeout=30)
                         
                         if response.status_code == 200:
                             logger.info(f"Scheduled scan {schedule_id} started successfully")
@@ -310,7 +308,7 @@ class MediaScheduler:
             self.scan_lock.release()
             
     def _run_cleanup(self):
-        """Run cleanup of orphaned records"""
+        """Run cleanup of orphaned records via HTTP self-call"""
         if not self.cleanup_lock.acquire(blocking=False):
             logger.warning("Cleanup already in progress, skipping")
             return
@@ -319,8 +317,30 @@ class MediaScheduler:
             with self.app.app_context():
                 logger.info("Starting scheduled cleanup of orphaned records")
                 
-                import requests
-                requests.post('http://localhost:5000/api/cleanup-orphaned', timeout=5)
+                # Get the correct port from app config or environment
+                port = self.app.config.get('PORT', os.environ.get('PORT', 5000))
+                base_url = f'http://localhost:{port}'
+                
+                # Add internal request header
+                headers = {
+                    'X-Internal-Request': 'scheduler',
+                    'Content-Type': 'application/json'
+                }
+                
+                try:
+                    response = requests.post(f'{base_url}/api/cleanup-orphaned', 
+                                          headers=headers,
+                                          timeout=30)
+                    
+                    if response.status_code == 200:
+                        logger.info("Cleanup task started successfully")
+                    elif response.status_code == 409:
+                        logger.warning("Cleanup skipped - another scan/cleanup is already running")
+                    else:
+                        logger.error(f"Cleanup API call failed: {response.status_code} - {response.text}")
+                        
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Failed to call API for cleanup: {e}")
                 
         except Exception as e:
             logger.error(f"Failed to run cleanup: {e}")
