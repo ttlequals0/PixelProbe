@@ -24,9 +24,11 @@ Welcome to the PixelProbe documentation! This directory contains all technical d
 - **[Developer Guide](developer/README.md)** - Setup and contribution guidelines
 - **[API Consolidation Plan](development/API_CONSOLIDATION_PLAN.md)** - API improvement roadmap
 - **[Audit Implementation Plan](development/2.1_AUDIT_IMPLEMENTATION_PLAN.md)** - v2.1 audit and implementation details
+- **[P0/P1 Implementation Status](development/P0_P1_IMPLEMENTATION_STATUS.md)** - Audit task completion status (v2.2.50)
 
 ### 🔌 API Documentation
 - **[API Reference](api/README.md)** - Complete API endpoint documentation
+- **[Scan Types Documentation](api/SCAN_TYPES_DOCUMENTATION.md)** - Comprehensive guide to all 7 scan types
 - **[OpenAPI Specification](api/openapi.yaml)** - OpenAPI 3.0 specification
 
 ### 💻 Integration Examples
