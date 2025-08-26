@@ -131,27 +131,43 @@ def db(app):
         _db.create_all()
         yield _db
         
-        # Clean up any running scan threads before dropping tables
-        if hasattr(app, 'scan_service') and app.scan_service:
-            if hasattr(app.scan_service, 'current_scan_thread') and app.scan_service.current_scan_thread:
-                app.scan_service.scan_cancelled = True
-                if app.scan_service.current_scan_thread.is_alive():
-                    app.scan_service.current_scan_thread.join(timeout=1.0)
-                app.scan_service.current_scan_thread = None
-        
-        # Close all sessions before dropping tables
-        _db.session.remove()
-        # Force close the connection to release locks
-        if hasattr(_db.engine, 'dispose'):
-            _db.engine.dispose()
-        
-        # Try to drop tables, but don't fail if locked
         try:
-            _db.drop_all()
+            # Clean up any running scan threads before dropping tables
+            if hasattr(app, 'scan_service') and app.scan_service:
+                if hasattr(app.scan_service, 'current_scan_thread') and app.scan_service.current_scan_thread:
+                    app.scan_service.scan_cancelled = True
+                    if app.scan_service.current_scan_thread.is_alive():
+                        app.scan_service.current_scan_thread.join(timeout=1.0)
+                    app.scan_service.current_scan_thread = None
+            
+            # Clean up any background threads from cleanup operations
+            import threading
+            for thread in threading.enumerate():
+                if thread.name.startswith('cleanup_') and thread.is_alive():
+                    # Wait a bit for thread to finish
+                    thread.join(timeout=0.5)
+            
+            # Close all sessions before dropping tables
+            _db.session.remove()
+            
+            # Force close the connection to release locks
+            if hasattr(_db.engine, 'dispose'):
+                try:
+                    _db.engine.dispose()
+                except Exception:
+                    pass  # Ignore disposal errors
+            
+            # Try to drop tables, but don't fail if locked
+            try:
+                _db.drop_all()
+            except Exception as e:
+                # If tables are locked, that's okay for tests
+                import logging
+                logging.warning(f"Could not drop all tables during teardown: {e}")
         except Exception as e:
-            # If tables are locked, that's okay for tests
+            # Log but don't fail teardown
             import logging
-            logging.warning(f"Could not drop all tables during teardown: {e}")
+            logging.warning(f"Error during database teardown: {e}")
 
 @pytest.fixture(scope='session')
 def test_data_dir():
