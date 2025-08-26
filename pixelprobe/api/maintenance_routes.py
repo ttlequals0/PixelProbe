@@ -411,7 +411,8 @@ def cleanup_orphaned_files():
     app = current_app._get_current_object()
     current_cleanup_thread = threading.Thread(
         target=cleanup_orphaned_async,
-        args=(app, cleanup_record.id,)
+        args=(app, cleanup_record.id,),
+        name=f'cleanup_{cleanup_record.id}'
     )
     current_cleanup_thread.start()
     

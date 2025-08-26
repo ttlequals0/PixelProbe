@@ -132,6 +132,26 @@ def db(app):
         yield _db
         
         try:
+            # First, mark any active cleanup as cancelled to stop background threads
+            from models import CleanupState, ScanState
+            try:
+                cleanup_states = CleanupState.query.filter_by(is_active=True).all()
+                for cleanup in cleanup_states:
+                    cleanup.is_active = False
+                    cleanup.cancelled = True
+                _db.session.commit()
+            except Exception:
+                pass  # Ignore errors if tables don't exist
+            
+            # Mark any active scans as stopped
+            try:
+                scan_state = ScanState.get_or_create()
+                if scan_state.is_active:
+                    scan_state.stop_scan()
+                    _db.session.commit()
+            except Exception:
+                pass
+            
             # Clean up any running scan threads before dropping tables
             if hasattr(app, 'scan_service') and app.scan_service:
                 if hasattr(app.scan_service, 'current_scan_thread') and app.scan_service.current_scan_thread:
@@ -140,12 +160,31 @@ def db(app):
                         app.scan_service.current_scan_thread.join(timeout=1.0)
                     app.scan_service.current_scan_thread = None
             
-            # Clean up any background threads from cleanup operations
+            # Wait for all background threads to finish
             import threading
-            for thread in threading.enumerate():
-                if thread.name.startswith('cleanup_') and thread.is_alive():
-                    # Wait a bit for thread to finish
-                    thread.join(timeout=0.5)
+            import time
+            max_wait = 2.0  # Maximum 2 seconds wait
+            start_time = time.time()
+            active_threads = []
+            
+            while time.time() - start_time < max_wait:
+                active_threads = []
+                for thread in threading.enumerate():
+                    if thread != threading.main_thread() and thread.is_alive():
+                        thread_name = thread.name.lower() if hasattr(thread, 'name') else ''
+                        if 'cleanup' in thread_name or 'scan' in thread_name:
+                            active_threads.append(thread)
+                
+                if not active_threads:
+                    break
+                    
+                # Give threads a moment to finish
+                time.sleep(0.1)
+            
+            # Force join any remaining threads
+            for thread in active_threads:
+                if thread.is_alive():
+                    thread.join(timeout=0.1)
             
             # Close all sessions before dropping tables
             _db.session.remove()
