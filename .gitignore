@@ -162,3 +162,4 @@ test_env/
 2.1_AUDIT_IMPLEMENTATION_PLAN.md
 pixelprobe.db
 *.db
+docs/development/
