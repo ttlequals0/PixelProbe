@@ -1295,7 +1295,10 @@ def reset_incomplete_scans():
                 db.and_(
                     ScanResult.is_corrupted == False,
                     ScanResult.scan_date.is_(None)
-                )
+                ),
+                # Case 3: Any file with scan_date NULL regardless of status
+                # This catches all files that were never actually scanned
+                ScanResult.scan_date.is_(None)
             )
         ).all()
         
@@ -1328,6 +1331,62 @@ def reset_incomplete_scans():
         
     except Exception as e:
         logger.error(f"Error resetting incomplete scans: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@scan_bp.route('/diagnose-incomplete-scans', methods=['GET'])
+@rate_limit("5 per minute")
+def diagnose_incomplete_scans():
+    """Diagnose why files show as healthy but have N/A scan details
+    
+    Returns detailed information about files that appear incomplete
+    """
+    try:
+        # Sample some files to understand the data patterns
+        diagnostics = {
+            'total_files': db.session.query(ScanResult).count(),
+            'files_with_null_scan_date': db.session.query(ScanResult).filter(
+                ScanResult.scan_date.is_(None)
+            ).count(),
+            'files_marked_healthy_no_scan_date': db.session.query(ScanResult).filter(
+                ScanResult.is_corrupted == False,
+                ScanResult.scan_date.is_(None)
+            ).count(),
+            'files_marked_corrupted_no_scan_date': db.session.query(ScanResult).filter(
+                ScanResult.is_corrupted == True,
+                ScanResult.scan_date.is_(None)
+            ).count(),
+            'files_completed_no_scan_date': db.session.query(ScanResult).filter(
+                ScanResult.scan_status == 'completed',
+                ScanResult.scan_date.is_(None)
+            ).count(),
+            'files_pending': db.session.query(ScanResult).filter(
+                ScanResult.scan_status == 'pending'
+            ).count()
+        }
+        
+        # Get a sample of problematic files
+        sample_files = []
+        problematic = ScanResult.query.filter(
+            ScanResult.is_corrupted == False,
+            ScanResult.scan_date.is_(None)
+        ).limit(5).all()
+        
+        for file in problematic:
+            sample_files.append({
+                'file_path': file.file_path,
+                'scan_status': file.scan_status,
+                'is_corrupted': file.is_corrupted,
+                'scan_date': str(file.scan_date) if file.scan_date else None,
+                'scan_output': file.scan_output[:100] if file.scan_output else None,
+                'discovered_date': str(file.discovered_date) if file.discovered_date else None
+            })
+        
+        diagnostics['sample_problematic_files'] = sample_files
+        
+        return jsonify(diagnostics)
+        
+    except Exception as e:
+        logger.error(f"Error diagnosing incomplete scans: {e}")
         return jsonify({'error': str(e)}), 500
 
 @scan_bp.route('/worker-status')

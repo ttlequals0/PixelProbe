@@ -243,7 +243,10 @@ class ResetIncompleteScans(Resource):
                     and_(
                         ScanResult.is_corrupted == False,
                         ScanResult.scan_date.is_(None)
-                    )
+                    ),
+                    # Case 3: Any file with scan_date NULL regardless of status
+                    # This catches all files that were never actually scanned
+                    ScanResult.scan_date.is_(None)
                 )
             ).all()
             

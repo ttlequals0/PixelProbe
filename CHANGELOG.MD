@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.63] - 2025-08-27
+
+### Improved Incomplete Scan Detection
+- **Enhanced reset-incomplete-scans to catch ALL unscanned files**
+  - Now detects ANY file with NULL scan_date regardless of status
+  - Added third detection case to ensure no unscanned files are missed
+  - Added `/api/diagnose-incomplete-scans` endpoint for debugging
+  - Provides detailed statistics about file scan states
+
 ## [2.2.62] - 2025-08-27
 
 ### Critical Database Migration Fix
