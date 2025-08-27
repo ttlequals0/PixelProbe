@@ -30,7 +30,7 @@ python scripts/reset_incomplete_scans.py
 SELECT COUNT(*) 
 FROM scan_results 
 WHERE scan_status = 'completed'
-AND (scan_date IS NULL OR tool_output IS NULL OR tool_output = '' OR tool_output = 'N/A');
+AND (scan_date IS NULL OR scan_output IS NULL OR scan_output = '' OR scan_output = 'N/A');
 
 -- Reset them to pending
 UPDATE scan_results 
@@ -38,7 +38,7 @@ SET scan_status = 'pending',
     is_corrupted = NULL,
     error_message = 'Reset due to incomplete scan data'
 WHERE scan_status = 'completed'
-AND (scan_date IS NULL OR tool_output IS NULL OR tool_output = '' OR tool_output = 'N/A');
+AND (scan_date IS NULL OR scan_output IS NULL OR scan_output = '' OR scan_output = 'N/A');
 ```
 
 ## After Reset

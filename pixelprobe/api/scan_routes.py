@@ -1282,9 +1282,9 @@ def reset_incomplete_scans():
             ScanResult.scan_status == 'completed',
             db.or_(
                 ScanResult.scan_date.is_(None),
-                ScanResult.tool_output.is_(None),
-                ScanResult.tool_output == '',
-                ScanResult.tool_output == 'N/A'
+                ScanResult.scan_output.is_(None),
+                ScanResult.scan_output == '',
+                ScanResult.scan_output == 'N/A'
             )
         ).all()
         
@@ -1303,7 +1303,6 @@ def reset_incomplete_scans():
             result.marked_as_good = False
             result.error_message = 'Reset due to incomplete scan data (v2.2.59 fix)'
             result.scan_output = None
-            result.tool_output = None
             # Keep discovered_date as is
         
         db.session.commit()

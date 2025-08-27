@@ -7,9 +7,9 @@ FROM scan_results
 WHERE scan_status = 'completed'
 AND (
     scan_date IS NULL 
-    OR tool_output IS NULL 
-    OR tool_output = ''
-    OR tool_output = 'N/A'
+    OR scan_output IS NULL 
+    OR scan_output = ''
+    OR scan_output = 'N/A'
 );
 
 -- List affected files (limit to first 100 for review)
@@ -17,16 +17,16 @@ SELECT
     file_path,
     scan_status,
     scan_date,
-    tool_output,
+    scan_output,
     is_corrupted,
     discovered_date
 FROM scan_results 
 WHERE scan_status = 'completed'
 AND (
     scan_date IS NULL 
-    OR tool_output IS NULL 
-    OR tool_output = ''
-    OR tool_output = 'N/A'
+    OR scan_output IS NULL 
+    OR scan_output = ''
+    OR scan_output = 'N/A'
 )
 LIMIT 100;
 
@@ -38,7 +38,7 @@ LIMIT 100;
 -- WHERE scan_status = 'completed'
 -- AND (
 --     scan_date IS NULL 
---     OR tool_output IS NULL 
---     OR tool_output = ''
---     OR tool_output = 'N/A'
+--     OR scan_output IS NULL 
+--     OR scan_output = ''
+--     OR scan_output = 'N/A'
 -- );
