@@ -268,7 +268,7 @@ def cleanup_stuck_operations():
         logger.error(f"Error cleaning up stuck operations: {str(e)}")
 
 def create_tables():
-    """Initialize database tables"""
+    """Initialize database tables and run migrations"""
     with app.app_context():
         try:
             # Use inspector to check existing tables
@@ -314,6 +314,9 @@ def migrate_database():
         # Run startup migrations for v2.0.89
         run_startup_migrations(db)
         
+        # Run v2.2.62 migrations - add missing columns
+        run_v2_2_62_migrations()
+        
         # Create performance indexes
         create_performance_indexes()
         
@@ -322,6 +325,43 @@ def migrate_database():
         
     except Exception as e:
         logger.error(f"Error during database initialization: {e}")
+
+def run_v2_2_62_migrations():
+    """Run migrations for v2.2.62 - add celery_task_id column"""
+    from sqlalchemy import text
+    
+    try:
+        with db.engine.connect() as conn:
+            # Check if celery_task_id column exists in scan_chunks
+            result = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'scan_chunks' 
+                AND column_name = 'celery_task_id'
+            """))
+            
+            if not result.fetchone():
+                logger.info("Applying migration: Adding celery_task_id column to scan_chunks table")
+                conn.execute(text("""
+                    ALTER TABLE scan_chunks 
+                    ADD COLUMN celery_task_id VARCHAR(36)
+                """))
+                
+                # Create index for performance
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_scan_chunks_celery_task_id 
+                    ON scan_chunks (celery_task_id) 
+                    WHERE celery_task_id IS NOT NULL
+                """))
+                
+                conn.commit()
+                logger.info("Migration completed: celery_task_id column added successfully")
+            else:
+                logger.debug("Migration already applied: celery_task_id column exists")
+                
+    except Exception as e:
+        logger.error(f"Migration v2.2.62 failed: {e}")
+        # Don't fail startup - app might still work without this column
 
 def create_performance_indexes():
     """Create performance indexes"""

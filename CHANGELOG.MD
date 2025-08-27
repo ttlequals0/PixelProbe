@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.2.62] - 2025-08-27
 
+### Critical Database Migration Fix
+- **Fixed missing celery_task_id column in scan_chunks table**
+  - Added automatic database migration on startup
+  - Creates celery_task_id column if it doesn't exist
+  - Fixes error: `column "celery_task_id" of relation "scan_chunks" does not exist`
+  - Includes performance index for celery_task_id lookups
+
 ### Enhanced Incomplete Scan Detection
 - **Fixed reset-incomplete-scans to detect falsely healthy files**
   - Now detects files marked as `is_corrupted=False` (healthy) but with `scan_date=NULL`
