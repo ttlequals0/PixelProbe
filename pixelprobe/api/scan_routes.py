@@ -372,7 +372,11 @@ def scan_file():
             return jsonify(result)
             
     except RuntimeError as e:
-        return jsonify({'error': str(e)}), 409
+        error_msg = str(e)
+        # Provide more context for common errors
+        if 'already running' in error_msg.lower():
+            error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
+        return jsonify({'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}), 409
     except FileNotFoundError as e:
         return jsonify({'error': str(e)}), 404
 
@@ -390,7 +394,15 @@ def scan_all():
     
     # Check if a scan is already running (thread or Celery)
     if is_scan_running():
-        return jsonify({'error': 'A scan is already in progress'}), 409
+        # Get current scan status for more informative error message
+        scan_state = ScanState.get_latest()
+        if scan_state and scan_state.is_active:
+            phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
+        else:
+            phase_info = ""
+        return jsonify({
+            'error': f'A scan is already in progress{phase_info}. Please wait for it to complete or use /api/cancel-scan to stop it.'
+        }), 409
     
     # Get scan configuration
     data = request.get_json() or {}
@@ -466,7 +478,11 @@ def scan_all():
             return jsonify(result)
             
     except RuntimeError as e:
-        return jsonify({'error': str(e)}), 409
+        error_msg = str(e)
+        # Provide more context for common errors
+        if 'already running' in error_msg.lower():
+            error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
+        return jsonify({'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}), 409
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -719,11 +735,18 @@ def get_scan_status():
             logger.warning(f"Could not convert end_time to timezone: {e}")
             end_time_tz = state_dict.get('end_time')
     
+    # Get current file being processed - ensure full path is shown
+    current_file_path = state_dict.get('current_file', service_status.get('file', ''))
+    # Ensure we show the full file path, not just directory
+    if current_file_path and os.path.isdir(current_file_path):
+        # If it's a directory, indicate that we're scanning within it
+        current_file_path = f"{current_file_path} (scanning directory)"
+    
     # Build comprehensive status response with frontend-expected fields
     status = {
         'current': current_progress,
         'total': total_progress,
-        'file': state_dict.get('current_file', service_status.get('file', '')),
+        'file': current_file_path,
         'status': status_value,
         'is_running': is_running,
         'is_scanning': is_running,  # Legacy compatibility
@@ -817,7 +840,15 @@ def scan_parallel():
     """Start a parallel scan with multiple workers"""
     # Check if a scan is already running (thread or Celery)
     if is_scan_running():
-        return jsonify({'error': 'A scan is already in progress'}), 409
+        # Get current scan status for more informative error message
+        scan_state = ScanState.get_latest()
+        if scan_state and scan_state.is_active:
+            phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
+        else:
+            phase_info = ""
+        return jsonify({
+            'error': f'A scan is already in progress{phase_info}. Please wait for it to complete or use /api/cancel-scan to stop it.'
+        }), 409
     
     data = request.get_json() or {}
     force_rescan = data.get('force_rescan', False)
@@ -951,7 +982,11 @@ def scan_parallel():
             return jsonify(result)
             
     except RuntimeError as e:
-        return jsonify({'error': str(e)}), 409
+        error_msg = str(e)
+        # Provide more context for common errors
+        if 'already running' in error_msg.lower():
+            error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
+        return jsonify({'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}), 409
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 

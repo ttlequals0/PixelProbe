@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.51] - 2025-08-27
+
+### Fixed
+- **Improved Error Messages for Failed Scan Starts**
+  - 409 errors now provide detailed information about the current scan status
+  - Added phase information and files processed count to conflict errors
+  - Added helpful suggestions to use `/api/scan-status` or `/api/cancel-scan`
+  - More informative RuntimeError messages with context-specific guidance
+
+- **File Path Display Issue in scan-status API**
+  - Fixed truncation of file paths when scanning directories
+  - Added indication when scanning within a directory vs. a specific file
+  - Ensures full file path is displayed in UI and API responses
+  - Properly handles directory paths that were being incorrectly displayed
+
+### Analysis
+- **Scan Crash Root Cause Identified**
+  - Previous scan crashed during "adding" phase at file 377,000 of 584,436
+  - Recovery was triggered via force cleanup endpoint
+  - Scan was successfully restarted and continued from Phase 1
+  - No system errors found - appears to be controlled recovery
+
 ## [2.2.50] - 2025-08-25
 
 ### Critical Fix - Scheduled Scans Not Running (P0 Task)
