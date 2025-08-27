@@ -5,6 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.56] - 2025-08-27
+
+### Fixed - Discovery Database Check Issue
+- **Added Comprehensive Logging for Discovery Debugging**
+  - Added logging to show database file counts (total and completed)
+  - Added error handling and logging for batch database checks
+  - Logs first batch check result to verify filtering is working
+  - Better logging to understand why 470k files are being discovered as "new"
+
+### Investigation
+- User reported 470,818 files being added when only 2-10 new files expected
+- Issue appears to be either:
+  1. Database was cleared/reset
+  2. Database query is failing and returning empty results
+  3. File path format changed (different mount points)
+  4. Genuine new files if this is first scan after database migration
+  
+- Added diagnostics to identify root cause
+
+## [2.2.55] - 2025-08-27
+
+### Performance - Massive Discovery Optimization
+- **Fixed Extremely Inefficient File Discovery Process**
+  - **Old Method**: Loaded ALL existing file paths into memory (millions of strings!)
+    - For <100k files: Loaded all paths at once
+    - For >100k files: Still loaded all paths, just in 50k chunks
+    - A database with 1M files = 1M+ strings consuming GBs of RAM
+    - Discovery couldn't even start until ALL paths were loaded
+  - **New Method**: Efficient batch database queries during discovery
+    - Check files in batches of 100 against database
+    - Near-zero memory overhead (only 100 paths at a time)
+    - Discovery starts immediately, no upfront loading
+    - Scales to any database size without memory issues
+  
+- **Performance Improvements**:
+  - **Memory Usage**: From GBs → MBs for large databases
+  - **Discovery Start Time**: From minutes → instant
+  - **Scalability**: Now handles millions of files efficiently
+
+### Technical Implementation
+- Modified `scan_service.py` to use `batch_check_callback` instead of loading paths
+- Updated `media_checker.py` to support efficient batch checking
+- Both sequential and parallel discovery now use batch checking
+- Maintains backward compatibility with legacy `existing_files` parameter
+
+### Note
+- File changes check still correctly checks ALL database files against disk
+- Only the discovery process (finding NEW files) was optimized
+- This fixes the regression introduced in v2.2.41 that made discovery worse
+
+## [2.2.54] - 2025-08-27
+
+### Fixed - Root Cause Analysis and Proper Solutions
+- **Fixed Scan State Reuse Bug**
+  - Added `ScanState.create_new_scan()` method that always creates a fresh scan state record
+  - Modified `scan_directories()` to use `create_new_scan()` instead of `get_or_create()`
+  - This fixes the critical bug where multiple scans were sharing the same database record (ID=2)
+  - Resolves issue where scans mysteriously showed as "cancelled" without user action
+  - Fixes concurrent scan detection failures
+
+- **Fixed Database Connection Failures**
+  - Reduced batch size from 1000 to 100 files for database inserts
+  - Prevents "server closed the connection unexpectedly" errors
+  - Fixes PostgreSQL connection pool exhaustion on large file batches
+  - No more query failures with excessive parameters
+
+- **Removed Workarounds**
+  - Removed unnecessary `db.session.refresh()` calls that were band-aids
+  - Kept proper error handling that marks scans as 'crashed' not 'cancelled'
+  - Maintained Celery task state checking as it's proper verification, not a workaround
+
+### Technical Details
+- Batch insert size reduced: 1000 → 100 files per batch
+- New scan states are now properly isolated with unique IDs
+- Database connection pool can handle the smaller batch sizes without exhaustion
+
 ## [2.2.53] - 2025-08-27
 
 ### Fixed

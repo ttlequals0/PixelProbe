@@ -292,6 +292,24 @@ class ScanState(db.Model):
                 db.session.rollback()
         return scan_state
     
+    @staticmethod
+    def create_new_scan():
+        """Create a new scan state record for starting a new scan"""
+        # Always create a fresh scan state when starting a new scan
+        scan_state = ScanState()
+        scan_state.scan_id = str(uuid.uuid4())
+        scan_state.is_active = False  # Will be set to True when scan actually starts
+        scan_state.phase = 'idle'
+        try:
+            db.session.add(scan_state)
+            db.session.commit()
+            logger.info(f"Created new scan state with ID: {scan_state.id}, scan_id: {scan_state.scan_id}")
+        except Exception as e:
+            logger.error(f"Failed to create new scan state: {e}")
+            db.session.rollback()
+            raise
+        return scan_state
+    
     def start_scan(self, directories, force_rescan=False):
         """Start a new scan"""
         self.phase = 'discovering'

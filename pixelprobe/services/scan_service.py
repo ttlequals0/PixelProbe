@@ -125,7 +125,8 @@ class ScanService:
         self.scan_cancelled = False
         
         # Save scan state and capture ID before threading
-        scan_state = ScanState.get_or_create()
+        # Create a new scan state for this scan instead of reusing existing one
+        scan_state = ScanState.create_new_scan()
         scan_state.start_scan(valid_dirs, force_rescan)
         # Store deep_scan flag for later use in report creation
         self._deep_scan = deep_scan
@@ -208,37 +209,40 @@ class ScanService:
                             return
                     
                     if not is_pending_scan:
-                        # Get existing files to skip during discovery (optimized for large databases)
-                        logger.info("Starting file discovery with efficient database filtering...")
-                        
-                        # For large databases, we'll pass a callback function that checks the database
-                        # This avoids loading all paths into memory
-                        def check_file_exists(file_path):
-                            """Check if a file exists in the database"""
-                            return db.session.query(ScanResult).filter_by(file_path=file_path).first() is not None
-                        
-                        # We'll modify the discovery to use this callback
-                        # For now, let's load a reasonable subset to avoid the worst performance
                         # Get count of existing files for logging
                         existing_count = db.session.query(ScanResult).count()
                         logger.info(f"Database contains {existing_count} existing files")
                         
-                        # Load existing file paths for duplicate detection during discovery
-                        # For large databases, load in chunks to avoid memory issues
-                        if existing_count < 100000:
-                            logger.info("Loading all existing paths for fast discovery...")
-                            existing_files = set(row[0] for row in db.session.query(ScanResult.file_path).all())
-                        else:
-                            # For large databases, still load paths but in chunks to manage memory
-                            logger.info(f"Large database detected ({existing_count} files) - loading paths in chunks...")
-                            existing_files = set()
-                            chunk_size = 50000
-                            for offset in range(0, existing_count, chunk_size):
-                                chunk = db.session.query(ScanResult.file_path).limit(chunk_size).offset(offset).all()
-                                existing_files.update(row[0] for row in chunk)
-                                if offset % 100000 == 0:
-                                    logger.info(f"Loaded {min(offset + chunk_size, existing_count)}/{existing_count} existing file paths...")
-                            logger.info(f"Loaded {len(existing_files)} existing file paths for duplicate detection")
+                        # Also check how many are in completed state
+                        completed_count = db.session.query(ScanResult).filter(
+                            ScanResult.scan_status == 'completed'
+                        ).count()
+                        logger.info(f"Database has {completed_count} completed scans out of {existing_count} total files")
+                        
+                        logger.info("Starting file discovery with efficient batch database filtering...")
+                        
+                        # Instead of loading all paths into memory, we'll use batch checking
+                        # This callback will be used by the discovery process
+                        def check_files_exist_batch(file_paths):
+                            """Check which files exist in database using batch query"""
+                            if not file_paths:
+                                return set()
+                            
+                            # Query database for these specific paths
+                            try:
+                                existing = db.session.query(ScanResult.file_path).filter(
+                                    ScanResult.file_path.in_(file_paths)
+                                ).all()
+                                existing_set = set(row[0] for row in existing)
+                                # Log the first check to verify it's working
+                                if not hasattr(check_files_exist_batch, 'logged'):
+                                    check_files_exist_batch.logged = True
+                                    logger.info(f"Batch check: {len(file_paths)} paths checked, {len(existing_set)} found in DB")
+                                return existing_set
+                            except Exception as e:
+                                logger.error(f"Database query failed in batch check: {e}")
+                                # Return empty set on error to avoid blocking discovery
+                                return set()
                         
                         # Define progress callback for discovery
                         def discovery_progress(files_checked, files_discovered):
@@ -248,8 +252,9 @@ class ScanService:
                             db.session.commit()
                         
                         # Discover only new files (not already in database)
-                        all_files = checker.discover_media_files(valid_dirs, existing_files=existing_files, progress_callback=discovery_progress)
-                        logger.info(f"File discovery completed. Found {len(all_files)} files to process")
+                        # Pass the batch check function instead of a huge in-memory set
+                        all_files = checker.discover_media_files(valid_dirs, batch_check_callback=check_files_exist_batch, progress_callback=discovery_progress)
+                        logger.info(f"File discovery completed. Found {len(all_files)} new files to add (database had {existing_count} existing files)")
                         
                         # SMART PRIORITIZATION: Sort files by modification time (newest first)
                         # This ensures recently added/modified files are processed first
@@ -291,7 +296,7 @@ class ScanService:
                         # Add new files to database with basic file info (no corruption check yet)
                         added_count = 0
                         duplicate_count = 0
-                        batch_size = 1000  # Process files in larger batches
+                        batch_size = 100  # Smaller batch size to prevent database connection issues
                         
                         # Process files in batches for better performance
                         for batch_start in range(0, len(all_files), batch_size):
@@ -300,10 +305,9 @@ class ScanService:
                                 self._handle_scan_cancellation(scan_state)
                                 return
                             
-                            # For Celery tasks, check database for cancellation
-                            db.session.refresh(scan_state)
+                            # Check scan state for cancellation
                             if scan_state.phase == 'cancelled':
-                                logger.info("Scan cancelled detected in database - stopping scan")
+                                logger.info("Scan cancelled - stopping scan")
                                 self.scan_cancelled = True
                                 self._handle_scan_cancellation(scan_state)
                                 return

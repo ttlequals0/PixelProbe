@@ -186,26 +186,41 @@ class PixelProbe:
             return self._db_session_factory()
         return None
     
-    def discover_media_files(self, directories, max_files=None, existing_files=None, progress_callback=None):
-        """Phase 1: Discover all supported files and return their paths (parallel version)"""
-        existing_files = existing_files or set()
+    def discover_media_files(self, directories, max_files=None, existing_files=None, batch_check_callback=None, progress_callback=None):
+        """Phase 1: Discover all supported files and return their paths (parallel version)
+        
+        Args:
+            directories: List of directories to scan
+            max_files: Maximum number of files to discover
+            existing_files: (deprecated) Set of existing file paths to skip
+            batch_check_callback: Function that takes a list of paths and returns set of existing ones
+            progress_callback: Function to report progress
+        """
+        # Support both old (existing_files) and new (batch_check_callback) methods
+        if existing_files is not None:
+            logger.info(f"Using legacy in-memory existing_files set with {len(existing_files)} entries")
+        elif batch_check_callback:
+            logger.info(f"Using efficient batch database checking for duplicate detection")
         
         logger.info(f"Starting parallel file discovery in {len(directories)} directories")
-        logger.info(f"Excluding {len(existing_files)} already-discovered files")
         
         # Use parallel discovery for multiple paths
         if len(directories) > 1:
-            return self._discover_files_parallel(directories, max_files, existing_files, progress_callback)
+            return self._discover_files_parallel(directories, max_files, existing_files, batch_check_callback, progress_callback)
         else:
             # Single path - use original sequential method
-            return self._discover_files_sequential(directories, max_files, existing_files, progress_callback)
+            return self._discover_files_sequential(directories, max_files, existing_files, batch_check_callback, progress_callback)
     
-    def _discover_files_sequential(self, directories, max_files=None, existing_files=None, progress_callback=None):
+    def _discover_files_sequential(self, directories, max_files=None, existing_files=None, batch_check_callback=None, progress_callback=None):
         """Sequential file discovery for single path or fallback"""
         files_discovered = []
         files_count = 0
         existing_files = existing_files or set()
         total_files_checked = 0
+        
+        # Batch for efficient database checking
+        batch_to_check = []
+        BATCH_SIZE = 100
         
         for directory in directories:
             if not os.path.exists(directory):
@@ -220,24 +235,53 @@ class PixelProbe:
                 
                 if max_files and files_count >= max_files:
                     logger.info(f"Reached maximum discovery limit of {max_files} files")
+                    # Check any remaining batch before returning
+                    if batch_check_callback and batch_to_check:
+                        existing_in_batch = batch_check_callback(batch_to_check)
+                        for path in batch_to_check:
+                            if path not in existing_in_batch and self._is_supported_file(path):
+                                files_discovered.append(path)
                     return files_discovered
                 
-                # Skip files that are already in the database
-                if file_path in existing_files:
-                    continue
-                
-                if self._is_supported_file(file_path):
-                    files_discovered.append(file_path)
-                    files_count += 1
+                # Use batch checking if callback provided, otherwise use legacy method
+                if batch_check_callback:
+                    # Add to batch for checking
+                    if self._is_supported_file(file_path):
+                        batch_to_check.append(file_path)
+                    
+                    # When batch is full, check against database
+                    if len(batch_to_check) >= BATCH_SIZE:
+                        existing_in_batch = batch_check_callback(batch_to_check)
+                        for path in batch_to_check:
+                            if path not in existing_in_batch:
+                                files_discovered.append(path)
+                                files_count += 1
+                        batch_to_check = []
+                else:
+                    # Legacy method: check against in-memory set
+                    if file_path in existing_files:
+                        continue
+                    
+                    if self._is_supported_file(file_path):
+                        files_discovered.append(file_path)
+                        files_count += 1
                 
                 # Call progress callback periodically
                 if progress_callback and total_files_checked % 100 == 0:
                     progress_callback(total_files_checked, files_count)
         
+        # Check any remaining files in the batch
+        if batch_check_callback and batch_to_check:
+            existing_in_batch = batch_check_callback(batch_to_check)
+            for path in batch_to_check:
+                if path not in existing_in_batch:
+                    files_discovered.append(path)
+                    files_count += 1
+        
         logger.info(f"Discovery complete: found {len(files_discovered)} new supported files")
         return files_discovered
     
-    def _discover_files_parallel(self, directories, max_files=None, existing_files=None, progress_callback=None):
+    def _discover_files_parallel(self, directories, max_files=None, existing_files=None, batch_check_callback=None, progress_callback=None):
         """Parallel file discovery across multiple paths"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
@@ -266,6 +310,9 @@ class PixelProbe:
                 logger.info(f"Found {len(files)} total files in {directory}")
                 
                 path_files = []
+                batch_to_check = []
+                BATCH_SIZE = 100
+                
                 for file_path in files:
                     # Check global file limit across all paths
                     with count_lock:
@@ -273,14 +320,46 @@ class PixelProbe:
                             shared_state['max_reached'] = True
                             logger.info(f"Reached maximum discovery limit of {max_files} files")
                             break
+                    
+                    if batch_check_callback:
+                        # Use batch checking for efficiency
+                        if self._is_supported_file(file_path):
+                            batch_to_check.append(file_path)
                         
-                        # Skip files that are already in the database
+                        # When batch is full, check against database
+                        if len(batch_to_check) >= BATCH_SIZE:
+                            existing_in_batch = batch_check_callback(batch_to_check)
+                            for path in batch_to_check:
+                                if path not in existing_in_batch:
+                                    with count_lock:
+                                        if max_files and shared_state['files_count'] >= max_files:
+                                            shared_state['max_reached'] = True
+                                            break
+                                        path_files.append(path)
+                                        shared_state['files_count'] += 1
+                            batch_to_check = []
+                    else:
+                        # Legacy method: check against in-memory set
                         if file_path in existing_files:
                             continue
                         
                         if self._is_supported_file(file_path):
-                            path_files.append(file_path)
-                            shared_state['files_count'] += 1
+                            with count_lock:
+                                if max_files and shared_state['files_count'] >= max_files:
+                                    shared_state['max_reached'] = True
+                                    break
+                                path_files.append(file_path)
+                                shared_state['files_count'] += 1
+                
+                # Check any remaining files in the batch
+                if batch_check_callback and batch_to_check:
+                    existing_in_batch = batch_check_callback(batch_to_check)
+                    for path in batch_to_check:
+                        if path not in existing_in_batch:
+                            with count_lock:
+                                if not (max_files and shared_state['files_count'] >= max_files):
+                                    path_files.append(path)
+                                    shared_state['files_count'] += 1
                 
                 logger.info(f"Path {directory}: discovered {len(path_files)} new supported files")
                 return path_files
