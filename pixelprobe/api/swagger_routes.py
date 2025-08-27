@@ -10,7 +10,8 @@ from pixelprobe.api.swagger import (
     file_changes_model, cleanup_status_model, export_request_model,
     config_model, schedule_model, error_model, success_model,
     reset_for_rescan_model, reset_result_model, reset_by_path_model,
-    stuck_scan_recovery_model, parallel_scan_model, parallel_scan_response_model
+    stuck_scan_recovery_model, parallel_scan_model, parallel_scan_response_model,
+    reset_incomplete_scans_model
 )
 import logging
 
@@ -206,6 +207,109 @@ class ForceCleanupScan(Resource):
             
         except Exception as e:
             logger.error(f"Error during force cleanup: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/reset-incomplete-scans')
+class ResetIncompleteScans(Resource):
+    @scan_ns.doc('reset_incomplete_scans')
+    @scan_ns.response(200, 'Incomplete scans reset', reset_incomplete_scans_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Reset files marked as completed but with incomplete scan data
+        
+        Finds and resets files that show 'N/A' for Tool Details and Scan Date
+        due to the v2.2.59 chunk query bug that prevented actual scanning.
+        """
+        from models import db, ScanResult
+        from sqlalchemy import or_
+        
+        try:
+            # Find files marked as completed but missing scan details
+            incomplete_files = ScanResult.query.filter(
+                ScanResult.scan_status == 'completed',
+                or_(
+                    ScanResult.scan_date.is_(None),
+                    ScanResult.tool_output.is_(None),
+                    ScanResult.tool_output == '',
+                    ScanResult.tool_output == 'N/A'
+                )
+            ).all()
+            
+            count = len(incomplete_files)
+            
+            if count == 0:
+                return {
+                    'message': 'No incomplete scans found',
+                    'reset_count': 0
+                }
+            
+            # Reset these files to pending
+            for result in incomplete_files:
+                result.scan_status = 'pending'
+                result.is_corrupted = None  # Reset to unknown
+                result.marked_as_good = False
+                result.error_message = 'Reset due to incomplete scan data (v2.2.59 fix)'
+                result.scan_output = None
+                result.tool_output = None
+                # Keep discovered_date as is
+            
+            db.session.commit()
+            
+            logger.info(f"Reset {count} files with incomplete scan data to pending status")
+            
+            return {
+                'message': f'Reset {count} files with incomplete scan data for rescanning',
+                'reset_count': count,
+                'description': 'These files were marked as completed but had no actual scan results'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error resetting incomplete scans: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/reset-files-by-path')
+class ResetFilesByPath(Resource):
+    @scan_ns.doc('reset_files_by_path')
+    @scan_ns.expect(reset_by_path_model)
+    @scan_ns.response(200, 'Files reset', reset_result_model)
+    @scan_ns.response(400, 'Invalid request', error_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Reset specific files by their paths"""
+        from models import db, ScanResult
+        
+        data = request.get_json() or {}
+        file_path = data.get('file_path')
+        file_paths = data.get('file_paths', [])
+        
+        if file_path:
+            file_paths = [file_path]
+        
+        if not file_paths:
+            return {'error': 'No file paths provided'}, 400
+        
+        try:
+            # Reset files by path
+            results = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+            count = len(results)
+            
+            for result in results:
+                result.scan_status = 'pending'
+                result.is_corrupted = False
+                result.marked_as_good = False
+                result.error_message = None
+                result.scan_output = None
+            
+            db.session.commit()
+            
+            return {
+                'message': f'Reset {count} files for rescanning',
+                'count': count,
+                'type': 'by_path'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error resetting files by path: {e}")
             return {'error': str(e)}, 500
 
 # Stats endpoints

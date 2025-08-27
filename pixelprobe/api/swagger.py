@@ -164,4 +164,10 @@ stuck_scan_recovery_model = api.model('StuckScanRecovery', {
     'stuck_files_reset': fields.Integer(description='Number of stuck files that were reset')
 })
 
+reset_incomplete_scans_model = api.model('ResetIncompleteScans', {
+    'message': fields.String(description='Result message'),
+    'reset_count': fields.Integer(description='Number of files reset to pending'),
+    'description': fields.String(description='Description of what was fixed')
+})
+
 # Route implementations will be imported in app.py after blueprint registration

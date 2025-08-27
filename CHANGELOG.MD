@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   
 - **Documentation** (`docs/FIX_INCOMPLETE_SCANS.md`)
   - Complete guide for fixing files affected by v2.2.59 bug
+  
+### API Documentation Updates
+- **Added Swagger/OpenAPI documentation** for new endpoints
+  - `/api/reset-incomplete-scans` - Reset files with incomplete scan data
+  - `/api/reset-files-by-path` - Reset specific files by their paths
+  - Full API documentation available at `/api/v1/docs`
 
 ## [2.2.59] - 2025-08-27
 
