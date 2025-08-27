@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.2.59] - 2025-08-27
 
+### Scan Cancellation Fix
+- **Fixed scan cancellation to properly terminate Celery tasks**
+  - Cancel command now terminates running Celery tasks using `revoke()` with `terminate=True` and `signal='SIGKILL'`
+  - Added celery_task_id field to ScanChunk model for tracking chunk tasks
+  - Cancel checks both main scan task and all chunk processing tasks
+  - Properly cleans up Celery tasks that continue running after cancel
+
 ### Critical Bug Fix - Files Not Being Scanned
 - **Fixed chunk query bug that prevented ANY files from being scanned**
   - Removed incorrect `file_path == chunk.directory_path` condition

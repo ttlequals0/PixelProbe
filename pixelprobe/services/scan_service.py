@@ -886,11 +886,68 @@ class ScanService:
         logger.info(f"Cancel scan status - thread_running: {is_thread_running}, db_active: {is_db_active}, "
                    f"scan_state.is_active: {scan_state.is_active}, phase: {scan_state.phase}")
         
-        if not is_thread_running and not is_db_active:
+        # Check for Celery tasks to terminate
+        celery_task_terminated = False
+        if scan_state.celery_task_id:
+            logger.info(f"Found Celery task ID: {scan_state.celery_task_id}")
+            try:
+                # Import Celery app to terminate tasks
+                from celery_config import celery_app
+                from celery.result import AsyncResult
+                
+                # Get the task result
+                task_result = AsyncResult(scan_state.celery_task_id, app=celery_app)
+                
+                # Check if task is still running
+                if task_result.state in ['PENDING', 'STARTED', 'PROGRESS']:
+                    logger.info(f"Terminating Celery task {scan_state.celery_task_id} (state: {task_result.state})")
+                    
+                    # Revoke the task to prevent execution or terminate if running
+                    # terminate=True will kill the task if it's currently executing
+                    # signal='SIGKILL' ensures immediate termination
+                    celery_app.control.revoke(scan_state.celery_task_id, terminate=True, signal='SIGKILL')
+                    celery_task_terminated = True
+                    
+                    logger.info(f"Celery task {scan_state.celery_task_id} terminated")
+                else:
+                    logger.info(f"Celery task {scan_state.celery_task_id} not running (state: {task_result.state})")
+                    
+            except Exception as e:
+                logger.error(f"Error terminating Celery task {scan_state.celery_task_id}: {e}")
+        
+        # Also check for any active ScanChunks with Celery task IDs
+        try:
+            from models import ScanChunk
+            active_chunks = db.session.query(ScanChunk).filter(
+                ScanChunk.status == 'processing',
+                ScanChunk.celery_task_id.isnot(None)
+            ).all()
+            
+            if active_chunks:
+                logger.info(f"Found {len(active_chunks)} active chunks with Celery tasks")
+                from celery_config import celery_app
+                
+                for chunk in active_chunks:
+                    try:
+                        logger.info(f"Terminating Celery task for chunk {chunk.chunk_id}: {chunk.celery_task_id}")
+                        celery_app.control.revoke(chunk.celery_task_id, terminate=True, signal='SIGKILL')
+                        chunk.status = 'cancelled'
+                        chunk.end_time = datetime.now(timezone.utc)
+                        celery_task_terminated = True
+                    except Exception as e:
+                        logger.error(f"Error terminating chunk Celery task {chunk.celery_task_id}: {e}")
+                
+                db.session.commit()
+                logger.info(f"Terminated Celery tasks for {len(active_chunks)} chunks")
+                
+        except Exception as e:
+            logger.error(f"Error checking for chunk Celery tasks: {e}")
+        
+        if not is_thread_running and not is_db_active and not celery_task_terminated:
             raise RuntimeError("No scan is currently running")
         
         # If database shows active but thread is not running, it's stuck
-        if is_db_active and not is_thread_running:
+        if is_db_active and not is_thread_running and not celery_task_terminated:
             logger.warning("Scan appears to be stuck (database active but thread not running)")
         
         self.scan_cancelled = True

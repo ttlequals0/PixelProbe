@@ -499,6 +499,7 @@ class ScanChunk(db.Model):
     start_time = db.Column(db.DateTime, nullable=True)
     end_time = db.Column(db.DateTime, nullable=True)
     error_message = db.Column(db.Text, nullable=True)
+    celery_task_id = db.Column(db.String(36), nullable=True, index=True)  # Celery task ID for chunk processing
     
     # Add composite unique constraint
     __table_args__ = (db.UniqueConstraint('scan_id', 'chunk_id', name='uq_scan_chunks_scan_chunk'),)
