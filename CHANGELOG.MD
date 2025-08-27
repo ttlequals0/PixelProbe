@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.58] - 2025-08-27
+
+### Scan Behavior Corrections
+- **Fixed Phase 3 scanning behavior for different scan types**
+  
+### Proper Scan Type Behaviors:
+- **Normal Scan**: 
+  - Phase 1: Discovers NEW files not in database
+  - Phase 2: Adds new files to database  
+  - Phase 3: Scans only NEW and PENDING files for corruption
+  - Purpose: Quick scan of unscanned files only
+  
+- **Force Rescan**: 
+  - Rescans ALL files regardless of previous scan status
+  - Purpose: Full re-validation of all files
+  
+- **Pending Scan**: 
+  - Only scans files marked as pending
+  - Purpose: Complete unfinished scans
+  
+- **File Changes Check** (via /api/file-changes):
+  - Checks ALL files in database
+  - Compares current file hash with stored hash
+  - Rescans files where hash has changed
+  - Purpose: Detect files that have been modified
+  
+- **Orphan Cleanup** (via /api/cleanup-orphaned):
+  - Checks if files in database still exist on disk
+  - Removes database entries for missing files
+  - Purpose: Clean up stale database entries
+
+### Implementation Notes
+- Normal scans are efficient - only scan what's new
+- Use File Changes Check to detect modified files
+- Use Force Rescan for complete re-validation
+- Previous versions had confused these behaviors
+
 ## [2.2.57] - 2025-08-27
 
 ### Critical Fix - Celery Context and Performance Issues
