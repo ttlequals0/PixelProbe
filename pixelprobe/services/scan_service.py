@@ -295,7 +295,16 @@ class ScanService:
                         
                         # Process files in batches for better performance
                         for batch_start in range(0, len(all_files), batch_size):
+                            # Check for cancellation both locally and in database
                             if self.scan_cancelled:
+                                self._handle_scan_cancellation(scan_state)
+                                return
+                            
+                            # For Celery tasks, check database for cancellation
+                            db.session.refresh(scan_state)
+                            if scan_state.phase == 'cancelled':
+                                logger.info("Scan cancelled detected in database - stopping scan")
+                                self.scan_cancelled = True
                                 self._handle_scan_cancellation(scan_state)
                                 return
                             

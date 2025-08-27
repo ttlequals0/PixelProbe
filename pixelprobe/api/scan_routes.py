@@ -88,7 +88,7 @@ def is_scan_running():
     # Check database for active Celery-based scans
     try:
         active_scan = ScanState.query.filter_by(is_active=True).first()
-        if active_scan and active_scan.phase not in ['idle', 'completed', 'error', 'crashed']:
+        if active_scan and active_scan.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
             # Check if scan is stale (no progress update)
             from datetime import datetime, timezone, timedelta
             
@@ -117,8 +117,22 @@ def is_scan_running():
                             stuck_threshold = timedelta(minutes=2)  # Even shorter if no progress
                 
                 if time_since_update > stuck_threshold:
-                    logger.warning(f"Scan {active_scan.scan_id} stuck in phase '{active_scan.phase}' (no update for {time_since_update})")
+                    logger.warning(f"Scan {active_scan.scan_id} appears stuck in phase '{active_scan.phase}' (no update for {time_since_update})")
                     logger.warning(f"Files processed: {active_scan.files_processed}/{active_scan.estimated_total}")
+                    
+                    # But first check if Celery task is actually still running before marking as crashed
+                    if active_scan.celery_task_id and check_celery_available():
+                        try:
+                            from celery.result import AsyncResult
+                            result = AsyncResult(active_scan.celery_task_id, app=current_app.celery)
+                            # Check actual task state
+                            if result.state in ['PENDING', 'STARTED', 'RETRY', 'PROGRESS']:
+                                logger.info(f"Celery task {active_scan.celery_task_id} still active with state: {result.state} - scan is running despite no recent update")
+                                return True  # Task is still running, just slow
+                            else:
+                                logger.warning(f"Celery task {active_scan.celery_task_id} is not active (state: {result.state})")
+                        except Exception as e:
+                            logger.warning(f"Could not check Celery task status: {e}")
                     
                     # Mark as crashed and allow new scan
                     active_scan.is_active = False
@@ -127,7 +141,7 @@ def is_scan_running():
                     db.session.commit()
                     return False
             
-            # Verify if Celery task is still running
+            # Also verify if Celery task is still running for non-stuck scans
             if active_scan.celery_task_id and check_celery_available():
                 try:
                     from celery.result import AsyncResult

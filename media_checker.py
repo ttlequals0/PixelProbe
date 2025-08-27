@@ -838,8 +838,10 @@ class PixelProbe:
         logger.info(f"ImageMagick timeout set to {imagemagick_timeout}s for {file_size_mb:.1f}MB {file_ext.upper()} file")
         
         try:
+            # Use simpler identify command without -verbose for faster checking
+            # -verbose provides detailed info we don't use and significantly slows down processing
             result = safe_subprocess_run(
-                ['identify', '-verbose', file_path],
+                ['identify', '-ping', file_path],  # -ping reads only header info, much faster
                 capture_output=True,
                 text=True,
                 encoding='utf-8',

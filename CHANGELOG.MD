@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.53] - 2025-08-27
+
+### Fixed
+- **ImageMagick Performance Optimization**
+  - Changed from `identify -verbose` to `identify -ping` for much faster image validation
+  - The `-ping` flag only reads image headers instead of processing entire files
+  - Dramatically reduces timeout issues on large/complex images
+  - Should eliminate most "ImageMagick identify timeout" warnings
+
+### Fixed
+- **Improved Scan State Synchronization for Celery Tasks**
+  - Added database refresh checks in scan loops to detect state changes
+  - Celery tasks now properly check database for current scan state
+  - Fixes issue where scans showed as "cancelled" in UI but continued running in background workers
+  - Addresses problem where scans could mysteriously stop without user intervention
+
+- **Enhanced Concurrent Scan Detection**
+  - Better detection of running Celery tasks before allowing new scans
+  - Checks actual Celery task state, not just database flags
+  - Prevents multiple scans from starting when one is already running
+  - Properly handles stuck scan detection without prematurely marking active tasks as crashed
+
+### Changed
+- Excluded 'cancelled' phase from active scan detection
+- Improved stuck scan detection to check Celery task status first
+- Better handling of slow-running tasks on large files (50GB+)
+
 ## [2.2.52] - 2025-08-27
 
 ### Hotfix
