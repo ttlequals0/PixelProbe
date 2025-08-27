@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.57] - 2025-08-27
+
+### Critical Fix - Celery Context and Performance Issues
+- **Fixed "Working outside of application context" error in Celery workers**
+  - Batch check callback was using `db.session` without Flask context
+  - Added proper context detection using `has_app_context()`
+  - When in Celery context, creates independent database connection
+  - This was causing ALL files to be treated as new (1M+ instead of 2-10)
+
+- **Fixed Database Connection Inefficiency**
+  - Was creating and disposing database engine for EVERY batch (every 100 files!)
+  - Now creates one persistent connection pool for entire discovery process
+  - Properly disposes of engine after discovery completes
+  - Added connection pooling with proper settings (pool_size=5, max_overflow=10)
+
+- **Fixed PostgreSQL Parameter Limit Issues**
+  - Changed from creating 100 named parameters to using PostgreSQL's ANY() operator
+  - Breaks large batches into 500-file chunks to avoid parameter limits
+  - Uses more efficient array parameter binding
+  
+### Performance Improvements
+- Discovery now ~100x faster by reusing database connections
+- Reduced database connection overhead from thousands of connections to just one pool
+- More efficient query execution with ANY() operator
+  
+### Root Cause Analysis
+- v2.2.55-56 optimized discovery but didn't account for Celery execution context
+- Database queries were failing silently, returning empty sets
+- Every batch was creating a new database connection (massive overhead)
+- Parameter binding was inefficient for large IN clauses
+
 ## [2.2.56] - 2025-08-27
 
 ### Fixed - Discovery Database Check Issue

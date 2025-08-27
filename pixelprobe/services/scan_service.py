@@ -223,24 +223,73 @@ class ScanService:
                         
                         # Instead of loading all paths into memory, we'll use batch checking
                         # This callback will be used by the discovery process
+                        # IMPORTANT: This may be called from Celery context, so we need to handle app context
+                        
+                        # Create a persistent connection for Celery context (reused across batches)
+                        celery_engine = None
+                        celery_session_maker = None
+                        
                         def check_files_exist_batch(file_paths):
                             """Check which files exist in database using batch query"""
+                            nonlocal celery_engine, celery_session_maker
+                            
                             if not file_paths:
                                 return set()
                             
                             # Query database for these specific paths
                             try:
-                                existing = db.session.query(ScanResult.file_path).filter(
-                                    ScanResult.file_path.in_(file_paths)
-                                ).all()
-                                existing_set = set(row[0] for row in existing)
+                                # Check if we're in a Flask app context
+                                from flask import has_app_context
+                                
+                                if has_app_context():
+                                    # We're in Flask context, use db.session directly
+                                    existing = db.session.query(ScanResult.file_path).filter(
+                                        ScanResult.file_path.in_(file_paths)
+                                    ).all()
+                                    existing_set = set(row[0] for row in existing)
+                                else:
+                                    # We're in Celery context, need our own connection
+                                    from sqlalchemy import create_engine, text
+                                    from sqlalchemy.orm import sessionmaker
+                                    
+                                    # Create engine once and reuse it
+                                    if celery_engine is None:
+                                        logger.info(f"Creating database engine for Celery batch checks: {self.database_uri}")
+                                        celery_engine = create_engine(
+                                            self.database_uri,
+                                            pool_size=5,
+                                            max_overflow=10,
+                                            pool_pre_ping=True,
+                                            pool_recycle=3600
+                                        )
+                                        celery_session_maker = sessionmaker(bind=celery_engine)
+                                    
+                                    session = celery_session_maker()
+                                    try:
+                                        # Use simpler query with text() to avoid needing ScanResult model in Celery
+                                        # Break into smaller chunks to avoid parameter limits
+                                        existing_set = set()
+                                        chunk_size = 500  # PostgreSQL can handle this many parameters easily
+                                        
+                                        for i in range(0, len(file_paths), chunk_size):
+                                            chunk = file_paths[i:i + chunk_size]
+                                            # Use tuple parameter binding which is more efficient
+                                            query = text("SELECT file_path FROM scan_results WHERE file_path = ANY(:paths)")
+                                            result = session.execute(query, {'paths': chunk})
+                                            existing_set.update(row[0] for row in result)
+                                    finally:
+                                        session.close()
+                                
                                 # Log the first check to verify it's working
                                 if not hasattr(check_files_exist_batch, 'logged'):
                                     check_files_exist_batch.logged = True
-                                    logger.info(f"Batch check: {len(file_paths)} paths checked, {len(existing_set)} found in DB")
+                                    logger.info(f"Batch check working: {len(file_paths)} paths checked, {len(existing_set)} found in DB")
+                                
                                 return existing_set
                             except Exception as e:
                                 logger.error(f"Database query failed in batch check: {e}")
+                                import traceback
+                                logger.error(f"Traceback: {traceback.format_exc()}")
                                 # Return empty set on error to avoid blocking discovery
                                 return set()
                         
@@ -255,6 +304,13 @@ class ScanService:
                         # Pass the batch check function instead of a huge in-memory set
                         all_files = checker.discover_media_files(valid_dirs, batch_check_callback=check_files_exist_batch, progress_callback=discovery_progress)
                         logger.info(f"File discovery completed. Found {len(all_files)} new files to add (database had {existing_count} existing files)")
+                        
+                        # Clean up Celery engine if it was created
+                        if celery_engine is not None:
+                            logger.info("Disposing of Celery database engine after discovery")
+                            celery_engine.dispose()
+                            celery_engine = None
+                            celery_session_maker = None
                         
                         # SMART PRIORITIZATION: Sort files by modification time (newest first)
                         # This ensures recently added/modified files are processed first
