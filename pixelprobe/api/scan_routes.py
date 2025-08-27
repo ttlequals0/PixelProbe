@@ -738,8 +738,9 @@ def get_scan_status():
     # Get current file being processed - ensure full path is shown
     current_file_path = state_dict.get('current_file', service_status.get('file', ''))
     # Ensure we show the full file path, not just directory
-    if current_file_path and os.path.isdir(current_file_path):
-        # If it's a directory, indicate that we're scanning within it
+    # Check if path looks like a directory (ends with common directory-only names)
+    if current_file_path and current_file_path.endswith(('/encoded-video', '/thumbs', '/library', '/uploads')):
+        # If it appears to be a directory, indicate that we're scanning within it
         current_file_path = f"{current_file_path} (scanning directory)"
     
     # Build comprehensive status response with frontend-expected fields
