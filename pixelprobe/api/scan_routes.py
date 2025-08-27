@@ -409,7 +409,7 @@ def scan_all():
     # Check if a scan is already running (thread or Celery)
     if is_scan_running():
         # Get current scan status for more informative error message
-        scan_state = ScanState.get_latest()
+        scan_state = ScanState.get_or_create()
         if scan_state and scan_state.is_active:
             phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
         else:
@@ -856,7 +856,7 @@ def scan_parallel():
     # Check if a scan is already running (thread or Celery)
     if is_scan_running():
         # Get current scan status for more informative error message
-        scan_state = ScanState.get_latest()
+        scan_state = ScanState.get_or_create()
         if scan_state and scan_state.is_active:
             phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
         else:
@@ -1266,6 +1266,58 @@ def reset_files_by_path():
         
     except Exception as e:
         logger.error(f"Error resetting files by path: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@scan_bp.route('/reset-incomplete-scans', methods=['POST'])
+@rate_limit("2 per minute")
+def reset_incomplete_scans():
+    """Reset files that were marked as completed but have incomplete scan data
+    
+    These are files that show 'N/A' for Tool Details and Scan Date in the UI
+    due to the v2.2.59 chunk query bug that prevented actual scanning.
+    """
+    try:
+        # Find files marked as completed but missing scan details
+        incomplete_files = ScanResult.query.filter(
+            ScanResult.scan_status == 'completed',
+            db.or_(
+                ScanResult.scan_date.is_(None),
+                ScanResult.tool_output.is_(None),
+                ScanResult.tool_output == '',
+                ScanResult.tool_output == 'N/A'
+            )
+        ).all()
+        
+        count = len(incomplete_files)
+        
+        if count == 0:
+            return jsonify({
+                'message': 'No incomplete scans found',
+                'reset_count': 0
+            })
+        
+        # Reset these files to pending
+        for result in incomplete_files:
+            result.scan_status = 'pending'
+            result.is_corrupted = None  # Reset to unknown
+            result.marked_as_good = False
+            result.error_message = 'Reset due to incomplete scan data (v2.2.59 fix)'
+            result.scan_output = None
+            result.tool_output = None
+            # Keep discovered_date as is
+        
+        db.session.commit()
+        
+        logger.info(f"Reset {count} files with incomplete scan data to pending status")
+        
+        return jsonify({
+            'message': f'Reset {count} files with incomplete scan data for rescanning',
+            'reset_count': count,
+            'description': 'These files were marked as completed but had no actual scan results'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting incomplete scans: {e}")
         return jsonify({'error': str(e)}), 500
 
 @scan_bp.route('/worker-status')
