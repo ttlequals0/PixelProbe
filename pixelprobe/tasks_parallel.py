@@ -136,6 +136,20 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
         else:
             # Regular file scanning
             for file_path in files_to_scan:
+                # Check if scan was cancelled
+                scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
+                if scan_state and not scan_state.is_active:
+                    logger.info(f"Chunk {chunk_id}: Scan cancelled, stopping processing")
+                    chunk.status = 'cancelled'
+                    chunk.end_time = datetime.now(timezone.utc)
+                    db.session.commit()
+                    return {
+                        'status': 'CANCELLED',
+                        'chunk_id': chunk_id,
+                        'files_processed': files_processed,
+                        'reason': 'Scan was cancelled'
+                    }
+                
                 try:
                     # Update task state
                     current_task.update_state(
@@ -652,6 +666,20 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         
         # Execute all tasks in parallel
         result = job.apply_async()
+        
+        # Save all child task IDs to chunks for cancellation support
+        if hasattr(result, 'children') and result.children:
+            logger.info(f"Saving {len(result.children)} task IDs to chunks for cancellation support")
+            try:
+                for idx, (chunk_id, child_result) in enumerate(zip(chunks_created, result.children)):
+                    chunk = ScanChunk.query.filter_by(chunk_id=chunk_id).first()
+                    if chunk and hasattr(child_result, 'id'):
+                        chunk.celery_task_id = child_result.id
+                        logger.debug(f"Saved task ID {child_result.id} to chunk {chunk_id}")
+                db.session.commit()
+                logger.info(f"Successfully saved task IDs for {len(result.children)} chunks")
+            except Exception as e:
+                logger.error(f"Error saving task IDs to chunks: {e}")
         
         # Monitor completion (this could be moved to a separate monitoring task)
         logger.info(f"Parallel scan orchestrator spawned {len(chunks_created)} tasks")

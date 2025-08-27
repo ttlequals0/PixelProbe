@@ -19,10 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Stats now dynamically build SQL queries based on actual user-configured paths
   - App no longer assumes any specific directory structure
 
+- **Fixed cancel scan to actually kill all running Celery tasks**
+  - Implemented "nuclear option" - kills ALL active and queued Celery tasks
+  - Properly cleans up all database state (chunks, scan state, stuck files)
+  - Previous version only set a flag but didn't actually terminate running tasks
+  - Now uses `control.revoke()` with `terminate=True` and `signal='SIGKILL'` for immediate termination
+  - Saves task IDs from Celery groups to chunks for proper cancellation support
+  - Adds cancellation checks in worker tasks to stop processing when scan is cancelled
+
 ### Improvements
 - Stats and monitoring now work with ANY user-configured paths
 - Empty SCAN_PATHS configuration is now properly handled
 - SQL injection protection added for dynamic path queries
+- Cancel scan now provides immediate feedback and actually stops all processing
 
 ## [2.2.63] - 2025-08-27
 
