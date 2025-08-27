@@ -1278,13 +1278,24 @@ def reset_incomplete_scans():
     """
     try:
         # Find files marked as completed but missing scan details
+        # OR files marked as healthy/not corrupted but never actually scanned
         incomplete_files = ScanResult.query.filter(
-            ScanResult.scan_status == 'completed',
             db.or_(
-                ScanResult.scan_date.is_(None),
-                ScanResult.scan_output.is_(None),
-                ScanResult.scan_output == '',
-                ScanResult.scan_output == 'N/A'
+                # Case 1: Marked as completed but no scan data
+                db.and_(
+                    ScanResult.scan_status == 'completed',
+                    db.or_(
+                        ScanResult.scan_date.is_(None),
+                        ScanResult.scan_output.is_(None),
+                        ScanResult.scan_output == '',
+                        ScanResult.scan_output == 'N/A'
+                    )
+                ),
+                # Case 2: Marked as healthy (is_corrupted=False) but no scan date
+                db.and_(
+                    ScanResult.is_corrupted == False,
+                    ScanResult.scan_date.is_(None)
+                )
             )
         ).all()
         

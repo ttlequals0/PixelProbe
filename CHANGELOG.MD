@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.62] - 2025-08-27
+
+### Enhanced Incomplete Scan Detection
+- **Fixed reset-incomplete-scans to detect falsely healthy files**
+  - Now detects files marked as `is_corrupted=False` (healthy) but with `scan_date=NULL`
+  - These files show as "HEALTHY" in UI but have "N/A" for Tool Details and Scan Date
+  - Added second detection case to find these improperly marked files
+  - Created SQL script to identify and analyze falsely healthy files
+
 ## [2.2.61] - 2025-08-27
 
 ### Critical Bug Fix
