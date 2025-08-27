@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.59] - 2025-08-27
+
+### Critical Bug Fix - Files Not Being Scanned
+- **Fixed chunk query bug that prevented ANY files from being scanned**
+  - Removed incorrect `file_path == chunk.directory_path` condition
+  - File paths (e.g., `/immich/file.jpg`) will never equal directory paths (`/immich`)
+  - This caused every chunk to find 0 files even when pending files existed
+  
+### What Was Broken
+- Phase 3 would report "1847 files to scan" but find 0 in every chunk
+- The system was processing 5,511 empty directory chunks
+- NO files were actually being checked for corruption
+
+### The Fix
+- Chunk queries now correctly use ONLY the LIKE pattern to find files
+- Files in directories will now be properly found and scanned
+- Normal scans will check NEW and PENDING files as intended
+
 ## [2.2.58] - 2025-08-27
 
 ### Scan Behavior Corrections

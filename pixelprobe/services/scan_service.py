@@ -441,8 +441,8 @@ class ScanService:
                             db.or_(*[ScanResult.file_path.like(f"{d}%") for d in valid_dirs])
                         ).count()
                     else:
-                        # Normal scan: count only NEW (pending) files that need scanning
-                        # We only scan files that haven't been scanned yet
+                        # Normal scan: count NEW and PENDING files for corruption check
+                        # This includes newly discovered files (pending status)
                         total_scan_files = db.session.query(ScanResult).filter(
                             ScanResult.scan_status == 'pending',
                             db.or_(*[ScanResult.file_path.like(f"{d}%") for d in valid_dirs])
@@ -1738,23 +1738,14 @@ class ScanService:
                 if force_rescan:
                     # Count all files in directory
                     files_count = db.session.query(ScanResult).filter(
-                        db.or_(
-                            ScanResult.file_path == chunk.directory_path,
-                            ScanResult.file_path.like(chunk_path_pattern)
-                        )
+                        ScanResult.file_path.like(chunk_path_pattern)
                     ).count()
                 else:
                     # For normal scans, only scan pending files (new/unscanned)
                     files_count = db.session.query(ScanResult).filter(
-                        db.or_(
-                            db.and_(
-                                ScanResult.file_path == chunk.directory_path,
-                                ScanResult.scan_status == 'pending'
-                            ),
-                            db.and_(
-                                ScanResult.file_path.like(chunk_path_pattern),
-                                ScanResult.scan_status == 'pending'
-                            )
+                        db.and_(
+                            ScanResult.file_path.like(chunk_path_pattern),
+                            ScanResult.scan_status == 'pending'
                         )
                     ).count()
             
@@ -1781,23 +1772,14 @@ class ScanService:
                     ).offset(batch_offset).limit(batch_size).all()
                 elif force_rescan:
                     files_batch = db.session.query(ScanResult).filter(
-                        db.or_(
-                            ScanResult.file_path == chunk.directory_path,
-                            ScanResult.file_path.like(chunk_path_pattern)
-                        )
+                        ScanResult.file_path.like(chunk_path_pattern)
                     ).offset(batch_offset).limit(batch_size).all()
                 else:
                     # For normal scans, only get pending files (new/unscanned)
                     files_batch = db.session.query(ScanResult).filter(
-                        db.or_(
-                            db.and_(
-                                ScanResult.file_path == chunk.directory_path,
-                                ScanResult.scan_status == 'pending'
-                            ),
-                            db.and_(
-                                ScanResult.file_path.like(chunk_path_pattern),
-                                ScanResult.scan_status == 'pending'
-                            )
+                        db.and_(
+                            ScanResult.file_path.like(chunk_path_pattern),
+                            ScanResult.scan_status == 'pending'
                         )
                     ).offset(batch_offset).limit(batch_size).all()
                 
