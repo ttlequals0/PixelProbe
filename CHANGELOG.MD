@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.60] - 2025-08-27
+
+### Critical Fixes
+- **Fixed AttributeError: 'ScanState' has no attribute 'get_latest'**
+  - Replaced non-existent `get_latest()` calls with `get_or_create()`
+  - This was causing 500 errors when trying to start scans
+
+### New Features - Incomplete Scan Recovery
+- **Added endpoint to reset incomplete scans** (`/api/reset-incomplete-scans`)
+  - Finds files marked as "completed" but with NULL/empty scan data
+  - These files show "N/A" for Tool Details and Scan Date in UI
+  - Resets them to "pending" status so they'll be properly scanned
+  
+- **Added command-line script** (`scripts/reset_incomplete_scans.py`)
+  - Allows resetting incomplete scans from command line
+  - Supports `--dry-run` to preview affected files
+  
+- **Added SQL queries** (`scripts/find_incomplete_scans.sql`)
+  - Direct database queries to find and fix incomplete scans
+  
+- **Documentation** (`docs/FIX_INCOMPLETE_SCANS.md`)
+  - Complete guide for fixing files affected by v2.2.59 bug
+
 ## [2.2.59] - 2025-08-27
 
 ### Scan Cancellation Fix
