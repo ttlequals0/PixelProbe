@@ -431,7 +431,7 @@ def scan_all():
         
         # If no database config, fall back to environment variable
         if not scan_dirs:
-            scan_paths_env = os.environ.get('SCAN_PATHS', '/media')
+            scan_paths_env = os.environ.get('SCAN_PATHS', '')
             scan_dirs = [path.strip() for path in scan_paths_env.split(',') if path.strip()]
             logger.info(f"Using SCAN_PATHS from environment: {scan_dirs}")
     
@@ -931,7 +931,7 @@ def scan_parallel():
         
         # If no database config, fall back to environment variable
         if not scan_dirs:
-            scan_paths_env = os.environ.get('SCAN_PATHS', '/media')
+            scan_paths_env = os.environ.get('SCAN_PATHS', '')
             scan_dirs = [path.strip() for path in scan_paths_env.split(',') if path.strip()]
             logger.info(f"Using SCAN_PATHS from environment: {scan_dirs}")
     

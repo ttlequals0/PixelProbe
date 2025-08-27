@@ -54,7 +54,7 @@ class Config:
     logger.info(f"Using PostgreSQL database: {POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}")
     
     # Application settings
-    SCAN_PATHS = os.getenv('SCAN_PATHS', '/media').split(',')
+    SCAN_PATHS = [p.strip() for p in os.getenv('SCAN_PATHS', '').split(',') if p.strip()]
     EXCLUDED_PATHS = os.getenv('EXCLUDED_PATHS', '').split(',') if os.getenv('EXCLUDED_PATHS') else []
     EXCLUDED_EXTENSIONS = os.getenv('EXCLUDED_EXTENSIONS', '.txt,.log,.md').split(',')
     

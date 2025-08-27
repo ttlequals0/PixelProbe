@@ -1742,28 +1742,19 @@ class ScanService:
                 ScanResult.scan_status == 'pending'
             ).count()
         
-        chunk_path_pattern = chunk.directory_path.rstrip(os.sep) + os.sep + '%'
+        chunk_dir = chunk.directory_path.rstrip(os.sep)
         
         if force_rescan:
-            # Count all files in directory
+            # Count all files that start with this directory path
             count = db.session.query(ScanResult).filter(
-                db.or_(
-                    ScanResult.file_path == chunk.directory_path,  # Exact match for files in root
-                    ScanResult.file_path.like(chunk_path_pattern)  # Files in subdirectories
-                )
+                ScanResult.file_path.startswith(chunk_dir)
             ).count()
         else:
             # Count only pending files
             count = db.session.query(ScanResult).filter(
-                db.or_(
-                    db.and_(
-                        ScanResult.file_path == chunk.directory_path,
-                        ScanResult.scan_status == 'pending'
-                    ),
-                    db.and_(
-                        ScanResult.file_path.like(chunk_path_pattern),
-                        ScanResult.scan_status == 'pending'
-                    )
+                db.and_(
+                    ScanResult.file_path.startswith(chunk_dir),
+                    ScanResult.scan_status == 'pending'
                 )
             ).count()
         
@@ -1787,21 +1778,20 @@ class ScanService:
                 logger.info(f"PENDING_FILES chunk: Found {files_count} pending files to scan")
             else:
                 # Query for files in this chunk's directory that need scanning
-                # Use proper path matching to avoid overlaps between chunks
-                # Ensure the path ends with a separator to avoid /path/to/dir matching /path/to/dir2
-                chunk_path_pattern = chunk.directory_path.rstrip(os.sep) + os.sep + '%'
+                # Simply match all files that start with the directory path
+                chunk_dir = chunk.directory_path.rstrip(os.sep)
                 
                 # Get count first to avoid loading all files into memory
                 if force_rescan:
-                    # Count all files in directory
+                    # Count all files that start with this directory path
                     files_count = db.session.query(ScanResult).filter(
-                        ScanResult.file_path.like(chunk_path_pattern)
+                        ScanResult.file_path.startswith(chunk_dir)
                     ).count()
                 else:
                     # For normal scans, only scan pending files (new/unscanned)
                     files_count = db.session.query(ScanResult).filter(
                         db.and_(
-                            ScanResult.file_path.like(chunk_path_pattern),
+                            ScanResult.file_path.startswith(chunk_dir),
                             ScanResult.scan_status == 'pending'
                         )
                     ).count()
@@ -1829,13 +1819,13 @@ class ScanService:
                     ).offset(batch_offset).limit(batch_size).all()
                 elif force_rescan:
                     files_batch = db.session.query(ScanResult).filter(
-                        ScanResult.file_path.like(chunk_path_pattern)
+                        ScanResult.file_path.startswith(chunk_dir)
                     ).offset(batch_offset).limit(batch_size).all()
                 else:
                     # For normal scans, only get pending files (new/unscanned)
                     files_batch = db.session.query(ScanResult).filter(
                         db.and_(
-                            ScanResult.file_path.like(chunk_path_pattern),
+                            ScanResult.file_path.startswith(chunk_dir),
                             ScanResult.scan_status == 'pending'
                         )
                     ).offset(batch_offset).limit(batch_size).all()

@@ -170,7 +170,8 @@ class MediaScheduler:
             
         try:
             with self.app.app_context():
-                scan_paths = os.environ.get('SCAN_PATHS', '/media').split(',')
+                scan_paths_env = os.environ.get('SCAN_PATHS', '')
+                scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
                 logger.info(f"Starting periodic scan of paths: {scan_paths}")
                 
                 # Filter out excluded paths
@@ -242,7 +243,8 @@ class MediaScheduler:
                 # Parse scan paths
                 scan_paths = json.loads(schedule.scan_paths) if schedule.scan_paths else []
                 if not scan_paths:
-                    scan_paths = os.environ.get('SCAN_PATHS', '/media').split(',')
+                    scan_paths_env = os.environ.get('SCAN_PATHS', '')
+                scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
                     
                 logger.info(f"Running scheduled scan '{schedule.name}' (type: {scan_type}) on paths: {scan_paths}")
                 

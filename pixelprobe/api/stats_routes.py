@@ -166,28 +166,42 @@ def get_system_info():
         monitored_paths = []
         total_filesystem_files = db_total_files  # Use DB total since all files are scanned
         
-        # Get file counts per path using a single aggregated query
-        path_counts_query = db.session.execute(
-            text("""
-                SELECT 
-                    CASE 
-                        WHEN file_path LIKE '/movies%' THEN '/movies'
-                        WHEN file_path LIKE '/tv%' THEN '/tv'
-                        WHEN file_path LIKE '/originals%' THEN '/originals'
-                        WHEN file_path LIKE '/immich%' THEN '/immich'
-                        ELSE 'other'
-                    END as base_path,
-                    COUNT(*) as file_count
-                FROM scan_results
-                GROUP BY base_path
-            """)
-        ).fetchall()
+        # Get configured scan paths from environment (no hardcoded defaults)
+        scan_paths_env = os.environ.get('SCAN_PATHS', '')
+        scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]  # Remove empty strings
         
-        # Convert to dictionary for easy lookup
-        path_counts = {row[0]: row[1] for row in path_counts_query}
-        
-        # Get configured scan paths from environment
-        scan_paths = os.environ.get('SCAN_PATHS', '/movies,/tv,/originals,/immich').split(',')
+        if not scan_paths:
+            # No scan paths configured - use empty path counts
+            path_counts = {}
+        else:
+            # Build dynamic CASE statement based on actual configured paths
+            case_statements = []
+            for path in scan_paths:
+                # Escape single quotes in path for SQL
+                escaped_path = path.replace("'", "''")
+                case_statements.append(f"WHEN file_path LIKE '{escaped_path}%' THEN '{escaped_path}'")
+            
+            # Build the query dynamically based on user's configured paths
+            if case_statements:
+                case_sql = "\n                        ".join(case_statements)
+                query = f"""
+                    SELECT 
+                        CASE 
+                            {case_sql}
+                            ELSE 'other'
+                        END as base_path,
+                        COUNT(*) as file_count
+                    FROM scan_results
+                    GROUP BY base_path
+                """
+                
+                # Get file counts per path using a single aggregated query
+                path_counts_query = db.session.execute(text(query)).fetchall()
+                
+                # Convert to dictionary for easy lookup
+                path_counts = {row[0]: row[1] for row in path_counts_query}
+            else:
+                path_counts = {}
         
         # Build monitored paths info
         for path in scan_paths:

@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.64] - 2025-08-27
+
+### Critical Fixes
+- **Fixed chunk path matching that prevented pending files from being scanned**
+  - Replaced broken `file_path.like(chunk_dir + '/%')` pattern with `file_path.startswith(chunk_dir)`
+  - The LIKE pattern with '%' requires at least one character, missing files directly in the directory
+  - Now properly finds files like `/immich/file.jpg` when chunk directory is `/immich`
+  
+- **Removed ALL hardcoded paths - app now fully respects user configuration**
+  - Removed hardcoded `/immich`, `/movies`, `/tv`, `/originals` from stats queries
+  - Removed hardcoded `/media` default from SCAN_PATHS environment variable
+  - Stats now dynamically build SQL queries based on actual user-configured paths
+  - App no longer assumes any specific directory structure
+
+### Improvements
+- Stats and monitoring now work with ANY user-configured paths
+- Empty SCAN_PATHS configuration is now properly handled
+- SQL injection protection added for dynamic path queries
+
 ## [2.2.63] - 2025-08-27
 
 ### Improved Incomplete Scan Detection
