@@ -9,10 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **ImageMagick Performance Optimization**
-  - Changed from `identify -verbose` to `identify -ping` for much faster image validation
-  - The `-ping` flag only reads image headers instead of processing entire files
-  - Dramatically reduces timeout issues on large/complex images
-  - Should eliminate most "ImageMagick identify timeout" warnings
+  - Removed unnecessary `-verbose` flag from identify command for better performance
+  - Still validates entire file structure for corruption detection
+  - Maintains full integrity checking while improving speed
+  - Timeout warnings on very large files (50GB+) are expected behavior
 
 ### Fixed
 - **Improved Scan State Synchronization for Celery Tasks**
