@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.2.51] - 2025-08-27
 
+### Hotfix
+- **Critical: Fixed scan-status endpoint UnboundLocalError**
+  - Removed os.path.isdir() call that was causing UnboundLocalError in Docker container
+  - Changed to pattern matching for known directory names (/encoded-video, /thumbs, etc.)
+  - Resolves 500 Internal Server Error on /api/scan-status endpoint
+
 ### Fixed
 - **Improved Error Messages for Failed Scan Starts**
   - 409 errors now provide detailed information about the current scan status
