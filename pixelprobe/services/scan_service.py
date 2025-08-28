@@ -38,10 +38,21 @@ class ScanService:
         
     def is_scan_running(self) -> bool:
         """Check if a scan is currently running"""
-        is_running = self.current_scan_thread is not None and self.current_scan_thread.is_alive()
-        logger.debug(f"is_scan_running check: thread exists={self.current_scan_thread is not None}, "
-                    f"is_alive={self.current_scan_thread.is_alive() if self.current_scan_thread else False}, "
-                    f"result={is_running}")
+        # Check thread-based scanning
+        thread_running = self.current_scan_thread is not None and self.current_scan_thread.is_alive()
+        
+        # Check database for active scan (covers Celery-based scans)
+        db_scan_active = False
+        try:
+            scan_state = ScanState.get_or_create()
+            db_scan_active = scan_state.is_active and scan_state.phase in ['discovering', 'adding', 'scanning']
+        except Exception as e:
+            logger.debug(f"Could not check database scan state: {e}")
+        
+        is_running = thread_running or db_scan_active
+        
+        logger.debug(f"is_scan_running check: thread_running={thread_running}, "
+                    f"db_scan_active={db_scan_active}, result={is_running}")
         return is_running
     
     def get_scan_progress(self) -> Dict:

@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Saves task IDs from Celery groups to chunks for proper cancellation support
   - Adds cancellation checks in worker tasks to stop processing when scan is cancelled
 
+- **Fixed UI not showing scan progress for Celery-based scans**
+  - `is_scan_running()` now checks database state in addition to thread state
+  - Fixes issue where scans running in Celery workers showed `is_running: false`
+  - UI now properly displays progress bar for all scan types (thread-based and Celery-based)
+
 ### Improvements
 - Stats and monitoring now work with ANY user-configured paths
 - Empty SCAN_PATHS configuration is now properly handled
