@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.65] - 2025-08-28
+
+### Critical Fix
+- **Fixed UI not showing scan progress for Celery-based scans**
+  - `is_scan_running()` now checks database state in addition to thread state
+  - Fixes issue where scans running in Celery workers showed `is_running: false`
+  - UI now properly displays progress bar for all scan types (thread-based and Celery-based)
+
 ## [2.2.64] - 2025-08-27
 
 ### Critical Fixes
@@ -26,11 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Now uses `control.revoke()` with `terminate=True` and `signal='SIGKILL'` for immediate termination
   - Saves task IDs from Celery groups to chunks for proper cancellation support
   - Adds cancellation checks in worker tasks to stop processing when scan is cancelled
-
-- **Fixed UI not showing scan progress for Celery-based scans**
-  - `is_scan_running()` now checks database state in addition to thread state
-  - Fixes issue where scans running in Celery workers showed `is_running: false`
-  - UI now properly displays progress bar for all scan types (thread-based and Celery-based)
 
 ### Improvements
 - Stats and monitoring now work with ANY user-configured paths
