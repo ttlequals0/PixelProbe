@@ -243,8 +243,19 @@ def get_scan_results():
         # Default sorting
         query = query.order_by(ScanResult.scan_date.desc())
     
-    # Paginate
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    # Paginate - handle -1 as "show all"
+    if per_page == -1:
+        # Get all results without pagination
+        all_results = query.all()
+        # Create a mock pagination object
+        class MockPagination:
+            def __init__(self, items, total):
+                self.items = items
+                self.total = total
+                self.pages = 1
+        pagination = MockPagination(all_results, len(all_results))
+    else:
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
     # Build response
     results = []

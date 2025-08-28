@@ -1868,7 +1868,7 @@ class PixelProbeApp {
             // Build query params
             const params = new URLSearchParams({
                 page: page,
-                per_page: 20,
+                per_page: 100,  // Use 100 for reports instead of 20
                 scan_type: typeFilter,
                 status: statusFilter,
                 sort_order: 'desc'

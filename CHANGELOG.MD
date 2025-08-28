@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.66] - 2025-08-28
+
+### Fixed
+- **Fixed "Show All" dropdown option only showing 20 items**
+  - Backend now properly handles `per_page=-1` to return all results
+  - UI dropdown for "Show All" now correctly displays all items instead of being limited
+  - Also increased reports per-page limit from 20 to 100 for better usability
+
 ## [2.2.65] - 2025-08-28
 
 ### Critical Fix
