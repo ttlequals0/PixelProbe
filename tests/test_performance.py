@@ -202,7 +202,7 @@ class TestPerformance:
         file_paths = [f.file_path for f in files]
         
         # Execute scan with memory monitoring
-        with patch('media_checker.PixelProbe.check_file', mock_check_file):
+        with patch('media_checker.PixelProbe.scan_file', mock_check_file):
             stats = executor.execute(file_paths, mock_check_file, parallel=True)
         
         results = performance_monitor.get_results()

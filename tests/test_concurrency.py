@@ -161,8 +161,11 @@ class TestConcurrency:
         def acquire_connection():
             try:
                 # Simulate acquiring a database connection
-                service = ScanService(app.config['SQLALCHEMY_DATABASE_URI'])
-                session = service._get_db_session()
+                from models import db
+                # Create a new session
+                session = db.session()
+                # Test if we can execute a query
+                session.execute(db.text("SELECT 1"))
                 connections.append(session)
                 time.sleep(0.5)  # Hold connection
             except Exception as e:
@@ -243,15 +246,19 @@ class TestConcurrency:
         # Verify scans didn't overlap (only one 'started' before 'completed')
         assert results.count('started') <= results.count('completed') + 1
     
-    def test_cleanup_and_scan_mutual_exclusion(self, app):
+    def test_cleanup_and_scan_mutual_exclusion(self, app, db):
         """Test that cleanup and scan operations are mutually exclusive"""
+        from models import ScanState
+        
+        # Ensure scan_state table exists
+        db.create_all()
+        
         results = {'scan': None, 'cleanup': None}
         
         def start_scan():
             with app.test_client() as client:
-                response = client.post('/api/scan', json={
-                    'directories': ['/tmp/test'],
-                    'scan_type': 'full'
+                response = client.post('/api/scan-all', json={
+                    'directories': ['/tmp/test']
                 })
                 results['scan'] = response.status_code
         
@@ -281,7 +288,8 @@ class TestConcurrency:
         
         # Initialize scan state
         scan_state = ScanState.get_or_create()
-        scan_state.start_discovering()
+        scan_state.start_scan(['/test'], force_rescan=False)
+        scan_state.phase = 'discovering'
         db.session.commit()
         
         inconsistencies = []
