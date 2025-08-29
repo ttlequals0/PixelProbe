@@ -235,8 +235,8 @@ class TestScanService:
         # Verify scan state was updated
         mock_scan_state.cancel_scan.assert_called_once()
         
-        # Clean up
-        scan_service.current_scan_thread.join()
+        # Clean up - thread is set to None after cancel
+        # No need to join since cancel_scan cleans it up
     
     def test_cancel_scan_not_running(self, scan_service):
         """Test cancel when no scan is running"""
