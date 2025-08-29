@@ -94,7 +94,21 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
             ).limit(1000).all()  # Process up to 1000 files per chunk
             
             files_to_scan = [f.file_path for f in files_in_chunk]
-            logger.info(f"Processing {len(files_to_scan)} files in chunk {chunk_id} for directory {chunk.directory_path}")
+            logger.info(f"Chunk {chunk.chunk_id}: Found {len(files_to_scan)} files to scan in {chunk.directory_path}")
+        
+        # Skip empty chunks
+        if not files_to_scan:
+            logger.info(f"Chunk {chunk_id} is empty, marking as complete")
+            chunk.is_complete = True
+            chunk.files_processed = 0
+            db.session.commit()
+            return {
+                'status': 'SKIPPED',
+                'chunk_id': chunk_id,
+                'scan_type': scan_type,
+                'files_processed': 0,
+                'reason': 'No files to scan in chunk'
+            }
         
         # Process files based on scan type
         files_processed = 0
@@ -603,12 +617,57 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         chunks_created = []
         
         # Group files by directory for better locality
+        # For efficiency, batch check which files need scanning
         files_by_dir = {}
-        for file_path in discovered_files:
-            dir_path = '/'.join(file_path.split('/')[:-1])
-            if dir_path not in files_by_dir:
-                files_by_dir[dir_path] = []
-            files_by_dir[dir_path].append(file_path)
+        
+        # Get all pending files in one query
+        if scan_type in ['full', 'file_changes']:
+            # Get existing file statuses in batches
+            batch_size = 5000
+            files_needing_scan = []
+            
+            for i in range(0, len(discovered_files), batch_size):
+                batch = discovered_files[i:i+batch_size]
+                
+                # Get existing records for this batch
+                existing_records = ScanResult.query.filter(
+                    ScanResult.file_path.in_(batch)
+                ).all()
+                
+                # Create lookup dict
+                existing_dict = {r.file_path: r for r in existing_records}
+                
+                # Check which files need scanning
+                for file_path in batch:
+                    existing = existing_dict.get(file_path)
+                    
+                    if not existing:
+                        # New file - needs to be scanned
+                        files_needing_scan.append(file_path)
+                    elif existing.scan_status == 'pending':
+                        # Pending file - needs to be scanned
+                        files_needing_scan.append(file_path)
+                    elif force_rescan and existing.scan_status == 'completed':
+                        # Force rescan requested - needs to be scanned
+                        files_needing_scan.append(file_path)
+            
+            # Group by directory
+            for file_path in files_needing_scan:
+                dir_path = '/'.join(file_path.split('/')[:-1])
+                if dir_path not in files_by_dir:
+                    files_by_dir[dir_path] = []
+                files_by_dir[dir_path].append(file_path)
+        else:
+            # For other scan types, use all discovered files
+            for file_path in discovered_files:
+                dir_path = '/'.join(file_path.split('/')[:-1])
+                if dir_path not in files_by_dir:
+                    files_by_dir[dir_path] = []
+                files_by_dir[dir_path].append(file_path)
+        
+        # Log how many files actually need scanning
+        total_files_to_scan = sum(len(files) for files in files_by_dir.values())
+        logger.info(f"Found {total_files_to_scan} files that need scanning out of {len(discovered_files)} discovered")
         
         # Create chunks
         chunk_id = 1

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.70] - 2025-08-29
+
+### Fixed
+- **Fixed incorrect "upload" showing as current file during scanning phase**
+  - The directory path was being shown instead of the actual file being scanned
+  - Now clears the current_file field when chunk processing is complete
+  - Prevents confusing messages like "Phase 3 of 3: Scanning files: current file: upload - 0 of 0 files"
+
+- **Fixed inefficient scanning of empty directories**
+  - Previously created chunks for ALL discovered directories (5529 chunks for only 16 files!)
+  - Now only creates chunks for directories that have files needing scanning
+  - Skips empty chunks immediately without processing
+  - Batch checks file statuses for better performance
+
+- **Optimized chunk creation for parallel scanning**
+  - Only includes files that actually need scanning (new, pending, or force rescan)
+  - Reduces database queries by batching file status checks
+  - Logs actual vs discovered file counts for better visibility
+  - Dramatically reduces scan time by avoiding empty directory processing
+
 ## [2.2.69] - 2025-08-29
 
 ### Fixed
