@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.71] - 2025-08-29
+
+### Fixed
+- **Fixed current_file showing directory path instead of actual file being scanned**
+  - When skipping empty chunks, now clears current_file instead of showing stale data
+  - Updates progress message to indicate skipping empty directory
+  - Prevents confusing messages showing directory paths as files
+
+- **Fixed ETA constantly showing "calculating..."**
+  - ProgressTracker now uses actual scan start time from database
+  - Prevents recreating tracker on each status check which lost timing data
+  - ETA now properly calculates based on entire phase duration
+
+- **Fixed estimated_total constantly changing during scanning phase**
+  - Removed update of estimated_total during scanning (line 1079 in scan_service.py)
+  - estimated_total is now locked after discovery phase as intended
+  - UI no longer shows confusing total file count changes
+
 ## [2.2.70] - 2025-08-29
 
 ### Fixed

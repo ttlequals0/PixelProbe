@@ -101,6 +101,16 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
             logger.info(f"Chunk {chunk_id} is empty, marking as complete")
             chunk.is_complete = True
             chunk.files_processed = 0
+            
+            # IMPORTANT: Clear the current_file in scan_state when skipping empty chunks
+            # Otherwise the UI will show stale directory paths
+            scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
+            if scan_state:
+                # Don't show directory path as current file
+                scan_state.current_file = ''
+                # Update the message to reflect we're skipping empty directories
+                scan_state.progress_message = f'Scanning: skipping empty directory {chunk.directory_path}'
+            
             db.session.commit()
             return {
                 'status': 'SKIPPED',

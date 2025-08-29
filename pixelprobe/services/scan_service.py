@@ -1076,7 +1076,8 @@ class ScanService:
             try:
                 scan_state.current_chunk_index = i + 1
                 scan_state.files_processed = total_files_scanned  # Ensure files_processed is set
-                scan_state.estimated_total = total_files_to_scan  # Update with better estimate
+                # Don't update estimated_total during scanning - it should be locked after discovery
+                # scan_state.estimated_total = total_files_to_scan  # REMOVED - causes confusing UI
                 scan_state.update_progress(total_files_scanned, total_files_to_scan, current_file='')
                 
                 # Update progress message

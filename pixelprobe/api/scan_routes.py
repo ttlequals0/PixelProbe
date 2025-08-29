@@ -603,6 +603,21 @@ def get_scan_status():
             # Generate fresh progress message with current data
             from utils import ProgressTracker
             progress_tracker = ProgressTracker('scan')
+            # Use the actual scan start time if available
+            if state_dict.get('start_time'):
+                try:
+                    start_time_str = state_dict['start_time']
+                    if isinstance(start_time_str, str):
+                        start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+                    else:
+                        start_time = start_time_str
+                    if start_time.tzinfo is None:
+                        start_time = start_time.replace(tzinfo=timezone.utc)
+                    # Set the actual scan start time
+                    import time
+                    progress_tracker.start_time = start_time.timestamp()
+                except:
+                    pass  # Use default if parsing fails
             progress_message = progress_tracker.get_progress_message(
                 'Phase 3 of 3: Scanning files',
                 current_progress,
