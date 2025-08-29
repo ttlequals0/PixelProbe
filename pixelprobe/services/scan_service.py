@@ -1058,7 +1058,8 @@ class ScanService:
                 estimated_remaining = int(avg_files_per_chunk * remaining_chunks)
                 total_files_to_scan = actual_total_discovered + estimated_remaining
             else:
-                total_files_to_scan = max(actual_total_discovered, scan_state.phase_total)
+                phase_total = getattr(scan_state, 'phase_total', 0) or 0
+                total_files_to_scan = max(actual_total_discovered, phase_total)
             
             # Now scan the chunk with updated total
             self._scan_chunk_files(chunk, checker, force_rescan, total_files_scanned, total_files_to_scan, scan_state)
