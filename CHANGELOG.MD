@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Fixed pending files counter showing 0 in UI**
-  - Removed incorrect `OR is_corrupted IS NULL` condition from stats query
-  - Now correctly counts only files with `scan_status='pending'`
-  - The old logic was incorrectly including completed files without corruption status
+  - Changed query to use `scan_status = 'pending' AND is_corrupted IS NULL`
+  - This correctly identifies files that are pending scan (not yet processed)
+  - Files are marked pending with NULL is_corrupted when discovered
 
 ## [2.2.73] - 2025-08-29
 
