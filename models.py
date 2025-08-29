@@ -4,11 +4,20 @@ import json
 import uuid
 import logging
 import os
+import pytz
 
 
 logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
+
+# Get configured timezone
+APP_TIMEZONE = os.environ.get('TZ', 'UTC')
+try:
+    tz = pytz.timezone(APP_TIMEZONE)
+except pytz.exceptions.UnknownTimeZoneError:
+    tz = pytz.UTC
+    logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
 
 # Import shared utilities after models are loaded
 # This will be imported in app.py to avoid circular imports
@@ -51,26 +60,36 @@ class ScanResult(db.Model):
     output_rotation_enabled = db.Column(db.Boolean, nullable=True)  # Per-record rotation setting
     
     def to_dict(self):
+        def convert_to_tz(dt):
+            """Convert UTC datetime to configured timezone"""
+            if dt is None:
+                return None
+            # If datetime is naive, assume it's UTC
+            if dt.tzinfo is None:
+                dt = pytz.UTC.localize(dt)
+            # Convert to configured timezone
+            return dt.astimezone(tz).isoformat()
+        
         return {
             'id': self.id,
             'file_path': self.file_path,
             'file_size': self.file_size,
             'file_type': self.file_type,
-            'creation_date': self.creation_date.isoformat() if self.creation_date else None,
+            'creation_date': convert_to_tz(self.creation_date),
             'is_corrupted': self.is_corrupted,
             'corruption_details': self.corruption_details,
-            'scan_date': self.scan_date.isoformat() if self.scan_date else None,
+            'scan_date': convert_to_tz(self.scan_date),
             'marked_as_good': self.marked_as_good,
             'scan_status': self.scan_status,
             'file_hash': self.file_hash,
-            'last_modified': self.last_modified.isoformat() if self.last_modified else None,
+            'last_modified': convert_to_tz(self.last_modified),
             'scan_tool': self.scan_tool,
             'scan_duration': self.scan_duration,
             'scan_output': self.scan_output,
             'has_warnings': self.has_warnings,
             'warning_details': self.warning_details,
             'deep_scan': self.deep_scan,
-            'discovered_date': self.discovered_date.isoformat() if self.discovered_date else None,
+            'discovered_date': convert_to_tz(self.discovered_date),
             'error_message': self.error_message,
             'media_info': self.media_info,
             'file_exists': self.file_exists
@@ -128,11 +147,21 @@ class IgnoredErrorPattern(db.Model):
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     
     def to_dict(self):
+        def convert_to_tz(dt):
+            """Convert UTC datetime to configured timezone"""
+            if dt is None:
+                return None
+            # If datetime is naive, assume it's UTC
+            if dt.tzinfo is None:
+                dt = pytz.UTC.localize(dt)
+            # Convert to configured timezone
+            return dt.astimezone(tz).isoformat()
+        
         return {
             'id': self.id,
             'pattern': self.pattern,
             'description': self.description,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'created_at': convert_to_tz(self.created_at),
             'created_date': self.created_date.isoformat() if self.created_date else None,
             'is_active': self.is_active
         }
@@ -151,11 +180,21 @@ class Exclusion(db.Model):
     )
     
     def to_dict(self):
+        def convert_to_tz(dt):
+            """Convert UTC datetime to configured timezone"""
+            if dt is None:
+                return None
+            # If datetime is naive, assume it's UTC
+            if dt.tzinfo is None:
+                dt = pytz.UTC.localize(dt)
+            # Convert to configured timezone
+            return dt.astimezone(tz).isoformat()
+        
         return {
             'id': self.id,
             'type': self.exclusion_type,
             'value': self.value,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'created_at': convert_to_tz(self.created_at),
             'is_active': self.is_active
         }
 
@@ -176,6 +215,16 @@ class ScanSchedule(db.Model):
     created_date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)  # Keep for backward compatibility
     
     def to_dict(self):
+        def convert_to_tz(dt):
+            """Convert UTC datetime to configured timezone"""
+            if dt is None:
+                return None
+            # If datetime is naive, assume it's UTC
+            if dt.tzinfo is None:
+                dt = pytz.UTC.localize(dt)
+            # Convert to configured timezone
+            return dt.astimezone(tz).isoformat()
+        
         return {
             'id': self.id,
             'name': self.name,
@@ -184,10 +233,10 @@ class ScanSchedule(db.Model):
             'scan_type': self.scan_type,
             'force_rescan': self.force_rescan,
             'is_active': self.is_active,
-            'last_run': self.last_run.isoformat() if self.last_run else None,
-            'next_run': self.next_run.isoformat() if self.next_run else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'created_date': self.created_date.isoformat() if self.created_date else None
+            'last_run': convert_to_tz(self.last_run),
+            'next_run': convert_to_tz(self.next_run),
+            'created_at': convert_to_tz(self.created_at),
+            'created_date': convert_to_tz(self.created_date)
         }
 
 class ScanConfiguration(db.Model):
@@ -206,6 +255,16 @@ class ScanConfiguration(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=True, default=lambda: datetime.now(timezone.utc))
     
     def to_dict(self):
+        def convert_to_tz(dt):
+            """Convert UTC datetime to configured timezone"""
+            if dt is None:
+                return None
+            # If datetime is naive, assume it's UTC
+            if dt.tzinfo is None:
+                dt = pytz.UTC.localize(dt)
+            # Convert to configured timezone
+            return dt.astimezone(tz).isoformat()
+        
         # Support both old and new structures
         if self.path is not None:
             # New path-based structure
@@ -213,7 +272,7 @@ class ScanConfiguration(db.Model):
                 'id': self.id,
                 'path': self.path,
                 'is_active': self.is_active,
-                'created_at': self.created_at.isoformat() if self.created_at else None
+                'created_at': convert_to_tz(self.created_at)
             }
         else:
             # Old key-value structure
@@ -222,7 +281,7 @@ class ScanConfiguration(db.Model):
                 'key': self.key,
                 'value': self.value,
                 'description': self.description,
-                'updated_date': self.updated_date.isoformat() if self.updated_date else None
+                'updated_date': convert_to_tz(self.updated_date)
             }
 
 class ScanState(db.Model):
@@ -254,6 +313,11 @@ class ScanState(db.Model):
     
     # Progress tracking
     last_update = db.Column(db.DateTime, nullable=True)  # Track last progress update for stuck scan detection
+    
+    # Scan statistics tracking
+    num_workers = db.Column(db.Integer, nullable=False, default=1)  # Number of parallel workers used
+    files_added = db.Column(db.Integer, nullable=False, default=0)  # New files added to database
+    files_updated = db.Column(db.Integer, nullable=False, default=0)  # Existing files updated
     
     # TODO: Crash recovery tracking columns will be added after migration
     # crash_count = db.Column(db.Integer, nullable=True, default=None)
@@ -505,6 +569,16 @@ class ScanChunk(db.Model):
     __table_args__ = (db.UniqueConstraint('scan_id', 'chunk_id', name='uq_scan_chunks_scan_chunk'),)
     
     def to_dict(self):
+        def convert_to_tz(dt):
+            """Convert UTC datetime to configured timezone"""
+            if dt is None:
+                return None
+            # If datetime is naive, assume it's UTC
+            if dt.tzinfo is None:
+                dt = pytz.UTC.localize(dt)
+            # Convert to configured timezone
+            return dt.astimezone(tz).isoformat()
+        
         return {
             'id': self.id,
             'scan_id': self.scan_id,
@@ -515,8 +589,8 @@ class ScanChunk(db.Model):
             'files_discovered': self.files_discovered,
             'files_added': self.files_added,
             'files_scanned': self.files_scanned,
-            'start_time': self.start_time.isoformat() if self.start_time else None,
-            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'start_time': convert_to_tz(self.start_time),
+            'end_time': convert_to_tz(self.end_time),
             'error_message': self.error_message
         }
 
@@ -561,12 +635,22 @@ class ScanReport(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     
     def to_dict(self):
+        def convert_to_tz(dt):
+            """Convert UTC datetime to configured timezone"""
+            if dt is None:
+                return None
+            # If datetime is naive, assume it's UTC
+            if dt.tzinfo is None:
+                dt = pytz.UTC.localize(dt)
+            # Convert to configured timezone
+            return dt.astimezone(tz).isoformat()
+        
         return {
             'id': self.id,
             'report_id': self.report_id,
             'scan_type': self.scan_type,
-            'start_time': self.start_time.isoformat() if self.start_time else None,
-            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'start_time': convert_to_tz(self.start_time),
+            'end_time': convert_to_tz(self.end_time),
             'duration_seconds': self.duration_seconds,
             'directories_scanned': json.loads(self.directories_scanned) if self.directories_scanned else [],
             'force_rescan': self.force_rescan,
@@ -585,5 +669,5 @@ class ScanReport(db.Model):
             'status': self.status,
             'error_message': self.error_message,
             'scan_id': self.scan_id,
-            'created_at': self.created_at.isoformat() if self.created_at else None
+            'created_at': convert_to_tz(self.created_at)
         }

@@ -27,6 +27,7 @@ class ScanService:
         self.database_uri = database_uri
         self.current_scan_thread: Optional[threading.Thread] = None
         self.scan_cancelled = False
+        self.scan_cancel_lock = threading.Lock()  # Thread safety for cancellation
         self.scan_progress = {
             'current': 0,
             'total': 0,
@@ -34,7 +35,9 @@ class ScanService:
             'status': 'idle'
         }
         self.progress_lock = threading.Lock()
-        self.chunk_size = 10000  # Files per chunk
+        # Get chunk size from environment or use default
+        import os
+        self.chunk_size = int(os.environ.get('CHUNK_SIZE', '10000'))  # Files per chunk
         
     def is_scan_running(self) -> bool:
         """Check if a scan is currently running"""
@@ -139,6 +142,7 @@ class ScanService:
         # Create a new scan state for this scan instead of reusing existing one
         scan_state = ScanState.create_new_scan()
         scan_state.start_scan(valid_dirs, force_rescan)
+        scan_state.num_workers = num_workers  # Track the number of workers used
         # Store deep_scan flag for later use in report creation
         self._deep_scan = deep_scan
         db.session.commit()
@@ -396,6 +400,9 @@ class ScanService:
                             added_count += batch_added
                             duplicate_count += batch_duplicates
                             
+                            # Update scan state with files added
+                            scan_state.files_added = added_count
+                            
                             # Update progress with error handling to prevent thread death
                             try:
                                 self.update_progress(batch_end, new_files_count, batch_files[-1] if batch_files else '', 'adding')
@@ -630,6 +637,7 @@ class ScanService:
         # Save scan state
         scan_state = ScanState.get_or_create()
         scan_state.start_scan(["selected_files"], force_rescan)
+        scan_state.num_workers = num_workers  # Track the number of workers used
         # Store deep_scan flag for later use in report creation
         self._deep_scan = deep_scan
         db.session.commit()
@@ -860,6 +868,9 @@ class ScanService:
                     scan_state.is_active = False
                     scan_state.end_time = datetime.now(timezone.utc)
                     db.session.commit()
+                    
+                    # Create scan report for resumed scan
+                    self._create_scan_report(scan_state, scan_type='resume_scan')
                     
                     self.update_progress(len(incomplete_chunks), len(incomplete_chunks), 
                                        '', 'completed')
@@ -1437,11 +1448,11 @@ class ScanService:
                 duration_seconds=duration,
                 directories_scanned=json.dumps(scan_state.directories) if scan_state.directories else None,
                 force_rescan=scan_state.force_rescan,
-                num_workers=1,  # TODO: Get from scan state
+                num_workers=scan_state.num_workers if hasattr(scan_state, 'num_workers') else 1,
                 total_files_discovered=scan_state.estimated_total,
                 files_scanned=stats.completed or 0,
-                files_added=0,  # TODO: Track new files added
-                files_updated=0,  # TODO: Track files updated
+                files_added=scan_state.files_added if hasattr(scan_state, 'files_added') else 0,
+                files_updated=scan_state.files_updated if hasattr(scan_state, 'files_updated') else 0,
                 files_corrupted=stats.corrupted or 0,
                 files_with_warnings=stats.warnings or 0,
                 files_error=stats.errors or 0,

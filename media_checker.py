@@ -220,7 +220,7 @@ class PixelProbe:
         
         # Batch for efficient database checking
         batch_to_check = []
-        BATCH_SIZE = 100
+        BATCH_SIZE = int(os.getenv('BATCH_SIZE', '100'))
         
         for directory in directories:
             if not os.path.exists(directory):
@@ -311,7 +311,7 @@ class PixelProbe:
                 
                 path_files = []
                 batch_to_check = []
-                BATCH_SIZE = 100
+                BATCH_SIZE = int(os.getenv('BATCH_SIZE', '100'))
                 
                 for file_path in files:
                     # Check global file limit across all paths

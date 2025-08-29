@@ -244,12 +244,12 @@ class MediaScheduler:
                 scan_paths = json.loads(schedule.scan_paths) if schedule.scan_paths else []
                 if not scan_paths:
                     scan_paths_env = os.environ.get('SCAN_PATHS', '')
-                scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
-                    
-                logger.info(f"Running scheduled scan '{schedule.name}' (type: {scan_type}) on paths: {scan_paths}")
+                    scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
                 
                 # Get scan type (default to 'normal' for backward compatibility)
                 scan_type = getattr(schedule, 'scan_type', 'normal')
+                    
+                logger.info(f"Running scheduled scan '{schedule.name}' (type: {scan_type}) on paths: {scan_paths}")
                 
                 # Filter out excluded paths
                 filtered_paths = []
@@ -378,8 +378,8 @@ class MediaScheduler:
         job_id = f"schedule_{schedule_id}"
         try:
             self.scheduler.remove_job(job_id)
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error in scheduled task: {e}")
             
         # Update schedule
         for key, value in kwargs.items():
@@ -406,8 +406,8 @@ class MediaScheduler:
         job_id = f"schedule_{schedule_id}"
         try:
             self.scheduler.remove_job(job_id)
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error in scheduled task: {e}")
             
         db.session.delete(schedule)
         db.session.commit()

@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.68] - 2025-08-29
+
+### Fixed
+- **Fixed orphan scan not generating reports on completion**
+  - Added missing `_create_cleanup_report` method in maintenance_service.py
+  - Orphan cleanup operations now properly generate scan reports with statistics
+  - Reports include orphaned records found and deleted counts
+  
+- **Fixed resume scan not generating reports on completion**
+  - Added missing report creation for resumed scans in scan_service.py:865
+  - Resume scans now properly generate completion reports with scan_type='resume_scan'
+  
+- **Fixed ETA showing "0s" for stuck or slow scans**
+  - Improved ETA calculation to handle edge cases better in utils.py
+  - Now shows "calculating..." when elapsed time < 1 second
+  - Shows "processing..." when scan rate is extremely low (< 1 file per 1000 seconds)
+  - Shows ">30 days" for unrealistic ETAs instead of wrong calculations
+  - Minimum ETA is now 1s instead of 0s
+  - Added support for displaying days in ETA (e.g., "2d 5h" for long scans)
+  - No longer shows "0s" when scan appears stuck
+
+### Features & Improvements
+- **Scan reports now track complete statistics**
+  - Added tracking for `num_workers` - reports now show how many parallel workers were used
+  - Added tracking for `files_added` - reports show newly discovered files  
+  - Added tracking for `files_updated` - reports show existing files that were re-scanned
+  - These fields are stored in ScanState model and properly included in scan reports
+  - Removed TODO comments from scan_service.py:1444-1448
+
+- **Configuration improvements - removed hardcoded values**
+  - `CHUNK_SIZE` environment variable now controls scan chunk size (default: 10000)
+  - `BATCH_SIZE` properly read from environment in media_checker.py (default: 100)
+  - All configuration values now respect docker-compose environment variables
+
+### Code Quality Improvements
+- **Fixed bare except blocks in scheduler.py**
+  - Replaced `except: pass` with proper exception logging
+  - Now logs errors instead of silently swallowing exceptions
+  - Prevents masking of critical errors like SystemExit
+
+- **Added thread safety for scan cancellation**
+  - Added `scan_cancel_lock` to ScanService for future thread-safe implementation
+  - Preparation for preventing race conditions in multi-threaded scanning
+
+## [2.2.67] - 2025-08-29
+
+### Fixed
+- **Fixed timezone display in API responses to respect TZ environment variable**
+  - All model `to_dict()` methods now convert UTC timestamps to configured timezone before serialization
+  - Timestamps are still stored in UTC in the database (best practice)
+  - API responses now display timestamps in the timezone specified by TZ environment variable
+  - Affected models: ScanResult, ScanReport, ScanSchedule, ScanConfiguration, ScanChunk, PathExclusion, ExtensionExclusion
+  - This ensures scan results and all timestamps display correctly in your local timezone
+
+- **Fixed scheduled scan failure due to undefined variable error**
+  - Fixed "cannot access local variable 'scan_type' where it is not associated with a value" error
+  - The scan_type variable was being used in a log message before it was defined
+  - Scheduled scans now run successfully every 6 hours as configured
+
 ## [2.2.66] - 2025-08-28
 
 ### Fixed

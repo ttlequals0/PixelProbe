@@ -46,29 +46,53 @@ class ProgressTracker:
     
     def estimate_time_remaining(self, files_processed, total_files):
         """Estimate time remaining based on current progress"""
-        if files_processed == 0:
+        if files_processed == 0 or total_files == 0:
             return None
             
         elapsed = time.time() - self.start_time
+        
+        # Minimum elapsed time to avoid division issues
+        if elapsed < 1:
+            return "calculating..."
+            
         rate = files_processed / elapsed
         remaining_files = total_files - files_processed
         
-        if rate > 0:
+        # If no files remaining, we're done
+        if remaining_files <= 0:
+            return "completing..."
+        
+        # If rate is extremely low (very slow scan), return a special message
+        if rate < 0.001:  # Less than 1 file per 1000 seconds
+            return "processing..."
+        elif rate > 0:
             remaining_seconds = remaining_files / rate
+            # Cap at 30 days to avoid unrealistic ETAs
+            if remaining_seconds > 2592000:  # 30 days
+                return ">30 days"
             return self.format_time(remaining_seconds)
         return None
     
     @staticmethod
     def format_time(seconds):
         """Format seconds into human-readable time"""
-        if seconds < 60:
-            return f"{int(seconds)}s"
+        # Handle invalid or very small values
+        if seconds <= 0:
+            return "calculating..."
+        elif seconds < 60:
+            # Don't show 0s, minimum 1s
+            return f"{max(1, int(seconds))}s"
         elif seconds < 3600:
             return f"{int(seconds / 60)}m {int(seconds % 60)}s"
-        else:
+        elif seconds < 86400:  # Less than a day
             hours = int(seconds / 3600)
             minutes = int((seconds % 3600) / 60)
             return f"{hours}h {minutes}m"
+        else:
+            # For very long ETAs, show days
+            days = int(seconds / 86400)
+            hours = int((seconds % 86400) / 3600)
+            return f"{days}d {hours}h"
     
     def get_progress_message(self, phase_name, files_processed=0, total_files=0, current_file=None):
         """Generate consistent progress messages"""
