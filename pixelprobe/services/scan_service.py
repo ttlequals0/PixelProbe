@@ -161,7 +161,7 @@ class ScanService:
             with app.app_context():
                 try:
                     # Get fresh ScanState object in worker thread to avoid detached instance
-                    scan_state = db.session.get(ScanState, scan_state_id)
+                    scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
                     if not scan_state:
                         logger.error(f"Could not find scan state with ID {scan_state_id}")
                         return

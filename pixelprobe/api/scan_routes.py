@@ -579,7 +579,8 @@ def get_scan_status():
     if current_phase == 'discovering':
         phase_number = 1
         # Use the actual progress message from database if available
-        progress_message = state_dict.get('progress_message', "Discovering files...")
+        db_progress_msg = state_dict.get('progress_message')
+        progress_message = db_progress_msg if db_progress_msg else "Phase 1 of 3: Discovering files..."
         # For discovery, we don't know total files yet, so show indeterminate progress
         phase_current = 0
         phase_total = 0  # Will show base phase progress (0-33%)
@@ -587,7 +588,8 @@ def get_scan_status():
     elif current_phase == 'adding':
         phase_number = 2  
         # Use the actual progress message from database if available
-        progress_message = state_dict.get('progress_message', "Adding new files to database...")
+        db_progress_msg = state_dict.get('progress_message')
+        progress_message = db_progress_msg if db_progress_msg else f"Phase 2 of 3: Adding files to database - {current_progress} of {total_progress:,} files"
         # Use current/total from database for adding phase
         phase_current = current_progress
         phase_total = total_progress

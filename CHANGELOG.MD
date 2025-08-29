@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.72] - 2025-08-29
+
+### Fixed
+- **Fixed NotImplementedError in Celery worker preventing scans from starting**
+  - Replaced `db.session.get(ScanState, id)` with `db.session.query(ScanState).filter_by(id=id).first()`
+  - SQLAlchemy session.get() method not properly implemented in Flask-SQLAlchemy context
+  - This was causing all scans to fail immediately with NotImplementedError
+
+- **Fixed UI showing "None" instead of progress messages**
+  - Progress message was showing literal string "None" when database value was null
+  - Now properly shows default messages like "Phase 1 of 3: Discovering files..." 
+  - Fixed for all phases: discovering, adding, and scanning
+
 ## [2.2.71] - 2025-08-29
 
 ### Fixed
