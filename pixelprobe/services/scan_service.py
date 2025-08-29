@@ -142,7 +142,9 @@ class ScanService:
         # Create a new scan state for this scan instead of reusing existing one
         scan_state = ScanState.create_new_scan()
         scan_state.start_scan(valid_dirs, force_rescan)
-        scan_state.num_workers = num_workers  # Track the number of workers used
+        # Safely set num_workers if column exists
+        if hasattr(scan_state, 'num_workers'):
+            scan_state.num_workers = num_workers  # Track the number of workers used
         # Store deep_scan flag for later use in report creation
         self._deep_scan = deep_scan
         db.session.commit()
@@ -401,7 +403,9 @@ class ScanService:
                             duplicate_count += batch_duplicates
                             
                             # Update scan state with files added
-                            scan_state.files_added = added_count
+                            # Safely set files_added if column exists
+                            if hasattr(scan_state, 'files_added'):
+                                scan_state.files_added = added_count
                             
                             # Update progress with error handling to prevent thread death
                             try:
@@ -637,7 +641,9 @@ class ScanService:
         # Save scan state
         scan_state = ScanState.get_or_create()
         scan_state.start_scan(["selected_files"], force_rescan)
-        scan_state.num_workers = num_workers  # Track the number of workers used
+        # Safely set num_workers if column exists
+        if hasattr(scan_state, 'num_workers'):
+            scan_state.num_workers = num_workers  # Track the number of workers used
         # Store deep_scan flag for later use in report creation
         self._deep_scan = deep_scan
         db.session.commit()

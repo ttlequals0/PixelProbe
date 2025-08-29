@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.69] - 2025-08-29
+
+### Fixed
+- **CRITICAL**: Fixed database migration issues where new columns (num_workers, files_added, files_updated) were missing in production
+  - Added automatic database migration on app startup to add missing columns safely
+  - Made all code handle missing columns gracefully with hasattr() checks  
+  - Fixed ScanReport.to_dict() to use getattr() for backward compatibility
+  - Production deployments will now automatically add missing columns
+
+### Added
+- Database migration script in migrations/add_scan_tracking_columns.py
+- Automatic migration logic in app.py create_tables() function
+- Safe column access throughout scan_service.py with hasattr() checks
+
 ## [2.2.68] - 2025-08-29
 
 ### Fixed

@@ -272,7 +272,7 @@ def create_tables():
     with app.app_context():
         try:
             # Use inspector to check existing tables
-            from sqlalchemy import inspect, exc
+            from sqlalchemy import inspect, exc, text
             
             try:
                 inspector = inspect(db.engine)
@@ -290,6 +290,44 @@ def create_tables():
                                 logger.error(f"Error creating table {table_name}: {str(e)}")
                 
                 logger.info("Database tables verified successfully")
+                
+                # Run migrations for v2.2.68 - add tracking columns if they don't exist
+                if 'scan_state' in existing_tables:
+                    try:
+                        # Check if new columns exist
+                        columns = [col['name'] for col in inspector.get_columns('scan_state')]
+                        
+                        # Add missing columns with safe migration
+                        with db.engine.connect() as conn:
+                            if 'num_workers' not in columns:
+                                try:
+                                    conn.execute(text("ALTER TABLE scan_state ADD COLUMN num_workers INTEGER DEFAULT 1"))
+                                    conn.commit()
+                                    logger.info("Added num_workers column to scan_state table")
+                                except exc.OperationalError as e:
+                                    if "already exists" not in str(e).lower():
+                                        logger.warning(f"Could not add num_workers column: {e}")
+                            
+                            if 'files_added' not in columns:
+                                try:
+                                    conn.execute(text("ALTER TABLE scan_state ADD COLUMN files_added INTEGER DEFAULT 0"))
+                                    conn.commit()
+                                    logger.info("Added files_added column to scan_state table")
+                                except exc.OperationalError as e:
+                                    if "already exists" not in str(e).lower():
+                                        logger.warning(f"Could not add files_added column: {e}")
+                            
+                            if 'files_updated' not in columns:
+                                try:
+                                    conn.execute(text("ALTER TABLE scan_state ADD COLUMN files_updated INTEGER DEFAULT 0"))
+                                    conn.commit()
+                                    logger.info("Added files_updated column to scan_state table")
+                                except exc.OperationalError as e:
+                                    if "already exists" not in str(e).lower():
+                                        logger.warning(f"Could not add files_updated column: {e}")
+                                        
+                    except Exception as e:
+                        logger.warning(f"Migration check failed (non-critical): {e}")
                 
             except exc.OperationalError as e:
                 # This might happen if the database is locked or another worker created tables
