@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.73] - 2025-08-29
+
+### Fixed
+- **CRITICAL: Fixed chunk creation creating 5,530 chunks for only 581 pending files**
+  - Simplified logic to query pending files directly from database
+  - No longer iterates through all discovered files then filters
+  - Now only creates chunks for files that actually need scanning
+  - This was a regression of the fix from v2.2.70
+
+- **Fixed scanning getting stuck processing empty directories**
+  - Only creates chunks for directories that have pending files
+  - Dramatically reduces scan time by avoiding empty chunk processing
+
+### Changed
+- **Simplified pending file detection**
+  - Direct database query for `scan_status='pending'` files
+  - No need to check every discovered file against database
+  - Much more efficient and clear logic
+
 ## [2.2.72] - 2025-08-29
 
 ### Fixed
