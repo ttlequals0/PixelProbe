@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.78] - 2025-08-30
+
+### Fixed
+- **Fixed System Stats modal error with avg_days_since_scan**
+  - API returns avg_days_since_scan as a string, but JavaScript was expecting a number
+  - Now properly converts string to float before calling toFixed()
+  - System Stats modal now displays correctly
+
 ## [2.2.77] - 2025-08-30
 
 ### Fixed
@@ -15,8 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Prevents "Invalid Date" errors with better error handling
 
 ### Note
-- System Stats modal display code was already correct
-- If "Failed to load system info" appears, clear browser cache as it may have old JavaScript cached
+- Added debugging to help identify System Stats modal issues
 
 ## [2.2.76] - 2025-08-30
 

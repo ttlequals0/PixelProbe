@@ -1694,7 +1694,7 @@ class PixelProbeApp {
             html += '<h4>Scan Performance</h4>';
             html += '<div class="stats-section">';
             html += `<p>Total Scans: ${perf.total_scans?.toLocaleString() || 0}</p>`;
-            html += `<p>Average Days Since Scan: ${perf.avg_days_since_scan?.toFixed(1) || 0} days</p>`;
+            html += `<p>Average Days Since Scan: ${perf.avg_days_since_scan ? parseFloat(perf.avg_days_since_scan).toFixed(1) : 0} days</p>`;
             if (perf.newest_scan) {
                 html += `<p>Last Scan: ${new Date(perf.newest_scan).toLocaleString()}</p>`;
             }
