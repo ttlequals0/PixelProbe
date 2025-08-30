@@ -5,9 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.76] - 2025-08-29
+## [2.2.77] - 2025-08-30
 
 ### Fixed
+- **Enhanced timezone display handling**
+  - Improved date formatting with validity checking
+  - Uses browser's locale setting for better international support
+  - Ensures local timezone is always used for display
+  - Prevents "Invalid Date" errors with better error handling
+
+### Note
+- System Stats modal display code was already correct
+- If "Failed to load system info" appears, clear browser cache as it may have old JavaScript cached
+
+## [2.2.76] - 2025-08-30
+
+### Fixed  
 - **Fixed timezone display issue - always show times in user's local timezone**
   - Removed UTC timezone forcing in formatDate function
   - Simplified date formatting to use browser's default locale settings

@@ -1251,19 +1251,25 @@ class TableManager {
         if (!dateString) return 'N/A';
         const date = new Date(dateString);
         
+        // Check if date is valid
+        if (isNaN(date.getTime())) return 'Invalid Date';
+        
         // Always display in the user's local timezone
+        // The Date object automatically converts to local time when displaying
         const options = {
             year: 'numeric',
-            month: 'short',
+            month: 'short', 
             day: 'numeric',
             hour: '2-digit',
             minute: '2-digit',
             second: '2-digit',
             hour12: false
-            // Don't set timeZone - this will use the browser's local timezone
+            // Explicitly don't set timeZone to ensure local time is used
         };
         
-        return date.toLocaleString('en-US', options);
+        // Use the browser's default locale or fallback to en-US
+        const locale = navigator.language || 'en-US';
+        return date.toLocaleString(locale, options);
     }
 
     escapeHtml(text) {
