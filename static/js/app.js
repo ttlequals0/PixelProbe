@@ -1647,6 +1647,7 @@ class PixelProbeApp {
             const info = await this.api.getSystemInfo();
             this.showSystemStatsModal(info);
         } catch (error) {
+            console.error('System info error:', error);
             this.showNotification('Failed to load system info', 'error');
         }
     }
