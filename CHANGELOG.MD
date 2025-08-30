@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.76] - 2025-08-29
+
+### Fixed
+- **Fixed timezone display issue - always show times in user's local timezone**
+  - Removed UTC timezone forcing in formatDate function
+  - Simplified date formatting to use browser's default locale settings
+  - Times now display correctly in user's local timezone instead of UTC
+
+- **Fixed empty details column in PDF scan reports**
+  - Details were only shown for corrupted files, now shows for all files
+  - Includes corruption details, warnings, errors, and scan output excerpts
+  - Healthy files now show relevant scan output information (duration, video/audio info)
+  - Both export_scan_report_pdf and generate_pdf_report functions updated
+
+- **Fixed JSON export missing scan results - now includes all file details**
+  - JSON export was only showing report metadata, not the actual scan results
+  - Now includes complete scan_results array with all scanned files
+  - Each file includes: path, status, size, type, tool, corruption/warning/error details
+  - Matches the comprehensive information shown in PDF reports
+  - Export metadata version updated to 2.0 to indicate new format
+
 ## [2.2.75] - 2025-08-29
 
 ### Fixed

@@ -1251,8 +1251,7 @@ class TableManager {
         if (!dateString) return 'N/A';
         const date = new Date(dateString);
         
-        // The backend now sends dates in the configured timezone
-        // Display them as-is without converting to browser's local time
+        // Always display in the user's local timezone
         const options = {
             year: 'numeric',
             month: 'short',
@@ -1261,16 +1260,8 @@ class TableManager {
             minute: '2-digit',
             second: '2-digit',
             hour12: false
+            // Don't set timeZone - this will use the browser's local timezone
         };
-        
-        // Parse the ISO string to get timezone offset
-        const match = dateString.match(/([+-]\d{2}:\d{2}|Z)$/);
-        if (match) {
-            const offset = match[0];
-            if (offset === 'Z') {
-                options.timeZone = 'UTC';
-            }
-        }
         
         return date.toLocaleString('en-US', options);
     }

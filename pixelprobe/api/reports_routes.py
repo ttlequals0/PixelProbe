@@ -152,7 +152,7 @@ def get_scan_report(report_id):
 
 @reports_bp.route('/scan-reports/<report_id>/export')
 def export_scan_report(report_id):
-    """Export scan report as JSON"""
+    """Export scan report as JSON with full scan results"""
     report = ScanReport.query.filter_by(report_id=report_id).first()
     if not report:
         return jsonify({'error': 'Report not found'}), 404
@@ -164,15 +164,58 @@ def export_scan_report(report_id):
     report_dict['end_time'] = convert_to_timezone(report.end_time)
     report_dict['created_at'] = convert_to_timezone(report.created_at)
     
+    # Add scan results - same as PDF report
+    from models import ScanResult
+    scanned_files = ScanResult.query.filter(
+        ScanResult.scan_date >= report.start_time,
+        ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
+    ).order_by(ScanResult.file_path).all()
+    
+    # Include detailed file results
+    file_results = []
+    for file in scanned_files:
+        file_data = {
+            'file_path': file.file_path,
+            'status': 'corrupted' if file.is_corrupted and not file.marked_as_good else ('warning' if file.has_warnings and not file.marked_as_good else 'healthy'),
+            'file_size': file.file_size,
+            'file_type': file.file_type,
+            'scan_tool': file.scan_tool,
+            'scan_date': convert_to_timezone(file.scan_date) if file.scan_date else None,
+            'is_corrupted': file.is_corrupted,
+            'has_warnings': file.has_warnings,
+            'marked_as_good': file.marked_as_good,
+            'corruption_details': file.corruption_details,
+            'warning_details': file.warning_details,
+            'error_message': file.error_message,
+            'scan_duration': file.scan_duration,
+            'file_hash': file.file_hash,
+            'last_modified': convert_to_timezone(file.last_modified) if file.last_modified else None
+        }
+        
+        # Include scan output summary if available
+        if file.scan_output and not file.is_corrupted:
+            # Extract meaningful info from scan output
+            output_lines = (file.scan_output or '').split('\n')
+            for line in output_lines[:5]:
+                if 'Duration:' in line or 'Video:' in line or 'Audio:' in line:
+                    file_data['scan_output_summary'] = line.strip()
+                    break
+        
+        file_results.append(file_data)
+    
+    report_dict['scan_results'] = file_results
+    report_dict['total_files_in_report'] = len(file_results)
+    
     # Add metadata
     report_dict['export_metadata'] = {
         'exported_at': convert_to_timezone(datetime.now(timezone.utc)),
         'export_format': 'json',
-        'version': '1.0'
+        'version': '2.0',
+        'includes_scan_results': True
     }
     
     # Create JSON file
-    json_data = json.dumps(report_dict, indent=2)
+    json_data = json.dumps(report_dict, indent=2, default=str)  # default=str handles any non-serializable types
     
     # Create response
     response = make_response(json_data)
@@ -590,14 +633,22 @@ def export_scan_report_pdf(report_id):
                     scan_tool = file.scan_tool or 'N/A'
                     scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
                     
-                    # Combine details from various fields
+                    # Combine details from various fields - show all available information
                     details = []
-                    if file.is_corrupted and file.corruption_details:
+                    if file.corruption_details:
                         details.append(file.corruption_details)
-                    elif file.has_warnings and file.warning_details:
+                    if file.warning_details:
                         details.append(file.warning_details)
-                    elif file.error_message:
+                    if file.error_message:
                         details.append(file.error_message)
+                    # If no specific details but file is healthy, add a brief scan output excerpt
+                    if not details and file.scan_output and not file.is_corrupted:
+                        # Extract meaningful info from scan output
+                        output_lines = (file.scan_output or '').split('\n')
+                        for line in output_lines[:3]:  # Check first 3 lines
+                            if 'Duration:' in line or 'Video:' in line or 'Audio:' in line:
+                                details.append(line.strip()[:50])
+                                break
                     details_text = ' '.join(details)[:100] + '...' if len(' '.join(details)) > 100 else ' '.join(details) if details else ''
                     
                     # Wrap file path in Paragraph for text wrapping
