@@ -326,6 +326,74 @@
         width: calc(100% - 2rem);
     }
     
+    /* System Stats Modal mobile */
+    #system-stats-modal .modal-content {
+        max-width: calc(100% - 2rem);
+        width: calc(100% - 2rem);
+    }
+    
+    .stats-columns {
+        display: block;
+    }
+    
+    .stats-column {
+        width: 100%;
+        margin-bottom: 1rem;
+    }
+    
+    /* Scan Reports Modal mobile */
+    #scan-reports-modal .modal-content {
+        max-width: 100%;
+        width: 100%;
+        margin: 0;
+        height: 100vh;
+        border-radius: 0;
+    }
+    
+    #scan-reports-modal .modal-body {
+        overflow-x: auto;
+        padding: 1rem;
+    }
+    
+    /* Make reports table scrollable on mobile */
+    .scan-reports-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    #scan-reports-table {
+        min-width: 600px; /* Force horizontal scroll rather than squashing */
+    }
+    
+    /* Alternatively, stack the table on mobile */
+    @media (max-width: 600px) {
+        #scan-reports-table thead {
+            display: none;
+        }
+        
+        #scan-reports-table tbody tr {
+            display: block;
+            margin-bottom: 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 0.5rem;
+        }
+        
+        #scan-reports-table tbody td {
+            display: block;
+            text-align: left;
+            padding: 0.25rem 0.5rem;
+            border: none;
+        }
+        
+        #scan-reports-table tbody td:before {
+            content: attr(data-label);
+            font-weight: bold;
+            display: inline-block;
+            width: 120px;
+        }
+    }
+    
     .modal-header {
         padding: 1rem;
     }

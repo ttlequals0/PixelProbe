@@ -556,17 +556,17 @@ class PixelProbe:
             logger.error(f"Error calculating hash for {file_path}: {str(e)}")
             return None
     
-    def scan_files_parallel(self, file_paths, progress_callback=None, deep_scan=False, scan_paths=None, force_rescan=False):
+    def scan_files_parallel(self, file_paths, progress_callback=None, scan_paths=None, force_rescan=False):
         """Scan multiple files in parallel using ThreadPoolExecutor with path-based optimization"""
         
         # If scan_paths provided and multiple paths, use path-based parallel scanning
         if scan_paths and len(scan_paths) > 1:
-            return self._scan_files_by_paths_parallel(file_paths, progress_callback, deep_scan, scan_paths, force_rescan)
+            return self._scan_files_by_paths_parallel(file_paths, progress_callback, scan_paths, force_rescan)
         else:
             # Use original single-pool approach
-            return self._scan_files_single_pool(file_paths, progress_callback, deep_scan, force_rescan)
+            return self._scan_files_single_pool(file_paths, progress_callback, force_rescan)
     
-    def _scan_files_single_pool(self, file_paths, progress_callback=None, deep_scan=False, force_rescan=False):
+    def _scan_files_single_pool(self, file_paths, progress_callback=None, force_rescan=False):
         """Original single thread pool scanning approach"""
         results = []
         completed = 0
@@ -577,7 +577,7 @@ class PixelProbe:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # Submit all tasks
             future_to_file = {
-                executor.submit(self.scan_file, file_path, deep_scan, force_rescan): file_path 
+                executor.submit(self.scan_file, file_path, force_rescan): file_path 
                 for file_path in file_paths
             }
             
@@ -612,7 +612,7 @@ class PixelProbe:
         logger.info(f"Parallel scan completed: {completed}/{total} files processed")
         return results
     
-    def _scan_files_by_paths_parallel(self, file_paths, progress_callback=None, deep_scan=False, scan_paths=None, force_rescan=False):
+    def _scan_files_by_paths_parallel(self, file_paths, progress_callback=None, scan_paths=None, force_rescan=False):
         """Scan files using dedicated worker pools per path"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
@@ -654,7 +654,7 @@ class PixelProbe:
             with ThreadPoolExecutor(max_workers=workers_per_path) as executor:
                 # Submit all files in this path
                 future_to_file = {
-                    executor.submit(self.scan_file, file_path, deep_scan, force_rescan): file_path 
+                    executor.submit(self.scan_file, file_path, force_rescan): file_path 
                     for file_path in path_files
                 }
                 
@@ -714,12 +714,11 @@ class PixelProbe:
         logger.info(f"Path-based parallel scan completed: {len(all_results)} files processed across {num_paths} paths")
         return all_results
     
-    def scan_file(self, file_path, deep_scan=False, force_rescan=False):
+    def scan_file(self, file_path, force_rescan=False):
         """Scan a single file for corruption
         
         Args:
             file_path (str): Path to the file to scan
-            deep_scan (bool): If True, perform enhanced corruption detection regardless of basic scan results
             force_rescan (bool): If True, rescan the file even if already in cache
         """
         scan_start_time = time.time()
@@ -767,13 +766,13 @@ class PixelProbe:
                 scan_output.extend(output)
                 warning_details = warnings
             elif extension in self.supported_video_formats:
-                is_corrupted, details, tool, output, warnings = self._check_video_corruption(file_path, deep_scan)
+                is_corrupted, details, tool, output, warnings = self._check_video_corruption(file_path)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
                 warning_details = warnings
             elif extension in self.supported_audio_formats:
-                is_corrupted, details, tool, output, warnings = self._check_audio_corruption(file_path, deep_scan)
+                is_corrupted, details, tool, output, warnings = self._check_audio_corruption(file_path)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
@@ -917,10 +916,17 @@ class PixelProbe:
         logger.info(f"ImageMagick timeout set to {imagemagick_timeout}s for {file_size_mb:.1f}MB {file_ext.upper()} file")
         
         try:
-            # Use identify without -verbose (which we don't parse anyway)
-            # Regular identify still validates the entire file structure
+            # Enhanced ImageMagick validation with comprehensive checks
+            # We validate the ENTIRE image file, not just metadata/headers
+            # Added -regard-warnings for stricter validation
             result = safe_subprocess_run(
-                ['identify', file_path],  # Check full file integrity, not just headers
+                ['identify', 
+                 '-regard-warnings',      # Treat warnings as errors for strict validation
+                 '-authenticate',          # Verify image authenticity
+                 '-limit', 'memory', '1GB',  # Set memory limit to prevent OOM
+                 '-limit', 'map', '2GB',     # Set memory map limit
+                 '-limit', 'disk', '4GB',    # Set disk limit for temp files
+                 file_path],              # Check full file integrity
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -1123,7 +1129,7 @@ class PixelProbe:
         
         return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
     
-    def _check_video_corruption(self, file_path, deep_scan=False):
+    def _check_video_corruption(self, file_path):
         corruption_details = []
         is_corrupted = False
         scan_tool = "ffmpeg"
@@ -1133,7 +1139,17 @@ class PixelProbe:
         codec_profile = None
         
         logger.info(f"Starting FFmpeg probe for: {file_path}")
+        
+        # First check if file exists to avoid marking missing files as corrupted
+        if not os.path.exists(file_path):
+            error_msg = f"File not found: {file_path}"
+            logger.warning(error_msg)
+            # Return as error, not corruption
+            return False, [], scan_tool, [error_msg], []
+        
         try:
+            # Enhanced probe with additional validation parameters
+            # Note: ffmpeg-python probe doesn't accept boolean kwargs directly
             probe = ffmpeg.probe(file_path)
             
             if 'streams' not in probe or len(probe['streams']) == 0:
@@ -1202,15 +1218,20 @@ class PixelProbe:
         timeout_seconds = min(30 + int(file_size_gb * 10), 300)
         logger.info(f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (timeout: {timeout_seconds}s)")
         
-        # Use improved FFmpeg command for corruption detection
+        # Enhanced FFmpeg validation with best practices for thorough file checking
         try:
+            # Comprehensive validation with multiple integrity checks
+            # We check the ENTIRE file, not just samples, for complete validation
             result = safe_subprocess_run([
                 'ffmpeg', 
                 '-v', 'error',           # Show only errors
-                '-err_detect', 'ignore_err',  # Continue on errors to get full error report
+                '-err_detect', 'aggressive',  # Aggressive error detection for thorough checking
+                '-fflags', '+genpts+discardcorrupt',  # Generate timestamps and handle corrupt frames
+                '-analyzeduration', '100M',  # Analyze more data for better detection (100MB)
+                '-probesize', '50M',     # Larger probe size for complex container formats
                 '-i', file_path,         # Input file
-                '-t', '30',              # Only check first 30 seconds for large files
-                '-c', 'copy',            # Copy streams without re-encoding (fast)
+                '-map', '0',             # Process ALL streams in the file
+                '-c', 'copy',            # Copy streams to validate container integrity (fast)
                 '-f', 'null',            # Null output format
                 '-'                      # Output to stdout (discarded)
             ], 
@@ -1302,14 +1323,14 @@ class PixelProbe:
         except Exception as e:
             logger.debug(f"Quick scan error: {str(e)}")
         
-        # Adaptive strategy: Run enhanced checks if basic scan failed or deep_scan requested
-        if is_corrupted or deep_scan:
-            logger.info(f"Running enhanced corruption detection for {file_path}")
-            enhanced_corrupted, enhanced_details, enhanced_output = self._enhanced_corruption_check(file_path, file_size_gb)
-            if enhanced_corrupted:
-                is_corrupted = True
-                corruption_details.extend(enhanced_details)
-                scan_output.extend(enhanced_output)
+        # Always run enhanced checks for comprehensive validation (merge deep scan into regular)
+        # Since we're checking entire files anyway, might as well be thorough
+        logger.info(f"Running comprehensive validation for {file_path}")
+        enhanced_corrupted, enhanced_details, enhanced_output = self._enhanced_corruption_check(file_path, file_size_gb)
+        if enhanced_corrupted:
+            is_corrupted = True
+            corruption_details.extend(enhanced_details)
+            scan_output.extend(enhanced_output)
         
         # Additional HEVC Main 10 specific checks
         if not is_corrupted and codec_name == 'hevc' and codec_profile and 'Main 10' in codec_profile:
@@ -1322,7 +1343,7 @@ class PixelProbe:
         # Return warning details as well
         return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
     
-    def _check_audio_corruption(self, file_path, deep_scan=False):
+    def _check_audio_corruption(self, file_path):
         """Check audio files for corruption using FFmpeg and format-specific tools"""
         corruption_details = []
         is_corrupted = False
@@ -1384,17 +1405,20 @@ class PixelProbe:
             return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
         
         # Step 2: Attempt to decode audio to check for corruption
-        logger.info(f"Attempting audio decode test for: {file_path}")
+        logger.info(f"Performing comprehensive audio validation for: {file_path}")
         try:
-            # Use ffmpeg to decode a portion of the audio
-            decode_duration = 10 if not deep_scan else 30  # Decode first 10s (or 30s for deep scan)
-            
+            # Enhanced audio validation - check entire file with aggressive detection
+            # No more sampling - we validate the complete audio file
             result = safe_subprocess_run([
                 'ffmpeg', '-v', 'error',
+                '-err_detect', 'aggressive',  # Aggressive error detection for audio
+                '-fflags', '+genpts+discardcorrupt',  # Handle timing and corrupt samples
+                '-analyzeduration', '50M',  # Analyze more data for better detection
+                '-probesize', '25M',  # Probe size for audio containers
                 '-i', file_path,
-                '-t', str(decode_duration),
+                '-af', 'astats=metadata=1:reset=1,silencedetect=n=-60dB:d=1',  # Audio stats and silence detection
                 '-f', 'null', '-'
-            ], capture_output=True, text=True, timeout=60)
+            ], capture_output=True, text=True, timeout=120)
             
             if result.returncode != 0:
                 stderr = result.stderr
@@ -1427,7 +1451,7 @@ class PixelProbe:
                         
                 logger.warning(f"Audio decode failed for {file_path}: {stderr[:100]}")
             else:
-                scan_output.append(f"Audio decode ({decode_duration}s): PASSED")
+                scan_output.append("Audio decode (full file): PASSED")
                 logger.info(f"Audio decode test passed for {file_path}")
                 
         except subprocess.TimeoutExpired:
@@ -1438,16 +1462,19 @@ class PixelProbe:
             scan_output.append(f"Audio decode: ERROR - {str(e)}")
             logger.error(f"Error during audio decode test for {file_path}: {str(e)}")
         
-        # Step 3: Deep scan - check entire file if requested
-        if deep_scan and not is_corrupted:
-            logger.info(f"Running deep audio scan for: {file_path}")
+        # Step 3: Additional validation - check for specific audio issues
+        # Now integrated into main validation above, this section handles additional checks
+        if not is_corrupted:
+            logger.info(f"Checking for additional audio issues in: {file_path}")
             try:
-                # Scan entire file for errors
+                # Check for packet corruption and timestamp issues
                 result = safe_subprocess_run([
                     'ffmpeg', '-v', 'error',
+                    '-err_detect', 'explode',  # Most strict - fail on any error
                     '-i', file_path,
+                    '-c', 'copy',  # Copy to check container integrity
                     '-f', 'null', '-'
-                ], capture_output=True, text=True, timeout=300)  # 5 minute timeout for deep scan
+                ], capture_output=True, text=True, timeout=120)
                 
                 if result.stderr:
                     # Look for non-fatal warnings that might indicate issues

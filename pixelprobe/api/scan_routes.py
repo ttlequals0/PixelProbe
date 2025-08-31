@@ -898,7 +898,6 @@ def scan_parallel():
     num_workers = data.get('num_workers', 4)
     scan_dirs = data.get('directories', [])
     file_paths = data.get('file_paths', [])
-    deep_scan = data.get('deep_scan', False)
     
     # Check if we're scanning specific files
     if file_paths:
@@ -920,8 +919,7 @@ def scan_parallel():
                 task = scan_files_task.delay(
                     scan_id=scan_id,
                     file_paths=file_paths,
-                    force_rescan=force_rescan,
-                    deep_scan=deep_scan
+                    force_rescan=force_rescan
                 )
                 
                 logger.info(f"Queued file scan task {task.id} for {len(file_paths)} files")
@@ -939,7 +937,6 @@ def scan_parallel():
                 result = current_app.scan_service.scan_files(
                     file_paths, 
                     force_rescan=force_rescan,
-                    deep_scan=deep_scan,
                     num_workers=num_workers
                 )
                 result['celery_enabled'] = False
@@ -992,7 +989,7 @@ def scan_parallel():
             scan_id = str(uuid4())
             
             # Determine scan type based on options
-            scan_type = 'deep' if deep_scan else 'parallel'
+            scan_type = 'parallel'
             
             # Queue the scan task
             task = scan_media_task.delay(
@@ -1018,8 +1015,7 @@ def scan_parallel():
             result = current_app.scan_service.scan_directories(
                 validated_dirs, 
                 force_rescan=force_rescan, 
-                num_workers=num_workers,
-                deep_scan=deep_scan
+                num_workers=num_workers
             )
             result['celery_enabled'] = False
             return jsonify(result)

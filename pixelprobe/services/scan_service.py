@@ -118,7 +118,7 @@ class ScanService:
         return {'status': 'started', 'message': 'Scan started', 'file_path': file_path}
     
     def scan_directories(self, directories: List[str], force_rescan: bool = False, 
-                        num_workers: int = 1, deep_scan: bool = False, async_mode: bool = True) -> Dict:
+                        num_workers: int = 1, async_mode: bool = True) -> Dict:
         """Scan multiple directories"""
         if self.is_scan_running():
             raise RuntimeError("Another scan is already in progress")
@@ -145,8 +145,6 @@ class ScanService:
         # Safely set num_workers if column exists
         if hasattr(scan_state, 'num_workers'):
             scan_state.num_workers = num_workers  # Track the number of workers used
-        # Store deep_scan flag for later use in report creation
-        self._deep_scan = deep_scan
         db.session.commit()
         
         # Capture scan ID while the object is still bound to the session
@@ -488,9 +486,7 @@ class ScanService:
                         completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
                         if completed_scan_state:
                             # Determine scan type based on flags
-                            if getattr(self, '_deep_scan', False):
-                                scan_type = 'deep_scan'
-                            elif force_rescan:
+                            if force_rescan:
                                 scan_type = 'rescan'
                             else:
                                 scan_type = 'full_scan'
@@ -622,7 +618,7 @@ class ScanService:
                 self.current_scan_thread = None
     
     def scan_files(self, file_paths: List[str], force_rescan: bool = False,
-                   deep_scan: bool = False, num_workers: int = 1, async_mode: bool = True) -> Dict:
+                   num_workers: int = 1, async_mode: bool = True) -> Dict:
         """Scan specific files only"""
         if self.is_scan_running():
             raise RuntimeError("Another scan is already in progress")
@@ -644,8 +640,6 @@ class ScanService:
         # Safely set num_workers if column exists
         if hasattr(scan_state, 'num_workers'):
             scan_state.num_workers = num_workers  # Track the number of workers used
-        # Store deep_scan flag for later use in report creation
-        self._deep_scan = deep_scan
         db.session.commit()
         
         # Capture scan ID
@@ -759,7 +753,6 @@ class ScanService:
                 'message': f'Scan started for {len(valid_files)} files',
                 'files': len(valid_files),
                 'force_rescan': force_rescan,
-                'deep_scan': deep_scan,
                 'num_workers': num_workers
             }
         else:
@@ -775,8 +768,7 @@ class ScanService:
                         'message': f'Scan completed for {len(valid_files)} files',
                         'files': len(valid_files),
                         'force_rescan': force_rescan,
-                        'deep_scan': deep_scan,
-                        'num_workers': num_workers,
+                                'num_workers': num_workers,
                         'files_processed': final_scan_state.files_processed,
                         'phase': final_scan_state.phase
                     }
@@ -786,8 +778,7 @@ class ScanService:
                         'message': f'Scan completed for {len(valid_files)} files',
                         'files': len(valid_files),
                         'force_rescan': force_rescan,
-                        'deep_scan': deep_scan,
-                        'num_workers': num_workers
+                                'num_workers': num_workers
                     }
             finally:
                 # Ensure thread reference is cleared even in sync mode
@@ -1121,7 +1112,7 @@ class ScanService:
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
-                scan_type = 'deep_scan' if getattr(self, '_deep_scan', False) else 'rescan' if force_rescan else 'full_scan'
+                scan_type = 'rescan' if force_rescan else 'full_scan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
                 
                 logger.info(f"=== SCAN COMPLETED (SEQUENTIAL) ===")
@@ -1198,9 +1189,7 @@ class ScanService:
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
                 # Determine scan type based on flags
-                if getattr(self, '_deep_scan', False):
-                    scan_type = 'deep_scan'
-                elif force_rescan:
+                if force_rescan:
                     scan_type = 'rescan'
                 else:
                     scan_type = 'full_scan'
@@ -1314,7 +1303,7 @@ class ScanService:
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
-                scan_type = 'deep_scan' if getattr(self, '_deep_scan', False) else 'rescan' if force_rescan else 'full_scan'
+                scan_type = 'rescan' if force_rescan else 'full_scan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
                 
                 logger.info(f"=== SCAN COMPLETED (PARALLEL) ===")
@@ -1408,9 +1397,7 @@ class ScanService:
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
                 # Determine scan type based on flags
-                if getattr(self, '_deep_scan', False):
-                    scan_type = 'deep_scan'
-                elif force_rescan:
+                if force_rescan:
                     scan_type = 'rescan'
                 else:
                     scan_type = 'full_scan'
@@ -2023,7 +2010,7 @@ class ScanService:
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
-                scan_type = 'deep_scan' if getattr(self, '_deep_scan', False) else 'rescan'
+                scan_type = 'rescan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
     
     def _parallel_scan_selected_chunks(self, checker: PixelProbe, chunks: List[ScanChunk],
@@ -2133,5 +2120,5 @@ class ScanService:
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
-                scan_type = 'deep_scan' if getattr(self, '_deep_scan', False) else 'rescan'
+                scan_type = 'rescan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full',
-                       force_rescan: bool = False, deep_scan: bool = False):
+                       force_rescan: bool = False):
     """
     Process a single chunk of files
     
@@ -34,7 +34,6 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
         scan_id: Unique scan identifier
         scan_type: Type of scan being performed
         force_rescan: Whether to force rescan of existing files
-        deep_scan: Whether to perform deep scanning
         
     Returns:
         dict: Chunk processing results
@@ -189,19 +188,51 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                     )
                     
                     # Scan the file
-                    scan_result = checker.scan_file(file_path, deep_scan=deep_scan, force_rescan=force_rescan)
+                    scan_result = checker.scan_file(file_path, force_rescan=force_rescan)
                     
                     if scan_result:
                         # Update database with result
                         db_result = ScanResult.query.filter_by(file_path=file_path).first()
                         if db_result:
-                            db_result.is_corrupted = scan_result.get('is_corrupted', False)
+                            # CRITICAL FIX: Properly classify files as Corrupted, Warning, or Healthy
+                            corruption_details = scan_result.get('corruption_details', '')
+                            warning_details = scan_result.get('warning_details', '')
+                            is_corrupted = scan_result.get('is_corrupted', False)
+                            has_warnings = scan_result.get('has_warnings', False)
+                            
+                            # If we have corruption_details with serious errors, mark as corrupted
+                            if corruption_details:
+                                details_lower = corruption_details.lower()
+                                if any(err in details_lower for err in ['error', 'failed', 'no such file', 'corrupted']):
+                                    is_corrupted = True
+                                elif 'warning' in details_lower:
+                                    # If it says "warning" but not marked as corrupted, it's a warning
+                                    has_warnings = True
+                                    if not warning_details:
+                                        warning_details = corruption_details
+                            
+                            # If we have warning_details but no has_warnings flag, set it
+                            if warning_details and not has_warnings:
+                                has_warnings = True
+                            
+                            db_result.is_corrupted = is_corrupted
                             db_result.scan_status = 'completed'
                             db_result.scan_date = datetime.utcnow()
-                            db_result.corruption_details = scan_result.get('corruption_details', '')
+                            db_result.corruption_details = corruption_details  # Keep all details for debugging
                             db_result.scan_output = str(scan_result.get('scan_output', ''))[:10000]
                             
-                            if scan_result.get('is_corrupted'):
+                            # Save warning fields with proper classification
+                            db_result.has_warnings = has_warnings
+                            db_result.warning_details = warning_details
+                            
+                            # Save other important fields that were missing
+                            db_result.file_hash = scan_result.get('file_hash')
+                            db_result.scan_tool = scan_result.get('scan_tool', 'unknown')
+                            db_result.scan_duration = scan_result.get('scan_duration')
+                            db_result.file_size = scan_result.get('file_size', 0)
+                            db_result.file_type = scan_result.get('file_type', 'unknown')
+                            
+                            if is_corrupted:
                                 files_corrupted += 1
                             
                             # Commit every 100 files
@@ -362,8 +393,7 @@ def discover_directory_task(self, directory: str, scan_id: str,
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
-                               scan_type: str = 'full', force_rescan: bool = False, 
-                               deep_scan: bool = False):
+                               scan_type: str = 'full', force_rescan: bool = False):
     """
     Universal orchestrator task that handles ALL scan types with parallel processing
     
@@ -382,7 +412,6 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         paths: List of paths to scan (optional for pending/orphan scans)
         scan_type: Type of scan ('full', 'parallel', 'pending', 'file_changes', 'orphan_cleanup')
         force_rescan: Whether to force rescan of existing files
-        deep_scan: Whether to perform deep scanning
         
     Returns:
         dict: Overall scan results
@@ -721,7 +750,7 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         
         # Create a group of parallel tasks
         job = group(
-            process_chunk_task.s(chunk_id, scan_id, scan_type, force_rescan, deep_scan)
+            process_chunk_task.s(chunk_id, scan_id, scan_type, force_rescan)
             for chunk_id in chunks_created
         )
         

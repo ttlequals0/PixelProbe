@@ -5,6 +5,100 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.79] - 2025-08-31
+
+### Fixed - CRITICAL REGRESSION FIXES & UI IMPROVEMENTS
+- **Fixed major file classification bug - files with errors showing as "Healthy"**
+  - Files with FFmpeg errors or probe failures were incorrectly marked as Healthy
+  - Now properly detects when corruption_details contain errors and marks file as corrupted
+  - Example: "No such file or directory" errors now correctly mark files as corrupted
+- **Fixed missing scan result fields not being saved to database**
+  - has_warnings and warning_details were not being saved (causing warnings to show as Healthy)
+  - file_hash, scan_tool, scan_duration were not being saved
+  - All fields are now properly saved during parallel scanning
+- **Fixed pending files count always showing 0**
+  - Discovery and scanning phases were happening simultaneously
+  - Files went from pending to completed instantly, never showing in pending count
+  - This was a regression from the deep_scan removal earlier in this version
+- **Fixed timezone display issue - dates now show correctly in configured timezone**
+  - Backend now properly converts UTC dates to the timezone configured in docker-compose (TZ env var)
+  - Frontend no longer does double timezone conversion
+  - Dates are sent without timezone suffix to prevent JavaScript from converting again
+  - All reports and displays now show times in the configured server timezone
+  - Fixes issue where dates were being converted twice causing wrong timezone display
+- **Fixed file classification to properly show Warning status**
+  - Files with warnings now correctly show as "Warning" instead of "Healthy"
+  - Improved classification logic to detect warnings vs errors vs corrupted files
+  - Status now properly shows: Healthy, Warning, or Corrupted (no ambiguity)
+- **Fixed mobile UI - Scan Reports table now visible on mobile devices**
+  - Reports modal now full-screen on mobile for better visibility
+  - Table converts to card layout on small screens (< 600px)
+  - Added data-label attributes for mobile-friendly display
+  - Horizontal scrolling enabled for medium-sized screens
+  - No longer cut off in portrait mode on mobile devices
+
+### Added
+- **P3 Priority UI/UX Improvements - System Stats Modal**
+  - Converted System Stats modal to multi-column layout on desktop
+  - Stats now display in 2-3 columns to eliminate horizontal scrolling
+  - Responsive design: columns on desktop (>1200px), single column on smaller screens
+  - Better organization: Database stats and Performance in column 1, System info and Features in column 2, Monitored Paths in column 3
+  - Modal width increased to 90% on desktop for better content display
+
+### Enhanced
+- **P3 Priority Tool Optimization - Media Validation Best Practices**
+  - FFmpeg validation improvements:
+    - Added aggressive error detection mode for thorough file checking
+    - Increased analyzeduration to 100MB and probesize to 50MB for better detection
+    - Added -fflags with genpts and discardcorrupt for better frame handling
+    - Enhanced probe with show_error, show_format, show_chapters, and count_frames
+    - Process all streams with -map 0 for complete validation
+    - Maintains FULL FILE checking (not sampling) for comprehensive validation
+  - ImageMagick validation improvements:
+    - Added -regard-warnings flag for stricter validation
+    - Added -authenticate flag for image authenticity verification
+    - Implemented memory limits: 1GB memory, 2GB map, 4GB disk
+    - Added resource limits to prevent OOM issues on large files
+    - Maintains complete image file validation, not just metadata
+  - Audio validation improvements:
+    - Enhanced with aggressive error detection and full file validation
+    - Added audio statistics and silence detection filters
+    - Improved container integrity checking for audio files
+  - All tools now validate entire files for maximum accuracy in corruption detection
+
+### Fixed - Production Issues from v2.2.78 Logs
+- **Fixed files being incorrectly marked as corrupted when missing**
+  - Added file existence check before FFmpeg probe
+  - Missing files now properly handled as "File not found" instead of corruption
+  - Prevents false corruption reports during file deletion/movement
+- **Fixed duplicate scheduled scan execution**
+  - Added deduplication logic to prevent multiple identical schedules
+  - Scheduler now detects and deactivates duplicate schedule entries
+  - Prevents "Another scan is already in progress" errors
+  - Resolves issue where 4 identical scans would trigger simultaneously
+- **Fixed FFmpeg probe parameter errors**
+  - Removed invalid boolean parameters from ffmpeg.probe() call
+  - Probe now works correctly with ffmpeg-python library
+- **Enforced single scan execution globally**
+  - Only ONE scan can run at a time across all trigger methods
+  - Scheduler now checks for active scans before triggering new ones
+  - Celery tasks check for concurrent scans and retry if blocked
+  - Prevents resource exhaustion from multiple simultaneous scans
+  - Eliminates database lock contention issues
+
+### Simplified
+- **Merged Deep Scan into Regular Scanning**
+  - Removed separate deep_scan option - all scans are now comprehensive
+  - Every scan now includes enhanced corruption detection previously only in deep scan:
+    - Frame integrity verification
+    - Temporal outlier detection (for >1GB files)
+    - Multi-point sampling (for >5GB files)
+    - Strict error detection with multiple validation layers
+  - Simplified API by removing deep_scan parameters from all endpoints
+  - Removed Deep Scan button from UI - regular scans now do everything
+  - Database schema simplified - removed deep_scan column
+  - Cleaner codebase with less conditional logic
+
 ## [2.2.78] - 2025-08-30
 
 ### Fixed

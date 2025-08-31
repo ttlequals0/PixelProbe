@@ -67,7 +67,6 @@ scan_status_model = api.model('ScanStatus', {
 parallel_scan_model = api.model('ParallelScan', {
     'directories': fields.List(fields.String, required=True, description='List of directories to scan'),
     'force_rescan': fields.Boolean(default=False, description='Force rescan of already scanned files'),
-    'deep_scan': fields.Boolean(default=False, description='Perform deep scan for better accuracy')
 })
 
 parallel_scan_response_model = api.model('ParallelScanResponse', {

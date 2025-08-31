@@ -122,7 +122,20 @@ class MediaScheduler:
         """Load and activate saved schedules from database"""
         try:
             schedules = ScanSchedule.query.filter_by(is_active=True).all()
+            
+            # Deduplicate schedules by cron_expression and scan_paths
+            seen_schedules = {}
             for schedule in schedules:
+                key = f"{schedule.cron_expression}:{schedule.scan_paths}:{schedule.scan_type}"
+                
+                if key in seen_schedules:
+                    # Deactivate duplicate schedule
+                    logger.warning(f"Deactivating duplicate schedule {schedule.id}: {schedule.name}")
+                    schedule.is_active = False
+                    db.session.commit()
+                    continue
+                    
+                seen_schedules[key] = schedule
                 self._activate_schedule(schedule)
         except Exception as e:
             logger.error(f"Failed to load saved schedules: {e}")
@@ -170,6 +183,11 @@ class MediaScheduler:
             
         try:
             with self.app.app_context():
+                # Check if ANY scan is already running before proceeding
+                scan_state = ScanState.get_or_create()
+                if scan_state.is_active and scan_state.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
+                    logger.warning(f"Periodic scan skipped - another scan is already running (phase: {scan_state.phase})")
+                    return
                 scan_paths_env = os.environ.get('SCAN_PATHS', '')
                 scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
                 logger.info(f"Starting periodic scan of paths: {scan_paths}")
@@ -232,6 +250,12 @@ class MediaScheduler:
             
         try:
             with self.app.app_context():
+                # Check if ANY scan is already running before proceeding
+                scan_state = ScanState.get_or_create()
+                if scan_state.is_active and scan_state.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
+                    logger.warning(f"Scheduled scan {schedule_id} skipped - another scan is already running (phase: {scan_state.phase})")
+                    return
+                
                 schedule = ScanSchedule.query.get(schedule_id)
                 if not schedule or not schedule.is_active:
                     return

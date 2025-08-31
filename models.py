@@ -49,7 +49,6 @@ class ScanResult(db.Model):
     scan_output = db.Column(db.Text)  # Full tool output for debugging
     has_warnings = db.Column(db.Boolean, nullable=False, default=False, index=True)  # Whether scan found warnings
     warning_details = db.Column(db.Text)  # Details of any warnings found
-    deep_scan = db.Column(db.Boolean, nullable=False, default=False)  # Whether deep scan is requested
     
     # Fields expected by API but currently missing
     error_message = db.Column(db.Text, nullable=True)  # Error message from scan
@@ -61,14 +60,18 @@ class ScanResult(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone"""
+            """Convert UTC datetime to configured timezone for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
                 dt = pytz.UTC.localize(dt)
             # Convert to configured timezone
-            return dt.astimezone(tz).isoformat()
+            # This uses the TZ environment variable set in docker-compose
+            converted = dt.astimezone(tz)
+            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
+            # Just return the date/time as if it's already in the correct timezone
+            return converted.strftime('%Y-%m-%dT%H:%M:%S')
         
         return {
             'id': self.id,
@@ -88,7 +91,6 @@ class ScanResult(db.Model):
             'scan_output': self.scan_output,
             'has_warnings': self.has_warnings,
             'warning_details': self.warning_details,
-            'deep_scan': self.deep_scan,
             'discovered_date': convert_to_tz(self.discovered_date),
             'error_message': self.error_message,
             'media_info': self.media_info,
@@ -148,14 +150,18 @@ class IgnoredErrorPattern(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone"""
+            """Convert UTC datetime to configured timezone for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
                 dt = pytz.UTC.localize(dt)
             # Convert to configured timezone
-            return dt.astimezone(tz).isoformat()
+            # This uses the TZ environment variable set in docker-compose
+            converted = dt.astimezone(tz)
+            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
+            # Just return the date/time as if it's already in the correct timezone
+            return converted.strftime('%Y-%m-%dT%H:%M:%S')
         
         return {
             'id': self.id,
@@ -181,14 +187,18 @@ class Exclusion(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone"""
+            """Convert UTC datetime to configured timezone for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
                 dt = pytz.UTC.localize(dt)
             # Convert to configured timezone
-            return dt.astimezone(tz).isoformat()
+            # This uses the TZ environment variable set in docker-compose
+            converted = dt.astimezone(tz)
+            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
+            # Just return the date/time as if it's already in the correct timezone
+            return converted.strftime('%Y-%m-%dT%H:%M:%S')
         
         return {
             'id': self.id,
@@ -216,14 +226,18 @@ class ScanSchedule(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone"""
+            """Convert UTC datetime to configured timezone for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
                 dt = pytz.UTC.localize(dt)
             # Convert to configured timezone
-            return dt.astimezone(tz).isoformat()
+            # This uses the TZ environment variable set in docker-compose
+            converted = dt.astimezone(tz)
+            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
+            # Just return the date/time as if it's already in the correct timezone
+            return converted.strftime('%Y-%m-%dT%H:%M:%S')
         
         return {
             'id': self.id,
@@ -256,14 +270,18 @@ class ScanConfiguration(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone"""
+            """Convert UTC datetime to configured timezone for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
                 dt = pytz.UTC.localize(dt)
             # Convert to configured timezone
-            return dt.astimezone(tz).isoformat()
+            # This uses the TZ environment variable set in docker-compose
+            converted = dt.astimezone(tz)
+            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
+            # Just return the date/time as if it's already in the correct timezone
+            return converted.strftime('%Y-%m-%dT%H:%M:%S')
         
         # Support both old and new structures
         if self.path is not None:
@@ -570,14 +588,18 @@ class ScanChunk(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone"""
+            """Convert UTC datetime to configured timezone for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
                 dt = pytz.UTC.localize(dt)
             # Convert to configured timezone
-            return dt.astimezone(tz).isoformat()
+            # This uses the TZ environment variable set in docker-compose
+            converted = dt.astimezone(tz)
+            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
+            # Just return the date/time as if it's already in the correct timezone
+            return converted.strftime('%Y-%m-%dT%H:%M:%S')
         
         return {
             'id': self.id,
@@ -599,7 +621,7 @@ class ScanReport(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     report_id = db.Column(db.String(36), nullable=False, unique=True, default=lambda: str(uuid.uuid4()))
-    scan_type = db.Column(db.String(50), nullable=False)  # full_scan, rescan, deep_scan, cleanup, file_changes
+    scan_type = db.Column(db.String(50), nullable=False)  # full_scan, rescan, cleanup, file_changes
     start_time = db.Column(db.DateTime(timezone=True), nullable=False)
     end_time = db.Column(db.DateTime(timezone=True), nullable=True)
     duration_seconds = db.Column(db.Float, nullable=True)
@@ -636,14 +658,18 @@ class ScanReport(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone"""
+            """Convert UTC datetime to configured timezone for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
                 dt = pytz.UTC.localize(dt)
             # Convert to configured timezone
-            return dt.astimezone(tz).isoformat()
+            # This uses the TZ environment variable set in docker-compose
+            converted = dt.astimezone(tz)
+            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
+            # Just return the date/time as if it's already in the correct timezone
+            return converted.strftime('%Y-%m-%dT%H:%M:%S')
         
         return {
             'id': self.id,

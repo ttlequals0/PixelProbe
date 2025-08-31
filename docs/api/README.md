@@ -217,7 +217,6 @@ Start an enhanced parallel scan that distributes work across all available Celer
 {
   "directories": ["/media/photos", "/media/videos"],
   "force_rescan": false,
-  "deep_scan": false,
   "chunk_size": 100
 }
 ```

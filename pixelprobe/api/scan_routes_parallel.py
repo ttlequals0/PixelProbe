@@ -42,8 +42,7 @@ def check_celery_available():
 @rate_limit("2 per minute")
 @validate_json_input({
     'directories': {'required': True, 'type': list},
-    'force_rescan': {'required': False, 'type': bool},
-    'deep_scan': {'required': False, 'type': bool}
+    'force_rescan': {'required': False, 'type': bool}
 })
 def scan_parallel_v2():
     """
@@ -61,7 +60,6 @@ def scan_parallel_v2():
     data = request.get_json()
     directories = data['directories']
     force_rescan = data.get('force_rescan', False)
-    deep_scan = data.get('deep_scan', False)
     
     # Validate directories
     validated_dirs = []
@@ -94,8 +92,7 @@ def scan_parallel_v2():
         task = parallel_scan_orchestrator.delay(
             scan_id=scan_id,
             paths=validated_dirs,
-            force_rescan=force_rescan,
-            deep_scan=deep_scan
+            force_rescan=force_rescan
         )
         
         logger.info(f"Launched parallel scan orchestrator {task.id} for scan {scan_id}")
@@ -114,7 +111,6 @@ def scan_parallel_v2():
             'celery_workers': total_workers,
             'scan_type': 'parallel_v2',
             'force_rescan': force_rescan,
-            'deep_scan': deep_scan,
             'directories': validated_dirs
         })
         

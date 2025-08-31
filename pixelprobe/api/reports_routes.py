@@ -125,7 +125,7 @@ def get_scan_report(report_id):
             report_dict['duration_formatted'] = f"{seconds}s"
     
     # Add summary statistics
-    if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+    if report.scan_type in ['full_scan', 'rescan']:
         report_dict['summary'] = {
             'total_files': report.files_scanned,
             'new_files': report.files_added,
@@ -545,7 +545,7 @@ def export_scan_report_pdf(report_id):
         # Add scan statistics
         elements.append(Paragraph("Scan Statistics", heading_style))
         
-        if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+        if report.scan_type in ['full_scan', 'rescan']:
             stats_data = [
                 ['Metric', 'Value'],
                 ['Total Files Discovered', f"{report.total_files_discovered:,}"],
@@ -607,7 +607,7 @@ def export_scan_report_pdf(report_id):
         )
         
         # Add scanned files list
-        if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+        if report.scan_type in ['full_scan', 'rescan']:
             elements.append(PageBreak())
             elements.append(Paragraph("Scanned Files", heading_style))
             
@@ -763,7 +763,7 @@ def export_scan_report_pdf(report_id):
             <table>
         """
         
-        if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+        if report.scan_type in ['full_scan', 'rescan']:
             html_content += f"""
                 <tr><th>Total Files Discovered</th><td>{report.total_files_discovered:,}</td></tr>
                 <tr><th>Files Scanned</th><td>{report.files_scanned:,}</td></tr>
@@ -784,7 +784,7 @@ def export_scan_report_pdf(report_id):
             """
         
         # Add scanned files list for scan reports
-        if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+        if report.scan_type in ['full_scan', 'rescan']:
             from models import ScanResult
             scanned_files = ScanResult.query.filter(
                 ScanResult.scan_date >= report.start_time,
@@ -847,7 +847,7 @@ def export_scan_report_pdf(report_id):
 @reports_bp.route('/scan-reports/latest')
 def get_latest_scan_reports():
     """Get the latest report for each scan type"""
-    scan_types = ['full_scan', 'rescan', 'deep_scan', 'cleanup', 'file_changes']
+    scan_types = ['full_scan', 'rescan', 'cleanup', 'file_changes']
     latest_reports = {}
     
     for scan_type in scan_types:
@@ -993,7 +993,7 @@ def download_multiple_reports():
                     elements.append(Paragraph("Statistics", styles['Heading2']))
                     stats_data = [['Metric', 'Value']]
                     
-                    if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+                    if report.scan_type in ['full_scan', 'rescan']:
                         stats_data.extend([
                             ['Total Files Discovered', f"{report.total_files_discovered:,}"],
                             ['Files Scanned', f"{report.files_scanned:,}"],
@@ -1023,7 +1023,7 @@ def download_multiple_reports():
                     elements.append(Spacer(1, 0.2*inch))
                     
                     # Add scanned files if available for scan reports
-                    if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+                    if report.scan_type in ['full_scan', 'rescan']:
                         # Query scan results for this report's time period
                         from models import ScanResult
                         scanned_files = ScanResult.query.filter(

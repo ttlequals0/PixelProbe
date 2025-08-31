@@ -84,7 +84,6 @@ class StatsService:
                     'paths_monitored': len(monitored_paths)
                 },
                 'features': {
-                    'deep_scan': True,
                     'parallel_scanning': True,
                     'auto_cleanup': True,
                     'file_monitoring': True,

@@ -50,7 +50,6 @@ class PostgreSQLMigrator:
                 'scan_output': 'TEXT',
                 'has_warnings': 'BOOLEAN DEFAULT FALSE',
                 'warning_details': 'TEXT',
-                'deep_scan': 'BOOLEAN DEFAULT FALSE',
                 'error_message': 'TEXT',
                 'media_info': 'TEXT',
                 'file_exists': 'BOOLEAN DEFAULT TRUE',

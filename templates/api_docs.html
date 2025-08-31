@@ -298,11 +298,6 @@ curl -X GET "https://your-server.com/api/stats"
                                             <td><span class="param-type">string</span></td>
                                             <td>The full path of the file to scan</td>
                                         </tr>
-                                        <tr>
-                                            <td><span class="param-name">deep_scan</span></td>
-                                            <td><span class="param-type">boolean</span></td>
-                                            <td>Enable enhanced corruption detection (optional, default: false)</td>
-                                        </tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -310,8 +305,7 @@ curl -X GET "https://your-server.com/api/stats"
                                 <h5>Request Example:</h5>
                                 <div class="code-block">
 {
-    "file_path": "/media/videos/movie.mp4",
-    "deep_scan": true
+    "file_path": "/media/videos/movie.mp4"
 }
                                 </div>
                             </div>
@@ -320,7 +314,7 @@ curl -X GET "https://your-server.com/api/stats"
                                 <div class="code-block">
 curl -X POST "https://your-server.com/api/scan-file" \
      -H "Content-Type: application/json" \
-     -d '{"file_path": "/media/videos/movie.mp4", "deep_scan": true}'
+     -d '{"file_path": "/media/videos/movie.mp4"}'
                                 </div>
                             </div>
                         </div>
@@ -347,11 +341,6 @@ curl -X POST "https://your-server.com/api/scan-file" \
                                             <td><span class="param-name">file_paths</span></td>
                                             <td><span class="param-type">array[string]</span></td>
                                             <td>Array of file paths to scan</td>
-                                        </tr>
-                                        <tr>
-                                            <td><span class="param-name">deep_scan</span></td>
-                                            <td><span class="param-type">boolean</span></td>
-                                            <td>Enable enhanced corruption detection (optional, default: false)</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -953,12 +942,11 @@ async function getScanResults(page = 1, filter = 'all') {
     }
 }
 
-// Scan specific files with deep scan
-async function scanFiles(filePaths, deepScan = true) {
+// Scan specific files
+async function scanFiles(filePaths) {
     try {
         const response = await axios.post(`${BASE_URL}/scan-parallel`, {
-            file_paths: filePaths,
-            deep_scan: deepScan
+            file_paths: filePaths
         });
         return response.data;
     } catch (error) {
@@ -978,7 +966,7 @@ async function scanFiles(filePaths, deepScan = true) {
     
     // Scan specific files
     const files = ['/media/video1.mp4', '/media/video2.mp4'];
-    await scanFiles(files, true);
+    await scanFiles(files);
 })();
                         </div>
                         
