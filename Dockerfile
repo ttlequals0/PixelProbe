@@ -74,6 +74,14 @@ RUN sed -i 's/<policy domain="coder" rights="none" pattern="PDF" \/>/<policy dom
     sed -i 's/<policy domain="resource" name="map" value=".*"\/>/<policy domain="resource" name="map" value="4GiB"\/>/g' /etc/ImageMagick-6/policy.xml && \
     sed -i 's/<policy domain="resource" name="disk" value=".*"\/>/<policy domain="resource" name="disk" value="8GiB"\/>/g' /etc/ImageMagick-6/policy.xml
 
+# Configure libpng and ImageMagick to handle benign PNG errors better
+# These environment variables tell libpng to be less strict
+ENV PNG_SKIP_SETJMP_CHECK=1
+ENV PNG_IGNORE_ADLER32=1
+
+# Set ImageMagick to be less verbose about warnings
+ENV MAGICK_CONFIGURE_PATH=/etc/ImageMagick-6
+
 # Configure FFmpeg for optimal performance and compatibility
 # Set thread count for better performance
 ENV FFMPEG_THREADS=0

@@ -996,7 +996,7 @@ class PixelProbe:
             # Simplified command to avoid parsing issues
             result = safe_subprocess_run(
                 ['identify', 
-                 '-regard-warnings',      # Treat warnings as errors for strict validation
+                 '-quiet',                # Suppress benign warnings like PNG sBIT
                  file_path],              # Check full file integrity
                 capture_output=True,
                 text=True,
