@@ -7,6 +7,7 @@ import os
 from models import ScanResult
 
 
+@pytest.mark.real_media
 class TestRealMediaSamples:
     """Test PixelProbe with real media files"""
     
@@ -99,6 +100,7 @@ class TestRealMediaSamples:
             assert result.scan_tool in ['ffmpeg', 'imagemagick', 'pillow', 'pil']
 
 
+@pytest.mark.real_media
 class TestCorruptionDetails:
     """Test specific corruption detection capabilities"""
     
