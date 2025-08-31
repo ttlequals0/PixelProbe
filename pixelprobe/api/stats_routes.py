@@ -3,22 +3,14 @@ from sqlalchemy import text
 import os
 import time
 import logging
-import pytz
 from datetime import datetime, timezone
 from functools import wraps
 
 from models import db, ScanResult
 from version import __version__
+from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone_name
 
 logger = logging.getLogger(__name__)
-
-# Get timezone from environment variable, default to UTC
-APP_TIMEZONE = os.environ.get('TZ', 'UTC')
-try:
-    tz = pytz.timezone(APP_TIMEZONE)
-except pytz.exceptions.UnknownTimeZoneError:
-    tz = pytz.UTC
-    logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
 
 stats_bp = Blueprint('stats', __name__, url_prefix='/api')
 
@@ -263,22 +255,22 @@ def get_system_info():
         oldest_scan = db_perf_query[2]
         newest_scan = db_perf_query[3]
         
-        # Parse oldest and newest scan dates
+        # Convert scan dates to configured timezone for display
         if oldest_scan:
             try:
                 oldest_scan_dt = datetime.fromisoformat(oldest_scan.replace('Z', '+00:00'))
-                if oldest_scan_dt.tzinfo is None:
-                    oldest_scan_dt = tz.localize(oldest_scan_dt)
-                oldest_scan = oldest_scan_dt.isoformat()
+                oldest_scan_display = from_utc_to_configured(oldest_scan_dt)
+                if oldest_scan_display:
+                    oldest_scan = oldest_scan_display.isoformat()
             except:
                 pass
                 
         if newest_scan:
             try:
                 newest_scan_dt = datetime.fromisoformat(newest_scan.replace('Z', '+00:00'))
-                if newest_scan_dt.tzinfo is None:
-                    newest_scan_dt = tz.localize(newest_scan_dt)
-                newest_scan = newest_scan_dt.isoformat()
+                newest_scan_display = from_utc_to_configured(newest_scan_dt)
+                if newest_scan_display:
+                    newest_scan = newest_scan_display.isoformat()
             except:
                 pass
         
@@ -296,10 +288,13 @@ def get_system_info():
             db_type = 'unknown'
         
         # Build response
+        current_time_utc = datetime.now(timezone.utc)
+        current_time_display = from_utc_to_configured(current_time_utc)
+        
         system_info = {
             'version': __version__,
-            'timezone': APP_TIMEZONE,
-            'current_time': datetime.now(tz).isoformat(),
+            'timezone': get_configured_timezone_name(),
+            'current_time': current_time_display.isoformat() if current_time_display else current_time_utc.isoformat(),
             'database': {
                 'type': db_type,
                 'total_files': db_total_files,

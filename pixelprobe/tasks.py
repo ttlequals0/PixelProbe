@@ -10,7 +10,7 @@ from celery import current_task
 from celery.exceptions import Retry
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from celery_config import celery_app
 from pixelprobe.services.scan_service import ScanService
@@ -148,7 +148,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             'files_processed': result.get('files_processed', 0),
             'files_discovered': result.get('files_discovered', 0),
             'corrupted_found': result.get('corrupted_found', 0),
-            'completed_at': datetime.utcnow().isoformat()
+            'completed_at': datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as exc:
@@ -220,7 +220,7 @@ def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
             'task_id': self.request.id,
             'orphaned_removed': result.get('orphaned_removed', 0),
             'files_processed': result.get('files_processed', 0),
-            'completed_at': datetime.utcnow().isoformat()
+            'completed_at': datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as exc:
@@ -298,7 +298,7 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False):
             'files_processed': result.get('files_processed', len(file_paths)),
             'files_scanned': result.get('files_scanned', 0),
             'corrupted_found': result.get('corrupted_found', 0),
-            'completed_at': datetime.utcnow().isoformat()
+            'completed_at': datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as exc:
@@ -322,7 +322,7 @@ def health_check_task():
     """
     return {
         'status': 'healthy',
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'worker_id': current_task.request.hostname
     }
 
@@ -363,7 +363,7 @@ def scheduled_scan_task(schedule_id, scan_type='full'):
         )
         
         # Update schedule last run time
-        schedule.last_run = datetime.utcnow()
+        schedule.last_run = datetime.now(timezone.utc)
         db.session.commit()
         
         logger.info(f"Scheduled scan queued with task_id: {task.id}")
@@ -373,7 +373,7 @@ def scheduled_scan_task(schedule_id, scan_type='full'):
             'schedule_id': schedule_id,
             'scan_id': scan_id,
             'task_id': task.id,
-            'queued_at': datetime.utcnow().isoformat()
+            'queued_at': datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as exc:

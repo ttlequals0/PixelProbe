@@ -1,9 +1,9 @@
 from flask import Blueprint, request, jsonify, current_app
-import pytz
 import os
 import threading
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from pixelprobe.utils.timezone import from_utc_to_configured
 
 from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
@@ -33,13 +33,7 @@ def check_celery_available():
     return celery_enabled
 
 
-# Get timezone from environment variable, default to UTC
-APP_TIMEZONE = os.environ.get('TZ', 'UTC')
-try:
-    tz = pytz.timezone(APP_TIMEZONE)
-except pytz.exceptions.UnknownTimeZoneError:
-    tz = pytz.UTC
-    logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
+# Timezone handling via utility module
 
 scan_bp = Blueprint('scan', __name__, url_prefix='/api')
 
@@ -213,7 +207,8 @@ def get_scan_results():
     if has_warnings == 'true':
         query = query.filter(
             (ScanResult.has_warnings == True) & 
-            (ScanResult.marked_as_good == False)
+            (ScanResult.marked_as_good == False) &
+            (ScanResult.is_corrupted == False)  # Exclude corrupted files from warnings filter
         )
     
     # Apply sorting
@@ -262,34 +257,22 @@ def get_scan_results():
     for result in pagination.items:
         result_dict = result.to_dict()
         
-        # Convert timestamps to configured timezone
+        # Convert timestamps to configured timezone for display
         if result.scan_date:
-            if result.scan_date.tzinfo is None:
-                scan_date = tz.localize(result.scan_date)
-            else:
-                scan_date = result.scan_date
-            result_dict['scan_date'] = scan_date.astimezone(tz).isoformat()
+            display_dt = from_utc_to_configured(result.scan_date)
+            result_dict['scan_date'] = display_dt.isoformat() if display_dt else None
         
         if result.discovered_date:
-            if result.discovered_date.tzinfo is None:
-                discovered_date = tz.localize(result.discovered_date)
-            else:
-                discovered_date = result.discovered_date
-            result_dict['discovered_date'] = discovered_date.astimezone(tz).isoformat()
+            display_dt = from_utc_to_configured(result.discovered_date)
+            result_dict['discovered_date'] = display_dt.isoformat() if display_dt else None
         
         if result.creation_date:
-            if result.creation_date.tzinfo is None:
-                creation_date = tz.localize(result.creation_date)
-            else:
-                creation_date = result.creation_date  
-            result_dict['creation_date'] = creation_date.astimezone(tz).isoformat()
+            display_dt = from_utc_to_configured(result.creation_date)
+            result_dict['creation_date'] = display_dt.isoformat() if display_dt else None
         
         if result.last_modified:
-            if result.last_modified.tzinfo is None:
-                last_modified = tz.localize(result.last_modified)
-            else:
-                last_modified = result.last_modified
-            result_dict['last_modified'] = last_modified.astimezone(tz).isoformat()
+            display_dt = from_utc_to_configured(result.last_modified)
+            result_dict['last_modified'] = display_dt.isoformat() if display_dt else None
         
         # Add file_name for frontend convenience
         result_dict['file_name'] = os.path.basename(result.file_path) if result.file_path else ''
@@ -310,34 +293,22 @@ def get_scan_result(result_id):
     result = ScanResult.query.get_or_404(result_id)
     result_dict = result.to_dict()
     
-    # Convert timestamps to configured timezone
+    # Convert timestamps to configured timezone for display
     if result.scan_date:
-        if result.scan_date.tzinfo is None:
-            scan_date = tz.localize(result.scan_date)
-        else:
-            scan_date = result.scan_date
-        result_dict['scan_date'] = scan_date.astimezone(tz).isoformat()
+        display_dt = from_utc_to_configured(result.scan_date)
+        result_dict['scan_date'] = display_dt.isoformat() if display_dt else None
     
     if result.discovered_date:
-        if result.discovered_date.tzinfo is None:
-            discovered_date = tz.localize(result.discovered_date)
-        else:
-            discovered_date = result.discovered_date
-        result_dict['discovered_date'] = discovered_date.astimezone(tz).isoformat()
+        display_dt = from_utc_to_configured(result.discovered_date)
+        result_dict['discovered_date'] = display_dt.isoformat() if display_dt else None
     
     if result.creation_date:
-        if result.creation_date.tzinfo is None:
-            creation_date = tz.localize(result.creation_date)
-        else:
-            creation_date = result.creation_date  
-        result_dict['creation_date'] = creation_date.astimezone(tz).isoformat()
+        display_dt = from_utc_to_configured(result.creation_date)
+        result_dict['creation_date'] = display_dt.isoformat() if display_dt else None
     
     if result.last_modified:
-        if result.last_modified.tzinfo is None:
-            last_modified = tz.localize(result.last_modified)
-        else:
-            last_modified = result.last_modified
-        result_dict['last_modified'] = last_modified.astimezone(tz).isoformat()
+        display_dt = from_utc_to_configured(result.last_modified)
+        result_dict['last_modified'] = display_dt.isoformat() if display_dt else None
     
     return jsonify(result_dict)
 
@@ -754,7 +725,7 @@ def get_scan_status():
                 start_dt = start_dt.replace(tzinfo=timezone.utc)
             
             # Convert to configured timezone
-            start_time_tz = start_dt.astimezone(tz).isoformat()
+            start_time_tz = from_utc_to_configured(start_dt).isoformat() if from_utc_to_configured(start_dt) else None
         except Exception as e:
             logger.warning(f"Could not convert start_time to timezone: {e}")
             start_time_tz = state_dict.get('start_time')
@@ -772,7 +743,7 @@ def get_scan_status():
                 end_dt = end_dt.replace(tzinfo=timezone.utc)
             
             # Convert to configured timezone
-            end_time_tz = end_dt.astimezone(tz).isoformat()
+            end_time_tz = from_utc_to_configured(end_dt).isoformat() if from_utc_to_configured(end_dt) else None
         except Exception as e:
             logger.warning(f"Could not convert end_time to timezone: {e}")
             end_time_tz = state_dict.get('end_time')

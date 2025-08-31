@@ -97,12 +97,12 @@ def test_cleanup():
     if cleanup_record:
         return jsonify({
             'current_state': cleanup_record.to_dict(),
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat()
         })
     else:
         return jsonify({
             'current_state': None,
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'message': 'No cleanup operations found'
         })
 

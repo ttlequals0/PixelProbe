@@ -5,7 +5,7 @@ import logging
 import hashlib
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from PIL import Image
 
@@ -568,8 +568,8 @@ class PixelProbe:
                 'file_path': file_path,
                 'file_size': 0,
                 'file_type': 'unknown',
-                'creation_date': datetime.now(),
-                'last_modified': datetime.now()
+                'creation_date': datetime.now(timezone.utc),
+                'last_modified': datetime.now(timezone.utc)
             }
     
     def calculate_file_hash(self, file_path):
@@ -893,8 +893,8 @@ class PixelProbe:
                 'file_path': file_path,
                 'file_size': 0,
                 'file_type': 'unknown',
-                'creation_date': datetime.now(),
-                'last_modified': datetime.now(),
+                'creation_date': datetime.now(timezone.utc),
+                'last_modified': datetime.now(timezone.utc),
                 'is_corrupted': True,
                 'corruption_details': f"Scan error: {str(e)}",
                 'file_hash': None,
@@ -993,14 +993,10 @@ class PixelProbe:
         try:
             # Enhanced ImageMagick validation with comprehensive checks
             # We validate the ENTIRE image file, not just metadata/headers
-            # Added -regard-warnings for stricter validation
+            # Simplified command to avoid parsing issues
             result = safe_subprocess_run(
                 ['identify', 
                  '-regard-warnings',      # Treat warnings as errors for strict validation
-                 '-authenticate',          # Verify image authenticity
-                 '-limit', 'memory', '1GB',  # Set memory limit to prevent OOM
-                 '-limit', 'map', '2GB',     # Set memory map limit
-                 '-limit', 'disk', '4GB',    # Set disk limit for temp files
                  file_path],              # Check full file integrity
                 capture_output=True,
                 text=True,
@@ -2116,7 +2112,7 @@ class PixelProbe:
         session = None
         try:
             from models import ScanResult
-            from datetime import datetime, timezone
+            from datetime import datetime, timezone, timezone
             
             session = self._get_db_session()
             if not session:

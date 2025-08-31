@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.83] - 2025-08-31
+
+### Fixed
+- **Fixed corrupted files showing in warnings filter**
+  - Files marked as corrupted were incorrectly appearing when filtering for warnings only
+  - Added explicit check to exclude corrupted files from warnings filter
+  - Updated both scan_routes.py and export_routes.py for consistency
+  
+- **Fixed ImageMagick command issues**
+  - Simplified ImageMagick identify command to avoid parsing errors
+  - Removed problematic `-authenticate` flag and memory limit parameters
+  - This resolves "unable to open image 'memory'" errors
+
+### Added
+- **Comprehensive timezone handling system**
+  - Created timezone.py utility module for consistent UTC storage and display
+  - All dates stored in UTC in database
+  - Dates converted to configured timezone (via TZ env var) for API/UI display
+  - Provides helper functions for timezone conversion and formatting
+
+### Changed
+- **Removed all old timezone conversion code**
+  - Replaced all datetime.now() calls with datetime.now(timezone.utc)
+  - Replaced all datetime.utcnow() calls with datetime.now(timezone.utc)
+  - Removed pytz-based timezone handling from multiple modules
+  - Updated stats_routes.py, admin_routes.py, stats_service.py, app.py to use new timezone utility
+  - Removed deprecated get_timezone() function from helpers.py
+
+- **Improved mobile UI for scan reports modal**
+  - Fixed button layout in Actions column for better mobile display
+  - Enhanced modal styling with proper backgrounds and borders
+  - Improved scrolling behavior with iOS-specific optimizations
+  - Adjusted font sizes and spacing for better readability
+  - Hide checkbox column on mobile to save space
+  - Made action buttons responsive with 2x2 grid layout
+
 ## [2.2.82] - 2025-08-31
 
 ### Changed

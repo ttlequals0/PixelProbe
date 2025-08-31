@@ -389,7 +389,7 @@ def generate_pdf_report(scan_type, scan_id):
         buffer.close()
         
         # Create filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"scan_report_{scan_type}_{scan_id}_{timestamp}.pdf"
         
         # Create response
@@ -1099,7 +1099,7 @@ def download_multiple_reports():
                 buffer.close()
                 
                 # Create response
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 response = make_response(pdf_data)
                 response.headers['Content-Type'] = 'application/pdf'
                 response.headers['Content-Disposition'] = f'attachment; filename=pixelprobe_reports_{timestamp}.pdf'
@@ -1135,7 +1135,7 @@ def download_multiple_reports():
                     zipf.writestr(filename, json_data)
             
             buffer.seek(0)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             
             response = make_response(buffer.getvalue())
             response.headers['Content-Type'] = 'application/zip'

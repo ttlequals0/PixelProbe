@@ -6,7 +6,6 @@ This is a demonstration of how app.py would look with the new modular architectu
 import os
 import logging
 from datetime import datetime, timezone
-import pytz
 from flask import Flask, jsonify, send_file, render_template, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
@@ -54,14 +53,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Get timezone
+# Timezone handling is now done via pixelprobe.utils.timezone module
 APP_TIMEZONE = os.environ.get('TZ', 'UTC')
-try:
-    tz = pytz.timezone(APP_TIMEZONE)
-    logger.info(f"Using timezone: {APP_TIMEZONE}")
-except pytz.exceptions.UnknownTimeZoneError:
-    tz = pytz.UTC
-    logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
+logger.info(f"Using timezone: {APP_TIMEZONE}")
 
 # Create Flask app
 app = Flask(__name__)
@@ -210,7 +204,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'version': __version__,
-        'timestamp': datetime.now(tz).isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat()
     })
 
 @app.route('/api/version')

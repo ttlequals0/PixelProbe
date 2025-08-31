@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -261,7 +261,7 @@ class MediaScheduler:
                     return
                     
                 # Update last run time
-                schedule.last_run = datetime.utcnow()
+                schedule.last_run = datetime.now(timezone.utc)
                 db.session.commit()
                 
                 # Parse scan paths

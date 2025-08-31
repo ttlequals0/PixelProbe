@@ -4,7 +4,7 @@ import csv
 import io
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timezone
 
 from models import db, ScanResult
 
@@ -168,10 +168,11 @@ def export_scan_results():
                         (ScanResult.marked_as_good == True)
                     )
                 elif filter_type == 'warning':
-                    # Show files with warnings that aren't marked as good
+                    # Show files with warnings that aren't corrupted and aren't marked as good
                     query = query.filter(
                         (ScanResult.has_warnings == True) &
-                        (ScanResult.marked_as_good == False)
+                        (ScanResult.marked_as_good == False) &
+                        (ScanResult.is_corrupted == False)  # Exclude corrupted files
                     )
                 # 'all' filter - no additional filtering needed
                 
@@ -224,7 +225,7 @@ def export_scan_results():
             logger.info(f"Exporting {len(results)} scan results to {format_type.upper()} (filter: {filter_type}, search: '{search}' via GET)")
         
         # Create filename with timestamp and export type
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         
         # Handle different export formats
         if format_type == 'json':

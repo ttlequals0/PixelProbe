@@ -9,7 +9,7 @@ across all available workers instead of processing everything in a single task.
 from celery import current_task, group, chord
 from celery.exceptions import Retry
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from celery_config import celery_app
@@ -217,7 +217,7 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                             
                             db_result.is_corrupted = is_corrupted
                             db_result.scan_status = 'completed'
-                            db_result.scan_date = datetime.utcnow()
+                            db_result.scan_date = datetime.now(timezone.utc)
                             db_result.corruption_details = corruption_details  # Keep all details for debugging
                             db_result.scan_output = str(scan_result.get('scan_output', ''))[:10000]
                             
@@ -260,7 +260,7 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                 'chunk_id': chunk_id,
                 'scan_type': scan_type,
                 'orphans_removed': orphans_removed,
-                'completed_at': datetime.utcnow().isoformat()
+                'completed_at': datetime.now(timezone.utc).isoformat()
             }
         else:
             logger.info(f"Chunk {chunk_id} completed: {files_processed} files processed, {files_corrupted} corrupted")
@@ -270,7 +270,7 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                 'scan_type': scan_type,
                 'files_processed': files_processed,
                 'files_corrupted': files_corrupted,
-                'completed_at': datetime.utcnow().isoformat()
+                'completed_at': datetime.now(timezone.utc).isoformat()
             }
         
     except Exception as exc:
@@ -728,7 +728,7 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
                             file_path=file_path,
                             scan_status='pending',
                             is_corrupted=None,
-                            discovered_date=datetime.utcnow()
+                            discovered_date=datetime.now(timezone.utc)
                         )
                         db.session.add(result)
                     elif force_rescan and existing.scan_status == 'completed':
@@ -824,7 +824,7 @@ def scan_completion_monitor(scan_id: str):
             if scan_state:
                 scan_state.phase = 'completed'
                 scan_state.is_active = False
-                scan_state.end_time = datetime.utcnow()
+                scan_state.end_time = datetime.now(timezone.utc)
                 
                 # Calculate final statistics
                 total_files = ScanResult.query.filter_by(scan_status='completed').count()

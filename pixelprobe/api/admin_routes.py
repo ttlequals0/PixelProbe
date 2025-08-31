@@ -3,21 +3,12 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
-import pytz
 
 from models import db, ScanResult, IgnoredErrorPattern, ScanConfiguration, ScanSchedule
 from scheduler import MediaScheduler
 from pixelprobe.utils.security import validate_json_input, AuditLogger, validate_directory_path
 
 logger = logging.getLogger(__name__)
-
-# Get timezone from environment variable, default to UTC
-APP_TIMEZONE = os.environ.get('TZ', 'UTC')
-try:
-    tz = pytz.timezone(APP_TIMEZONE)
-except pytz.exceptions.UnknownTimeZoneError:
-    tz = pytz.UTC
-    logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/api')
 

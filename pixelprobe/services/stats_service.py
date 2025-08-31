@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlalchemy import text
 
 from models import db, ScanResult
-from pixelprobe.utils.helpers import get_timezone
+from pixelprobe.utils.timezone import from_utc_to_configured
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class StatsService:
     """Service for calculating and retrieving statistics"""
     
     def __init__(self):
-        self.tz = get_timezone()
+        pass
         
     def get_file_statistics(self) -> Dict:
         """Get comprehensive file statistics"""
@@ -248,22 +248,22 @@ class StatsService:
             oldest_scan = db_perf_query[2]
             newest_scan = db_perf_query[3]
             
-            # Parse dates
+            # Convert scan dates to configured timezone for display
             if oldest_scan:
                 try:
                     oldest_scan_dt = datetime.fromisoformat(oldest_scan.replace('Z', '+00:00'))
-                    if oldest_scan_dt.tzinfo is None:
-                        oldest_scan_dt = self.tz.localize(oldest_scan_dt)
-                    oldest_scan = oldest_scan_dt.isoformat()
+                    oldest_scan_display = from_utc_to_configured(oldest_scan_dt)
+                    if oldest_scan_display:
+                        oldest_scan = oldest_scan_display.isoformat()
                 except:
                     pass
                     
             if newest_scan:
                 try:
                     newest_scan_dt = datetime.fromisoformat(newest_scan.replace('Z', '+00:00'))
-                    if newest_scan_dt.tzinfo is None:
-                        newest_scan_dt = self.tz.localize(newest_scan_dt)
-                    newest_scan = newest_scan_dt.isoformat()
+                    newest_scan_display = from_utc_to_configured(newest_scan_dt)
+                    if newest_scan_display:
+                        newest_scan = newest_scan_display.isoformat()
                 except:
                     pass
             

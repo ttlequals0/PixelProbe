@@ -4,20 +4,13 @@ import json
 import uuid
 import logging
 import os
-import pytz
 
 
 logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
 
-# Get configured timezone
-APP_TIMEZONE = os.environ.get('TZ', 'UTC')
-try:
-    tz = pytz.timezone(APP_TIMEZONE)
-except pytz.exceptions.UnknownTimeZoneError:
-    tz = pytz.UTC
-    logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
+# Timezone handling moved to pixelprobe.utils.timezone
 
 # Import shared utilities after models are loaded
 # This will be imported in app.py to avoid circular imports
@@ -60,18 +53,14 @@ class ScanResult(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone for display"""
+            """Return datetime as ISO string for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
-                dt = pytz.UTC.localize(dt)
-            # Convert to configured timezone
-            # This uses the TZ environment variable set in docker-compose
-            converted = dt.astimezone(tz)
-            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
-            # Just return the date/time as if it's already in the correct timezone
-            return converted.strftime('%Y-%m-%dT%H:%M:%S')
+                dt = dt.replace(tzinfo=timezone.utc)
+            # Return as ISO string - timezone conversion handled in API routes
+            return dt.isoformat()
         
         return {
             'id': self.id,
@@ -150,18 +139,14 @@ class IgnoredErrorPattern(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone for display"""
+            """Return datetime as ISO string for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
-                dt = pytz.UTC.localize(dt)
-            # Convert to configured timezone
-            # This uses the TZ environment variable set in docker-compose
-            converted = dt.astimezone(tz)
-            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
-            # Just return the date/time as if it's already in the correct timezone
-            return converted.strftime('%Y-%m-%dT%H:%M:%S')
+                dt = dt.replace(tzinfo=timezone.utc)
+            # Return as ISO string - timezone conversion handled in API routes
+            return dt.isoformat()
         
         return {
             'id': self.id,
@@ -187,18 +172,14 @@ class Exclusion(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone for display"""
+            """Return datetime as ISO string for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
-                dt = pytz.UTC.localize(dt)
-            # Convert to configured timezone
-            # This uses the TZ environment variable set in docker-compose
-            converted = dt.astimezone(tz)
-            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
-            # Just return the date/time as if it's already in the correct timezone
-            return converted.strftime('%Y-%m-%dT%H:%M:%S')
+                dt = dt.replace(tzinfo=timezone.utc)
+            # Return as ISO string - timezone conversion handled in API routes
+            return dt.isoformat()
         
         return {
             'id': self.id,
@@ -226,18 +207,14 @@ class ScanSchedule(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone for display"""
+            """Return datetime as ISO string for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
-                dt = pytz.UTC.localize(dt)
-            # Convert to configured timezone
-            # This uses the TZ environment variable set in docker-compose
-            converted = dt.astimezone(tz)
-            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
-            # Just return the date/time as if it's already in the correct timezone
-            return converted.strftime('%Y-%m-%dT%H:%M:%S')
+                dt = dt.replace(tzinfo=timezone.utc)
+            # Return as ISO string - timezone conversion handled in API routes
+            return dt.isoformat()
         
         return {
             'id': self.id,
@@ -270,18 +247,14 @@ class ScanConfiguration(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone for display"""
+            """Return datetime as ISO string for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
-                dt = pytz.UTC.localize(dt)
-            # Convert to configured timezone
-            # This uses the TZ environment variable set in docker-compose
-            converted = dt.astimezone(tz)
-            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
-            # Just return the date/time as if it's already in the correct timezone
-            return converted.strftime('%Y-%m-%dT%H:%M:%S')
+                dt = dt.replace(tzinfo=timezone.utc)
+            # Return as ISO string - timezone conversion handled in API routes
+            return dt.isoformat()
         
         # Support both old and new structures
         if self.path is not None:
@@ -588,18 +561,14 @@ class ScanChunk(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone for display"""
+            """Return datetime as ISO string for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
-                dt = pytz.UTC.localize(dt)
-            # Convert to configured timezone
-            # This uses the TZ environment variable set in docker-compose
-            converted = dt.astimezone(tz)
-            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
-            # Just return the date/time as if it's already in the correct timezone
-            return converted.strftime('%Y-%m-%dT%H:%M:%S')
+                dt = dt.replace(tzinfo=timezone.utc)
+            # Return as ISO string - timezone conversion handled in API routes
+            return dt.isoformat()
         
         return {
             'id': self.id,
@@ -658,18 +627,14 @@ class ScanReport(db.Model):
     
     def to_dict(self):
         def convert_to_tz(dt):
-            """Convert UTC datetime to configured timezone for display"""
+            """Return datetime as ISO string for display"""
             if dt is None:
                 return None
             # If datetime is naive, assume it's UTC
             if dt.tzinfo is None:
-                dt = pytz.UTC.localize(dt)
-            # Convert to configured timezone
-            # This uses the TZ environment variable set in docker-compose
-            converted = dt.astimezone(tz)
-            # Return as ISO string WITHOUT timezone suffix so JS doesn't double-convert
-            # Just return the date/time as if it's already in the correct timezone
-            return converted.strftime('%Y-%m-%dT%H:%M:%S')
+                dt = dt.replace(tzinfo=timezone.utc)
+            # Return as ISO string - timezone conversion handled in API routes
+            return dt.isoformat()
         
         return {
             'id': self.id,

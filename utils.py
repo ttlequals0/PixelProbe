@@ -3,7 +3,7 @@
 import logging
 import time
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +218,7 @@ def mark_operation_complete(state_obj, message=None):
     """Common method to mark operations as complete"""
     state_obj.is_active = False
     state_obj.phase = 'completed'
-    state_obj.end_time = datetime.utcnow()
+    state_obj.end_time = datetime.now(timezone.utc)
     if message:
         state_obj.progress_message = message
     return state_obj
@@ -228,7 +228,7 @@ def mark_operation_error(state_obj, error_message):
     """Common method to mark operations as failed"""
     state_obj.is_active = False
     state_obj.phase = 'error'
-    state_obj.end_time = datetime.utcnow()
+    state_obj.end_time = datetime.now(timezone.utc)
     state_obj.error_message = error_message
     return state_obj
 

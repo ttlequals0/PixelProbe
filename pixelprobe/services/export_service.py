@@ -6,7 +6,7 @@ import os
 import csv
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from flask import send_file, Response
 
@@ -132,7 +132,7 @@ class ExportService:
             
             # Convert to JSON-serializable format
             export_data = {
-                'export_date': datetime.now().isoformat(),
+                'export_date': datetime.now(timezone.utc).isoformat(),
                 'filter_type': filter_type,
                 'search_term': search,
                 'total_records': len(results),
@@ -222,5 +222,5 @@ class ExportService:
     
     def get_export_filename(self, export_type: str, format_type: str = 'csv') -> str:
         """Generate filename for export"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         return f"pixelprobe_{export_type}_{timestamp}.{format_type}"
