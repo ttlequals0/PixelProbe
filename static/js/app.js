@@ -1249,28 +1249,24 @@ class TableManager {
 
     formatDate(dateString) {
         if (!dateString) return 'N/A';
-        const date = new Date(dateString);
         
-        // Check if date is valid
-        if (isNaN(date.getTime())) return 'Invalid Date';
+        // The backend sends datetime in the server's configured timezone WITHOUT timezone info
+        // e.g., "2025-08-31T04:25:50" which is already in the server's timezone
+        // We need to display it AS-IS without any timezone conversion
         
-        // The backend has already converted to the configured timezone
-        // Just format it nicely without any timezone conversion
-        // Since the date string doesn't have timezone info, JS treats it as local time
-        const options = {
-            year: 'numeric',
-            month: 'short', 
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: false
-            // Don't specify timeZone - the date is already in the correct timezone
-        };
+        // Parse the date components manually to avoid timezone interpretation
+        const match = dateString.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+        if (!match) return 'Invalid Date';
         
-        // Use the browser's default locale or fallback to en-US
-        const locale = navigator.language || 'en-US';
-        return date.toLocaleString(locale, options);
+        const [_, year, month, day, hour, minute, second] = match;
+        
+        // Format month name
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                           'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthName = monthNames[parseInt(month) - 1];
+        
+        // Return formatted string without any timezone conversion
+        return `${monthName} ${parseInt(day)}, ${year} ${hour}:${minute}:${second}`;
     }
 
     escapeHtml(text) {
@@ -1943,7 +1939,7 @@ class PixelProbeApp {
                                data-filename="${report.filename || ''}"
                                onchange="app.toggleReportSelection('${report.report_id}', this.checked)">
                     </td>
-                    <td data-label="Date">${new Date(report.start_time).toLocaleString()}</td>
+                    <td data-label="Date">${this.formatDate(report.start_time)}</td>
                     <td data-label="Type">${scanType}</td>
                     <td data-label="Status"><span class="${statusClass}">${report.status}</span></td>
                     <td data-label="Duration">${report.duration_formatted || 'N/A'}</td>

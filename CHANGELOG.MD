@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.81] - 2025-08-31
+
+### Fixed
+- **Fixed timezone display in UI to show server timezone correctly**
+  - JavaScript now displays dates exactly as sent from server without timezone conversion
+  - Dates are parsed manually to avoid browser timezone interpretation
+  - Reports table dates now use consistent formatting
+  - Prevents browser from converting server times to local timezone
+- **Fixed mobile Scan Reports table not visible**
+  - Removed overly broad CSS rule that was hiding all table containers
+  - Modal tables now properly excluded from mobile hiding rules
+  - Scan Reports table now displays correctly on mobile devices
+- **Fixed ImageMagick decode delegate errors in Docker**
+  - Reordered Dockerfile to install image libraries before ImageMagick
+  - Added proper JPEG and WebP library packages (libjpeg62-turbo, libwebpmux3, etc.)
+  - Added verification step in Docker build to test ImageMagick format support
+  - ImageMagick can now properly decode JPEG, WebP, and other image formats
+
+### Added
+- **Default exclusion for macOS resource fork files**
+  - Automatically excludes `._*` files (macOS AppleDouble resource forks)
+  - Also excludes `.DS_Store`, `Thumbs.db`, `.gitkeep`, and `.placeholder` files
+  - These patterns are applied by default but can be overridden via exclusions.json
+  - Prevents false positive warnings for macOS metadata files
+
+### Notes
+- ImageMagick JPEG/WebP support now properly configured in Docker container
+- MP4 corruption detection working correctly (file has invalid metadata)
+- macOS resource fork files (._*) are now excluded by default from scanning
+
 ## [2.2.80] - 2025-08-31
 
 ### Fixed

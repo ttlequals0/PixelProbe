@@ -12,7 +12,7 @@ import time
 from typing import List, Dict, Optional, Tuple
 
 from flask import current_app
-from media_checker import PixelProbe, load_exclusions
+from media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
 from models import db, ScanResult, ScanState, ScanReport, ScanChunk
 from utils import ProgressTracker
 from sqlalchemy import text
@@ -93,11 +93,12 @@ class ScanService:
             # Set up Flask app context for the thread
             with app.app_context():
                 try:
-                    excluded_paths, excluded_extensions = load_exclusions()
+                    excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
                     checker = PixelProbe(
                         database_path=self.database_uri,
                         excluded_paths=excluded_paths,
-                        excluded_extensions=excluded_extensions
+                        excluded_extensions=excluded_extensions,
+                        excluded_patterns=excluded_patterns
                     )
                     result = checker.scan_file(file_path, force_rescan=force_rescan)
                     self.update_progress(1, 1, file_path, 'completed')
@@ -183,11 +184,12 @@ class ScanService:
                     db.session.commit()
                     logger.info("Old scan chunks cleaned up successfully")
                     
-                    excluded_paths, excluded_extensions = load_exclusions()
+                    excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
                     checker = PixelProbe(
                         database_path=self.database_uri,
                         excluded_paths=excluded_paths,
-                        excluded_extensions=excluded_extensions
+                        excluded_extensions=excluded_extensions,
+                        excluded_patterns=excluded_patterns
                     )
                     
                     # Create progress tracker for scan operations
@@ -658,11 +660,12 @@ class ScanService:
                         logger.error(f"Could not find scan state with ID {scan_state_id}")
                         return
                     
-                    excluded_paths, excluded_extensions = load_exclusions()
+                    excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
                     checker = PixelProbe(
                         database_path=self.database_uri,
                         excluded_paths=excluded_paths,
-                        excluded_extensions=excluded_extensions
+                        excluded_extensions=excluded_extensions,
+                        excluded_patterns=excluded_patterns
                     )
                     
                     # Skip discovery phase - we already have the files
@@ -832,11 +835,12 @@ class ScanService:
                         return
                     
                     # Initialize checker
-                    excluded_paths, excluded_extensions = load_exclusions()
+                    excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
                     checker = PixelProbe(
                         database_path=self.database_uri,
                         excluded_paths=excluded_paths,
-                        excluded_extensions=excluded_extensions
+                        excluded_extensions=excluded_extensions,
+                        excluded_patterns=excluded_patterns
                     )
                     
                     # Process incomplete chunks

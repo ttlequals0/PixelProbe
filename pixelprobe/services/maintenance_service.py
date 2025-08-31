@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import uuid
 
-from media_checker import PixelProbe, load_exclusions
+from media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
 from models import db, ScanResult, CleanupState, FileChangesState, ScanReport
 from utils import ProgressTracker
 
@@ -433,11 +433,12 @@ class MaintenanceService:
             # Create progress tracker for file changes
             progress_tracker = ProgressTracker('file_changes')
             
-            excluded_paths, excluded_extensions = load_exclusions()
+            excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
             checker = PixelProbe(
                 database_path=self.database_uri,
                 excluded_paths=excluded_paths,
-                excluded_extensions=excluded_extensions
+                excluded_extensions=excluded_extensions,
+                excluded_patterns=excluded_patterns
             )
             changed_files = []
             

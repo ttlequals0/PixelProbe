@@ -219,9 +219,16 @@
         width: 100%;
     }
     
-    /* Table mobile transformation */
-    .table-container {
+    /* Table mobile transformation - hide main scan results table only */
+    .content > .table-container,
+    .card-body > .table-container {
         display: none !important;
+    }
+    
+    /* But keep scan reports table visible in modal */
+    #scanReportsModal .table-container,
+    .scan-reports-container .table-container {
+        display: block !important;
     }
     
     /* Mobile cards for scan results */
@@ -378,6 +385,7 @@
     
     /* Table container takes remaining space */
     .scan-reports-container .table-container {
+        display: block !important; /* Override the display: none */
         flex: 1;
         overflow: auto;
         -webkit-overflow-scrolling: touch;

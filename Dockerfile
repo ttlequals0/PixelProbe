@@ -2,14 +2,13 @@ FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    imagemagick \
     libmagic1 \
     curl \
-    # ImageMagick delegates for full format support \
-    libjpeg-dev \
-    libpng-dev \
-    libtiff-dev \
-    libwebp-dev \
+    # Install ImageMagick delegates BEFORE imagemagick itself \
+    libjpeg-dev libjpeg62-turbo \
+    libpng-dev libpng16-16 \
+    libtiff-dev libtiff5 \
+    libwebp-dev libwebpmux3 libwebpdemux2 \
     libopenjp2-7-dev \
     librsvg2-dev \
     ghostscript \
@@ -18,6 +17,8 @@ RUN apt-get update && apt-get install -y \
     liblcms2-dev \
     libfftw3-dev \
     webp \
+    # Now install ImageMagick after delegates are in place \
+    imagemagick \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure ImageMagick to allow all file formats and increase resource limits
@@ -53,7 +54,16 @@ RUN ffmpeg -version && \
     ffmpeg -decoders 2>/dev/null | grep -E "(hevc|h264|h265|av1|vp9)" && \
     ffmpeg -encoders 2>/dev/null | grep -E "(libx264|libx265|libvpx)" && \
     convert -version && \
-    identify -list format | grep -E "(JPEG|PNG|WEBP|HEIC)" || true
+    echo "ImageMagick Delegates:" && \
+    convert -list delegate | head -20 && \
+    echo "ImageMagick Supported Formats:" && \
+    identify -list format | grep -E "(JPEG|JPG|PNG|WEBP|GIF|TIFF)" && \
+    echo "Testing ImageMagick with sample images:" && \
+    convert -size 100x100 xc:white /tmp/test.jpg && \
+    identify /tmp/test.jpg && \
+    convert -size 100x100 xc:white /tmp/test.png && \
+    identify /tmp/test.png && \
+    rm -f /tmp/test.jpg /tmp/test.png
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

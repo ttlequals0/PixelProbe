@@ -25,18 +25,74 @@ from pixelprobe.utils.security import safe_subprocess_run, validate_file_path
 
 logger = logging.getLogger(__name__)
 
+def get_default_filename_patterns():
+    """Get default filename patterns to exclude"""
+    return [
+        '._*',  # macOS resource fork files (AppleDouble format)
+        '.DS_Store',  # macOS folder metadata
+        'Thumbs.db',  # Windows thumbnail cache
+        '.gitkeep',  # Git placeholder files
+        '.placeholder'  # Common placeholder files
+    ]
+
 def load_exclusions():
-    """Load exclusion patterns from exclusions.json file"""
+    """Load exclusion patterns from exclusions.json file with default exclusions
+    
+    Returns:
+        tuple: (excluded_paths, excluded_extensions) for backward compatibility
+    """
+    # Default exclusions that are always applied
+    default_excluded_paths = []
+    default_excluded_extensions = []
+    
+    try:
+        # Load user-defined exclusions from file
+        exclusions_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'exclusions.json')
+        user_paths = []
+        user_extensions = []
+        
+        if os.path.exists(exclusions_file):
+            with open(exclusions_file, 'r') as f:
+                data = json.load(f)
+                user_paths = data.get('paths', [])
+                user_extensions = data.get('extensions', [])
+        
+        # Combine default and user exclusions
+        excluded_paths = list(set(default_excluded_paths + user_paths))
+        excluded_extensions = list(set(default_excluded_extensions + user_extensions))
+        
+        return excluded_paths, excluded_extensions
+    except Exception as e:
+        logger.error(f"Error loading exclusions.json: {e}")
+        # Return defaults on error
+        return default_excluded_paths, default_excluded_extensions
+
+def load_exclusions_with_patterns():
+    """Load exclusion patterns including filename patterns
+    
+    Returns:
+        tuple: (excluded_paths, excluded_extensions, excluded_patterns)
+    """
+    paths, extensions = load_exclusions()
+    
+    # Get default patterns
+    default_patterns = get_default_filename_patterns()
+    
+    # Load user patterns from file if exists
+    user_patterns = []
     try:
         exclusions_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'exclusions.json')
         if os.path.exists(exclusions_file):
             with open(exclusions_file, 'r') as f:
                 data = json.load(f)
-                return data.get('paths', []), data.get('extensions', [])
-        return [], []
+                user_patterns = data.get('filename_patterns', [])
     except Exception as e:
-        logger.error(f"Error loading exclusions.json: {e}")
-        return [], []
+        logger.error(f"Error loading filename patterns: {e}")
+    
+    # Combine patterns
+    excluded_patterns = list(set(default_patterns + user_patterns))
+    
+    return paths, extensions, excluded_patterns
 
 def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
     """Truncate scan output to prevent memory issues"""
@@ -58,7 +114,7 @@ def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
     return lines
 
 class PixelProbe:
-    def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None, database_path=None):
+    def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None, database_path=None, excluded_patterns=None):
         # Video formats - including HEVC/H.265 and professional formats
         self.supported_video_formats = [
             '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
@@ -135,6 +191,7 @@ class PixelProbe:
         self.scan_start_time = None
         self.excluded_paths = excluded_paths or []
         self.excluded_extensions = excluded_extensions or []
+        self.excluded_patterns = excluded_patterns or get_default_filename_patterns()
         self.database_path = database_path
         # Database session management - reuse connections
         self._db_engine = None
@@ -438,13 +495,23 @@ class PixelProbe:
                             # Check if file extension is supported
                             extension = os.path.splitext(entry.name)[1].lower()
                             if extension in self.supported_formats and extension not in self.excluded_extensions:
-                                try:
-                                    # Use DirEntry.stat() for better performance
-                                    stat = entry.stat(follow_symlinks=False)
-                                    files.append((full_path, stat.st_ctime))
-                                except OSError:
-                                    # If stat fails, skip this file
-                                    continue
+                                # Check if filename matches exclusion patterns
+                                import fnmatch
+                                skip_file = False
+                                for pattern in self.excluded_patterns:
+                                    if fnmatch.fnmatch(entry.name, pattern):
+                                        logger.debug(f"Skipping {entry.name} - matches exclusion pattern {pattern}")
+                                        skip_file = True
+                                        break
+                                
+                                if not skip_file:
+                                    try:
+                                        # Use DirEntry.stat() for better performance
+                                        stat = entry.stat(follow_symlinks=False)
+                                        files.append((full_path, stat.st_ctime))
+                                    except OSError:
+                                        # If stat fails, skip this file
+                                        continue
             except (OSError, PermissionError) as e:
                 logger.warning(f"Cannot access directory {path}: {e}")
         
@@ -459,6 +526,7 @@ class PixelProbe:
     
     def _is_supported_file(self, file_path):
         extension = Path(file_path).suffix.lower()
+        filename = os.path.basename(file_path)
         
         # Check if extension is excluded
         if extension in self.excluded_extensions:
@@ -467,6 +535,13 @@ class PixelProbe:
         # Check if path is excluded
         for excluded_path in self.excluded_paths:
             if file_path.startswith(excluded_path):
+                return False
+        
+        # Check if filename matches exclusion patterns
+        import fnmatch
+        for pattern in self.excluded_patterns:
+            if fnmatch.fnmatch(filename, pattern):
+                logger.debug(f"Excluding {filename} - matches pattern {pattern}")
                 return False
                 
         return extension in self.supported_formats
