@@ -5,9 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.87] - 2025-08-31
+
+### Changed
+- **Upgraded to Ubuntu 24.04 base image for latest media tools**
+  - FFmpeg upgraded from 4.4.2 to 6.1.1 (much better WebP/JPEG decoding)
+  - ImageMagick upgraded from 6.9.11 to 6.9.13
+  - libwebp upgraded from 1.2.2 to 1.3.2
+  - libpng upgraded from 1.6.37 to 1.6.43
+  - Python upgraded from 3.11 to 3.12
+  - These newer versions resolve many FFmpeg "invalid data" decoder errors
+
+### Fixed
+- Fixed pip install for Ubuntu 24.04 PEP 668 compliance
+
+## [2.2.86] - 2025-08-31
+
+### Fixed
+- **Fixed ImageMagick PNG decoder warnings**
+  - Changed from `-regard-warnings` to `-quiet` flag in ImageMagick identify
+  - Added libpng environment variables for benign error handling
+  - PNG sBIT and other chunk warnings no longer cause false positives
+
+## [2.2.85] - 2025-08-31
+
+### Fixed
+- **Fixed FFmpeg false warnings and scheduler imports**
+  - Fixed FFmpeg reporting false warnings when PIL verifies images are OK
+  - Properly handle MJPEG decoder errors and WebP "invalid data" issues
+  - Fixed missing ScanState import in scheduler causing scheduled scans to fail
+  - FFmpeg codec compliance issues no longer mark files as warnings when PIL passes
+  - Files that work fine are no longer incorrectly flagged as having warnings
+
 ## [2.2.84] - 2025-08-31
 
 ### Fixed
+- **Fixed export endpoints, timezone display, and media validation**
+  - Fixed export endpoint 404 errors by updating frontend to use /api/export
+  - Fixed PDF/JSON report timezone display to use configured timezone instead of UTC
+  - Improved FFmpeg error handling to only mark files as corrupted on non-zero exit codes
+  - Added PNG chunk warning handling for ImageMagick (sBIT, iCCP, etc.)
+  - Enhanced scan progress updates with proper session management
+  - Fixed stuck scan issues with database session refresh
 - **Fixed scan progress not updating in UI when using Celery workers**
   - Added db.session.remove() in scan-status endpoint to force new connection
   - Added db.session.refresh() to force re-read of scan state from database
