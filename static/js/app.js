@@ -1899,7 +1899,7 @@ class PixelProbeApp {
             }
             
             // Render reports
-            data.reports.forEach(report => {
+            data.reports.forEach((report) => {
                 const row = document.createElement('tr');
                 
                 // Format scan type
@@ -1939,7 +1939,7 @@ class PixelProbeApp {
                                data-filename="${report.filename || ''}"
                                onchange="app.toggleReportSelection('${report.report_id}', this.checked)">
                     </td>
-                    <td data-label="Date">${this.formatDate(report.start_time)}</td>
+                    <td data-label="Date">${this.table.formatDate(report.start_time)}</td>
                     <td data-label="Type">${scanType}</td>
                     <td data-label="Status"><span class="${statusClass}">${report.status}</span></td>
                     <td data-label="Duration">${report.duration_formatted || 'N/A'}</td>

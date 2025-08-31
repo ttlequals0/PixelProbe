@@ -6,8 +6,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     # Install ImageMagick delegates BEFORE imagemagick itself \
     libjpeg-dev libjpeg62-turbo \
-    libpng-dev libpng16-16 \
-    libtiff-dev libtiff5 \
+    libpng-dev \
+    libtiff-dev \
     libwebp-dev libwebpmux3 libwebpdemux2 \
     libopenjp2-7-dev \
     librsvg2-dev \

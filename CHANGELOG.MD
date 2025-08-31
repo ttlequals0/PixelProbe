@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.82] - 2025-08-31
+
+### Fixed
+- **Fixed formatDate function reference error in scan reports**
+  - Scan reports modal was failing with "formatDate is not a function" error
+  - Fixed by using `this.table.formatDate` instead of `this.formatDate`
+  - Reports now display correctly with proper date formatting
+
 ## [2.2.81] - 2025-08-31
 
 ### Fixed
