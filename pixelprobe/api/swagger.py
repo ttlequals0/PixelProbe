@@ -67,7 +67,6 @@ scan_status_model = api.model('ScanStatus', {
 parallel_scan_model = api.model('ParallelScan', {
     'directories': fields.List(fields.String, required=True, description='List of directories to scan'),
     'force_rescan': fields.Boolean(default=False, description='Force rescan of already scanned files'),
-    'deep_scan': fields.Boolean(default=False, description='Perform deep scan for better accuracy')
 })
 
 parallel_scan_response_model = api.model('ParallelScanResponse', {
@@ -162,6 +161,12 @@ reset_by_path_model = api.model('ResetByPath', {
 stuck_scan_recovery_model = api.model('StuckScanRecovery', {
     'message': fields.String(description='Recovery status message'),
     'stuck_files_reset': fields.Integer(description='Number of stuck files that were reset')
+})
+
+reset_incomplete_scans_model = api.model('ResetIncompleteScans', {
+    'message': fields.String(description='Result message'),
+    'reset_count': fields.Integer(description='Number of files reset to pending'),
+    'description': fields.String(description='Description of what was fixed')
 })
 
 # Route implementations will be imported in app.py after blueprint registration

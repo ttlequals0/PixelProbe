@@ -637,7 +637,7 @@ class ProgressManager {
             
             // Add file count for cleanup
             if (status.current > 0 && status.total > 0) {
-                parts.push(`${status.current} of ${status.total} files`);
+                parts.push(`${status.current.toLocaleString()} of ${status.total.toLocaleString()} files`);
             }
             
             if (status.current_file) {
@@ -676,7 +676,7 @@ class ProgressManager {
             
             // Add file count
             if (status.current > 0 && status.total > 0) {
-                parts.push(`${status.current} of ${status.total} files`);
+                parts.push(`${status.current.toLocaleString()} of ${status.total.toLocaleString()} files`);
             }
             
             if (status.current_file) {
@@ -1249,30 +1249,24 @@ class TableManager {
 
     formatDate(dateString) {
         if (!dateString) return 'N/A';
-        const date = new Date(dateString);
         
-        // The backend now sends dates in the configured timezone
-        // Display them as-is without converting to browser's local time
-        const options = {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: false
-        };
+        // The backend sends datetime in the server's configured timezone WITHOUT timezone info
+        // e.g., "2025-08-31T04:25:50" which is already in the server's timezone
+        // We need to display it AS-IS without any timezone conversion
         
-        // Parse the ISO string to get timezone offset
-        const match = dateString.match(/([+-]\d{2}:\d{2}|Z)$/);
-        if (match) {
-            const offset = match[0];
-            if (offset === 'Z') {
-                options.timeZone = 'UTC';
-            }
-        }
+        // Parse the date components manually to avoid timezone interpretation
+        const match = dateString.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+        if (!match) return 'Invalid Date';
         
-        return date.toLocaleString('en-US', options);
+        const [_, year, month, day, hour, minute, second] = match;
+        
+        // Format month name
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                           'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthName = monthNames[parseInt(month) - 1];
+        
+        // Return formatted string without any timezone conversion
+        return `${monthName} ${parseInt(day)}, ${year} ${hour}:${minute}:${second}`;
     }
 
     escapeHtml(text) {
@@ -1585,8 +1579,7 @@ class PixelProbeApp {
                 const scanResponse = await this.api.request('/scan-parallel', {
                     method: 'POST',
                     body: JSON.stringify({ 
-                        file_paths: [file.file_path],
-                        deep_scan: false
+                        file_paths: [file.file_path]
                     })
                 });
                 this.showNotification(scanResponse.message || 'File rescan started', 'success');
@@ -1650,6 +1643,7 @@ class PixelProbeApp {
             const info = await this.api.getSystemInfo();
             this.showSystemStatsModal(info);
         } catch (error) {
+            console.error('System info error:', error);
             this.showNotification('Failed to load system info', 'error');
         }
     }
@@ -1661,8 +1655,12 @@ class PixelProbeApp {
         const modalBody = modal.querySelector('.modal-body');
         if (!modalBody) return;
         
-        // Format the system info
+        // Format the system info with columns layout
         let html = '<div class="system-stats-content">';
+        html += '<div class="stats-columns">';
+        
+        // Column 1
+        html += '<div class="stats-column">';
         
         // Database Stats
         if (info.database) {
@@ -1678,25 +1676,13 @@ class PixelProbeApp {
             html += '</div>';
         }
         
-        // Monitored Paths
-        if (info.monitored_paths && info.monitored_paths.length > 0) {
-            html += '<h4>Monitored Paths</h4>';
-            html += '<div class="stats-section">';
-            info.monitored_paths.forEach(path => {
-                html += `<p>${path.path}: ${path.file_count?.toLocaleString() || 0} files`;
-                if (!path.exists) html += ' (not accessible)';
-                html += '</p>';
-            });
-            html += '</div>';
-        }
-        
         // Performance Stats
         if (info.database && info.database.performance) {
             const perf = info.database.performance;
             html += '<h4>Scan Performance</h4>';
             html += '<div class="stats-section">';
             html += `<p>Total Scans: ${perf.total_scans?.toLocaleString() || 0}</p>`;
-            html += `<p>Average Days Since Scan: ${perf.avg_days_since_scan?.toFixed(1) || 0} days</p>`;
+            html += `<p>Average Days Since Scan: ${perf.avg_days_since_scan ? parseFloat(perf.avg_days_since_scan).toFixed(1) : 0} days</p>`;
             if (perf.newest_scan) {
                 html += `<p>Last Scan: ${new Date(perf.newest_scan).toLocaleString()}</p>`;
             }
@@ -1705,6 +1691,11 @@ class PixelProbeApp {
             }
             html += '</div>';
         }
+        
+        html += '</div>'; // End Column 1
+        
+        // Column 2
+        html += '<div class="stats-column">';
         
         // System Information
         if (info.version || info.timezone || info.features) {
@@ -1719,17 +1710,6 @@ class PixelProbeApp {
             if (info.current_time) {
                 html += `<p>Current Time: ${new Date(info.current_time).toLocaleString()}</p>`;
             }
-            html += '</div>';
-        }
-        
-        // Features
-        if (info.features) {
-            html += '<h4>Features</h4>';
-            html += '<div class="stats-section">';
-            Object.entries(info.features).forEach(([key, value]) => {
-                const featureName = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-                html += `<p>${featureName}: ${value ? 'Enabled' : 'Disabled'}</p>`;
-            });
             html += '</div>';
         }
         
@@ -1749,6 +1729,34 @@ class PixelProbeApp {
             html += '</div>';
         }
         
+        // Features
+        if (info.features) {
+            html += '<h4>Features</h4>';
+            html += '<div class="stats-section">';
+            Object.entries(info.features).forEach(([key, value]) => {
+                const featureName = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                html += `<p>${featureName}: ${value ? 'Enabled' : 'Disabled'}</p>`;
+            });
+            html += '</div>';
+        }
+        
+        html += '</div>'; // End Column 2
+        
+        // Column 3 - Monitored Paths (if they exist)
+        if (info.monitored_paths && info.monitored_paths.length > 0) {
+            html += '<div class="stats-column">';
+            html += '<h4>Monitored Paths</h4>';
+            html += '<div class="stats-section">';
+            info.monitored_paths.forEach(path => {
+                html += `<p>${path.path}: ${path.file_count?.toLocaleString() || 0} files`;
+                if (!path.exists) html += ' (not accessible)';
+                html += '</p>';
+            });
+            html += '</div>';
+            html += '</div>'; // End Column 3
+        }
+        
+        html += '</div>'; // End stats-columns
         html += '</div>';
         
         modalBody.innerHTML = html;
@@ -1868,7 +1876,7 @@ class PixelProbeApp {
             // Build query params
             const params = new URLSearchParams({
                 page: page,
-                per_page: 20,
+                per_page: 100,  // Use 100 for reports instead of 20
                 scan_type: typeFilter,
                 status: statusFilter,
                 sort_order: 'desc'
@@ -1891,7 +1899,7 @@ class PixelProbeApp {
             }
             
             // Render reports
-            data.reports.forEach(report => {
+            data.reports.forEach((report) => {
                 const row = document.createElement('tr');
                 
                 // Format scan type
@@ -1925,19 +1933,19 @@ class PixelProbeApp {
                 }
                 
                 row.innerHTML = `
-                    <td>
+                    <td data-label="Select">
                         <input type="checkbox" 
                                data-report-id="${report.report_id}" 
                                data-filename="${report.filename || ''}"
                                onchange="app.toggleReportSelection('${report.report_id}', this.checked)">
                     </td>
-                    <td>${new Date(report.start_time).toLocaleString()}</td>
-                    <td>${scanType}</td>
-                    <td><span class="${statusClass}">${report.status}</span></td>
-                    <td>${report.duration_formatted || 'N/A'}</td>
-                    <td>${filesInfo}</td>
-                    <td>${issuesInfo}</td>
-                    <td>
+                    <td data-label="Date">${this.table.formatDate(report.start_time)}</td>
+                    <td data-label="Type">${scanType}</td>
+                    <td data-label="Status"><span class="${statusClass}">${report.status}</span></td>
+                    <td data-label="Duration">${report.duration_formatted || 'N/A'}</td>
+                    <td data-label="Files">${filesInfo}</td>
+                    <td data-label="Issues">${issuesInfo}</td>
+                    <td data-label="Actions">
                         <button class="btn btn-sm btn-primary" onclick="app.viewScanReport('${report.report_id}')" title="View Details">
                             <i class="fas fa-eye"></i>
                         </button>
@@ -2324,7 +2332,7 @@ class PixelProbeApp {
                 requestBody.search = this.table.searchQuery;
             }
             
-            const response = await fetch('/api/export-csv', {
+            const response = await fetch('/api/export', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2364,65 +2372,6 @@ class PixelProbeApp {
         }
     }
 
-    async deepScanSelected() {
-        if (this.table.selectedFiles.size === 0) {
-            this.showNotification('No files selected', 'warning');
-            return;
-        }
-
-        try {
-            const fileIds = Array.from(this.table.selectedFiles);
-            
-            // First, reset the selected files for deep scanning
-            const resetResponse = await fetch('/api/reset-for-rescan', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ 
-                    type: 'selected',
-                    file_ids: fileIds
-                })
-            });
-
-            if (!resetResponse.ok) {
-                throw new Error('Failed to reset files for deep scan');
-            }
-
-            // Get file paths for the selected files
-            const filePaths = [];
-            for (const fileId of fileIds) {
-                const response = await fetch(`/api/scan-results/${fileId}`);
-                if (response.ok) {
-                    const result = await response.json();
-                    filePaths.push(result.file_path);
-                }
-            }
-
-            // Start deep scan on only the selected files
-            const scanResponse = await fetch('/api/scan-parallel', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ 
-                    file_paths: filePaths,
-                    deep_scan: true,
-                    force_rescan: true  // Force rescan for deep scan
-                })
-            });
-
-            if (scanResponse.ok) {
-                this.showNotification(`Deep scan started for ${fileIds.length} files`, 'success');
-                // Start monitoring with 'scan' operation type to ensure auto-refresh
-                this.progress.startMonitoring('scan');
-            } else {
-                throw new Error('Deep scan failed');
-            }
-        } catch (error) {
-            this.showNotification('Failed to start deep scan', 'error');
-        }
-    }
 
     async downloadFile(fileId) {
         window.location.href = `/api/download/${fileId}`;
@@ -2500,7 +2449,6 @@ class PixelProbeApp {
                 },
                 body: JSON.stringify({ 
                     file_paths: filePaths,
-                    deep_scan: false,
                     force_rescan: true  // Force rescan to actually re-scan the files
                 })
             });

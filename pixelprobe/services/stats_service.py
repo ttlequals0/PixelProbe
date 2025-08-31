@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlalchemy import text
 
 from models import db, ScanResult
-from pixelprobe.utils.helpers import get_timezone
+from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class StatsService:
     """Service for calculating and retrieving statistics"""
     
     def __init__(self):
-        self.tz = get_timezone()
+        self.tz = get_configured_timezone()
         
     def get_file_statistics(self) -> Dict:
         """Get comprehensive file statistics"""
@@ -84,7 +84,6 @@ class StatsService:
                     'paths_monitored': len(monitored_paths)
                 },
                 'features': {
-                    'deep_scan': True,
                     'parallel_scanning': True,
                     'auto_cleanup': True,
                     'file_monitoring': True,
@@ -172,25 +171,39 @@ class StatsService:
     def _get_monitored_paths(self) -> List[Dict]:
         """Get information about monitored paths"""
         try:
-            # Get configured scan paths
-            scan_paths = os.environ.get('SCAN_PATHS', '/movies,/tv,/originals,/immich').split(',')
+            # Get configured scan paths (no hardcoded defaults)
+            scan_paths_env = os.environ.get('SCAN_PATHS', '')
+            scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
             
-            # Get file counts per path
-            path_counts_query = db.session.execute(
-                text("""
-                    SELECT 
-                        CASE 
-                            WHEN file_path LIKE '/movies%' THEN '/movies'
-                            WHEN file_path LIKE '/tv%' THEN '/tv'
-                            WHEN file_path LIKE '/originals%' THEN '/originals'
-                            WHEN file_path LIKE '/immich%' THEN '/immich'
-                            ELSE 'other'
-                        END as base_path,
-                        COUNT(*) as file_count
-                    FROM scan_results
-                    GROUP BY base_path
-                """)
-            ).fetchall()
+            if not scan_paths:
+                # No scan paths configured
+                path_counts_query = []
+            else:
+                # Build dynamic CASE statement based on actual configured paths
+                case_statements = []
+                for path in scan_paths:
+                    # Escape single quotes in path for SQL
+                    escaped_path = path.replace("'", "''")
+                    case_statements.append(f"WHEN file_path LIKE '{escaped_path}%' THEN '{escaped_path}'")
+                
+                # Build the query dynamically
+                if case_statements:
+                    case_sql = "\n                            ".join(case_statements)
+                    query = f"""
+                        SELECT 
+                            CASE 
+                                {case_sql}
+                                ELSE 'other'
+                            END as base_path,
+                            COUNT(*) as file_count
+                        FROM scan_results
+                        GROUP BY base_path
+                    """
+                    
+                    # Get file counts per path
+                    path_counts_query = db.session.execute(text(query)).fetchall()
+                else:
+                    path_counts_query = []
             
             # Convert to dictionary
             path_counts = {row[0]: row[1] for row in path_counts_query}
@@ -235,22 +248,22 @@ class StatsService:
             oldest_scan = db_perf_query[2]
             newest_scan = db_perf_query[3]
             
-            # Parse dates
+            # Convert scan dates to configured timezone for display
             if oldest_scan:
                 try:
                     oldest_scan_dt = datetime.fromisoformat(oldest_scan.replace('Z', '+00:00'))
-                    if oldest_scan_dt.tzinfo is None:
-                        oldest_scan_dt = self.tz.localize(oldest_scan_dt)
-                    oldest_scan = oldest_scan_dt.isoformat()
+                    oldest_scan_display = from_utc_to_configured(oldest_scan_dt)
+                    if oldest_scan_display:
+                        oldest_scan = oldest_scan_display.isoformat()
                 except:
                     pass
                     
             if newest_scan:
                 try:
                     newest_scan_dt = datetime.fromisoformat(newest_scan.replace('Z', '+00:00'))
-                    if newest_scan_dt.tzinfo is None:
-                        newest_scan_dt = self.tz.localize(newest_scan_dt)
-                    newest_scan = newest_scan_dt.isoformat()
+                    newest_scan_display = from_utc_to_configured(newest_scan_dt)
+                    if newest_scan_display:
+                        newest_scan = newest_scan_display.isoformat()
                 except:
                     pass
             

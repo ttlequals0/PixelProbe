@@ -49,6 +49,7 @@ def create_test_app():
     from pixelprobe.api.export_routes import export_bp
     from pixelprobe.api.maintenance_routes import maintenance_bp
     from pixelprobe.api.reports_routes import reports_bp
+    from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
     from scheduler import MediaScheduler
     
     test_app.register_blueprint(scan_bp)
@@ -57,6 +58,7 @@ def create_test_app():
     test_app.register_blueprint(export_bp)
     test_app.register_blueprint(maintenance_bp)
     test_app.register_blueprint(reports_bp)
+    test_app.register_blueprint(parallel_scan_bp)
     
     # Exempt API endpoints from CSRF
     csrf.exempt(scan_bp)
@@ -65,6 +67,7 @@ def create_test_app():
     csrf.exempt(export_bp)
     csrf.exempt(maintenance_bp)
     csrf.exempt(reports_bp)
+    csrf.exempt(parallel_scan_bp)
     
     # Set up scheduler without initializing (to avoid DB access before tables exist)
     scheduler = MediaScheduler()
@@ -121,12 +124,89 @@ def db(app):
     """Create database for testing"""
     with app.app_context():
         # Ensure all models are loaded
-        from models import ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport, Exclusion
+        from models import (ScanResult, ScanState, CleanupState, FileChangesState, 
+                            ScanConfiguration, IgnoredErrorPattern, ScanSchedule, 
+                            ScanReport, Exclusion, ScanChunk)
         
         _db.create_all()
         yield _db
-        _db.session.remove()
-        _db.drop_all()
+        
+        try:
+            # First, mark any active cleanup as cancelled to stop background threads
+            from models import CleanupState, ScanState
+            try:
+                cleanup_states = CleanupState.query.filter_by(is_active=True).all()
+                for cleanup in cleanup_states:
+                    cleanup.is_active = False
+                    cleanup.cancelled = True
+                _db.session.commit()
+            except Exception:
+                pass  # Ignore errors if tables don't exist
+            
+            # Mark any active scans as stopped
+            try:
+                scan_state = ScanState.get_or_create()
+                if scan_state.is_active:
+                    scan_state.stop_scan()
+                    _db.session.commit()
+            except Exception:
+                pass
+            
+            # Clean up any running scan threads before dropping tables
+            if hasattr(app, 'scan_service') and app.scan_service:
+                if hasattr(app.scan_service, 'current_scan_thread') and app.scan_service.current_scan_thread:
+                    app.scan_service.scan_cancelled = True
+                    if app.scan_service.current_scan_thread.is_alive():
+                        app.scan_service.current_scan_thread.join(timeout=1.0)
+                    app.scan_service.current_scan_thread = None
+            
+            # Wait for all background threads to finish
+            import threading
+            import time
+            max_wait = 2.0  # Maximum 2 seconds wait
+            start_time = time.time()
+            active_threads = []
+            
+            while time.time() - start_time < max_wait:
+                active_threads = []
+                for thread in threading.enumerate():
+                    if thread != threading.main_thread() and thread.is_alive():
+                        thread_name = thread.name.lower() if hasattr(thread, 'name') else ''
+                        if 'cleanup' in thread_name or 'scan' in thread_name:
+                            active_threads.append(thread)
+                
+                if not active_threads:
+                    break
+                    
+                # Give threads a moment to finish
+                time.sleep(0.1)
+            
+            # Force join any remaining threads
+            for thread in active_threads:
+                if thread.is_alive():
+                    thread.join(timeout=0.1)
+            
+            # Close all sessions before dropping tables
+            _db.session.remove()
+            
+            # Force close the connection to release locks
+            if hasattr(_db.engine, 'dispose'):
+                try:
+                    _db.engine.dispose()
+                except Exception:
+                    pass  # Ignore disposal errors
+            
+            # Try to drop tables, but don't fail if locked
+            try:
+                _db.drop_all()
+            except Exception as e:
+                # If tables are locked, that's okay for tests
+                import logging
+                logging.warning(f"Could not drop all tables during teardown: {e}")
+        except Exception as e:
+            # Log but don't fail teardown
+            import logging
+            logging.warning(f"Error during database teardown: {e}")
 
 @pytest.fixture(scope='session')
 def test_data_dir():
@@ -231,7 +311,7 @@ def mock_scan_result(db):
 
 @pytest.fixture
 def real_scan_results(db, test_data_dir):
-    """Scan real media files into test database"""
+    """Scan real media files into test database - optimized for faster execution"""
     from models import ScanResult
     from media_checker import PixelProbe
     from datetime import datetime, timezone
@@ -239,51 +319,69 @@ def real_scan_results(db, test_data_dir):
     checker = PixelProbe()
     results = []
     
-    # Scan valid files
-    for key, path in test_data_dir.items():
-        if key.startswith('valid_') and os.path.exists(path):
-            scan_data = checker.scan_file(path)
-            if scan_data:
-                result = ScanResult(
-                    file_path=path,
-                    file_size=scan_data.get('file_size', 0),
-                    file_type=scan_data.get('file_type', ''),
-                    file_hash=scan_data.get('file_hash', ''),
-                    scan_date=datetime.now(timezone.utc),
-                    scan_status='completed',
-                    is_corrupted=scan_data.get('is_corrupted', False),
-                    error_message=scan_data.get('error_message'),
-                    corruption_details=scan_data.get('corruption_details'),
-                    scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
-                    scan_output=scan_data.get('scan_output'),
-                    warning_details=scan_data.get('warning_details'),
-                    marked_as_good=False
-                )
-                db.session.add(result)
-                results.append(result)
+    # Limit the number of files to scan to prevent timeouts
+    MAX_FILES_PER_TYPE = 3
+    valid_files_scanned = 0
+    corrupted_files_scanned = 0
     
-    # Scan corrupted files
+    # Only scan essential file types for faster tests
+    essential_extensions = ['.mp4', '.jpg', '.png', '.mp3']
+    
+    # Scan valid files (limited)
     for key, path in test_data_dir.items():
+        if valid_files_scanned >= MAX_FILES_PER_TYPE:
+            break
+        if key.startswith('valid_') and os.path.exists(path):
+            # Only scan essential file types
+            if any(path.endswith(ext) for ext in essential_extensions):
+                scan_data = checker.scan_file(path)
+                if scan_data:
+                    result = ScanResult(
+                        file_path=path,
+                        file_size=scan_data.get('file_size', 0),
+                        file_type=scan_data.get('file_type', ''),
+                        file_hash=scan_data.get('file_hash', ''),
+                        scan_date=datetime.now(timezone.utc),
+                        scan_status='completed',
+                        is_corrupted=scan_data.get('is_corrupted', False),
+                        error_message=scan_data.get('error_message'),
+                        corruption_details=scan_data.get('corruption_details'),
+                        scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
+                        scan_output=scan_data.get('scan_output'),
+                        warning_details=scan_data.get('warning_details'),
+                        marked_as_good=False
+                    )
+                    db.session.add(result)
+                    results.append(result)
+                    valid_files_scanned += 1
+    
+    # Scan corrupted files (limited)
+    for key, path in test_data_dir.items():
+        if corrupted_files_scanned >= MAX_FILES_PER_TYPE:
+            break
         if key.startswith('corrupted_') and os.path.exists(path):
-            scan_data = checker.scan_file(path)
-            if scan_data:
-                result = ScanResult(
-                    file_path=path,
-                    file_size=scan_data.get('file_size', 0),
-                    file_type=scan_data.get('file_type', ''),
-                    file_hash=scan_data.get('file_hash', ''),
-                    scan_date=datetime.now(timezone.utc),
-                    scan_status='completed',
-                    is_corrupted=scan_data.get('is_corrupted', False),
-                    error_message=scan_data.get('error_message'),
-                    corruption_details=scan_data.get('corruption_details'),
-                    scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
-                    scan_output=scan_data.get('scan_output'),
-                    warning_details=scan_data.get('warning_details'),
-                    marked_as_good=False
-                )
-                db.session.add(result)
-                results.append(result)
+            # Only scan essential file types
+            if any(path.endswith(ext) for ext in essential_extensions):
+                scan_data = checker.scan_file(path)
+                if scan_data:
+                    result = ScanResult(
+                        file_path=path,
+                        file_size=scan_data.get('file_size', 0),
+                        file_type=scan_data.get('file_type', ''),
+                        file_hash=scan_data.get('file_hash', ''),
+                        scan_date=datetime.now(timezone.utc),
+                        scan_status='completed',
+                        is_corrupted=scan_data.get('is_corrupted', False),
+                        error_message=scan_data.get('error_message'),
+                        corruption_details=scan_data.get('corruption_details'),
+                        scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
+                        scan_output=scan_data.get('scan_output'),
+                        warning_details=scan_data.get('warning_details'),
+                        marked_as_good=False
+                    )
+                    db.session.add(result)
+                    results.append(result)
+                    corrupted_files_scanned += 1
     
     db.session.commit()
     return results

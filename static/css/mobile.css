@@ -219,9 +219,16 @@
         width: 100%;
     }
     
-    /* Table mobile transformation */
-    .table-container {
+    /* Table mobile transformation - hide main scan results table only */
+    .content > .table-container,
+    .card-body > .table-container {
         display: none !important;
+    }
+    
+    /* But keep scan reports table visible in modal */
+    #scanReportsModal .table-container,
+    .scan-reports-container .table-container {
+        display: block !important;
     }
     
     /* Mobile cards for scan results */
@@ -324,6 +331,166 @@
     .modal-content {
         margin: 2rem 1rem;
         width: calc(100% - 2rem);
+    }
+    
+    /* System Stats Modal mobile */
+    #system-stats-modal .modal-content {
+        max-width: calc(100% - 2rem);
+        width: calc(100% - 2rem);
+    }
+    
+    .stats-columns {
+        display: block;
+    }
+    
+    .stats-column {
+        width: 100%;
+        margin-bottom: 1rem;
+    }
+    
+    /* Scan Reports Modal mobile */
+    #scan-reports-modal .modal-content {
+        max-width: 100%;
+        width: 100%;
+        margin: 0;
+        height: 100vh;
+        border-radius: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg-primary);
+    }
+    
+    #scan-reports-modal .modal-header {
+        flex-shrink: 0;
+        padding: 1rem;
+        border-bottom: 1px solid var(--border-color);
+        background: var(--bg-secondary);
+    }
+    
+    #scan-reports-modal .modal-header h5 {
+        font-size: 1.125rem;
+        margin: 0;
+    }
+    
+    #scan-reports-modal .modal-body {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 0.5rem;
+        min-height: 0; /* Critical for flex child scrolling */
+        -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+    }
+    
+    /* Fix close button on mobile */
+    #scan-reports-modal .close {
+        font-size: 1.5rem;
+        padding: 0;
+        margin: -0.5rem -0.5rem -0.5rem auto;
+        width: 2rem;
+        height: 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Make reports container scrollable */
+    .scan-reports-container {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    /* Filter controls fixed at top */
+    .scan-reports-container .filter-controls {
+        flex-shrink: 0;
+    }
+    
+    /* Table container takes remaining space */
+    .scan-reports-container .table-container {
+        display: block !important; /* Override the display: none */
+        flex: 1;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+        min-height: 200px; /* Ensure minimum height */
+        position: relative; /* For absolute positioning context */
+    }
+    
+    /* Ensure table is visible even when empty */
+    #scan-reports-table tbody:empty::after {
+        content: "Loading reports...";
+        display: block;
+        padding: 2rem;
+        text-align: center;
+        color: var(--text-secondary);
+    }
+    
+    #scan-reports-table {
+        width: 100%;
+    }
+    
+    /* Stack the table on small mobile screens */
+    @media (max-width: 600px) {
+        #scan-reports-table thead {
+            display: none;
+        }
+        
+        #scan-reports-table tbody tr {
+            display: block;
+            margin-bottom: 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 0.5rem;
+            background: var(--bg-secondary);
+        }
+        
+        #scan-reports-table tbody td {
+            display: block;
+            text-align: left;
+            padding: 0.25rem 0.5rem;
+            border: none;
+        }
+        
+        #scan-reports-table tbody td:before {
+            content: attr(data-label);
+            font-weight: bold;
+            display: inline-block;
+            width: 120px;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+        
+        /* Hide checkbox column on mobile */
+        #scan-reports-table tbody td:first-child {
+            display: none;
+        }
+        
+        /* Actions column - make buttons stack vertically */
+        #scan-reports-table tbody td:last-child {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.25rem;
+            padding: 0.5rem;
+        }
+        
+        #scan-reports-table tbody td:last-child:before {
+            width: 100%;
+            margin-bottom: 0.5rem;
+        }
+        
+        #scan-reports-table tbody td:last-child button {
+            flex: 1 1 calc(50% - 0.125rem);
+            min-width: 0;
+            padding: 0.375rem 0.5rem;
+            font-size: 0.875rem;
+        }
+        
+        /* Pagination at bottom */
+        #reports-pagination {
+            flex-shrink: 0;
+            padding: 1rem;
+            border-top: 1px solid var(--border-color);
+            background: var(--bg-primary);
+        }
     }
     
     .modal-header {

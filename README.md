@@ -6,23 +6,47 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.2.7** - Critical scan engine fixes with enhanced performance, large file handling, and database improvements.
+**Version 2.2.87** - Major upgrade to Ubuntu 24.04 with latest media tools for better decoder support.
 
-## 🚀 What's New in Version 2.2.7
+## 🚀 What's New in Version 2.2.87
 
-### 🔧 Critical Scan Engine Fixes
-- **Database Constraints**: Fixed `StringDataRightTruncation` and `UniqueViolation` errors that caused scan failures
-- **Large File Handling**: Added 5GB file size limits and 5-minute timeouts to prevent indefinite hangs
-- **Chunk ID Uniqueness**: Enhanced chunk ID generation with timestamps to prevent duplicate key conflicts  
-- **Progress Messages**: Increased VARCHAR limits from 200 to 1000 characters to prevent truncation errors
-- **Error Recovery**: Improved scan thread crash recovery and status reporting
-- **Startup Reliability**: Fixed app startup issues caused by database migration timing
+### 🎯 Major Infrastructure Upgrade
+- **Ubuntu 24.04 Base**: Upgraded from Ubuntu 22.04 for latest package versions
+- **FFmpeg 6.1.1**: Upgraded from 4.4.2 - significantly better WebP/JPEG decoding
+- **ImageMagick 6.9.13**: Upgraded from 6.9.11 - improved PNG handling
+- **Python 3.12**: Upgraded from 3.11 for better performance
+- **Modern Libraries**: libwebp 1.3.2, libpng 1.6.43 for better format support
+
+### 🛡️ Decoder & Warning Fixes
+- **FFmpeg False Positives**: Fixed "invalid data" errors for valid files
+- **ImageMagick PNG Warnings**: Resolved sBIT chunk warnings
+- **Scheduler Reliability**: Fixed missing imports causing scheduled scan failures
+- **Timezone Display**: Fixed PDF/JSON reports showing UTC instead of configured timezone
+
+## 🚀 Previous Version Highlights (2.2.47)
+
+### 🛡️ Database Reliability Enhancements
+- **Connection Pool Recovery**: Automatic recovery from "lost synchronization" errors
+- **Transaction Management**: Robust handling of aborted transactions with automatic rollback
+- **Query Resilience**: Fixed count(*) query errors and ResourceClosedError issues
+- **Schema Migrations**: Added missing database columns (last_update, files_processed)
+
+### 🔧 Critical Production Fixes
+- **UI Updates**: Fixed scan progress not updating in UI during phase 3
+- **Connection Pooling**: Implemented pre-ping, recycling, and automatic bad connection removal
+- **Error Recovery**: Added retry logic with exponential backoff for database operations
+- **Session Management**: Proper cleanup and disposal of corrupted database sessions
+
+### 📊 Previous v2.2.45 Features
+- **Parallel Scanning**: All Celery workers utilized for 3-8x faster scanning
+- **Export API**: Multiple format support (CSV, JSON, PDF)
+- **Stuck Scan Recovery**: Automatic detection and recovery
 
 ### 🎯 Key Benefits
-- **No More Stuck Scans**: Eliminates the "100% complete with pending files" issue
-- **Large File Support**: Handles multi-GB video files without hanging
-- **Database Stability**: Resolves PostgreSQL constraint violations that crashed scans
-- **Clean Restarts**: Fresh database start recommended for optimal performance
+- **No More Stuck Scans**: Automatic recovery after 5-10 minutes of no progress
+- **Faster Processing**: Utilizes all available CPU cores through proper worker distribution
+- **Better Large Library Support**: Handles 1M+ file libraries without hanging
+- **Improved Reliability**: Better error handling and partial result recovery
 
 ## 🚀 What's New in Version 2.2.0
 
@@ -76,7 +100,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
          - postgres_data:/var/lib/postgresql/data
    
      mediachecker:
-       image: ttlequals0/pixelprobe:2.2.0
+       image: ttlequals0/pixelprobe:2.2.48
        environment:
          POSTGRES_HOST: postgres
          POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -205,6 +229,15 @@ This major release includes 80 versions worth of improvements since 2.0.53:
 - **Better Logging**: Structured logging with proper levels
 - **Database Tools**: Migration and repair utilities
 - **CI/CD Ready**: Docker multi-stage builds
+
+## 📚 Documentation
+
+- **[Docker Setup Guide](docs/DOCKER_SETUP.md)** - Complete Docker Compose setup with container explanations
+- **[System Architecture](docs/SYSTEM_ARCHITECTURE.md)** - Container architecture, Celery queues, and data flow
+- **[API Documentation](docs/api/README.md)** - Complete REST API reference  
+- **[Architecture Overview](docs/ARCHITECTURE.md)** - Application layers and design
+- **[Performance Tuning](docs/PERFORMANCE_TUNING.md)** - Optimization strategies
+- **[Developer Guide](docs/developer/README.md)** - Development setup and guidelines
 
 ## ✨ Features
 
@@ -677,16 +710,14 @@ See [tools/README.md](tools/README.md) for detailed documentation on each tool.
 
 ## Documentation
 
-### API Documentation
-- **[API Reference](docs/api/README.md)** - Complete API documentation with endpoints, request/response examples
-- **[OpenAPI Specification](docs/api/openapi.yaml)** - OpenAPI 3.0 specification for API integration
-- **[Integration Guide](docs/examples/integration-guide.md)** - Examples for integrating PixelProbe into your workflows
+Complete documentation is organized in the **[docs/](docs/README.md)** directory.
 
-### Developer Documentation
-- **[Developer Guide](docs/developer/README.md)** - Setup, architecture, and contribution guidelines
-- **[Architecture Overview](docs/ARCHITECTURE.md)** - System design and component architecture
-- **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Detailed code organization and module descriptions
-- **[Performance Tuning](docs/PERFORMANCE_TUNING.md)** - Optimization guide for large-scale deployments
+### Quick Links
+- **[API Reference](docs/api/README.md)** - Complete API documentation
+- **[Migration Guides](docs/migration/)** - Database migration instructions  
+- **[Tools & Scripts](docs/maintenance/TOOLS_AND_SCRIPTS.md)** - Maintenance utilities
+- **[Architecture](docs/ARCHITECTURE.md)** - System design and components
+- **[Developer Guide](docs/developer/README.md)** - Contributing guidelines
 
 ### API Client Examples
 - **[Python Client](docs/examples/python-client.py)** - Full-featured Python client with CLI

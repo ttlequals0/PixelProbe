@@ -1,4 +1,5 @@
-version: '3.8'
+# Docker Compose configuration for PixelProbe
+# Production deployment using latest stable image
 
 services:
   # PostgreSQL database
@@ -37,7 +38,7 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.2.41
+    image: ttlequals0/pixelprobe:latest
     container_name: pixelprobe-app
     environment:
       # Security
@@ -63,6 +64,8 @@ services:
       BATCH_SIZE: ${BATCH_SIZE:-100}
       MAX_OUTPUT_SIZE: ${MAX_OUTPUT_SIZE:-10000}
       OUTPUT_ROTATION_ENABLED: ${OUTPUT_ROTATION_ENABLED:-true}
+      TZ: America/New_York
+      
       
       # Scheduled scans
       PERIODIC_SCAN_SCHEDULE: ${PERIODIC_SCAN_SCHEDULE:-}
@@ -96,7 +99,7 @@ services:
 
   # P1 Celery Worker for distributed task processing
   celery-worker:
-    image: ttlequals0/pixelprobe:2.2.41
+    image: ttlequals0/pixelprobe:latest
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:
@@ -134,7 +137,7 @@ services:
 
   # P1 Flower monitoring dashboard (optional)
   flower:
-    image: ttlequals0/pixelprobe:2.2.41
+    image: ttlequals0/pixelprobe:latest
     container_name: pixelprobe-flower
     command: python flower_monitor.py
     environment:

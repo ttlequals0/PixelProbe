@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import uuid
 
-from media_checker import PixelProbe, load_exclusions
+from media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
 from models import db, ScanResult, CleanupState, FileChangesState, ScanReport
 from utils import ProgressTracker
 
@@ -364,6 +364,39 @@ class MaintenanceService:
             logger.error(f"Error during cleanup: {e}")
             self._handle_cleanup_error(cleanup_id, str(e))
     
+    def _create_cleanup_report(self, cleanup_record: CleanupState):
+        """Create a report for the cleanup operation"""
+        try:
+            # Calculate duration
+            duration_seconds = None
+            if cleanup_record.start_time and cleanup_record.end_time:
+                duration_seconds = (cleanup_record.end_time - cleanup_record.start_time).total_seconds()
+            
+            # Create the report
+            report = ScanReport(
+                scan_type='cleanup',
+                start_time=cleanup_record.start_time,
+                end_time=cleanup_record.end_time,
+                duration_seconds=duration_seconds,
+                status='completed' if cleanup_record.phase == 'complete' else 'cancelled',
+                total_files_discovered=cleanup_record.total_files,
+                files_scanned=cleanup_record.files_processed,
+                orphaned_records_found=cleanup_record.orphaned_found,
+                orphaned_records_deleted=cleanup_record.orphaned_found,  # All found orphans are deleted
+                created_at=datetime.now(timezone.utc)
+            )
+            
+            db.session.add(report)
+            db.session.commit()
+            
+            logger.info(f"Created cleanup report {report.report_id} for cleanup operation")
+            return report
+            
+        except Exception as e:
+            logger.error(f"Failed to create cleanup report: {e}")
+            # Don't fail the cleanup operation if report creation fails
+            return None
+    
     def _run_file_changes_check(self, check_id: str):
         """Run the file changes check operation"""
         try:
@@ -400,11 +433,12 @@ class MaintenanceService:
             # Create progress tracker for file changes
             progress_tracker = ProgressTracker('file_changes')
             
-            excluded_paths, excluded_extensions = load_exclusions()
+            excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
             checker = PixelProbe(
                 database_path=self.database_uri,
                 excluded_paths=excluded_paths,
-                excluded_extensions=excluded_extensions
+                excluded_extensions=excluded_extensions,
+                excluded_patterns=excluded_patterns
             )
             changed_files = []
             

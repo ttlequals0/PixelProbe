@@ -3,20 +3,9 @@ Helper utilities for PixelProbe
 """
 
 import os
-import pytz
 import logging
 
 logger = logging.getLogger(__name__)
-
-def get_timezone():
-    """Get configured timezone, default to UTC"""
-    APP_TIMEZONE = os.environ.get('TZ', 'UTC')
-    try:
-        tz = pytz.timezone(APP_TIMEZONE)
-        return tz
-    except pytz.exceptions.UnknownTimeZoneError:
-        logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
-        return pytz.UTC
 
 def format_file_size(size_bytes):
     """Format file size in human readable format"""

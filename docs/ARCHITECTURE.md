@@ -1,8 +1,10 @@
 # PixelProbe Architecture
 
+> **Note**: For detailed container architecture and Celery queue system documentation, see [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md)
+
 ## Overview
 
-PixelProbe is a media file corruption detection system built with a modular, layered architecture. The system is designed to be scalable, maintainable, and secure.
+PixelProbe v2.2.45 is a distributed media file corruption detection system built with a modular, layered architecture. The system leverages Celery for distributed processing, Redis for message queuing, and PostgreSQL for persistent storage.
 
 ## System Components
 
@@ -34,15 +36,22 @@ PixelProbe is a media file corruption detection system built with a modular, lay
                                 │
                                 ▼
 ┌────────────────────────────────────────────────────────────────┐
-│                      SQLite Database                            │
+│                    PostgreSQL Database                          │
 │              (Scan Results, Configurations)                     │
 └────────────────────────────────────────────────────────────────┘
-
-Parallel Components:
-┌─────────────────────┐      ┌─────────────────────┐
-│   Media Scanner     │      │   Task Scheduler    │
-│ (FFmpeg/ImageMagick)│      │   (APScheduler)     │
-└─────────────────────┘      └─────────────────────┘
+                               │
+                ┌──────────────┼──────────────┐
+                ▼              ▼              ▼
+┌─────────────────────┐ ┌─────────────┐ ┌─────────────────────┐
+│   Celery Workers    │ │    Redis    │ │   Task Scheduler    │
+│ (8+ Parallel Tasks) │ │   (Queue)   │ │   (APScheduler)     │
+└─────────────────────┘ └─────────────┘ └─────────────────────┘
+        │                                         │
+        ▼                                         ▼
+┌─────────────────────┐                 ┌─────────────────────┐
+│   Media Scanner     │                 │  Scheduled Scans    │
+│ (FFmpeg/ImageMagick)│                 │  (Cron-like)        │
+└─────────────────────┘                 └─────────────────────┘
 ```
 
 ## Core Design Principles
@@ -206,14 +215,27 @@ class MediaScheduler:
 
 ## Data Flow
 
-### Scan Request Flow
+### Scan Request Flow (v2.2.45 Distributed)
 
 ```
 Client Request → API Endpoint → Validation → Service Layer
                                                ↓
-Database ← Repository Layer ← Business Logic ← Scanner
-    ↑                                           ↓
-    └──────── Scan Results ←──── External Tools
+                                        Celery Task Queue
+                                               ↓
+                    ┌──────────────────────────┴────────────────────────┐
+                    ▼                                                    ▼
+            Parallel Discovery                                  Parallel Scanning
+         (Multiple Workers)                                  (Multiple Workers)
+                    │                                                    │
+    ┌───────┬───────┼───────┬───────┐                  ┌───────┬───────┼───────┬───────┐
+    ▼       ▼       ▼       ▼       ▼                  ▼       ▼       ▼       ▼       ▼
+Worker1  Worker2  Worker3  Worker4  Worker5         Worker1  Worker2  Worker3  Worker4  Worker5
+ Dir1     Dir2     Dir3     Dir4     Dir5           Chunk1   Chunk2   Chunk3   Chunk4   Chunk5
+    │       │       │       │       │                  │       │       │       │       │
+    └───────┴───────┼───────┴───────┘                  └───────┴───────┼───────┴───────┘
+                    ▼                                                    ▼
+            PostgreSQL Database                                 PostgreSQL Database
+              (File List)                                      (Scan Results)
 ```
 
 ### Real-time Updates

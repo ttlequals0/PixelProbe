@@ -96,7 +96,7 @@ class TestStatsService:
                     assert info['version'] == '2.0.55'
                     assert info['database']['total_files'] == 100
                     assert len(info['monitored_paths']) == 2
-                    assert info['features']['deep_scan'] == True
+                    assert 'deep_scan' not in info['features']
     
     @patch('pixelprobe.services.stats_service.db')
     def test_get_corruption_statistics(self, mock_db, stats_service):

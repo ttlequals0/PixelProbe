@@ -102,17 +102,25 @@ class TestScanManagementEndpoints:
             scan_state.start_time = datetime.now(timezone.utc)
             db.session.commit()
             
-            # Recover scan
-            response = client.post('/api/recover-stuck-scan')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert 'Scan state recovered' in data['message']
-            assert data['stuck_files_reset'] >= 0
+            # Mock scan service to report scan as not running (stuck)
+            original_is_running = app.scan_service.is_scan_running
+            app.scan_service.is_scan_running = lambda: False
             
-            # Verify recovery
-            db.session.refresh(scan_state)
-            assert scan_state.is_active is False
-            assert scan_state.phase == 'error'
+            try:
+                # Recover scan
+                response = client.post('/api/recover-stuck-scan')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert 'Scan state recovered' in data['message']
+                assert data['stuck_files_reset'] >= 0
+                
+                # Verify recovery
+                db.session.refresh(scan_state)
+                assert scan_state.is_active is False
+                assert scan_state.phase == 'error'
+            finally:
+                # Restore original method
+                app.scan_service.is_scan_running = original_is_running
     
     def test_recover_stuck_scan_not_stuck(self, client, app, db):
         """Test recovering when scan not stuck"""

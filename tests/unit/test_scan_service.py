@@ -134,7 +134,9 @@ class TestScanService:
             mock_scan_state.error_message = None
             mock_scan_state.estimated_total = 2
             mock_scan_state.phase_total = 2
+            mock_scan_state.start_scan = Mock()
             mock_scan_state_class.get_or_create.return_value = mock_scan_state
+            mock_scan_state_class.create_new_scan.return_value = mock_scan_state
             
             # Mock ScanResult query to avoid database access
             def query_side_effect(*args):
@@ -149,6 +151,10 @@ class TestScanService:
                     mock_stats.errors = 0
                     mock_stats.completed = 2
                     mock_query.first.return_value = mock_stats
+                # Check if querying for ScanState
+                elif args and hasattr(args[0], '__name__') and args[0].__name__ == 'ScanState':
+                    # Return the mock scan state
+                    mock_query.filter_by.return_value.first.return_value = mock_scan_state
                 # Check if querying for ScanResult itself
                 elif args and args[0] == mock_scan_result_class:
                     # This is querying ScanResult directly
@@ -159,12 +165,17 @@ class TestScanService:
                 elif args and hasattr(args[0], 'property') and hasattr(args[0].property, 'key') and args[0].property.key == 'file_path':
                     # This is querying ScanResult.file_path
                     mock_query.all.return_value = []  # Empty list, no existing files
+                    # For batch insert counting
+                    mock_filter = Mock()
+                    mock_filter.count.return_value = 0  # No existing files before insert
+                    mock_query.filter.return_value = mock_filter
                 else:
                     # This is a normal query
                     mock_query.offset.return_value.limit.return_value.all.return_value = []
                     # Mock the filter query for force_rescan
                     mock_filter_query = Mock()
                     mock_filter_query.all.return_value = []  # No existing files
+                    mock_filter_query.count.return_value = 0  # For batch insert counting
                     mock_query.filter.return_value = mock_filter_query
                     # Mock count() method for existing files check
                     mock_query.count.return_value = 50000  # Less than 100000, so it will load paths
@@ -218,19 +229,21 @@ class TestScanService:
         # Cancel scan
         result = scan_service.cancel_scan()
         
-        assert result['message'] == 'Scan cancellation completed'
+        assert result['message'] == 'Scan cancellation completed - all tasks killed'
         assert scan_service.scan_cancelled == True
         
         # Verify scan state was updated
         mock_scan_state.cancel_scan.assert_called_once()
         
-        # Clean up
-        scan_service.current_scan_thread.join()
+        # Clean up - thread is set to None after cancel
+        # No need to join since cancel_scan cleans it up
     
     def test_cancel_scan_not_running(self, scan_service):
-        """Test error when cancelling with no scan running"""
-        with pytest.raises(RuntimeError, match="No scan is currently running"):
-            scan_service.cancel_scan()
+        """Test cancel when no scan is running"""
+        # No scan is running, but cancel should still work (cleanup orphaned tasks)
+        result = scan_service.cancel_scan()
+        assert 'message' in result
+        assert 'tasks_killed' in result
     
     @patch('pixelprobe.services.scan_service.db')
     def test_reset_stuck_scans(self, mock_db, scan_service, db):
@@ -280,7 +293,9 @@ class TestScanService:
             mock_scan_state.error_message = None
             mock_scan_state.estimated_total = 4
             mock_scan_state.phase_total = 4
+            mock_scan_state.start_scan = Mock()
             mock_scan_state_class.get_or_create.return_value = mock_scan_state
+            mock_scan_state_class.create_new_scan.return_value = mock_scan_state
             
             # Mock ScanResult query to avoid database access
             def query_side_effect(*args):
@@ -295,6 +310,10 @@ class TestScanService:
                     mock_stats.errors = 0
                     mock_stats.completed = 4
                     mock_query.first.return_value = mock_stats
+                # Check if querying for ScanState
+                elif args and hasattr(args[0], '__name__') and args[0].__name__ == 'ScanState':
+                    # Return the mock scan state
+                    mock_query.filter_by.return_value.first.return_value = mock_scan_state
                 # Check if querying for ScanResult itself
                 elif args and args[0] == mock_scan_result_class:
                     # This is querying ScanResult directly
@@ -305,12 +324,17 @@ class TestScanService:
                 elif args and hasattr(args[0], 'property') and hasattr(args[0].property, 'key') and args[0].property.key == 'file_path':
                     # This is querying ScanResult.file_path
                     mock_query.all.return_value = []  # Empty list, no existing files
+                    # For batch insert counting
+                    mock_filter = Mock()
+                    mock_filter.count.return_value = 0  # No existing files before insert
+                    mock_query.filter.return_value = mock_filter
                 else:
                     # This is a normal query
                     mock_query.offset.return_value.limit.return_value.all.return_value = []
                     # Mock the filter query for force_rescan
                     mock_filter_query = Mock()
                     mock_filter_query.all.return_value = []  # No existing files
+                    mock_filter_query.count.return_value = 0  # For batch insert counting
                     mock_query.filter.return_value = mock_filter_query
                     # Mock count() method for existing files check
                     mock_query.count.return_value = 50000  # Less than 100000, so it will load paths

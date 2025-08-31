@@ -66,7 +66,7 @@ Check if the service is running.
 ```json
 {
   "status": "healthy",
-  "version": "2.0.55",
+  "version": "2.2.45",
   "timestamp": "2025-01-20T12:00:00Z"
 }
 ```
@@ -81,7 +81,7 @@ Get version information.
 **Response:**
 ```json
 {
-  "version": "2.0.55",
+  "version": "2.2.45",
   "github_url": "https://github.com/ttlequals0/PixelProbe",
   "api_version": "1.0"
 }
@@ -202,6 +202,78 @@ Start a parallel scan with multiple workers. Rate limited to 2 requests per minu
   "force_rescan": false,
   "num_workers": 4,
   "directories": ["/media/photos"]
+}
+```
+
+#### Enhanced Parallel Scan V2
+```http
+POST /api/scan/parallel-v2
+```
+
+Start an enhanced parallel scan that distributes work across all available Celery workers.
+
+**Request Body:**
+```json
+{
+  "directories": ["/media/photos", "/media/videos"],
+  "force_rescan": false,
+  "chunk_size": 100
+}
+```
+
+**Response:**
+```json
+{
+  "scan_id": "uuid-string",
+  "message": "Enhanced parallel scan started",
+  "total_workers": 8,
+  "chunks_created": 42
+}
+```
+
+#### Get Parallel Scan V2 Status
+```http
+GET /api/scan/parallel-v2/status/<scan_id>
+```
+
+Get detailed status of an enhanced parallel scan including chunk progress.
+
+**Response:**
+```json
+{
+  "scan_id": "uuid-string",
+  "status": "running",
+  "total_chunks": 42,
+  "completed_chunks": 15,
+  "progress_percentage": 35.7,
+  "estimated_time_remaining": "5 minutes",
+  "worker_status": {
+    "active": 8,
+    "idle": 0
+  }
+}
+```
+
+#### Get Worker Status
+```http
+GET /api/scan/parallel-v2/workers
+```
+
+Get current status and utilization of all Celery workers.
+
+**Response:**
+```json
+{
+  "total_workers": 8,
+  "active_workers": 6,
+  "idle_workers": 2,
+  "worker_details": [
+    {
+      "worker_id": "worker-1",
+      "status": "busy",
+      "current_task": "processing chunk 5"
+    }
+  ]
 }
 ```
 
@@ -376,12 +448,42 @@ Add a new directory to scan.
 
 ### Export Endpoints
 
-#### Export to CSV
+#### Export Scan Results (Enhanced)
+```http
+GET /api/export?format=csv
+POST /api/export
+```
+
+Export scan results in multiple formats (CSV, JSON, or PDF).
+
+**Query Parameters (GET):**
+- `format` (string): Output format - `csv`, `json`, or `pdf` (default: csv)
+- `scan_status` (string): Filter by status - `all`, `pending`, `completed`, `error`
+- `is_corrupted` (string): Filter by corruption - `all`, `true`, `false`
+- `start_date` (string): Start date in ISO format
+- `end_date` (string): End date in ISO format
+
+**Request Body (POST):**
+```json
+{
+  "format": "pdf",
+  "filters": {
+    "scan_status": "completed",
+    "is_corrupted": "true",
+    "start_date": "2025-01-01",
+    "end_date": "2025-01-31"
+  }
+}
+```
+
+**Response:** File download in requested format
+
+#### Export to CSV (Legacy)
 ```http
 POST /api/export/csv
 ```
 
-Export scan results to CSV format.
+Export scan results to CSV format (legacy endpoint, use `/api/export` instead).
 
 **Request Body:**
 ```json

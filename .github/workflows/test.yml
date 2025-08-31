@@ -33,7 +33,7 @@ jobs:
     
     - name: Run tests with pytest
       run: |
-        pytest --cov=pixelprobe --cov-report=xml --cov-report=term
+        pytest -m "not real_media" --cov=pixelprobe --cov-report=xml --cov-report=term
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3

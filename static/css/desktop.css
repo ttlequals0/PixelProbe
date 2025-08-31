@@ -581,6 +581,22 @@ body {
 }
 
 /* System Stats Modal */
+#system-stats-modal .modal-content {
+    max-width: 90%;
+    width: 90%;
+}
+
+.stats-columns {
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+}
+
+.stats-column {
+    flex: 1;
+    min-width: 280px;
+}
+
 .system-stats-content h4 {
     margin-top: 1.5rem;
     margin-bottom: 0.75rem;
@@ -589,6 +605,10 @@ body {
 }
 
 .system-stats-content h4:first-child {
+    margin-top: 0;
+}
+
+.stats-column h4:first-child {
     margin-top: 0;
 }
 
@@ -602,6 +622,17 @@ body {
 .stats-section p {
     margin: 0.5rem 0;
     font-size: 0.875rem;
+}
+
+/* Responsive adjustments for smaller screens */
+@media (max-width: 1200px) {
+    .stats-columns {
+        flex-direction: column;
+    }
+    
+    .stats-column {
+        width: 100%;
+    }
 }
 
 /* Form elements */

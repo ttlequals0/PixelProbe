@@ -49,10 +49,16 @@ class TestMediaChecker:
         assert result['file_hash'] is not None
         assert len(result['file_hash']) == 64  # SHA256 hash length
     
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
     @patch('subprocess.run')
     @patch('ffmpeg.probe')
-    def test_hevc_main10_detection(self, mock_probe, mock_run):
+    def test_hevc_main10_detection(self, mock_probe, mock_run, mock_exists, mock_getsize):
         """Test detection of HEVC Main 10 profile issues"""
+        # Mock file exists and size
+        mock_exists.return_value = True
+        mock_getsize.return_value = 1024 * 1024  # 1MB
+        
         # Mock ffmpeg probe to return HEVC Main 10 profile
         mock_probe.return_value = {
             'streams': [{
@@ -83,10 +89,16 @@ class TestMediaChecker:
         assert any('HEVC reference picture errors' in detail for detail in corruption_details)
         assert any('HEVC Main 10' in output for output in scan_output)
     
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
     @patch('subprocess.run')
     @patch('ffmpeg.probe')
-    def test_hevc_main10_hdr_detection(self, mock_probe, mock_run):
+    def test_hevc_main10_hdr_detection(self, mock_probe, mock_run, mock_exists, mock_getsize):
         """Test detection of HDR content in HEVC Main 10"""
+        # Mock file exists and size
+        mock_exists.return_value = True
+        mock_getsize.return_value = 1024 * 1024  # 1MB
+        
         # Mock ffmpeg probe
         mock_probe.return_value = {
             'streams': [{
@@ -177,7 +189,7 @@ class TestMediaChecker:
         checker = PixelProbe()
         
         result1 = checker.scan_file(test_data_dir['valid_mp4'])
-        result2 = checker.scan_file(test_data_dir['valid_mp4'], deep_scan=True)
+        result2 = checker.scan_file(test_data_dir['valid_mp4'])
         
         assert result1['file_hash'] == result2['file_hash']
     
@@ -378,7 +390,7 @@ class TestMediaChecker:
             
             # Should be marked as corrupted when not ignored
             mock_check.return_value = True  # Ignored
-            result2 = checker.scan_file(test_data_dir['corrupted_mp4'], deep_scan=True)
+            result2 = checker.scan_file(test_data_dir['corrupted_mp4'])
             
             # The behavior depends on implementation
     

@@ -10,7 +10,8 @@ from pixelprobe.api.swagger import (
     file_changes_model, cleanup_status_model, export_request_model,
     config_model, schedule_model, error_model, success_model,
     reset_for_rescan_model, reset_result_model, reset_by_path_model,
-    stuck_scan_recovery_model
+    stuck_scan_recovery_model, parallel_scan_model, parallel_scan_response_model,
+    reset_incomplete_scans_model
 )
 import logging
 
@@ -98,6 +99,53 @@ class CancelScan(Resource):
         except RuntimeError as e:
             return {'error': str(e)}, 400
 
+@scan_ns.route('/parallel-v2')
+class ParallelScanV2(Resource):
+    @scan_ns.doc('parallel_scan_v2')
+    @scan_ns.expect(parallel_scan_model)
+    @scan_ns.response(200, 'Parallel scan started', parallel_scan_response_model)
+    @scan_ns.response(400, 'Invalid request', error_model)
+    @scan_ns.response(503, 'Celery workers not available', error_model)
+    def post(self):
+        """Start enhanced parallel scan that distributes work across all Celery workers"""
+        from pixelprobe.api.scan_routes_parallel import scan_parallel_v2
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='POST',
+            json=request.get_json()
+        ):
+            return scan_parallel_v2()
+
+@scan_ns.route('/parallel-v2/status/<scan_id>')
+class ParallelScanStatus(Resource):
+    @scan_ns.doc('get_parallel_scan_status')
+    @scan_ns.response(200, 'Scan status retrieved')
+    @scan_ns.response(404, 'Scan not found', error_model)
+    def get(self, scan_id):
+        """Get detailed status of a parallel scan including chunk progress"""
+        from pixelprobe.api.scan_routes_parallel import get_parallel_scan_status
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='GET'
+        ):
+            return get_parallel_scan_status(scan_id)
+
+@scan_ns.route('/parallel-v2/workers')
+class WorkerStatus(Resource):
+    @scan_ns.doc('get_worker_status')
+    @scan_ns.response(200, 'Worker status retrieved')
+    def get(self):
+        """Get detailed status of all Celery workers"""
+        from pixelprobe.api.scan_routes_parallel import get_worker_status
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='GET'
+        ):
+            return get_worker_status()
+
 # Removed /reset-for-rescan endpoint - rarely needed functionality
 # Users can achieve the same result by running a scan with force_rescan=true
 
@@ -159,6 +207,123 @@ class ForceCleanupScan(Resource):
             
         except Exception as e:
             logger.error(f"Error during force cleanup: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/reset-incomplete-scans')
+class ResetIncompleteScans(Resource):
+    @scan_ns.doc('reset_incomplete_scans')
+    @scan_ns.response(200, 'Incomplete scans reset', reset_incomplete_scans_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Reset files marked as completed but with incomplete scan data
+        
+        Finds and resets files that show 'N/A' for Tool Details and Scan Date
+        due to the v2.2.59 chunk query bug that prevented actual scanning.
+        """
+        from models import db, ScanResult
+        from sqlalchemy import or_
+        
+        try:
+            # Find files marked as completed but missing scan details
+            # OR files marked as healthy/not corrupted but never actually scanned
+            from sqlalchemy import and_
+            incomplete_files = ScanResult.query.filter(
+                or_(
+                    # Case 1: Marked as completed but no scan data
+                    and_(
+                        ScanResult.scan_status == 'completed',
+                        or_(
+                            ScanResult.scan_date.is_(None),
+                            ScanResult.scan_output.is_(None),
+                            ScanResult.scan_output == '',
+                            ScanResult.scan_output == 'N/A'
+                        )
+                    ),
+                    # Case 2: Marked as healthy (is_corrupted=False) but no scan date
+                    and_(
+                        ScanResult.is_corrupted == False,
+                        ScanResult.scan_date.is_(None)
+                    ),
+                    # Case 3: Any file with scan_date NULL regardless of status
+                    # This catches all files that were never actually scanned
+                    ScanResult.scan_date.is_(None)
+                )
+            ).all()
+            
+            count = len(incomplete_files)
+            
+            if count == 0:
+                return {
+                    'message': 'No incomplete scans found',
+                    'reset_count': 0
+                }
+            
+            # Reset these files to pending
+            for result in incomplete_files:
+                result.scan_status = 'pending'
+                result.is_corrupted = None  # Reset to unknown
+                result.marked_as_good = False
+                result.error_message = 'Reset due to incomplete scan data (v2.2.59 fix)'
+                result.scan_output = None
+                # Keep discovered_date as is
+            
+            db.session.commit()
+            
+            logger.info(f"Reset {count} files with incomplete scan data to pending status")
+            
+            return {
+                'message': f'Reset {count} files with incomplete scan data for rescanning',
+                'reset_count': count,
+                'description': 'These files were marked as completed but had no actual scan results'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error resetting incomplete scans: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/reset-files-by-path')
+class ResetFilesByPath(Resource):
+    @scan_ns.doc('reset_files_by_path')
+    @scan_ns.expect(reset_by_path_model)
+    @scan_ns.response(200, 'Files reset', reset_result_model)
+    @scan_ns.response(400, 'Invalid request', error_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Reset specific files by their paths"""
+        from models import db, ScanResult
+        
+        data = request.get_json() or {}
+        file_path = data.get('file_path')
+        file_paths = data.get('file_paths', [])
+        
+        if file_path:
+            file_paths = [file_path]
+        
+        if not file_paths:
+            return {'error': 'No file paths provided'}, 400
+        
+        try:
+            # Reset files by path
+            results = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+            count = len(results)
+            
+            for result in results:
+                result.scan_status = 'pending'
+                result.is_corrupted = False
+                result.marked_as_good = False
+                result.error_message = None
+                result.scan_output = None
+            
+            db.session.commit()
+            
+            return {
+                'message': f'Reset {count} files for rescanning',
+                'count': count,
+                'type': 'by_path'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error resetting files by path: {e}")
             return {'error': str(e)}, 500
 
 # Stats endpoints
@@ -305,21 +470,66 @@ class Schedules(Resource):
         return {'message': 'Schedule created', 'id': schedule.id}
 
 # Export endpoints
-@export_ns.route('/csv')
-class ExportCSV(Resource):
-    @export_ns.doc('export_csv')
-    @export_ns.expect(export_request_model)
+@export_ns.route('')
+class Export(Resource):
+    @export_ns.doc('export_scan_results')
+    @export_ns.expect(export_request_model, validate=False)
+    @export_ns.param('format', 'Export format (csv, json, pdf)', type='string', enum=['csv', 'json', 'pdf'], default='csv')
+    @export_ns.param('filter', 'Filter type', type='string', enum=['all', 'corrupted', 'healthy', 'pending', 'error'], default='all')
+    @export_ns.param('search', 'Search term to filter file paths', type='string')
+    @export_ns.response(200, 'Export successful')
+    @export_ns.response(400, 'Invalid request', error_model)
+    def get(self):
+        """Export scan results with GET parameters"""
+        # Import here to avoid circular dependency
+        from pixelprobe.api.export_routes import export_scan_results
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            query_string=request.query_string,
+            method='GET'
+        ):
+            return export_scan_results()
+    
     def post(self):
-        """Export scan results to CSV"""
-        export_service = current_app.export_service
-        data = request.get_json() or {}
-        
-        file_ids = data.get('file_ids')
-        csv_data = export_service.export_to_csv(file_ids)
-        
-        from flask import Response
-        return Response(
-            csv_data,
-            mimetype='text/csv',
-            headers={'Content-Disposition': 'attachment; filename=pixelprobe_export.csv'}
-        )
+        """Export scan results with POST body"""
+        # Import here to avoid circular dependency
+        from pixelprobe.api.export_routes import export_scan_results
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='POST',
+            json=request.get_json()
+        ):
+            return export_scan_results()
+
+@export_ns.route('/view/<int:result_id>')
+class ViewFile(Resource):
+    @export_ns.doc('view_file')
+    @export_ns.response(200, 'File streamed successfully')
+    @export_ns.response(404, 'File not found', error_model)
+    def get(self, result_id):
+        """View/stream a media file (supports range requests for video streaming)"""
+        from pixelprobe.api.export_routes import view_file
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            headers=request.headers,
+            method='GET'
+        ):
+            return view_file(result_id)
+
+@export_ns.route('/download/<int:result_id>')
+class DownloadFile(Resource):
+    @export_ns.doc('download_file')
+    @export_ns.response(200, 'File download started')
+    @export_ns.response(404, 'File not found', error_model)
+    def get(self, result_id):
+        """Download a media file"""
+        from pixelprobe.api.export_routes import download_file
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='GET'
+        ):
+            return download_file(result_id)

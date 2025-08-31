@@ -10,7 +10,7 @@ from celery import current_task
 from celery.exceptions import Retry
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from celery_config import celery_app
 from pixelprobe.services.scan_service import ScanService
@@ -38,6 +38,24 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
     logger.info(f"Starting Celery scan task {self.request.id} for scan_id: {scan_id}")
     
     try:
+        # CRITICAL: Check if another scan is already running before proceeding
+        # This prevents concurrent scans when multiple tasks are queued
+        active_scan = ScanState.query.filter_by(is_active=True).first()
+        if active_scan and active_scan.scan_id != scan_id:
+            # Another scan is running with a different scan_id
+            error_msg = f"Another scan is already in progress (scan_id: {active_scan.scan_id}, phase: {active_scan.phase})"
+            logger.error(f"Celery scan task {self.request.id} failed: {error_msg}")
+            
+            # Retry with delay to check again later
+            if self.request.retries < self.max_retries:
+                retry_delay = 60 * (self.request.retries + 1)  # 60s, 120s, 180s
+                logger.info(f"Retrying scan task {self.request.id} in {retry_delay} seconds")
+                raise self.retry(exc=RuntimeError(error_msg), countdown=retry_delay)
+            else:
+                # Max retries reached, fail the task
+                logger.error(f"Task {self.request.id} failed permanently after {self.max_retries} retries")
+                raise RuntimeError(error_msg)
+        
         # Update scan state with Celery task ID
         scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
         if scan_state:
@@ -65,10 +83,9 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             )
         
         # Execute scan based on type
-        if scan_type in ['full', 'parallel', 'deep', 'pending']:
+        if scan_type in ['full', 'parallel', 'pending']:
             # Determine parameters based on scan type
             num_workers = 1 if scan_type in ['full', 'pending'] else 4
-            deep_scan = scan_type == 'deep'
             
             # Note: ScanService handles progress internally via database updates
             # The progress_callback defined above is for Celery task state updates
@@ -76,7 +93,6 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                 directories=paths,
                 force_rescan=force_rescan,
                 num_workers=num_workers,
-                deep_scan=deep_scan,
                 async_mode=False  # Run synchronously in Celery task
             )
             
@@ -102,7 +118,6 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                 directories=paths,
                 force_rescan=False,  # Don't force rescan for discovery
                 num_workers=1,
-                deep_scan=False,
                 async_mode=False  # Run synchronously in Celery task
             )
             
@@ -133,7 +148,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             'files_processed': result.get('files_processed', 0),
             'files_discovered': result.get('files_discovered', 0),
             'corrupted_found': result.get('corrupted_found', 0),
-            'completed_at': datetime.utcnow().isoformat()
+            'completed_at': datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as exc:
@@ -205,7 +220,7 @@ def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
             'task_id': self.request.id,
             'orphaned_removed': result.get('orphaned_removed', 0),
             'files_processed': result.get('files_processed', 0),
-            'completed_at': datetime.utcnow().isoformat()
+            'completed_at': datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as exc:
@@ -221,7 +236,7 @@ def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
 
 @celery_app.task(bind=True, max_retries=2,
                  soft_time_limit=None, time_limit=None)  # No timeout for file scan tasks
-def scan_files_task(self, scan_id, file_paths, force_rescan=False, deep_scan=False):
+def scan_files_task(self, scan_id, file_paths, force_rescan=False):
     """
     Background task for scanning specific files
     
@@ -229,7 +244,6 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, deep_scan=Fal
         scan_id (str): Unique scan identifier
         file_paths (list): List of specific file paths to scan
         force_rescan (bool): Whether to force rescan of existing files
-        deep_scan (bool): Whether to perform deep scanning
         
     Returns:
         dict: File scan results
@@ -261,7 +275,6 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, deep_scan=Fal
         result = scan_service.scan_files(
             file_paths=file_paths,
             force_rescan=force_rescan,
-            deep_scan=deep_scan,
             async_mode=False  # Run synchronously in Celery task
         )
         
@@ -285,7 +298,7 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, deep_scan=Fal
             'files_processed': result.get('files_processed', len(file_paths)),
             'files_scanned': result.get('files_scanned', 0),
             'corrupted_found': result.get('corrupted_found', 0),
-            'completed_at': datetime.utcnow().isoformat()
+            'completed_at': datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as exc:
@@ -309,7 +322,7 @@ def health_check_task():
     """
     return {
         'status': 'healthy',
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'worker_id': current_task.request.hostname
     }
 
@@ -350,7 +363,7 @@ def scheduled_scan_task(schedule_id, scan_type='full'):
         )
         
         # Update schedule last run time
-        schedule.last_run = datetime.utcnow()
+        schedule.last_run = datetime.now(timezone.utc)
         db.session.commit()
         
         logger.info(f"Scheduled scan queued with task_id: {task.id}")
@@ -360,7 +373,7 @@ def scheduled_scan_task(schedule_id, scan_type='full'):
             'schedule_id': schedule_id,
             'scan_id': scan_id,
             'task_id': task.id,
-            'queued_at': datetime.utcnow().isoformat()
+            'queued_at': datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as exc:

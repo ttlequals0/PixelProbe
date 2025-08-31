@@ -1,9 +1,9 @@
 from flask import Blueprint, request, jsonify, current_app
-import pytz
 import os
 import threading
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from pixelprobe.utils.timezone import from_utc_to_configured
 
 from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
@@ -33,13 +33,7 @@ def check_celery_available():
     return celery_enabled
 
 
-# Get timezone from environment variable, default to UTC
-APP_TIMEZONE = os.environ.get('TZ', 'UTC')
-try:
-    tz = pytz.timezone(APP_TIMEZONE)
-except pytz.exceptions.UnknownTimeZoneError:
-    tz = pytz.UTC
-    logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
+# Timezone handling via utility module
 
 scan_bp = Blueprint('scan', __name__, url_prefix='/api')
 
@@ -88,28 +82,60 @@ def is_scan_running():
     # Check database for active Celery-based scans
     try:
         active_scan = ScanState.query.filter_by(is_active=True).first()
-        if active_scan and active_scan.phase not in ['idle', 'completed', 'error', 'crashed']:
-            # Check if scan is stale (no progress for more than 5 minutes)
-            if active_scan.start_time:
-                from datetime import datetime, timezone, timedelta
-                # Ensure start_time is timezone-aware
-                start_time = active_scan.start_time
-                if start_time.tzinfo is None:
-                    # If naive, assume UTC
-                    start_time = start_time.replace(tzinfo=timezone.utc)
-                time_since_start = datetime.now(timezone.utc) - start_time
+        if active_scan and active_scan.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
+            # Check if scan is stale (no progress update)
+            from datetime import datetime, timezone, timedelta
+            
+            # Use last_update if available, otherwise use start_time
+            check_time = active_scan.last_update or active_scan.start_time
+            
+            if check_time:
+                # Ensure timezone-aware
+                if check_time.tzinfo is None:
+                    check_time = check_time.replace(tzinfo=timezone.utc)
                 
-                # If scan has been running for more than 30 minutes, it's likely stuck
-                # (Our timeout fix in v2.2.35 removed the 10-minute limit, but 30 min is still too long for no progress)
-                if time_since_start > timedelta(minutes=30):
-                    logger.warning(f"Scan {active_scan.scan_id} has been running for {time_since_start} - marking as crashed")
+                now = datetime.now(timezone.utc)
+                time_since_update = now - check_time
+                
+                # Check for stuck scan based on phase
+                stuck_threshold = timedelta(minutes=10)  # Default 10 minutes
+                
+                # Adding phase can get stuck - use shorter timeout
+                if active_scan.phase == 'adding':
+                    stuck_threshold = timedelta(minutes=5)
+                    
+                    # Also check if files_processed hasn't changed
+                    if hasattr(active_scan, '_last_files_processed'):
+                        if active_scan.files_processed == active_scan._last_files_processed:
+                            logger.warning(f"Scan stuck in adding phase at {active_scan.files_processed} files")
+                            stuck_threshold = timedelta(minutes=2)  # Even shorter if no progress
+                
+                if time_since_update > stuck_threshold:
+                    logger.warning(f"Scan {active_scan.scan_id} appears stuck in phase '{active_scan.phase}' (no update for {time_since_update})")
+                    logger.warning(f"Files processed: {active_scan.files_processed}/{active_scan.estimated_total}")
+                    
+                    # But first check if Celery task is actually still running before marking as crashed
+                    if active_scan.celery_task_id and check_celery_available():
+                        try:
+                            from celery.result import AsyncResult
+                            result = AsyncResult(active_scan.celery_task_id, app=current_app.celery)
+                            # Check actual task state
+                            if result.state in ['PENDING', 'STARTED', 'RETRY', 'PROGRESS']:
+                                logger.info(f"Celery task {active_scan.celery_task_id} still active with state: {result.state} - scan is running despite no recent update")
+                                return True  # Task is still running, just slow
+                            else:
+                                logger.warning(f"Celery task {active_scan.celery_task_id} is not active (state: {result.state})")
+                        except Exception as e:
+                            logger.warning(f"Could not check Celery task status: {e}")
+                    
+                    # Mark as crashed and allow new scan
                     active_scan.is_active = False
                     active_scan.phase = 'crashed'
-                    active_scan.error_message = f'Scan stuck for {time_since_start} - no progress detected'
+                    active_scan.error_message = f'Scan stuck in {active_scan.phase} phase - no progress for {time_since_update}'
                     db.session.commit()
                     return False
             
-            # Verify if Celery task is still running
+            # Also verify if Celery task is still running for non-stuck scans
             if active_scan.celery_task_id and check_celery_available():
                 try:
                     from celery.result import AsyncResult
@@ -181,7 +207,8 @@ def get_scan_results():
     if has_warnings == 'true':
         query = query.filter(
             (ScanResult.has_warnings == True) & 
-            (ScanResult.marked_as_good == False)
+            (ScanResult.marked_as_good == False) &
+            (ScanResult.is_corrupted == False)  # Exclude corrupted files from warnings filter
         )
     
     # Apply sorting
@@ -211,42 +238,41 @@ def get_scan_results():
         # Default sorting
         query = query.order_by(ScanResult.scan_date.desc())
     
-    # Paginate
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    # Paginate - handle -1 as "show all"
+    if per_page == -1:
+        # Get all results without pagination
+        all_results = query.all()
+        # Create a mock pagination object
+        class MockPagination:
+            def __init__(self, items, total):
+                self.items = items
+                self.total = total
+                self.pages = 1
+        pagination = MockPagination(all_results, len(all_results))
+    else:
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
     # Build response
     results = []
     for result in pagination.items:
         result_dict = result.to_dict()
         
-        # Convert timestamps to configured timezone
+        # Convert timestamps to configured timezone for display
         if result.scan_date:
-            if result.scan_date.tzinfo is None:
-                scan_date = tz.localize(result.scan_date)
-            else:
-                scan_date = result.scan_date
-            result_dict['scan_date'] = scan_date.astimezone(tz).isoformat()
+            display_dt = from_utc_to_configured(result.scan_date)
+            result_dict['scan_date'] = display_dt.isoformat() if display_dt else None
         
         if result.discovered_date:
-            if result.discovered_date.tzinfo is None:
-                discovered_date = tz.localize(result.discovered_date)
-            else:
-                discovered_date = result.discovered_date
-            result_dict['discovered_date'] = discovered_date.astimezone(tz).isoformat()
+            display_dt = from_utc_to_configured(result.discovered_date)
+            result_dict['discovered_date'] = display_dt.isoformat() if display_dt else None
         
         if result.creation_date:
-            if result.creation_date.tzinfo is None:
-                creation_date = tz.localize(result.creation_date)
-            else:
-                creation_date = result.creation_date  
-            result_dict['creation_date'] = creation_date.astimezone(tz).isoformat()
+            display_dt = from_utc_to_configured(result.creation_date)
+            result_dict['creation_date'] = display_dt.isoformat() if display_dt else None
         
         if result.last_modified:
-            if result.last_modified.tzinfo is None:
-                last_modified = tz.localize(result.last_modified)
-            else:
-                last_modified = result.last_modified
-            result_dict['last_modified'] = last_modified.astimezone(tz).isoformat()
+            display_dt = from_utc_to_configured(result.last_modified)
+            result_dict['last_modified'] = display_dt.isoformat() if display_dt else None
         
         # Add file_name for frontend convenience
         result_dict['file_name'] = os.path.basename(result.file_path) if result.file_path else ''
@@ -267,34 +293,22 @@ def get_scan_result(result_id):
     result = ScanResult.query.get_or_404(result_id)
     result_dict = result.to_dict()
     
-    # Convert timestamps to configured timezone
+    # Convert timestamps to configured timezone for display
     if result.scan_date:
-        if result.scan_date.tzinfo is None:
-            scan_date = tz.localize(result.scan_date)
-        else:
-            scan_date = result.scan_date
-        result_dict['scan_date'] = scan_date.astimezone(tz).isoformat()
+        display_dt = from_utc_to_configured(result.scan_date)
+        result_dict['scan_date'] = display_dt.isoformat() if display_dt else None
     
     if result.discovered_date:
-        if result.discovered_date.tzinfo is None:
-            discovered_date = tz.localize(result.discovered_date)
-        else:
-            discovered_date = result.discovered_date
-        result_dict['discovered_date'] = discovered_date.astimezone(tz).isoformat()
+        display_dt = from_utc_to_configured(result.discovered_date)
+        result_dict['discovered_date'] = display_dt.isoformat() if display_dt else None
     
     if result.creation_date:
-        if result.creation_date.tzinfo is None:
-            creation_date = tz.localize(result.creation_date)
-        else:
-            creation_date = result.creation_date  
-        result_dict['creation_date'] = creation_date.astimezone(tz).isoformat()
+        display_dt = from_utc_to_configured(result.creation_date)
+        result_dict['creation_date'] = display_dt.isoformat() if display_dt else None
     
     if result.last_modified:
-        if result.last_modified.tzinfo is None:
-            last_modified = tz.localize(result.last_modified)
-        else:
-            last_modified = result.last_modified
-        result_dict['last_modified'] = last_modified.astimezone(tz).isoformat()
+        display_dt = from_utc_to_configured(result.last_modified)
+        result_dict['last_modified'] = display_dt.isoformat() if display_dt else None
     
     return jsonify(result_dict)
 
@@ -354,7 +368,11 @@ def scan_file():
             return jsonify(result)
             
     except RuntimeError as e:
-        return jsonify({'error': str(e)}), 409
+        error_msg = str(e)
+        # Provide more context for common errors
+        if 'already running' in error_msg.lower():
+            error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
+        return jsonify({'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}), 409
     except FileNotFoundError as e:
         return jsonify({'error': str(e)}), 404
 
@@ -372,7 +390,15 @@ def scan_all():
     
     # Check if a scan is already running (thread or Celery)
     if is_scan_running():
-        return jsonify({'error': 'A scan is already in progress'}), 409
+        # Get current scan status for more informative error message
+        scan_state = ScanState.get_or_create()
+        if scan_state and scan_state.is_active:
+            phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
+        else:
+            phase_info = ""
+        return jsonify({
+            'error': f'A scan is already in progress{phase_info}. Please wait for it to complete or use /api/cancel-scan to stop it.'
+        }), 409
     
     # Get scan configuration
     data = request.get_json() or {}
@@ -387,7 +413,7 @@ def scan_all():
         
         # If no database config, fall back to environment variable
         if not scan_dirs:
-            scan_paths_env = os.environ.get('SCAN_PATHS', '/media')
+            scan_paths_env = os.environ.get('SCAN_PATHS', '')
             scan_dirs = [path.strip() for path in scan_paths_env.split(',') if path.strip()]
             logger.info(f"Using SCAN_PATHS from environment: {scan_dirs}")
     
@@ -448,7 +474,11 @@ def scan_all():
             return jsonify(result)
             
     except RuntimeError as e:
-        return jsonify({'error': str(e)}), 409
+        error_msg = str(e)
+        # Provide more context for common errors
+        if 'already running' in error_msg.lower():
+            error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
+        return jsonify({'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}), 409
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -465,13 +495,19 @@ def get_scan_status():
         # CRITICAL: For Celery workers in separate processes, we need to close and recreate session
         # to ensure we see committed changes from other processes
         db.session.close()
+        db.session.remove()  # Remove session completely to force new connection
         
         # First try to get active scan with fresh session
         scan_state = db.session.query(ScanState).filter_by(is_active=True).first()
-        if not scan_state:
+        if scan_state:
+            # Force refresh from database to get latest state
+            db.session.refresh(scan_state)
+        else:
             # No active scan, get the most recent one for status display
             scan_state = db.session.query(ScanState).order_by(ScanState.id.desc()).first()
-            if not scan_state:
+            if scan_state:
+                db.session.refresh(scan_state)
+            else:
                 # No scan states at all, create initial one
                 scan_state = ScanState()
                 db.session.add(scan_state)
@@ -520,7 +556,8 @@ def get_scan_status():
     if current_phase == 'discovering':
         phase_number = 1
         # Use the actual progress message from database if available
-        progress_message = state_dict.get('progress_message', "Discovering files...")
+        db_progress_msg = state_dict.get('progress_message')
+        progress_message = db_progress_msg if db_progress_msg else "Phase 1 of 3: Discovering files..."
         # For discovery, we don't know total files yet, so show indeterminate progress
         phase_current = 0
         phase_total = 0  # Will show base phase progress (0-33%)
@@ -528,7 +565,8 @@ def get_scan_status():
     elif current_phase == 'adding':
         phase_number = 2  
         # Use the actual progress message from database if available
-        progress_message = state_dict.get('progress_message', "Adding new files to database...")
+        db_progress_msg = state_dict.get('progress_message')
+        progress_message = db_progress_msg if db_progress_msg else f"Phase 2 of 3: Adding files to database - {current_progress} of {total_progress:,} files"
         # Use current/total from database for adding phase
         phase_current = current_progress
         phase_total = total_progress
@@ -544,6 +582,21 @@ def get_scan_status():
             # Generate fresh progress message with current data
             from utils import ProgressTracker
             progress_tracker = ProgressTracker('scan')
+            # Use the actual scan start time if available
+            if state_dict.get('start_time'):
+                try:
+                    start_time_str = state_dict['start_time']
+                    if isinstance(start_time_str, str):
+                        start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+                    else:
+                        start_time = start_time_str
+                    if start_time.tzinfo is None:
+                        start_time = start_time.replace(tzinfo=timezone.utc)
+                    # Set the actual scan start time
+                    import time
+                    progress_tracker.start_time = start_time.timestamp()
+                except:
+                    pass  # Use default if parsing fails
             progress_message = progress_tracker.get_progress_message(
                 'Phase 3 of 3: Scanning files',
                 current_progress,
@@ -678,7 +731,7 @@ def get_scan_status():
                 start_dt = start_dt.replace(tzinfo=timezone.utc)
             
             # Convert to configured timezone
-            start_time_tz = start_dt.astimezone(tz).isoformat()
+            start_time_tz = from_utc_to_configured(start_dt).isoformat() if from_utc_to_configured(start_dt) else None
         except Exception as e:
             logger.warning(f"Could not convert start_time to timezone: {e}")
             start_time_tz = state_dict.get('start_time')
@@ -696,16 +749,24 @@ def get_scan_status():
                 end_dt = end_dt.replace(tzinfo=timezone.utc)
             
             # Convert to configured timezone
-            end_time_tz = end_dt.astimezone(tz).isoformat()
+            end_time_tz = from_utc_to_configured(end_dt).isoformat() if from_utc_to_configured(end_dt) else None
         except Exception as e:
             logger.warning(f"Could not convert end_time to timezone: {e}")
             end_time_tz = state_dict.get('end_time')
+    
+    # Get current file being processed - ensure full path is shown
+    current_file_path = state_dict.get('current_file', service_status.get('file', ''))
+    # Ensure we show the full file path, not just directory
+    # Check if path looks like a directory (ends with common directory-only names)
+    if current_file_path and current_file_path.endswith(('/encoded-video', '/thumbs', '/library', '/uploads')):
+        # If it appears to be a directory, indicate that we're scanning within it
+        current_file_path = f"{current_file_path} (scanning directory)"
     
     # Build comprehensive status response with frontend-expected fields
     status = {
         'current': current_progress,
         'total': total_progress,
-        'file': state_dict.get('current_file', service_status.get('file', '')),
+        'file': current_file_path,
         'status': status_value,
         'is_running': is_running,
         'is_scanning': is_running,  # Legacy compatibility
@@ -799,14 +860,21 @@ def scan_parallel():
     """Start a parallel scan with multiple workers"""
     # Check if a scan is already running (thread or Celery)
     if is_scan_running():
-        return jsonify({'error': 'A scan is already in progress'}), 409
+        # Get current scan status for more informative error message
+        scan_state = ScanState.get_or_create()
+        if scan_state and scan_state.is_active:
+            phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
+        else:
+            phase_info = ""
+        return jsonify({
+            'error': f'A scan is already in progress{phase_info}. Please wait for it to complete or use /api/cancel-scan to stop it.'
+        }), 409
     
     data = request.get_json() or {}
     force_rescan = data.get('force_rescan', False)
     num_workers = data.get('num_workers', 4)
     scan_dirs = data.get('directories', [])
     file_paths = data.get('file_paths', [])
-    deep_scan = data.get('deep_scan', False)
     
     # Check if we're scanning specific files
     if file_paths:
@@ -828,8 +896,7 @@ def scan_parallel():
                 task = scan_files_task.delay(
                     scan_id=scan_id,
                     file_paths=file_paths,
-                    force_rescan=force_rescan,
-                    deep_scan=deep_scan
+                    force_rescan=force_rescan
                 )
                 
                 logger.info(f"Queued file scan task {task.id} for {len(file_paths)} files")
@@ -847,7 +914,6 @@ def scan_parallel():
                 result = current_app.scan_service.scan_files(
                     file_paths, 
                     force_rescan=force_rescan,
-                    deep_scan=deep_scan,
                     num_workers=num_workers
                 )
                 result['celery_enabled'] = False
@@ -867,7 +933,7 @@ def scan_parallel():
         
         # If no database config, fall back to environment variable
         if not scan_dirs:
-            scan_paths_env = os.environ.get('SCAN_PATHS', '/media')
+            scan_paths_env = os.environ.get('SCAN_PATHS', '')
             scan_dirs = [path.strip() for path in scan_paths_env.split(',') if path.strip()]
             logger.info(f"Using SCAN_PATHS from environment: {scan_dirs}")
     
@@ -900,7 +966,7 @@ def scan_parallel():
             scan_id = str(uuid4())
             
             # Determine scan type based on options
-            scan_type = 'deep' if deep_scan else 'parallel'
+            scan_type = 'parallel'
             
             # Queue the scan task
             task = scan_media_task.delay(
@@ -926,14 +992,17 @@ def scan_parallel():
             result = current_app.scan_service.scan_directories(
                 validated_dirs, 
                 force_rescan=force_rescan, 
-                num_workers=num_workers,
-                deep_scan=deep_scan
+                num_workers=num_workers
             )
             result['celery_enabled'] = False
             return jsonify(result)
             
     except RuntimeError as e:
-        return jsonify({'error': str(e)}), 409
+        error_msg = str(e)
+        # Provide more context for common errors
+        if 'already running' in error_msg.lower():
+            error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
+        return jsonify({'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}), 409
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -1198,6 +1267,127 @@ def reset_files_by_path():
         
     except Exception as e:
         logger.error(f"Error resetting files by path: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@scan_bp.route('/reset-incomplete-scans', methods=['POST'])
+@rate_limit("2 per minute")
+def reset_incomplete_scans():
+    """Reset files that were marked as completed but have incomplete scan data
+    
+    These are files that show 'N/A' for Tool Details and Scan Date in the UI
+    due to the v2.2.59 chunk query bug that prevented actual scanning.
+    """
+    try:
+        # Find files marked as completed but missing scan details
+        # OR files marked as healthy/not corrupted but never actually scanned
+        incomplete_files = ScanResult.query.filter(
+            db.or_(
+                # Case 1: Marked as completed but no scan data
+                db.and_(
+                    ScanResult.scan_status == 'completed',
+                    db.or_(
+                        ScanResult.scan_date.is_(None),
+                        ScanResult.scan_output.is_(None),
+                        ScanResult.scan_output == '',
+                        ScanResult.scan_output == 'N/A'
+                    )
+                ),
+                # Case 2: Marked as healthy (is_corrupted=False) but no scan date
+                db.and_(
+                    ScanResult.is_corrupted == False,
+                    ScanResult.scan_date.is_(None)
+                ),
+                # Case 3: Any file with scan_date NULL regardless of status
+                # This catches all files that were never actually scanned
+                ScanResult.scan_date.is_(None)
+            )
+        ).all()
+        
+        count = len(incomplete_files)
+        
+        if count == 0:
+            return jsonify({
+                'message': 'No incomplete scans found',
+                'reset_count': 0
+            })
+        
+        # Reset these files to pending
+        for result in incomplete_files:
+            result.scan_status = 'pending'
+            result.is_corrupted = None  # Reset to unknown
+            result.marked_as_good = False
+            result.error_message = 'Reset due to incomplete scan data (v2.2.59 fix)'
+            result.scan_output = None
+            # Keep discovered_date as is
+        
+        db.session.commit()
+        
+        logger.info(f"Reset {count} files with incomplete scan data to pending status")
+        
+        return jsonify({
+            'message': f'Reset {count} files with incomplete scan data for rescanning',
+            'reset_count': count,
+            'description': 'These files were marked as completed but had no actual scan results'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting incomplete scans: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@scan_bp.route('/diagnose-incomplete-scans', methods=['GET'])
+@rate_limit("5 per minute")
+def diagnose_incomplete_scans():
+    """Diagnose why files show as healthy but have N/A scan details
+    
+    Returns detailed information about files that appear incomplete
+    """
+    try:
+        # Sample some files to understand the data patterns
+        diagnostics = {
+            'total_files': db.session.query(ScanResult).count(),
+            'files_with_null_scan_date': db.session.query(ScanResult).filter(
+                ScanResult.scan_date.is_(None)
+            ).count(),
+            'files_marked_healthy_no_scan_date': db.session.query(ScanResult).filter(
+                ScanResult.is_corrupted == False,
+                ScanResult.scan_date.is_(None)
+            ).count(),
+            'files_marked_corrupted_no_scan_date': db.session.query(ScanResult).filter(
+                ScanResult.is_corrupted == True,
+                ScanResult.scan_date.is_(None)
+            ).count(),
+            'files_completed_no_scan_date': db.session.query(ScanResult).filter(
+                ScanResult.scan_status == 'completed',
+                ScanResult.scan_date.is_(None)
+            ).count(),
+            'files_pending': db.session.query(ScanResult).filter(
+                ScanResult.scan_status == 'pending'
+            ).count()
+        }
+        
+        # Get a sample of problematic files
+        sample_files = []
+        problematic = ScanResult.query.filter(
+            ScanResult.is_corrupted == False,
+            ScanResult.scan_date.is_(None)
+        ).limit(5).all()
+        
+        for file in problematic:
+            sample_files.append({
+                'file_path': file.file_path,
+                'scan_status': file.scan_status,
+                'is_corrupted': file.is_corrupted,
+                'scan_date': str(file.scan_date) if file.scan_date else None,
+                'scan_output': file.scan_output[:100] if file.scan_output else None,
+                'discovered_date': str(file.discovered_date) if file.discovered_date else None
+            })
+        
+        diagnostics['sample_problematic_files'] = sample_files
+        
+        return jsonify(diagnostics)
+        
+    except Exception as e:
+        logger.error(f"Error diagnosing incomplete scans: {e}")
         return jsonify({'error': str(e)}), 500
 
 @scan_bp.route('/worker-status')

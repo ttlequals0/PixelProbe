@@ -6,7 +6,6 @@ This is a demonstration of how app.py would look with the new modular architectu
 import os
 import logging
 from datetime import datetime, timezone
-import pytz
 from flask import Flask, jsonify, send_file, render_template, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
@@ -54,14 +53,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Get timezone
+# Timezone handling is now done via pixelprobe.utils.timezone module
 APP_TIMEZONE = os.environ.get('TZ', 'UTC')
-try:
-    tz = pytz.timezone(APP_TIMEZONE)
-    logger.info(f"Using timezone: {APP_TIMEZONE}")
-except pytz.exceptions.UnknownTimeZoneError:
-    tz = pytz.UTC
-    logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
+logger.info(f"Using timezone: {APP_TIMEZONE}")
 
 # Create Flask app
 app = Flask(__name__)
@@ -210,7 +204,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'version': __version__,
-        'timestamp': datetime.now(tz).isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat()
     })
 
 @app.route('/api/version')
@@ -268,11 +262,11 @@ def cleanup_stuck_operations():
         logger.error(f"Error cleaning up stuck operations: {str(e)}")
 
 def create_tables():
-    """Initialize database tables"""
+    """Initialize database tables and run migrations"""
     with app.app_context():
         try:
             # Use inspector to check existing tables
-            from sqlalchemy import inspect, exc
+            from sqlalchemy import inspect, exc, text
             
             try:
                 inspector = inspect(db.engine)
@@ -291,6 +285,44 @@ def create_tables():
                 
                 logger.info("Database tables verified successfully")
                 
+                # Run migrations for v2.2.68 - add tracking columns if they don't exist
+                if 'scan_state' in existing_tables:
+                    try:
+                        # Check if new columns exist
+                        columns = [col['name'] for col in inspector.get_columns('scan_state')]
+                        
+                        # Add missing columns with safe migration
+                        with db.engine.connect() as conn:
+                            if 'num_workers' not in columns:
+                                try:
+                                    conn.execute(text("ALTER TABLE scan_state ADD COLUMN num_workers INTEGER DEFAULT 1"))
+                                    conn.commit()
+                                    logger.info("Added num_workers column to scan_state table")
+                                except exc.OperationalError as e:
+                                    if "already exists" not in str(e).lower():
+                                        logger.warning(f"Could not add num_workers column: {e}")
+                            
+                            if 'files_added' not in columns:
+                                try:
+                                    conn.execute(text("ALTER TABLE scan_state ADD COLUMN files_added INTEGER DEFAULT 0"))
+                                    conn.commit()
+                                    logger.info("Added files_added column to scan_state table")
+                                except exc.OperationalError as e:
+                                    if "already exists" not in str(e).lower():
+                                        logger.warning(f"Could not add files_added column: {e}")
+                            
+                            if 'files_updated' not in columns:
+                                try:
+                                    conn.execute(text("ALTER TABLE scan_state ADD COLUMN files_updated INTEGER DEFAULT 0"))
+                                    conn.commit()
+                                    logger.info("Added files_updated column to scan_state table")
+                                except exc.OperationalError as e:
+                                    if "already exists" not in str(e).lower():
+                                        logger.warning(f"Could not add files_updated column: {e}")
+                                        
+                    except Exception as e:
+                        logger.warning(f"Migration check failed (non-critical): {e}")
+                
             except exc.OperationalError as e:
                 # This might happen if the database is locked or another worker created tables
                 if "already exists" not in str(e):
@@ -308,11 +340,14 @@ def create_tables():
 
 def migrate_database():
     """Run database migrations"""
-    from app_startup_migration import run_startup_migrations
+    from tools.app_startup_migration import run_startup_migrations
     
     try:
         # Run startup migrations for v2.0.89
         run_startup_migrations(db)
+        
+        # Run v2.2.62 migrations - add missing columns
+        run_v2_2_62_migrations()
         
         # Create performance indexes
         create_performance_indexes()
@@ -322,6 +357,43 @@ def migrate_database():
         
     except Exception as e:
         logger.error(f"Error during database initialization: {e}")
+
+def run_v2_2_62_migrations():
+    """Run migrations for v2.2.62 - add celery_task_id column"""
+    from sqlalchemy import text
+    
+    try:
+        with db.engine.connect() as conn:
+            # Check if celery_task_id column exists in scan_chunks
+            result = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'scan_chunks' 
+                AND column_name = 'celery_task_id'
+            """))
+            
+            if not result.fetchone():
+                logger.info("Applying migration: Adding celery_task_id column to scan_chunks table")
+                conn.execute(text("""
+                    ALTER TABLE scan_chunks 
+                    ADD COLUMN celery_task_id VARCHAR(36)
+                """))
+                
+                # Create index for performance
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_scan_chunks_celery_task_id 
+                    ON scan_chunks (celery_task_id) 
+                    WHERE celery_task_id IS NOT NULL
+                """))
+                
+                conn.commit()
+                logger.info("Migration completed: celery_task_id column added successfully")
+            else:
+                logger.debug("Migration already applied: celery_task_id column exists")
+                
+    except Exception as e:
+        logger.error(f"Migration v2.2.62 failed: {e}")
+        # Don't fail startup - app might still work without this column
 
 def create_performance_indexes():
     """Create performance indexes"""

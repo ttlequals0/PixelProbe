@@ -3,6 +3,7 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
+from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone_name
 from io import BytesIO
 import base64
 import pytz
@@ -125,7 +126,7 @@ def get_scan_report(report_id):
             report_dict['duration_formatted'] = f"{seconds}s"
     
     # Add summary statistics
-    if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+    if report.scan_type in ['full_scan', 'rescan']:
         report_dict['summary'] = {
             'total_files': report.files_scanned,
             'new_files': report.files_added,
@@ -152,7 +153,7 @@ def get_scan_report(report_id):
 
 @reports_bp.route('/scan-reports/<report_id>/export')
 def export_scan_report(report_id):
-    """Export scan report as JSON"""
+    """Export scan report as JSON with full scan results"""
     report = ScanReport.query.filter_by(report_id=report_id).first()
     if not report:
         return jsonify({'error': 'Report not found'}), 404
@@ -164,20 +165,63 @@ def export_scan_report(report_id):
     report_dict['end_time'] = convert_to_timezone(report.end_time)
     report_dict['created_at'] = convert_to_timezone(report.created_at)
     
+    # Add scan results - same as PDF report
+    from models import ScanResult
+    scanned_files = ScanResult.query.filter(
+        ScanResult.scan_date >= report.start_time,
+        ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
+    ).order_by(ScanResult.file_path).all()
+    
+    # Include detailed file results
+    file_results = []
+    for file in scanned_files:
+        file_data = {
+            'file_path': file.file_path,
+            'status': 'corrupted' if file.is_corrupted and not file.marked_as_good else ('warning' if file.has_warnings and not file.marked_as_good else 'healthy'),
+            'file_size': file.file_size,
+            'file_type': file.file_type,
+            'scan_tool': file.scan_tool,
+            'scan_date': convert_to_timezone(file.scan_date) if file.scan_date else None,
+            'is_corrupted': file.is_corrupted,
+            'has_warnings': file.has_warnings,
+            'marked_as_good': file.marked_as_good,
+            'corruption_details': file.corruption_details,
+            'warning_details': file.warning_details,
+            'error_message': file.error_message,
+            'scan_duration': file.scan_duration,
+            'file_hash': file.file_hash,
+            'last_modified': convert_to_timezone(file.last_modified) if file.last_modified else None
+        }
+        
+        # Include scan output summary if available
+        if file.scan_output and not file.is_corrupted:
+            # Extract meaningful info from scan output
+            output_lines = (file.scan_output or '').split('\n')
+            for line in output_lines[:5]:
+                if 'Duration:' in line or 'Video:' in line or 'Audio:' in line:
+                    file_data['scan_output_summary'] = line.strip()
+                    break
+        
+        file_results.append(file_data)
+    
+    report_dict['scan_results'] = file_results
+    report_dict['total_files_in_report'] = len(file_results)
+    
     # Add metadata
     report_dict['export_metadata'] = {
         'exported_at': convert_to_timezone(datetime.now(timezone.utc)),
         'export_format': 'json',
-        'version': '1.0'
+        'version': '2.0',
+        'includes_scan_results': True
     }
     
     # Create JSON file
-    json_data = json.dumps(report_dict, indent=2)
+    json_data = json.dumps(report_dict, indent=2, default=str)  # default=str handles any non-serializable types
     
     # Create response
     response = make_response(json_data)
     response.headers['Content-Type'] = 'application/json'
-    response.headers['Content-Disposition'] = f'attachment; filename=scan_report_{report_id}_{report.start_time.strftime("%Y%m%d_%H%M%S")}.json'
+    response.headers['Content-Disposition'] = f'attachment; filename=scan_report_{report_id}_{from_utc_to_configured(report.start_time).strftime("%Y%m%d_%H%M%S")}.json'
     
     return response
 
@@ -243,7 +287,9 @@ def generate_pdf_report(scan_type, scan_id):
         elements.append(Spacer(1, 0.2*inch))
         
         # Add export info
-        info_text = f"Report Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}<br/>"
+        current_time = from_utc_to_configured(datetime.now(timezone.utc))
+        timezone_name = get_configured_timezone_name()
+        info_text = f"Report Date: {current_time.strftime(f'%Y-%m-%d %H:%M:%S {timezone_name}')}<br/>"
         info_text += f"Scan Type: {scan_type.replace('_', ' ').title()}<br/>"
         info_text += f"Scan ID: {scan_id}"
         elements.append(Paragraph(info_text, styles['Normal']))
@@ -300,7 +346,7 @@ def generate_pdf_report(scan_type, scan_id):
                 details_text = ' '.join(details) if details else ''
                 
                 # Format scan date
-                scan_date = result.scan_date.strftime('%m/%d/%Y, %I:%M:%S %p') if result.scan_date else 'N/A'
+                scan_date = from_utc_to_configured(result.scan_date).strftime('%m/%d/%Y, %I:%M:%S %p') if result.scan_date else 'N/A'
                 
                 # Wrap file path and details in Paragraph for proper text wrapping
                 file_path_para = Paragraph(result.file_path, cell_style)
@@ -346,7 +392,7 @@ def generate_pdf_report(scan_type, scan_id):
         buffer.close()
         
         # Create filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"scan_report_{scan_type}_{scan_id}_{timestamp}.pdf"
         
         # Create response
@@ -438,8 +484,8 @@ def export_scan_report_pdf(report_id):
             ['Report ID:', report.report_id],
             ['Scan Type:', report.scan_type.replace('_', ' ').title()],
             ['Status:', report.status.title()],
-            ['Start Time:', report.start_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.start_time else 'N/A'],
-            ['End Time:', report.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.end_time else 'N/A'],
+            ['Start Time:', from_utc_to_configured(report.start_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.start_time else 'N/A'],
+            ['End Time:', from_utc_to_configured(report.end_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.end_time else 'N/A'],
             ['Duration:', f"{int(report.duration_seconds // 60)}m {int(report.duration_seconds % 60)}s" if report.duration_seconds else 'N/A'],
         ]
         
@@ -502,7 +548,7 @@ def export_scan_report_pdf(report_id):
         # Add scan statistics
         elements.append(Paragraph("Scan Statistics", heading_style))
         
-        if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+        if report.scan_type in ['full_scan', 'rescan']:
             stats_data = [
                 ['Metric', 'Value'],
                 ['Total Files Discovered', f"{report.total_files_discovered:,}"],
@@ -564,7 +610,7 @@ def export_scan_report_pdf(report_id):
         )
         
         # Add scanned files list
-        if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+        if report.scan_type in ['full_scan', 'rescan']:
             elements.append(PageBreak())
             elements.append(Paragraph("Scanned Files", heading_style))
             
@@ -588,16 +634,24 @@ def export_scan_report_pdf(report_id):
                     size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
                     file_type = file.file_type or 'Unknown'
                     scan_tool = file.scan_tool or 'N/A'
-                    scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+                    scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
                     
-                    # Combine details from various fields
+                    # Combine details from various fields - show all available information
                     details = []
-                    if file.is_corrupted and file.corruption_details:
+                    if file.corruption_details:
                         details.append(file.corruption_details)
-                    elif file.has_warnings and file.warning_details:
+                    if file.warning_details:
                         details.append(file.warning_details)
-                    elif file.error_message:
+                    if file.error_message:
                         details.append(file.error_message)
+                    # If no specific details but file is healthy, add a brief scan output excerpt
+                    if not details and file.scan_output and not file.is_corrupted:
+                        # Extract meaningful info from scan output
+                        output_lines = (file.scan_output or '').split('\n')
+                        for line in output_lines[:3]:  # Check first 3 lines
+                            if 'Duration:' in line or 'Video:' in line or 'Audio:' in line:
+                                details.append(line.strip()[:50])
+                                break
                     details_text = ' '.join(details)[:100] + '...' if len(' '.join(details)) > 100 else ' '.join(details) if details else ''
                     
                     # Wrap file path in Paragraph for text wrapping
@@ -703,8 +757,8 @@ def export_scan_report_pdf(report_id):
                 <tr><th>Report ID</th><td>{report.report_id}</td></tr>
                 <tr><th>Scan Type</th><td>{report.scan_type.replace('_', ' ').title()}</td></tr>
                 <tr><th>Status</th><td>{report.status.title()}</td></tr>
-                <tr><th>Start Time</th><td>{report.start_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.start_time else 'N/A'}</td></tr>
-                <tr><th>End Time</th><td>{report.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.end_time else 'N/A'}</td></tr>
+                <tr><th>Start Time</th><td>{from_utc_to_configured(report.start_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.start_time else 'N/A'}</td></tr>
+                <tr><th>End Time</th><td>{from_utc_to_configured(report.end_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.end_time else 'N/A'}</td></tr>
                 <tr><th>Duration</th><td>{f"{int(report.duration_seconds // 60)}m {int(report.duration_seconds % 60)}s" if report.duration_seconds else 'N/A'}</td></tr>
             </table>
             
@@ -712,7 +766,7 @@ def export_scan_report_pdf(report_id):
             <table>
         """
         
-        if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+        if report.scan_type in ['full_scan', 'rescan']:
             html_content += f"""
                 <tr><th>Total Files Discovered</th><td>{report.total_files_discovered:,}</td></tr>
                 <tr><th>Files Scanned</th><td>{report.files_scanned:,}</td></tr>
@@ -733,7 +787,7 @@ def export_scan_report_pdf(report_id):
             """
         
         # Add scanned files list for scan reports
-        if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+        if report.scan_type in ['full_scan', 'rescan']:
             from models import ScanResult
             scanned_files = ScanResult.query.filter(
                 ScanResult.scan_date >= report.start_time,
@@ -756,7 +810,7 @@ def export_scan_report_pdf(report_id):
                 status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
                 size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
                 file_type = file.file_type or 'Unknown'
-                scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+                scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
                 status_class = 'corrupted' if status == 'Corrupted' else 'healthy'
                 
                 html_content += f"""
@@ -776,7 +830,7 @@ def export_scan_report_pdf(report_id):
         
         html_content += f"""
             <div class="footer">
-                <p>Generated on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                <p>Generated on {from_utc_to_configured(datetime.now(timezone.utc)).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}')}</p>
                 <p>This report is for compliance and auditing purposes</p>
             </div>
         </body>
@@ -796,7 +850,7 @@ def export_scan_report_pdf(report_id):
 @reports_bp.route('/scan-reports/latest')
 def get_latest_scan_reports():
     """Get the latest report for each scan type"""
-    scan_types = ['full_scan', 'rescan', 'deep_scan', 'cleanup', 'file_changes']
+    scan_types = ['full_scan', 'rescan', 'cleanup', 'file_changes']
     latest_reports = {}
     
     for scan_type in scan_types:
@@ -933,8 +987,8 @@ def download_multiple_reports():
                     info_text = f"Report ID: {report.report_id}<br/>"
                     info_text += f"Scan Type: {report.scan_type.replace('_', ' ').title()}<br/>"
                     info_text += f"Status: {report.status}<br/>"
-                    info_text += f"Start Time: {report.start_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.start_time else 'N/A'}<br/>"
-                    info_text += f"End Time: {report.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.end_time else 'N/A'}<br/>"
+                    info_text += f"Start Time: {from_utc_to_configured(report.start_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.start_time else 'N/A'}<br/>"
+                    info_text += f"End Time: {from_utc_to_configured(report.end_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.end_time else 'N/A'}<br/>"
                     elements.append(Paragraph(info_text, styles['Normal']))
                     elements.append(Spacer(1, 0.2*inch))
                     
@@ -942,7 +996,7 @@ def download_multiple_reports():
                     elements.append(Paragraph("Statistics", styles['Heading2']))
                     stats_data = [['Metric', 'Value']]
                     
-                    if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+                    if report.scan_type in ['full_scan', 'rescan']:
                         stats_data.extend([
                             ['Total Files Discovered', f"{report.total_files_discovered:,}"],
                             ['Files Scanned', f"{report.files_scanned:,}"],
@@ -972,7 +1026,7 @@ def download_multiple_reports():
                     elements.append(Spacer(1, 0.2*inch))
                     
                     # Add scanned files if available for scan reports
-                    if report.scan_type in ['full_scan', 'rescan', 'deep_scan']:
+                    if report.scan_type in ['full_scan', 'rescan']:
                         # Query scan results for this report's time period
                         from models import ScanResult
                         scanned_files = ScanResult.query.filter(
@@ -1008,7 +1062,7 @@ def download_multiple_reports():
                                 # Wrap details in Paragraph
                                 details_para = Paragraph(details, cell_style)
                                 
-                                scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+                                scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
                                 
                                 files_data.append([
                                     status,
@@ -1048,7 +1102,7 @@ def download_multiple_reports():
                 buffer.close()
                 
                 # Create response
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 response = make_response(pdf_data)
                 response.headers['Content-Type'] = 'application/pdf'
                 response.headers['Content-Disposition'] = f'attachment; filename=pixelprobe_reports_{timestamp}.pdf'
@@ -1084,7 +1138,7 @@ def download_multiple_reports():
                     zipf.writestr(filename, json_data)
             
             buffer.seek(0)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             
             response = make_response(buffer.getvalue())
             response.headers['Content-Type'] = 'application/zip'
