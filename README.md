@@ -6,9 +6,24 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.2.48** - Enhanced migration tools, comprehensive documentation organization, and improved project structure.
+**Version 2.2.87** - Major upgrade to Ubuntu 24.04 with latest media tools for better decoder support.
 
-## 🚀 What's New in Version 2.2.47
+## 🚀 What's New in Version 2.2.87
+
+### 🎯 Major Infrastructure Upgrade
+- **Ubuntu 24.04 Base**: Upgraded from Ubuntu 22.04 for latest package versions
+- **FFmpeg 6.1.1**: Upgraded from 4.4.2 - significantly better WebP/JPEG decoding
+- **ImageMagick 6.9.13**: Upgraded from 6.9.11 - improved PNG handling
+- **Python 3.12**: Upgraded from 3.11 for better performance
+- **Modern Libraries**: libwebp 1.3.2, libpng 1.6.43 for better format support
+
+### 🛡️ Decoder & Warning Fixes
+- **FFmpeg False Positives**: Fixed "invalid data" errors for valid files
+- **ImageMagick PNG Warnings**: Resolved sBIT chunk warnings
+- **Scheduler Reliability**: Fixed missing imports causing scheduled scan failures
+- **Timezone Display**: Fixed PDF/JSON reports showing UTC instead of configured timezone
+
+## 🚀 Previous Version Highlights (2.2.47)
 
 ### 🛡️ Database Reliability Enhancements
 - **Connection Pool Recovery**: Automatic recovery from "lost synchronization" errors

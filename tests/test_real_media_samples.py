@@ -10,6 +10,7 @@ from models import ScanResult
 class TestRealMediaSamples:
     """Test PixelProbe with real media files"""
     
+    @pytest.mark.timeout(120)  # 2 minute timeout
     def test_valid_files_not_corrupted(self, real_scan_results):
         """Test that valid files are detected as not corrupted"""
         valid_results = [r for r in real_scan_results if 'valid' in r.file_path]
@@ -24,6 +25,7 @@ class TestRealMediaSamples:
             if filename in ['valid.mp4', 'valid.jpg', 'valid.png', 'valid.wav']:
                 assert not result.is_corrupted, f"{filename} should not be corrupted"
     
+    @pytest.mark.timeout(120)  # 2 minute timeout
     def test_corrupted_files_detected(self, real_scan_results):
         """Test that corrupted files are properly detected"""
         corrupted_results = [r for r in real_scan_results if 'corrupted' in r.file_path]
@@ -48,12 +50,14 @@ class TestRealMediaSamples:
         detection_rate = detected / total if total > 0 else 0
         assert detection_rate >= 0.20, f"Only {detected}/{total} corrupted files detected ({detection_rate*100:.1f}%)"
     
+    @pytest.mark.timeout(60)  # 1 minute timeout
     def test_scan_output_captured(self, real_scan_results):
         """Test that scan output is properly captured"""
         # Most scans should have some output
         results_with_output = [r for r in real_scan_results if r.scan_output]
         assert len(results_with_output) > 0, "No scan output captured"
     
+    @pytest.mark.timeout(60)  # 1 minute timeout
     def test_file_types_detected(self, real_scan_results):
         """Test that file types are properly detected"""
         for result in real_scan_results:
@@ -68,12 +72,14 @@ class TestRealMediaSamples:
                 elif filename.endswith('.jpg'):
                     assert 'image' in result.file_type.lower() or 'jpeg' in result.file_type.lower()
     
+    @pytest.mark.timeout(60)  # 1 minute timeout
     def test_file_hashes_generated(self, real_scan_results):
         """Test that file hashes are generated"""
         for result in real_scan_results:
             assert result.file_hash is not None
             assert len(result.file_hash) == 64  # SHA256 hash length
     
+    @pytest.mark.timeout(60)  # 1 minute timeout
     def test_hevc_detection(self, real_scan_results):
         """Test HEVC file detection and warnings"""
         hevc_results = [r for r in real_scan_results if 'hevc' in r.file_path.lower()]
@@ -85,6 +91,7 @@ class TestRealMediaSamples:
                     assert any('hevc' in str(line).lower() or 'h.265' in str(line).lower() 
                               for line in (result.scan_output if isinstance(result.scan_output, list) else [result.scan_output]))
     
+    @pytest.mark.timeout(60)  # 1 minute timeout
     def test_scan_tool_recorded(self, real_scan_results):
         """Test that scan tool is recorded"""
         for result in real_scan_results:
@@ -95,6 +102,7 @@ class TestRealMediaSamples:
 class TestCorruptionDetails:
     """Test specific corruption detection capabilities"""
     
+    @pytest.mark.timeout(60)  # 1 minute timeout
     def test_mp3_broken_frame(self, real_scan_results):
         """Test MP3 with broken first frame is detected"""
         mp3_results = [r for r in real_scan_results if 'corrupted.mp3' in r.file_path]
@@ -104,6 +112,7 @@ class TestCorruptionDetails:
             # Note: Some MP3s with minor corruption may still play
             assert result.is_corrupted or result.error_message or result.warning_details or result.scan_status == 'completed'
     
+    @pytest.mark.timeout(60)  # 1 minute timeout
     def test_invalid_aiff(self, real_scan_results):
         """Test invalid AIFF without common chunk"""
         aiff_results = [r for r in real_scan_results if 'corrupted.aiff' in r.file_path]
@@ -112,6 +121,7 @@ class TestCorruptionDetails:
             # Invalid AIFF should be detected - but some may still parse
             assert result.is_corrupted or result.error_message or result.warning_details or result.scan_status == 'completed'
     
+    @pytest.mark.timeout(60)  # 1 minute timeout
     def test_corrupted_images(self, real_scan_results):
         """Test corrupted image detection"""
         image_extensions = ['.jpg', '.png', '.gif', '.bmp']

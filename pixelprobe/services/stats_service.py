@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlalchemy import text
 
 from models import db, ScanResult
-from pixelprobe.utils.timezone import from_utc_to_configured
+from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class StatsService:
     """Service for calculating and retrieving statistics"""
     
     def __init__(self):
-        pass
+        self.tz = get_configured_timezone()
         
     def get_file_statistics(self) -> Dict:
         """Get comprehensive file statistics"""
