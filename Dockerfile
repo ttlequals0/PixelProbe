@@ -1,37 +1,35 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Python 3.11, ImageMagick and all dependencies
+# Install Python and latest media tools
+# Ubuntu 24.04 includes:
+# - FFmpeg 6.1.1 (much newer than 22.04's 4.4.2)
+# - ImageMagick 6.9.13 (newer than 22.04's 6.9.11)
+# - Python 3.12 by default
 RUN apt-get update && \
-    apt-get install -y software-properties-common && \
-    add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && \
     apt-get install -y \
-    # Python 3.11 \
-    python3.11 \
-    python3.11-dev \
-    python3.11-venv \
-    python3.11-distutils \
+    # Python and pip
+    python3 \
+    python3-dev \
+    python3-venv \
     python3-pip \
     # Core utilities \
     ffmpeg \
     libmagic1 \
     curl \
     wget \
-    # ImageMagick and ALL its dependencies \
+    # ImageMagick and dependencies (24.04 uses ImageMagick 7) \
     imagemagick \
-    imagemagick-6.q16 \
-    libmagickcore-6.q16-6 \
-    libmagickcore-6.q16-6-extra \
-    libmagickwand-6.q16-6 \
-    # Image format libraries \
-    libjpeg8 \
+    libmagickcore-6.q16hdri-7-extra \
+    libmagickwand-6.q16hdri-7 \
+    # Image format libraries (updated versions in 24.04) \
+    libjpeg-turbo8 \
     libjpeg-dev \
-    libpng16-16 \
+    libpng16-16t64 \
     libpng-dev \
-    libtiff5 \
+    libtiff6 \
     libtiff-dev \
     libwebp7 \
     libwebp-dev \
@@ -42,7 +40,7 @@ RUN apt-get update && \
     libopenjp2-7-dev \
     librsvg2-2 \
     librsvg2-dev \
-    libraw20 \
+    libraw23 \
     libraw-dev \
     libheif1 \
     libheif-dev \
@@ -52,7 +50,7 @@ RUN apt-get update && \
     libexif-dev \
     liblcms2-2 \
     liblcms2-dev \
-    libfftw3-3 \
+    libfftw3-double3 \
     libfftw3-dev \
     libfreetype6 \
     libfreetype6-dev \
@@ -60,10 +58,9 @@ RUN apt-get update && \
     libfontconfig1-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Python 3.11 as default
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
-    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
-    update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
+# Python 3.12 is already default in Ubuntu 24.04
+# Just create python symlink for compatibility
+RUN ln -s /usr/bin/python3 /usr/bin/python
 
 # Configure ImageMagick to allow all file formats and increase resource limits
 # Ubuntu 22.04 uses ImageMagick 6
@@ -125,7 +122,8 @@ RUN ffmpeg -version && \
     echo "=== All image format tests passed ==="
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Ubuntu 24.04 requires --break-system-packages for pip install in Docker
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 COPY . .
 
