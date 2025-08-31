@@ -948,9 +948,18 @@ class PixelProbe:
                         is_corrupted = True
                         scan_tool = "imagemagick"
                 else:
-                    corruption_details.append("ImageMagick identify failed")
-                    is_corrupted = True
-                    scan_tool = "imagemagick"
+                    # Check if PIL passed before marking as corrupted
+                    # ImageMagick might fail due to missing delegates/decoders
+                    if not pil_failed and not pil_load_failed:
+                        # PIL passed, so file is likely OK - ImageMagick issue
+                        warning_details.append("ImageMagick identify failed (but PIL passed - likely decoder issue)")
+                        scan_output.append("Note: ImageMagick failed but PIL verified OK")
+                        scan_tool = "pil"  # Use PIL as the authoritative tool
+                    else:
+                        # Both PIL and ImageMagick failed - likely corrupted
+                        corruption_details.append("ImageMagick identify failed")
+                        is_corrupted = True
+                        scan_tool = "imagemagick"
                 logger.warning(f"ImageMagick identify failed for {file_path}")
             elif result.stderr:
                 # Check if this is just a metadata/profile warning (not actual corruption)
@@ -1026,11 +1035,21 @@ class PixelProbe:
                     scan_output.append("FFmpeg image validation: SKIPPED (HEIC compatibility)")
                     logger.info(f"FFmpeg HEIC compatibility issue for {file_path}, relying on PIL/ImageMagick")
                 else:
-                    corruption_details.append("FFmpeg image validation failed")
-                    is_corrupted = True
-                    scan_tool = "ffmpeg"
-                    scan_output.append(f"FFmpeg image validation: FAILED")
-                    scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
+                    # Check if PIL passed before marking as corrupted
+                    if not pil_failed and not pil_load_failed:
+                        # PIL passed, so file is likely OK - FFmpeg issue
+                        warning_details.append("FFmpeg image validation failed (but PIL passed)")
+                        scan_output.append(f"FFmpeg image validation: FAILED")
+                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
+                        scan_output.append("Note: FFmpeg failed but PIL verified OK - file likely valid")
+                        # Don't mark as corrupted since PIL passed
+                    else:
+                        # Both PIL and FFmpeg failed - likely corrupted
+                        corruption_details.append("FFmpeg image validation failed")
+                        is_corrupted = True
+                        scan_tool = "ffmpeg"
+                        scan_output.append(f"FFmpeg image validation: FAILED")
+                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
             elif result.stderr:
                 # Check if this is just an EXIF/metadata warning (not actual corruption)
                 stderr_lower = result.stderr.lower()
@@ -1086,6 +1105,22 @@ class PixelProbe:
                 warning_details = ["GIF header warning: Non-standard header detected (file may still be playable)"]
                 # Clear corruption details since we're treating it as a warning
                 corruption_details = []
+        
+        # Final reconciliation: If PIL passed but other tools failed, trust PIL
+        # PIL is the most reliable for basic image integrity
+        if not pil_failed and not pil_load_failed and is_corrupted:
+            # PIL verified the image successfully
+            pil_passed_msg = "PIL verification and load test passed"
+            
+            # Check if corruption was only due to ImageMagick/FFmpeg failures
+            if all('ImageMagick' in detail or 'FFmpeg' in detail for detail in corruption_details):
+                logger.info(f"Overriding corruption status for {file_path} - PIL passed, other tools may have decoder issues")
+                is_corrupted = False
+                # Move corruption details to warnings
+                warning_details.extend(corruption_details)
+                warning_details.append("File verified OK by PIL - other tool failures likely due to decoder/configuration issues")
+                corruption_details = []
+                scan_tool = "pil"  # PIL is authoritative
         
         # Check if this is a HEIC/HEIF with compatibility issues that should be warnings
         if is_heic and is_corrupted:

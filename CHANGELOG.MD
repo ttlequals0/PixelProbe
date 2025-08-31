@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.80] - 2025-08-31
+
+### Fixed
+- **Fixed mobile Scan Reports table not displaying**
+  - Modal now uses flexbox layout for proper height management
+  - Table container properly scrolls within available space
+  - Filter controls stay fixed at top while table scrolls
+  - Added minimum height to ensure table is always visible
+  - Improved card layout styling for small screens
+  - Fixed pagination positioning at bottom of modal
+  - Added loading indicator when table is empty
+  - Ensured checkbox column displays correctly on mobile
+- **Fixed false positive corruption detection when ImageMagick or FFmpeg fail**
+  - Files no longer marked as corrupted if PIL verification passes
+  - ImageMagick decoder issues (missing delegates) now treated as warnings
+  - FFmpeg decoder issues now treated as warnings when PIL passes
+  - Added final reconciliation check - PIL is authoritative for image integrity
+  - Corruption details moved to warnings when only secondary tools fail
+  - Prevents marking valid files as corrupted due to tool configuration issues
+  - Example: JPEG files that PIL can read but ImageMagick lacks decoder for
+
+### Enhanced
+- **Added full ImageMagick delegate support in Docker image**
+  - Installed all image format decoders (JPEG, PNG, WebP, HEIF, TIFF, JXL, RAW)
+  - Added support for HEIC/HEIF files with libheif
+  - Added WebP support with libwebp and tools
+  - Added JPEG-XL support with libjxl
+  - Added RAW image support with libraw
+  - Added SVG support with librsvg2
+  - Added JPEG 2000 support with libopenjp2
+  - Configured ImageMagick policies to allow all formats
+  - Increased ImageMagick resource limits (2GB memory, 4GB map, 8GB disk)
+  - This prevents "no decode delegate" errors and improves format compatibility
+- **Added comprehensive FFmpeg codec support in Docker image**
+  - Installed libavcodec-extra for additional codec support
+  - Added H.264 support with libx264
+  - Added H.265/HEVC support with libx265
+  - Added VP8/VP9 support with libvpx
+  - Added AV1 support with libaom, libdav1d, libsvtav1enc, librav1e
+  - Added audio codecs: MP3 (lame), Opus, Vorbis, Theora, AAC (fdk-aac)
+  - Added Blu-ray support with libbluray
+  - Added subtitle support with libass and libfreetype
+  - Added hardware acceleration libraries (VA-API, VDPAU)
+  - Added image scaling with libzimg
+  - This ensures FFmpeg can decode ALL media formats properly
+- **Configured FFmpeg for optimal performance**
+  - Set environment variables for better format detection (100MB probe size)
+  - Enabled all experimental codecs (FFMPEG_STRICT=-2)
+  - Configured multi-threading (FFMPEG_THREADS=0 for auto)
+  - Enabled hardware acceleration support (VA-API)
+  - Increased network timeout for streaming sources
+  - Added build-time verification of codec availability
+  - This ensures consistent and reliable media validation
+
 ## [2.2.79] - 2025-08-31
 
 ### Fixed - CRITICAL REGRESSION FIXES & UI IMPROVEMENTS

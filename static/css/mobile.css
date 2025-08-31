@@ -348,24 +348,57 @@
         margin: 0;
         height: 100vh;
         border-radius: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    #scan-reports-modal .modal-header {
+        flex-shrink: 0;
     }
     
     #scan-reports-modal .modal-body {
-        overflow-x: auto;
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
         padding: 1rem;
+        min-height: 0; /* Critical for flex child scrolling */
     }
     
-    /* Make reports table scrollable on mobile */
+    /* Make reports container scrollable */
     .scan-reports-container {
-        overflow-x: auto;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    /* Filter controls fixed at top */
+    .scan-reports-container .filter-controls {
+        flex-shrink: 0;
+    }
+    
+    /* Table container takes remaining space */
+    .scan-reports-container .table-container {
+        flex: 1;
+        overflow: auto;
         -webkit-overflow-scrolling: touch;
+        min-height: 200px; /* Ensure minimum height */
+        position: relative; /* For absolute positioning context */
+    }
+    
+    /* Ensure table is visible even when empty */
+    #scan-reports-table tbody:empty::after {
+        content: "Loading reports...";
+        display: block;
+        padding: 2rem;
+        text-align: center;
+        color: var(--text-secondary);
     }
     
     #scan-reports-table {
-        min-width: 600px; /* Force horizontal scroll rather than squashing */
+        width: 100%;
     }
     
-    /* Alternatively, stack the table on mobile */
+    /* Stack the table on small mobile screens */
     @media (max-width: 600px) {
         #scan-reports-table thead {
             display: none;
@@ -377,6 +410,7 @@
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 0.5rem;
+            background: var(--bg-secondary);
         }
         
         #scan-reports-table tbody td {
@@ -391,6 +425,22 @@
             font-weight: bold;
             display: inline-block;
             width: 120px;
+            color: var(--text-secondary);
+        }
+        
+        /* Ensure checkbox is visible */
+        #scan-reports-table tbody td:first-child {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        /* Pagination at bottom */
+        #reports-pagination {
+            flex-shrink: 0;
+            padding: 1rem;
+            border-top: 1px solid var(--border-color);
+            background: var(--bg-primary);
         }
     }
     
