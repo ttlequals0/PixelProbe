@@ -495,13 +495,19 @@ def get_scan_status():
         # CRITICAL: For Celery workers in separate processes, we need to close and recreate session
         # to ensure we see committed changes from other processes
         db.session.close()
+        db.session.remove()  # Remove session completely to force new connection
         
         # First try to get active scan with fresh session
         scan_state = db.session.query(ScanState).filter_by(is_active=True).first()
-        if not scan_state:
+        if scan_state:
+            # Force refresh from database to get latest state
+            db.session.refresh(scan_state)
+        else:
             # No active scan, get the most recent one for status display
             scan_state = db.session.query(ScanState).order_by(ScanState.id.desc()).first()
-            if not scan_state:
+            if scan_state:
+                db.session.refresh(scan_state)
+            else:
                 # No scan states at all, create initial one
                 scan_state = ScanState()
                 db.session.add(scan_state)

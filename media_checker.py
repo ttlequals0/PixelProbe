@@ -1037,10 +1037,27 @@ class PixelProbe:
                 stderr_lower = result.stderr.lower()
                 is_profile_warning = 'corruptimageprofile' in stderr_lower and '@warning/profile.c' in stderr_lower
                 
+                # Check for PNG chunk warnings that aren't actual corruption
+                png_chunk_warnings = [
+                    'sbit: invalid',
+                    'iccp: known incorrect srgb profile',
+                    'phys chunk',
+                    'text chunk',
+                    'itxt chunk',
+                    'time chunk',
+                    'bkgd chunk'
+                ]
+                is_png_warning = any(warning in stderr_lower for warning in png_chunk_warnings) and '@warning/png.c' in stderr_lower
+                
                 if is_profile_warning:
                     # Profile warnings (like XMP) don't indicate actual image corruption
                     scan_output.append("ImageMagick identify: PASSED (with profile warnings)")
                     logger.info(f"ImageMagick profile warning (not corruption) for {file_path}: {result.stderr[:100]}")
+                elif is_png_warning:
+                    # PNG chunk warnings don't indicate actual image corruption
+                    warning_details.append("PNG metadata warning")
+                    scan_output.append("ImageMagick identify: PASSED (with PNG metadata warnings)")
+                    logger.info(f"ImageMagick PNG warning (not corruption) for {file_path}: {result.stderr[:100]}")
                 elif any(keyword in stderr_lower for keyword in ['error', 'corrupt', 'truncated', 'damaged']):
                     corruption_details.append(f"ImageMagick warnings: {result.stderr[:100]}")
                     is_corrupted = True
@@ -1095,16 +1112,37 @@ class PixelProbe:
                 file_ext = os.path.splitext(file_path)[1].lower()
                 stderr_lower = result.stderr.lower()
                 
-                if file_ext in ['.heic', '.heif'] and any(msg in stderr_lower for msg in [
+                # Check for known FFmpeg compatibility issues with certain formats
+                compatibility_issues = [
                     'moov atom not found',
-                    'invalid data found',
+                    'invalid data found when processing input',
                     'could not find codec parameters',
                     'no decoder found',
-                    'unrecognized file format'
-                ]):
+                    'unrecognized file format',
+                    'error while decoding stream'
+                ]
+                
+                if file_ext in ['.heic', '.heif'] and any(msg in stderr_lower for msg in compatibility_issues):
                     # Known FFmpeg HEIC compatibility issue - check with other tools first
                     scan_output.append("FFmpeg image validation: SKIPPED (HEIC compatibility)")
                     logger.info(f"FFmpeg HEIC compatibility issue for {file_path}, relying on PIL/ImageMagick")
+                elif 'invalid data found when processing input' in stderr_lower or 'error while decoding stream' in stderr_lower:
+                    # Common FFmpeg decoding issue that doesn't always mean corruption
+                    # Check if other tools passed
+                    if not pil_failed and not pil_load_failed:
+                        # PIL passed, so file is likely OK - FFmpeg decoder issue
+                        warning_details.append("FFmpeg decoding warning (PIL verified OK)")
+                        scan_output.append("FFmpeg image validation: WARNINGS")
+                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
+                        logger.info(f"FFmpeg decoding issue but PIL passed for {file_path}")
+                        # Don't mark as corrupted since PIL passed
+                    else:
+                        # Both PIL and FFmpeg failed - likely corrupted
+                        corruption_details.append("FFmpeg validation failed")
+                        is_corrupted = True
+                        scan_tool = "ffmpeg"
+                        scan_output.append(f"FFmpeg image validation: FAILED")
+                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
                 else:
                     # Check if PIL passed before marking as corrupted
                     if not pil_failed and not pil_load_failed:
@@ -1371,6 +1409,15 @@ class PixelProbe:
                     elif 'number of reference frames' in line_lower and 'exceeds max' in line_lower:
                         has_reference_frame_warnings = True
                         # This is a common encoding issue that doesn't affect playback
+                    elif 'invalid data found when processing input' in line_lower or 'error while decoding stream' in line_lower:
+                        # These are common FFmpeg decoder issues that don't always mean corruption
+                        # Only mark as error if FFmpeg actually fails (returncode != 0)
+                        if result.returncode != 0:
+                            significant_errors.append(line)
+                            has_other_errors = True
+                        else:
+                            # FFmpeg succeeded despite the warning - treat as minor issue
+                            has_reference_frame_warnings = True
                     elif (('error' in line_lower and 'duration' not in line_lower) or
                           'corrupt' in line_lower or
                           'broken' in line_lower or

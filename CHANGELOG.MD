@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.84] - 2025-08-31
+
+### Fixed
+- **Fixed scan progress not updating in UI when using Celery workers**
+  - Added db.session.remove() in scan-status endpoint to force new connection
+  - Added db.session.refresh() to force re-read of scan state from database
+  - Added db.session.expire() after commits in scan service to ensure changes are visible
+  - Added db.session.flush() after commits to force immediate write
+  - Fixed issue where Celery worker database updates weren't visible to main app
+
 ## [2.2.83] - 2025-08-31
 
 ### Fixed

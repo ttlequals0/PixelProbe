@@ -2332,7 +2332,7 @@ class PixelProbeApp {
                 requestBody.search = this.table.searchQuery;
             }
             
-            const response = await fetch('/api/export-csv', {
+            const response = await fetch('/api/export', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

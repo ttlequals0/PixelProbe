@@ -3,6 +3,7 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
+from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone_name
 from io import BytesIO
 import base64
 import pytz
@@ -220,7 +221,7 @@ def export_scan_report(report_id):
     # Create response
     response = make_response(json_data)
     response.headers['Content-Type'] = 'application/json'
-    response.headers['Content-Disposition'] = f'attachment; filename=scan_report_{report_id}_{report.start_time.strftime("%Y%m%d_%H%M%S")}.json'
+    response.headers['Content-Disposition'] = f'attachment; filename=scan_report_{report_id}_{from_utc_to_configured(report.start_time).strftime("%Y%m%d_%H%M%S")}.json'
     
     return response
 
@@ -286,7 +287,9 @@ def generate_pdf_report(scan_type, scan_id):
         elements.append(Spacer(1, 0.2*inch))
         
         # Add export info
-        info_text = f"Report Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}<br/>"
+        current_time = from_utc_to_configured(datetime.now(timezone.utc))
+        timezone_name = get_configured_timezone_name()
+        info_text = f"Report Date: {current_time.strftime(f'%Y-%m-%d %H:%M:%S {timezone_name}')}<br/>"
         info_text += f"Scan Type: {scan_type.replace('_', ' ').title()}<br/>"
         info_text += f"Scan ID: {scan_id}"
         elements.append(Paragraph(info_text, styles['Normal']))
@@ -343,7 +346,7 @@ def generate_pdf_report(scan_type, scan_id):
                 details_text = ' '.join(details) if details else ''
                 
                 # Format scan date
-                scan_date = result.scan_date.strftime('%m/%d/%Y, %I:%M:%S %p') if result.scan_date else 'N/A'
+                scan_date = from_utc_to_configured(result.scan_date).strftime('%m/%d/%Y, %I:%M:%S %p') if result.scan_date else 'N/A'
                 
                 # Wrap file path and details in Paragraph for proper text wrapping
                 file_path_para = Paragraph(result.file_path, cell_style)
@@ -481,8 +484,8 @@ def export_scan_report_pdf(report_id):
             ['Report ID:', report.report_id],
             ['Scan Type:', report.scan_type.replace('_', ' ').title()],
             ['Status:', report.status.title()],
-            ['Start Time:', report.start_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.start_time else 'N/A'],
-            ['End Time:', report.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.end_time else 'N/A'],
+            ['Start Time:', from_utc_to_configured(report.start_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.start_time else 'N/A'],
+            ['End Time:', from_utc_to_configured(report.end_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.end_time else 'N/A'],
             ['Duration:', f"{int(report.duration_seconds // 60)}m {int(report.duration_seconds % 60)}s" if report.duration_seconds else 'N/A'],
         ]
         
@@ -631,7 +634,7 @@ def export_scan_report_pdf(report_id):
                     size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
                     file_type = file.file_type or 'Unknown'
                     scan_tool = file.scan_tool or 'N/A'
-                    scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+                    scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
                     
                     # Combine details from various fields - show all available information
                     details = []
@@ -754,8 +757,8 @@ def export_scan_report_pdf(report_id):
                 <tr><th>Report ID</th><td>{report.report_id}</td></tr>
                 <tr><th>Scan Type</th><td>{report.scan_type.replace('_', ' ').title()}</td></tr>
                 <tr><th>Status</th><td>{report.status.title()}</td></tr>
-                <tr><th>Start Time</th><td>{report.start_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.start_time else 'N/A'}</td></tr>
-                <tr><th>End Time</th><td>{report.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.end_time else 'N/A'}</td></tr>
+                <tr><th>Start Time</th><td>{from_utc_to_configured(report.start_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.start_time else 'N/A'}</td></tr>
+                <tr><th>End Time</th><td>{from_utc_to_configured(report.end_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.end_time else 'N/A'}</td></tr>
                 <tr><th>Duration</th><td>{f"{int(report.duration_seconds // 60)}m {int(report.duration_seconds % 60)}s" if report.duration_seconds else 'N/A'}</td></tr>
             </table>
             
@@ -807,7 +810,7 @@ def export_scan_report_pdf(report_id):
                 status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
                 size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
                 file_type = file.file_type or 'Unknown'
-                scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+                scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
                 status_class = 'corrupted' if status == 'Corrupted' else 'healthy'
                 
                 html_content += f"""
@@ -827,7 +830,7 @@ def export_scan_report_pdf(report_id):
         
         html_content += f"""
             <div class="footer">
-                <p>Generated on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                <p>Generated on {from_utc_to_configured(datetime.now(timezone.utc)).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}')}</p>
                 <p>This report is for compliance and auditing purposes</p>
             </div>
         </body>
@@ -984,8 +987,8 @@ def download_multiple_reports():
                     info_text = f"Report ID: {report.report_id}<br/>"
                     info_text += f"Scan Type: {report.scan_type.replace('_', ' ').title()}<br/>"
                     info_text += f"Status: {report.status}<br/>"
-                    info_text += f"Start Time: {report.start_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.start_time else 'N/A'}<br/>"
-                    info_text += f"End Time: {report.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if report.end_time else 'N/A'}<br/>"
+                    info_text += f"Start Time: {from_utc_to_configured(report.start_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.start_time else 'N/A'}<br/>"
+                    info_text += f"End Time: {from_utc_to_configured(report.end_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.end_time else 'N/A'}<br/>"
                     elements.append(Paragraph(info_text, styles['Normal']))
                     elements.append(Spacer(1, 0.2*inch))
                     
@@ -1059,7 +1062,7 @@ def download_multiple_reports():
                                 # Wrap details in Paragraph
                                 details_para = Paragraph(details, cell_style)
                                 
-                                scan_date = file.scan_date.strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+                                scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
                                 
                                 files_data.append([
                                     status,

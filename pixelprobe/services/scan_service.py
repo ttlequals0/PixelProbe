@@ -220,6 +220,9 @@ class ScanService:
                         scan_state.update_progress(0, 0, phase='discovering')
                         scan_state.progress_message = 'Phase 1 of 3: Discovering media files...'
                         db.session.commit()
+                        db.session.flush()
+                        # Force the state to be visible to other sessions
+                        db.session.expire(scan_state)
                         
                         if self.scan_cancelled:
                             self._handle_scan_cancellation(scan_state)
@@ -365,6 +368,9 @@ class ScanService:
                         scan_state.update_progress(0, new_files_count, phase='adding')
                         scan_state.progress_message = f'Phase 2 of 3: Adding {new_files_count} new files to database...'
                         db.session.commit()
+                        db.session.flush()
+                        # Force the state to be visible to other sessions
+                        db.session.expire(scan_state)
                         
                         # Add new files to database with basic file info (no corruption check yet)
                         added_count = 0
@@ -1083,7 +1089,11 @@ class ScanService:
                     total_files_to_scan,
                     os.path.basename(chunk.directory_path)
                 )
+                # Force commit and flush to ensure visibility
                 db.session.commit()
+                db.session.flush()
+                # For Celery, also expire the object to force re-read
+                db.session.expire(scan_state)
             except Exception as e:
                 logger.error(f"Failed to update progress for chunk {chunk.directory_path}: {e}")
                 # Try to recover the database session
@@ -1272,7 +1282,11 @@ class ScanService:
                             total_files_to_scan,
                             os.path.basename(chunk.directory_path)
                         )
+                        # Force commit and flush to ensure visibility
                         db.session.commit()
+                        db.session.flush()
+                        # For Celery, also expire the object to force re-read
+                        db.session.expire(scan_state)
                     except Exception as e:
                         logger.error(f"Failed to update progress for chunk {chunk.directory_path}: {e}")
                         # Try to recover the database session
