@@ -1,35 +1,78 @@
-FROM python:3.11-slim
+FROM ubuntu:22.04
 
-RUN apt-get update && apt-get install -y \
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.11, ImageMagick and all dependencies
+RUN apt-get update && \
+    apt-get install -y software-properties-common && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y \
+    # Python 3.11 \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    python3.11-distutils \
+    python3-pip \
+    # Core utilities \
     ffmpeg \
     libmagic1 \
     curl \
-    # Install ImageMagick delegates BEFORE imagemagick itself \
-    libjpeg-dev libjpeg62-turbo \
-    libpng-dev \
-    libtiff-dev \
-    libwebp-dev libwebpmux3 libwebpdemux2 \
-    libopenjp2-7-dev \
-    librsvg2-dev \
-    ghostscript \
-    # Additional libraries for better format support \
-    libexif-dev \
-    liblcms2-dev \
-    libfftw3-dev \
-    webp \
-    # Now install ImageMagick after delegates are in place \
+    wget \
+    # ImageMagick and ALL its dependencies \
     imagemagick \
+    imagemagick-6.q16 \
+    libmagickcore-6.q16-6 \
+    libmagickcore-6.q16-6-extra \
+    libmagickwand-6.q16-6 \
+    # Image format libraries \
+    libjpeg8 \
+    libjpeg-dev \
+    libpng16-16 \
+    libpng-dev \
+    libtiff5 \
+    libtiff-dev \
+    libwebp7 \
+    libwebp-dev \
+    libwebpmux3 \
+    libwebpdemux2 \
+    webp \
+    libopenjp2-7 \
+    libopenjp2-7-dev \
+    librsvg2-2 \
+    librsvg2-dev \
+    libraw20 \
+    libraw-dev \
+    libheif1 \
+    libheif-dev \
+    ghostscript \
+    # Additional libraries for better support \
+    libexif12 \
+    libexif-dev \
+    liblcms2-2 \
+    liblcms2-dev \
+    libfftw3-3 \
+    libfftw3-dev \
+    libfreetype6 \
+    libfreetype6-dev \
+    libfontconfig1 \
+    libfontconfig1-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
+
 # Configure ImageMagick to allow all file formats and increase resource limits
-# Remove restrictive policies that might block certain formats
-RUN sed -i 's/<policy domain="coder" rights="none" pattern="PDF" \/>/<policy domain="coder" rights="read|write" pattern="PDF" \/>/g' /etc/ImageMagick-6/policy.xml || true && \
-    sed -i 's/<policy domain="coder" rights="none" pattern="HEIC" \/>/<policy domain="coder" rights="read|write" pattern="HEIC" \/>/g' /etc/ImageMagick-6/policy.xml || true && \
-    sed -i 's/<policy domain="coder" rights="none" pattern="HEIF" \/>/<policy domain="coder" rights="read|write" pattern="HEIF" \/>/g' /etc/ImageMagick-6/policy.xml || true && \
-    # Increase resource limits for large images
-    sed -i 's/<policy domain="resource" name="memory" value=".*"\/>/<policy domain="resource" name="memory" value="2GiB"\/>/g' /etc/ImageMagick-6/policy.xml || true && \
-    sed -i 's/<policy domain="resource" name="map" value=".*"\/>/<policy domain="resource" name="map" value="4GiB"\/>/g' /etc/ImageMagick-6/policy.xml || true && \
-    sed -i 's/<policy domain="resource" name="disk" value=".*"\/>/<policy domain="resource" name="disk" value="8GiB"\/>/g' /etc/ImageMagick-6/policy.xml || true
+# Ubuntu 22.04 uses ImageMagick 6
+RUN sed -i 's/<policy domain="coder" rights="none" pattern="PDF" \/>/<policy domain="coder" rights="read|write" pattern="PDF" \/>/g' /etc/ImageMagick-6/policy.xml && \
+    sed -i 's/<policy domain="coder" rights="none" pattern="HEIC" \/>/<policy domain="coder" rights="read|write" pattern="HEIC" \/>/g' /etc/ImageMagick-6/policy.xml && \
+    sed -i 's/<policy domain="coder" rights="none" pattern="HEIF" \/>/<policy domain="coder" rights="read|write" pattern="HEIF" \/>/g' /etc/ImageMagick-6/policy.xml && \
+    sed -i 's/<policy domain="resource" name="memory" value=".*"\/>/<policy domain="resource" name="memory" value="2GiB"\/>/g' /etc/ImageMagick-6/policy.xml && \
+    sed -i 's/<policy domain="resource" name="map" value=".*"\/>/<policy domain="resource" name="map" value="4GiB"\/>/g' /etc/ImageMagick-6/policy.xml && \
+    sed -i 's/<policy domain="resource" name="disk" value=".*"\/>/<policy domain="resource" name="disk" value="8GiB"\/>/g' /etc/ImageMagick-6/policy.xml
 
 # Configure FFmpeg for optimal performance and compatibility
 # Set thread count for better performance
@@ -53,17 +96,25 @@ WORKDIR /app
 RUN ffmpeg -version && \
     ffmpeg -decoders 2>/dev/null | grep -E "(hevc|h264|h265|av1|vp9)" && \
     ffmpeg -encoders 2>/dev/null | grep -E "(libx264|libx265|libvpx)" && \
+    echo "=== ImageMagick Version and Delegates ===" && \
     convert -version && \
-    echo "ImageMagick Delegates:" && \
-    convert -list delegate | head -20 && \
-    echo "ImageMagick Supported Formats:" && \
-    identify -list format | grep -E "(JPEG|JPG|PNG|WEBP|GIF|TIFF)" && \
-    echo "Testing ImageMagick with sample images:" && \
+    echo "=== ImageMagick Delegate Libraries ===" && \
+    convert -list delegate | head -30 && \
+    echo "=== ImageMagick Supported Formats ===" && \
+    identify -list format | grep -E "(JPEG|JPG|PNG|WEBP|GIF|TIFF|HEIC)" && \
+    echo "=== Testing ImageMagick with sample images ===" && \
+    # Test JPEG support \
     convert -size 100x100 xc:white /tmp/test.jpg && \
-    identify /tmp/test.jpg && \
+    identify -verbose /tmp/test.jpg | head -5 && \
+    # Test PNG support \
     convert -size 100x100 xc:white /tmp/test.png && \
-    identify /tmp/test.png && \
-    rm -f /tmp/test.jpg /tmp/test.png
+    identify -verbose /tmp/test.png | head -5 && \
+    # Test WebP support \
+    convert -size 100x100 xc:white /tmp/test.webp && \
+    identify -verbose /tmp/test.webp | head -5 && \
+    # Clean up test files \
+    rm -f /tmp/test.jpg /tmp/test.png /tmp/test.webp && \
+    echo "=== All image format tests passed ==="
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -74,7 +125,7 @@ COPY . .
 RUN mkdir -p /app/instance
 
 # Set Python path to include the app directory
-ENV PYTHONPATH=/app:$PYTHONPATH
+ENV PYTHONPATH=/app
 # Ensure Python output is unbuffered for proper logging
 ENV PYTHONUNBUFFERED=1
 

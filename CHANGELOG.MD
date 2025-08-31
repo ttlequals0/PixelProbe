@@ -7,11 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.2.82] - 2025-08-31
 
+### Changed
+- **Switched Docker base image from python:3.11-slim to Ubuntu 22.04**
+  - Ubuntu provides better ImageMagick package support with all delegates included
+  - Resolves "no decode delegate" errors for JPEG, WebP, PNG and other formats
+  - Uses Ubuntu's well-tested ImageMagick 6 package instead of compiling from source
+  - Includes Python 3.11 from deadsnakes PPA
+  - More stable and predictable package ecosystem
+
 ### Fixed
 - **Fixed formatDate function reference error in scan reports**
   - Scan reports modal was failing with "formatDate is not a function" error
   - Fixed by using `this.table.formatDate` instead of `this.formatDate`
   - Reports now display correctly with proper date formatting
+- **Fixed ImageMagick decode delegate errors for all image formats**
+  - Installed complete ImageMagick package with all format libraries
+  - Added libmagickcore-6.q16-6-extra for additional format support
+  - Ensures JPEG, PNG, WebP, TIFF, and other formats work correctly
+  - No more "no decode delegate for this image format" errors
 
 ## [2.2.81] - 2025-08-31
 
