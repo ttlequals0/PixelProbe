@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from models import db, ScanSchedule, ScanResult
+from models import db, ScanSchedule, ScanResult, ScanState
 from sqlalchemy import text
 import threading
 import requests
