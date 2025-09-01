@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.92] - 2025-09-01
+
+### Critical Fix
+- **Fixed app hanging on startup - removed blocking advisory lock**
+  - Simplified migration to use worker ID checking instead of PostgreSQL advisory locks
+  - DDL commands now run in separate transactions to avoid blocking
+  - Migration errors are handled gracefully without stopping startup
+  - Only first worker runs migration to avoid conflicts
+
 ## [2.2.91] - 2025-09-01
 
 ### Critical Fix

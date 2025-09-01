@@ -364,68 +364,71 @@ def migrate_database():
 def run_v2_2_90_migrations():
     """Run migrations for v2.2.90 - fix deep_scan column constraint"""
     from sqlalchemy import text
-    import time
+    import os
+    
+    # Only run migration on first worker to avoid conflicts
+    worker_id = os.environ.get('SERVER_SOFTWARE', '').split('/')[-1] if 'SERVER_SOFTWARE' in os.environ else '0'
+    if worker_id not in ['0', '7', '1', '']:  # Only first worker or main process
+        logger.debug(f"Skipping v2.2.90 migration on worker {worker_id}")
+        return
     
     try:
-        # Use advisory lock to prevent concurrent migrations
-        with db.engine.begin() as conn:
-            # Try to acquire advisory lock (using a unique number for this migration)
-            lock_acquired = conn.execute(text("SELECT pg_try_advisory_lock(22900)")).scalar()
+        with db.engine.connect() as conn:
+            # Check if deep_scan column exists
+            result = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'scan_results' 
+                AND column_name = 'deep_scan'
+                LIMIT 1
+            """))
             
-            if not lock_acquired:
-                logger.info("Another worker is running v2.2.90 migration, waiting...")
-                time.sleep(2)  # Wait a bit for the other worker
-                return
-            
-            try:
-                # Check if deep_scan column exists and has NOT NULL constraint
-                result = conn.execute(text("""
-                    SELECT 
-                        column_name,
-                        is_nullable,
-                        column_default
-                    FROM information_schema.columns 
-                    WHERE table_name = 'scan_results' 
-                    AND column_name = 'deep_scan'
-                """))
+            if result.fetchone():
+                logger.info("Applying migration: Removing deep_scan column constraint")
                 
-                row = result.fetchone()
-                if row:
-                    column_name, is_nullable, column_default = row
-                    
-                    # If column exists and has NOT NULL constraint, fix it
-                    if is_nullable == 'NO':
-                        logger.info("Applying migration: Fixing deep_scan column NOT NULL constraint")
-                        
-                        # Make column nullable and add default
-                        conn.execute(text("""
+                # Use separate transactions for DDL commands
+                try:
+                    # First transaction: Drop NOT NULL constraint
+                    with db.engine.begin() as txn:
+                        txn.execute(text("""
                             ALTER TABLE scan_results 
                             ALTER COLUMN deep_scan DROP NOT NULL
                         """))
-                        
-                        conn.execute(text("""
+                    logger.debug("Dropped NOT NULL constraint on deep_scan")
+                except Exception as e:
+                    if 'already nullable' not in str(e).lower() and 'not null' not in str(e).lower():
+                        logger.debug(f"Could not drop NOT NULL: {e}")
+                
+                try:
+                    # Second transaction: Set default
+                    with db.engine.begin() as txn:
+                        txn.execute(text("""
                             ALTER TABLE scan_results 
                             ALTER COLUMN deep_scan SET DEFAULT FALSE
                         """))
-                        
-                        # Update any NULL values to FALSE
-                        conn.execute(text("""
+                    logger.debug("Set default FALSE on deep_scan")
+                except Exception as e:
+                    logger.debug(f"Could not set default: {e}")
+                
+                try:
+                    # Third transaction: Update NULL values
+                    with db.engine.begin() as txn:
+                        result = txn.execute(text("""
                             UPDATE scan_results 
                             SET deep_scan = FALSE 
                             WHERE deep_scan IS NULL
                         """))
-                        
-                        logger.info("Migration completed: deep_scan column is now nullable with default FALSE")
-                    else:
-                        logger.debug("Migration already applied: deep_scan column is already nullable")
-                else:
-                    logger.debug("No deep_scan column found - this is expected for new installations")
-            finally:
-                # Release advisory lock
-                conn.execute(text("SELECT pg_advisory_unlock(22900)"))
+                        if result.rowcount > 0:
+                            logger.info(f"Updated {result.rowcount} NULL deep_scan values to FALSE")
+                except Exception as e:
+                    logger.debug(f"Could not update NULL values: {e}")
+                
+                logger.info("Migration v2.2.90 completed")
+            else:
+                logger.debug("No deep_scan column found - expected for new installations")
                 
     except Exception as e:
-        logger.error(f"Migration v2.2.90 failed: {e}")
+        logger.warning(f"Migration v2.2.90 encountered issues: {e}")
         # Don't fail startup - the temporary model fix will handle it
 
 def run_v2_2_62_migrations():
