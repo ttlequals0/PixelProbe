@@ -43,10 +43,10 @@ def get_stats():
                     SUM(CASE WHEN scan_status = 'pending' AND is_corrupted IS NULL THEN 1 ELSE 0 END) as pending_files,
                     SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
                     SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
-                    SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE AND (has_warnings = FALSE OR has_warnings IS NULL) THEN 1 ELSE 0 END) as corrupted_files,
+                    SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,
                     SUM(CASE WHEN (is_corrupted = FALSE AND scan_status = 'completed') OR marked_as_good = TRUE THEN 1 ELSE 0 END) as healthy_files,
                     SUM(CASE WHEN marked_as_good = TRUE THEN 1 ELSE 0 END) as marked_as_good,
-                    SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as warning_files
+                    SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) THEN 1 ELSE 0 END) as warning_files
                 FROM scan_results
             """)
         ).fetchone()
@@ -78,15 +78,17 @@ def get_stats():
             error_files = ScanResult.query.filter_by(scan_status='error').count()
             
             # Count files, excluding marked_as_good from corrupted and warning counts
+            # Corrupted files include ALL files marked as corrupted (regardless of warnings)
             corrupted_files = ScanResult.query.filter(
                 (ScanResult.is_corrupted == True) & 
-                (ScanResult.marked_as_good == False) &
-                ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None))
+                (ScanResult.marked_as_good == False)
             ).count()
             
+            # Warning files are those with warnings but NOT corrupted
             warning_files = ScanResult.query.filter(
                 (ScanResult.has_warnings == True) &
-                (ScanResult.marked_as_good == False)
+                (ScanResult.marked_as_good == False) &
+                ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None))
             ).count()
             
             marked_as_good = ScanResult.query.filter_by(marked_as_good=True).count()
@@ -133,7 +135,7 @@ def get_system_info():
                     SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,
                     SUM(CASE WHEN (is_corrupted = FALSE AND scan_status = 'completed') OR marked_as_good = TRUE THEN 1 ELSE 0 END) as healthy_files,
                     SUM(CASE WHEN marked_as_good = TRUE THEN 1 ELSE 0 END) as marked_as_good,
-                    SUM(CASE WHEN has_warnings = TRUE THEN 1 ELSE 0 END) as warning_files
+                    SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) THEN 1 ELSE 0 END) as warning_files
                 FROM scan_results
             """)
         ).fetchone()

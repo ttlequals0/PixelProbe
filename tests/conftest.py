@@ -311,7 +311,7 @@ def mock_scan_result(db):
 
 @pytest.fixture
 def real_scan_results(db, test_data_dir):
-    """Scan real media files into test database - optimized for faster execution"""
+    """Scan real media files into test database"""
     from models import ScanResult
     from media_checker import PixelProbe
     from datetime import datetime, timezone
@@ -319,69 +319,51 @@ def real_scan_results(db, test_data_dir):
     checker = PixelProbe()
     results = []
     
-    # Limit the number of files to scan to prevent timeouts
-    MAX_FILES_PER_TYPE = 3
-    valid_files_scanned = 0
-    corrupted_files_scanned = 0
-    
-    # Only scan essential file types for faster tests
-    essential_extensions = ['.mp4', '.jpg', '.png', '.mp3']
-    
-    # Scan valid files (limited)
+    # Scan valid files
     for key, path in test_data_dir.items():
-        if valid_files_scanned >= MAX_FILES_PER_TYPE:
-            break
         if key.startswith('valid_') and os.path.exists(path):
-            # Only scan essential file types
-            if any(path.endswith(ext) for ext in essential_extensions):
-                scan_data = checker.scan_file(path)
-                if scan_data:
-                    result = ScanResult(
-                        file_path=path,
-                        file_size=scan_data.get('file_size', 0),
-                        file_type=scan_data.get('file_type', ''),
-                        file_hash=scan_data.get('file_hash', ''),
-                        scan_date=datetime.now(timezone.utc),
-                        scan_status='completed',
-                        is_corrupted=scan_data.get('is_corrupted', False),
-                        error_message=scan_data.get('error_message'),
-                        corruption_details=scan_data.get('corruption_details'),
-                        scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
-                        scan_output=scan_data.get('scan_output'),
-                        warning_details=scan_data.get('warning_details'),
-                        marked_as_good=False
-                    )
-                    db.session.add(result)
-                    results.append(result)
-                    valid_files_scanned += 1
+            scan_data = checker.scan_file(path)
+            if scan_data:
+                result = ScanResult(
+                    file_path=path,
+                    file_size=scan_data.get('file_size', 0),
+                    file_type=scan_data.get('file_type', ''),
+                    file_hash=scan_data.get('file_hash', ''),
+                    scan_date=datetime.now(timezone.utc),
+                    scan_status='completed',
+                    is_corrupted=scan_data.get('is_corrupted', False),
+                    error_message=scan_data.get('error_message'),
+                    corruption_details=scan_data.get('corruption_details'),
+                    scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
+                    scan_output=scan_data.get('scan_output'),
+                    warning_details=scan_data.get('warning_details'),
+                    marked_as_good=False
+                )
+                db.session.add(result)
+                results.append(result)
     
-    # Scan corrupted files (limited)
+    # Scan corrupted files
     for key, path in test_data_dir.items():
-        if corrupted_files_scanned >= MAX_FILES_PER_TYPE:
-            break
         if key.startswith('corrupted_') and os.path.exists(path):
-            # Only scan essential file types
-            if any(path.endswith(ext) for ext in essential_extensions):
-                scan_data = checker.scan_file(path)
-                if scan_data:
-                    result = ScanResult(
-                        file_path=path,
-                        file_size=scan_data.get('file_size', 0),
-                        file_type=scan_data.get('file_type', ''),
-                        file_hash=scan_data.get('file_hash', ''),
-                        scan_date=datetime.now(timezone.utc),
-                        scan_status='completed',
-                        is_corrupted=scan_data.get('is_corrupted', False),
-                        error_message=scan_data.get('error_message'),
-                        corruption_details=scan_data.get('corruption_details'),
-                        scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
-                        scan_output=scan_data.get('scan_output'),
-                        warning_details=scan_data.get('warning_details'),
-                        marked_as_good=False
-                    )
-                    db.session.add(result)
-                    results.append(result)
-                    corrupted_files_scanned += 1
+            scan_data = checker.scan_file(path)
+            if scan_data:
+                result = ScanResult(
+                    file_path=path,
+                    file_size=scan_data.get('file_size', 0),
+                    file_type=scan_data.get('file_type', ''),
+                    file_hash=scan_data.get('file_hash', ''),
+                    scan_date=datetime.now(timezone.utc),
+                    scan_status='completed',
+                    is_corrupted=scan_data.get('is_corrupted', False),
+                    error_message=scan_data.get('error_message'),
+                    corruption_details=scan_data.get('corruption_details'),
+                    scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
+                    scan_output=scan_data.get('scan_output'),
+                    warning_details=scan_data.get('warning_details'),
+                    marked_as_good=False
+                )
+                db.session.add(result)
+                results.append(result)
     
     db.session.commit()
     return results

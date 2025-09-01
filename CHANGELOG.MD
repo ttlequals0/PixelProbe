@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.88] - 2025-09-01
+
+### Fixed
+- **Fixed Phase 2 scan getting stuck with 0 files processed**
+  - Removed obsolete `deep_scan` column constraint that was causing database insert failures
+  - Phase 2 (adding files) now properly processes discovered files
+  - Created migration to handle legacy database schema issues
+  
+- **Fixed UI showing incorrect counts for corrupted and warning files**
+  - Files with both corruption AND warnings are now properly counted as corrupted
+  - Warning count now only includes files with warnings that are NOT corrupted
+  - Visual corruption detection results now correctly appear in corrupted files filter
+  
+- **Fixed regression where files with visual corruption were marked as warnings**
+  - Enhanced corruption detection (frame integrity, temporal outliers) now properly marks files as corrupted
+  - Files with visual corruption will appear when filtering for corrupted files in scan results table
+  - Proper categorization: corrupted status takes precedence over warning status
+
+### Changed
+- Reverted test optimization to ensure all media samples are properly scanned during testing
+
 ## [2.2.87] - 2025-08-31
 
 ### Changed
