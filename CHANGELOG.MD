@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.91] - 2025-09-01
+
+### Critical Fix
+- **Fixed app hanging on startup due to concurrent migration attempts**
+  - Added PostgreSQL advisory lock to prevent multiple workers from running migrations simultaneously
+  - Workers now wait gracefully if another worker is running the migration
+  - Prevents database deadlocks during startup with multiple gunicorn workers
+
 ## [2.2.90] - 2025-09-01
 
 ### Fixed

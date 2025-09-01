@@ -364,52 +364,65 @@ def migrate_database():
 def run_v2_2_90_migrations():
     """Run migrations for v2.2.90 - fix deep_scan column constraint"""
     from sqlalchemy import text
+    import time
     
     try:
-        with db.engine.connect() as conn:
-            # Check if deep_scan column exists and has NOT NULL constraint
-            result = conn.execute(text("""
-                SELECT 
-                    column_name,
-                    is_nullable,
-                    column_default
-                FROM information_schema.columns 
-                WHERE table_name = 'scan_results' 
-                AND column_name = 'deep_scan'
-            """))
+        # Use advisory lock to prevent concurrent migrations
+        with db.engine.begin() as conn:
+            # Try to acquire advisory lock (using a unique number for this migration)
+            lock_acquired = conn.execute(text("SELECT pg_try_advisory_lock(22900)")).scalar()
             
-            row = result.fetchone()
-            if row:
-                column_name, is_nullable, column_default = row
+            if not lock_acquired:
+                logger.info("Another worker is running v2.2.90 migration, waiting...")
+                time.sleep(2)  # Wait a bit for the other worker
+                return
+            
+            try:
+                # Check if deep_scan column exists and has NOT NULL constraint
+                result = conn.execute(text("""
+                    SELECT 
+                        column_name,
+                        is_nullable,
+                        column_default
+                    FROM information_schema.columns 
+                    WHERE table_name = 'scan_results' 
+                    AND column_name = 'deep_scan'
+                """))
                 
-                # If column exists and has NOT NULL constraint, fix it
-                if is_nullable == 'NO':
-                    logger.info("Applying migration: Fixing deep_scan column NOT NULL constraint")
+                row = result.fetchone()
+                if row:
+                    column_name, is_nullable, column_default = row
                     
-                    # Make column nullable and add default
-                    conn.execute(text("""
-                        ALTER TABLE scan_results 
-                        ALTER COLUMN deep_scan DROP NOT NULL
-                    """))
-                    
-                    conn.execute(text("""
-                        ALTER TABLE scan_results 
-                        ALTER COLUMN deep_scan SET DEFAULT FALSE
-                    """))
-                    
-                    # Update any NULL values to FALSE
-                    conn.execute(text("""
-                        UPDATE scan_results 
-                        SET deep_scan = FALSE 
-                        WHERE deep_scan IS NULL
-                    """))
-                    
-                    conn.commit()
-                    logger.info("Migration completed: deep_scan column is now nullable with default FALSE")
+                    # If column exists and has NOT NULL constraint, fix it
+                    if is_nullable == 'NO':
+                        logger.info("Applying migration: Fixing deep_scan column NOT NULL constraint")
+                        
+                        # Make column nullable and add default
+                        conn.execute(text("""
+                            ALTER TABLE scan_results 
+                            ALTER COLUMN deep_scan DROP NOT NULL
+                        """))
+                        
+                        conn.execute(text("""
+                            ALTER TABLE scan_results 
+                            ALTER COLUMN deep_scan SET DEFAULT FALSE
+                        """))
+                        
+                        # Update any NULL values to FALSE
+                        conn.execute(text("""
+                            UPDATE scan_results 
+                            SET deep_scan = FALSE 
+                            WHERE deep_scan IS NULL
+                        """))
+                        
+                        logger.info("Migration completed: deep_scan column is now nullable with default FALSE")
+                    else:
+                        logger.debug("Migration already applied: deep_scan column is already nullable")
                 else:
-                    logger.debug("Migration already applied: deep_scan column is already nullable")
-            else:
-                logger.debug("No deep_scan column found - this is expected for new installations")
+                    logger.debug("No deep_scan column found - this is expected for new installations")
+            finally:
+                # Release advisory lock
+                conn.execute(text("SELECT pg_advisory_unlock(22900)"))
                 
     except Exception as e:
         logger.error(f"Migration v2.2.90 failed: {e}")
