@@ -349,8 +349,8 @@ def migrate_database():
         # Run v2.2.62 migrations - add missing columns
         run_v2_2_62_migrations()
         
-        # Run v2.2.89 migrations - fix deep_scan column
-        run_v2_2_89_migrations()
+        # Run v2.2.90 migrations - fix deep_scan column
+        run_v2_2_90_migrations()
         
         # Create performance indexes
         create_performance_indexes()
@@ -361,8 +361,8 @@ def migrate_database():
     except Exception as e:
         logger.error(f"Error during database initialization: {e}")
 
-def run_v2_2_89_migrations():
-    """Run migrations for v2.2.89 - fix deep_scan column constraint"""
+def run_v2_2_90_migrations():
+    """Run migrations for v2.2.90 - fix deep_scan column constraint"""
     from sqlalchemy import text
     
     try:
@@ -412,7 +412,7 @@ def run_v2_2_89_migrations():
                 logger.debug("No deep_scan column found - this is expected for new installations")
                 
     except Exception as e:
-        logger.error(f"Migration v2.2.89 failed: {e}")
+        logger.error(f"Migration v2.2.90 failed: {e}")
         # Don't fail startup - the temporary model fix will handle it
 
 def run_v2_2_62_migrations():

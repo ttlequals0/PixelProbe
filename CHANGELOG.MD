@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Gracefully handles the deep_scan column constraint issue
 
 ### Technical
-- Added `run_v2_2_89_migrations()` function to app.py
+- Added `run_v2_2_90_migrations()` function to app.py
   - Checks if deep_scan column has NOT NULL constraint
   - Automatically fixes the constraint and sets default value
   - Updates existing NULL values to FALSE
