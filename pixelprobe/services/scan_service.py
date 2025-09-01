@@ -1551,7 +1551,9 @@ class ScanService:
                     'scan_status': 'pending',
                     'is_corrupted': None,
                     'marked_as_good': False,
-                    'file_exists': True
+                    'file_exists': True,
+                    'has_warnings': False,
+                    'deep_scan': False  # Temporary until migration runs
                 })
                 
             except Exception as e:
@@ -1564,7 +1566,9 @@ class ScanService:
                     'error_message': str(e),
                     'is_corrupted': None,
                     'marked_as_good': False,
-                    'file_exists': True
+                    'file_exists': True,
+                    'has_warnings': False,
+                    'deep_scan': False  # Temporary until migration runs
                 })
         
         # Bulk insert with duplicate handling

@@ -40,7 +40,7 @@ def get_stats():
                 SELECT 
                     COUNT(*) as total_files,
                     SUM(CASE WHEN scan_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
-                    SUM(CASE WHEN scan_status = 'pending' AND is_corrupted IS NULL THEN 1 ELSE 0 END) as pending_files,
+                    SUM(CASE WHEN scan_status = 'pending' THEN 1 ELSE 0 END) as pending_files,
                     SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
                     SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
                     SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,
@@ -72,7 +72,7 @@ def get_stats():
             total_files = ScanResult.query.count()
             completed_files = ScanResult.query.filter_by(scan_status='completed').count()
             pending_files = ScanResult.query.filter(
-                (ScanResult.scan_status == 'pending') | (ScanResult.is_corrupted == None)
+                ScanResult.scan_status == 'pending'
             ).count()
             scanning_files = ScanResult.query.filter_by(scan_status='scanning').count()
             error_files = ScanResult.query.filter_by(scan_status='error').count()
@@ -129,7 +129,7 @@ def get_system_info():
                 SELECT 
                     COUNT(*) as total_files,
                     SUM(CASE WHEN scan_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
-                    SUM(CASE WHEN scan_status = 'pending' AND is_corrupted IS NULL THEN 1 ELSE 0 END) as pending_files,
+                    SUM(CASE WHEN scan_status = 'pending' THEN 1 ELSE 0 END) as pending_files,
                     SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
                     SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
                     SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,

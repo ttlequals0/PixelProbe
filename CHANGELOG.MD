@@ -5,11 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.88] - 2025-09-01
+## [2.2.89] - 2025-09-01
 
 ### Fixed
 - **Fixed Phase 2 scan getting stuck with 0 files processed**
-  - Removed obsolete `deep_scan` column constraint that was causing database insert failures
+  - Added temporary `deep_scan` column back to model until migration runs
+  - Fixed bulk insert missing `has_warnings` and `deep_scan` fields
   - Phase 2 (adding files) now properly processes discovered files
   - Created migration to handle legacy database schema issues
   
@@ -23,8 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Files with visual corruption will appear when filtering for corrupted files in scan results table
   - Proper categorization: corrupted status takes precedence over warning status
 
+- **Fixed pending files count always showing 0 in UI**
+  - Removed unnecessary `is_corrupted IS NULL` condition from pending files query
+  - Pending files are now correctly counted based only on `scan_status = 'pending'`
+  - Files discovered in Phase 2 now properly show in pending count and count down as they're scanned
+
 ### Changed
 - Reverted test optimization to ensure all media samples are properly scanned during testing
+
+## [2.2.88] - 2025-09-01 [SKIPPED - Combined into 2.2.89]
 
 ## [2.2.87] - 2025-08-31
 

@@ -48,6 +48,10 @@ class ScanResult(db.Model):
     media_info = db.Column(db.Text, nullable=True)  # JSON string of media metadata
     file_exists = db.Column(db.Boolean, nullable=False, default=True, index=True)  # Whether file exists on disk
     
+    # Temporary: Keep deep_scan column until migration is run (will be removed in v2.2.90)
+    # This prevents insert failures in production environments that haven't run the migration yet
+    deep_scan = db.Column(db.Boolean, nullable=True, default=False, server_default='false')
+    
     # Output rotation tracking
     output_rotation_enabled = db.Column(db.Boolean, nullable=True)  # Per-record rotation setting
     
