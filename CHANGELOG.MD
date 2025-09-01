@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.91] - 2025-09-01
+
+### Fixed
+- **Fixed truncated images being marked as warnings instead of corrupted**
+  - Images with truncation errors (e.g., "29 bytes not processed") are now properly marked as corrupted
+  - PIL load failures with truncation now correctly set is_corrupted = True
+  - Affects GIF, JPEG, and other image formats with incomplete data
+
 ## [2.2.90] - 2025-09-01
 
 ### Changed
