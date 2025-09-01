@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.90] - 2025-09-01
+
+### Changed
+- **Automatic database migration for deep_scan column**
+  - Migration now runs automatically on startup via existing migration system
+  - No manual SQL execution required
+  - Gracefully handles the deep_scan column constraint issue
+
+### Technical
+- Added `run_v2_2_89_migrations()` function to app.py
+  - Checks if deep_scan column has NOT NULL constraint
+  - Automatically fixes the constraint and sets default value
+  - Updates existing NULL values to FALSE
+  - Safe and idempotent - won't fail if already applied
+
 ## [2.2.89] - 2025-09-01
 
 ### Fixed
@@ -31,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Reverted test optimization to ensure all media samples are properly scanned during testing
+- Integrated deep_scan migration into automatic startup migration system
 
 ## [2.2.88] - 2025-09-01 [SKIPPED - Combined into 2.2.89]
 

@@ -349,6 +349,9 @@ def migrate_database():
         # Run v2.2.62 migrations - add missing columns
         run_v2_2_62_migrations()
         
+        # Run v2.2.89 migrations - fix deep_scan column
+        run_v2_2_89_migrations()
+        
         # Create performance indexes
         create_performance_indexes()
         
@@ -357,6 +360,60 @@ def migrate_database():
         
     except Exception as e:
         logger.error(f"Error during database initialization: {e}")
+
+def run_v2_2_89_migrations():
+    """Run migrations for v2.2.89 - fix deep_scan column constraint"""
+    from sqlalchemy import text
+    
+    try:
+        with db.engine.connect() as conn:
+            # Check if deep_scan column exists and has NOT NULL constraint
+            result = conn.execute(text("""
+                SELECT 
+                    column_name,
+                    is_nullable,
+                    column_default
+                FROM information_schema.columns 
+                WHERE table_name = 'scan_results' 
+                AND column_name = 'deep_scan'
+            """))
+            
+            row = result.fetchone()
+            if row:
+                column_name, is_nullable, column_default = row
+                
+                # If column exists and has NOT NULL constraint, fix it
+                if is_nullable == 'NO':
+                    logger.info("Applying migration: Fixing deep_scan column NOT NULL constraint")
+                    
+                    # Make column nullable and add default
+                    conn.execute(text("""
+                        ALTER TABLE scan_results 
+                        ALTER COLUMN deep_scan DROP NOT NULL
+                    """))
+                    
+                    conn.execute(text("""
+                        ALTER TABLE scan_results 
+                        ALTER COLUMN deep_scan SET DEFAULT FALSE
+                    """))
+                    
+                    # Update any NULL values to FALSE
+                    conn.execute(text("""
+                        UPDATE scan_results 
+                        SET deep_scan = FALSE 
+                        WHERE deep_scan IS NULL
+                    """))
+                    
+                    conn.commit()
+                    logger.info("Migration completed: deep_scan column is now nullable with default FALSE")
+                else:
+                    logger.debug("Migration already applied: deep_scan column is already nullable")
+            else:
+                logger.debug("No deep_scan column found - this is expected for new installations")
+                
+    except Exception as e:
+        logger.error(f"Migration v2.2.89 failed: {e}")
+        # Don't fail startup - the temporary model fix will handle it
 
 def run_v2_2_62_migrations():
     """Run migrations for v2.2.62 - add celery_task_id column"""
