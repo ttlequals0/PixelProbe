@@ -1656,8 +1656,7 @@ class ScanService:
                 directory_path=f"FILE_CHUNK:{offset}:{limit}",
                 phase='scanning',
                 status='pending',
-                files_discovered=limit,  # Set the expected file count
-                files_to_scan=limit
+                files_discovered=limit  # Set the expected file count
             )
             chunks.append(chunk)
         
