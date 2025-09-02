@@ -1950,9 +1950,20 @@ class ScanService:
                             self.update_progress(current_total, total_to_scan, 
                                                file_result.file_path, 'scanning')
                         
-                        # Commit every 50 files to balance real-time updates with performance
-                        # This reduces database lock contention while maintaining responsiveness
-                        if scan_state and (scanned - last_commit_count) >= 50:
+                        # Commit based on scan size to balance real-time updates with performance
+                        # For small scans (<20 files), update EVERY file for immediate UI feedback
+                        # For medium scans, update every 5-10 files
+                        # For large scans, update less frequently to reduce database overhead
+                        if total_to_scan < 20:
+                            update_threshold = 1  # Update every file for small scans
+                        elif total_to_scan < 100:
+                            update_threshold = 5  # Update every 5 files for medium scans
+                        elif total_to_scan < 1000:
+                            update_threshold = 10  # Update every 10 files
+                        else:
+                            update_threshold = 50  # Update every 50 files for large scans
+                        
+                        if scan_state and (scanned - last_commit_count) >= update_threshold:
                             try:
                                 scan_state.files_processed = current_total
                                 scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
