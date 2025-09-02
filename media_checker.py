@@ -973,6 +973,13 @@ class PixelProbe:
                 pil_load_failed = True
                 pil_load_error = str(e)
                 scan_output.append(f"PIL load/transform: FAILED - {str(e)}")
+                
+                # Check for truncation errors - these indicate actual corruption
+                if 'truncated' in str(e).lower() or 'bytes not processed' in str(e).lower():
+                    logger.warning(f"Image truncation detected for {file_path}: {str(e)}")
+                    corruption_details.append(f"Image file is truncated: {str(e)}")
+                    is_corrupted = True
+                    scan_tool = "pil"
         
         logger.info(f"Starting ImageMagick verification for: {file_path}")
         

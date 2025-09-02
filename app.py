@@ -340,23 +340,105 @@ def create_tables():
 
 def migrate_database():
     """Run database migrations"""
+    # Run startup migrations
+    logger.info("Running startup migrations...")
     from tools.app_startup_migration import run_startup_migrations
+    try:
+        run_startup_migrations(db)
+        logger.info("Startup migrations completed successfully")
+    except Exception as e:
+        logger.error(f"Startup migration failed: {e}")
+    
+    # Test v2.2.62 migration
+    logger.info("Running v2.2.62 migration...")
+    try:
+        run_v2_2_62_migrations()
+        logger.info("v2.2.62 migration completed successfully")
+    except Exception as e:
+        logger.error(f"v2.2.62 migration failed: {e}")
+    
+    # Skip v2.2.90 migration - it was causing startup hang
+    # run_v2_2_90_migrations()  # DISABLED - causing startup hang
+    
+    # Create performance indexes
+    logger.info("Creating performance indexes...")
+    try:
+        create_performance_indexes()
+        logger.info("Performance indexes created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create performance indexes: {e}")
+    
+    logger.info("Database initialization completed")
+
+def run_v2_2_90_migrations():
+    """Run migrations for v2.2.90 - fix deep_scan column constraint"""
+    from sqlalchemy import text
+    import os
+    
+    # Only run migration on first worker to avoid conflicts
+    worker_id = os.environ.get('SERVER_SOFTWARE', '').split('/')[-1] if 'SERVER_SOFTWARE' in os.environ else '0'
+    if worker_id not in ['0', '7', '1', '']:  # Only first worker or main process
+        logger.debug(f"Skipping v2.2.90 migration on worker {worker_id}")
+        return
     
     try:
-        # Run startup migrations for v2.0.89
-        run_startup_migrations(db)
-        
-        # Run v2.2.62 migrations - add missing columns
-        run_v2_2_62_migrations()
-        
-        # Create performance indexes
-        create_performance_indexes()
-        
-        # All old column migrations removed - PostgreSQL schema should be up to date
-        logger.info("Database initialization completed")
-        
+        with db.engine.connect() as conn:
+            # Check if deep_scan column exists
+            result = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'scan_results' 
+                AND column_name = 'deep_scan'
+                LIMIT 1
+            """))
+            
+            if result.fetchone():
+                logger.info("Applying migration: Removing deep_scan column constraint")
+                
+                # Use separate transactions for DDL commands
+                try:
+                    # First transaction: Drop NOT NULL constraint
+                    with db.engine.begin() as txn:
+                        txn.execute(text("""
+                            ALTER TABLE scan_results 
+                            ALTER COLUMN deep_scan DROP NOT NULL
+                        """))
+                    logger.debug("Dropped NOT NULL constraint on deep_scan")
+                except Exception as e:
+                    if 'already nullable' not in str(e).lower() and 'not null' not in str(e).lower():
+                        logger.debug(f"Could not drop NOT NULL: {e}")
+                
+                try:
+                    # Second transaction: Set default
+                    with db.engine.begin() as txn:
+                        txn.execute(text("""
+                            ALTER TABLE scan_results 
+                            ALTER COLUMN deep_scan SET DEFAULT FALSE
+                        """))
+                    logger.debug("Set default FALSE on deep_scan")
+                except Exception as e:
+                    logger.debug(f"Could not set default: {e}")
+                
+                try:
+                    # Third transaction: Update NULL values
+                    with db.engine.begin() as txn:
+                        result = txn.execute(text("""
+                            UPDATE scan_results 
+                            SET deep_scan = FALSE 
+                            WHERE deep_scan IS NULL
+                        """))
+                        if result.rowcount > 0:
+                            logger.info(f"Updated {result.rowcount} NULL deep_scan values to FALSE")
+                except Exception as e:
+                    logger.debug(f"Could not update NULL values: {e}")
+                
+                logger.info("Migration v2.2.90 completed")
+            else:
+                logger.debug("No deep_scan column found - expected for new installations")
+                
     except Exception as e:
-        logger.error(f"Error during database initialization: {e}")
+        logger.warning(f"Migration v2.2.90 encountered issues: {e}")
+        # Don't fail startup - the temporary model fix will handle it
 
 def run_v2_2_62_migrations():
     """Run migrations for v2.2.62 - add celery_task_id column"""
@@ -414,15 +496,22 @@ def create_performance_indexes():
     ]
     
     logger.info("Creating performance indexes...")
-    with db.engine.connect() as conn:
-        for index in indexes:
-            try:
-                conn.execute(text(index))
-            except Exception as e:
-                logger.warning(f"Could not create index: {e}")
-        conn.commit()
+    created_count = 0
+    for index_sql in indexes:
+        try:
+            # Use separate transaction for each index
+            with db.engine.begin() as conn:
+                conn.execute(text(index_sql))
+            created_count += 1
+        except Exception as e:
+            # Index might already exist or column might not exist
+            if 'already exists' not in str(e).lower() and 'does not exist' not in str(e).lower():
+                logger.debug(f"Could not create index: {e}")
     
-    logger.info("Performance indexes created successfully")
+    if created_count > 0:
+        logger.info(f"Created {created_count} performance indexes")
+    else:
+        logger.debug("All performance indexes already exist")
 
 # Initialize on startup for better Docker compatibility
 with app.app_context():

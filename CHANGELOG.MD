@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.92] - 2025-09-01
+
+### Critical Fix
+- **Fixed app hanging on startup - removed blocking advisory lock**
+  - Simplified migration to use worker ID checking instead of PostgreSQL advisory locks
+  - DDL commands now run in separate transactions to avoid blocking
+  - Migration errors are handled gracefully without stopping startup
+  - Only first worker runs migration to avoid conflicts
+
+## [2.2.91] - 2025-09-01
+
+### Critical Fix
+- **Fixed app hanging on startup due to concurrent migration attempts**
+  - Added PostgreSQL advisory lock to prevent multiple workers from running migrations simultaneously
+  - Workers now wait gracefully if another worker is running the migration
+  - Prevents database deadlocks during startup with multiple gunicorn workers
+
+## [2.2.90] - 2025-09-01
+
+### Fixed
+- **Fixed truncated images being marked as warnings instead of corrupted**
+  - Images with truncation errors (e.g., "29 bytes not processed") are now properly marked as corrupted
+  - PIL load failures with truncation now correctly set is_corrupted = True
+  - Affects GIF, JPEG, and other image formats with incomplete data
+
+### Changed
+- **Automatic database migration for deep_scan column**
+  - Migration now runs automatically on startup via existing migration system
+  - No manual SQL execution required
+  - Gracefully handles the deep_scan column constraint issue
+
+### Technical
+- Added `run_v2_2_90_migrations()` function to app.py
+  - Checks if deep_scan column has NOT NULL constraint
+  - Automatically fixes the constraint and sets default value
+  - Updates existing NULL values to FALSE
+  - Safe and idempotent - won't fail if already applied
+
+## [2.2.89] - 2025-09-01
+
+### Fixed
+- **Fixed Phase 2 scan getting stuck with 0 files processed**
+  - Added temporary `deep_scan` column back to model until migration runs
+  - Fixed bulk insert missing `has_warnings` and `deep_scan` fields
+  - Phase 2 (adding files) now properly processes discovered files
+  - Created migration to handle legacy database schema issues
+  
+- **Fixed UI showing incorrect counts for corrupted and warning files**
+  - Files with both corruption AND warnings are now properly counted as corrupted
+  - Warning count now only includes files with warnings that are NOT corrupted
+  - Visual corruption detection results now correctly appear in corrupted files filter
+  
+- **Fixed regression where files with visual corruption were marked as warnings**
+  - Enhanced corruption detection (frame integrity, temporal outliers) now properly marks files as corrupted
+  - Files with visual corruption will appear when filtering for corrupted files in scan results table
+  - Proper categorization: corrupted status takes precedence over warning status
+
+- **Fixed pending files count always showing 0 in UI**
+  - Removed unnecessary `is_corrupted IS NULL` condition from pending files query
+  - Pending files are now correctly counted based only on `scan_status = 'pending'`
+  - Files discovered in Phase 2 now properly show in pending count and count down as they're scanned
+
+### Changed
+- Reverted test optimization to ensure all media samples are properly scanned during testing
+- Integrated deep_scan migration into automatic startup migration system
+
+## [2.2.88] - 2025-09-01 [SKIPPED - Combined into 2.2.89]
+
 ## [2.2.87] - 2025-08-31
 
 ### Changed
