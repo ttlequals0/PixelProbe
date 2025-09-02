@@ -583,19 +583,18 @@ class PixelProbe:
             # Get file size to determine optimal chunk size
             file_size = os.path.getsize(file_path)
             
-            # Skip hash for extremely large files (>5GB) to prevent hanging
-            MAX_HASH_SIZE = 5 * 1024 * 1024 * 1024  # 5GB
-            if file_size > MAX_HASH_SIZE:
-                logger.warning(f"Skipping hash for very large file (>{MAX_HASH_SIZE/1024/1024/1024}GB): {file_path}")
-                return f"SKIPPED_LARGE_FILE_{file_size}"
+            # NEVER skip hash - integrity checking is critical for all files
+            # Use adaptive chunk sizes for better performance
+            chunk_size = 1024 * 1024  # 1MB chunks for files up to 1GB
             
-            # Use larger chunks for better performance (1MB instead of 4KB)
-            # This reduces the number of read operations significantly
-            chunk_size = 1024 * 1024  # 1MB chunks
-            
-            # For very large files (>1GB), use even larger chunks
+            # For large files (>1GB), use larger chunks for better performance
             if file_size > 1024 * 1024 * 1024:
-                chunk_size = 4 * 1024 * 1024  # 4MB chunks
+                chunk_size = 4 * 1024 * 1024  # 4MB chunks for 1GB+ files
+            
+            # For very large files (>10GB), use even larger chunks
+            if file_size > 10 * 1024 * 1024 * 1024:
+                chunk_size = 16 * 1024 * 1024  # 16MB chunks for 10GB+ files
+                logger.info(f"Hashing large file ({file_size/1024/1024/1024:.1f}GB) with 16MB chunks: {file_path}")
             
             # Maximum time allowed for hashing (5 minutes)
             MAX_HASH_TIME = 300
