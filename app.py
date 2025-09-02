@@ -340,26 +340,35 @@ def create_tables():
 
 def migrate_database():
     """Run database migrations"""
+    # Run startup migrations
+    logger.info("Running startup migrations...")
     from tools.app_startup_migration import run_startup_migrations
-    
     try:
-        # Run startup migrations for v2.0.89
         run_startup_migrations(db)
-        
-        # Run v2.2.62 migrations - add missing columns
-        run_v2_2_62_migrations()
-        
-        # Run v2.2.90 migrations - fix deep_scan column
-        run_v2_2_90_migrations()
-        
-        # Create performance indexes
-        create_performance_indexes()
-        
-        # All old column migrations removed - PostgreSQL schema should be up to date
-        logger.info("Database initialization completed")
-        
+        logger.info("Startup migrations completed successfully")
     except Exception as e:
-        logger.error(f"Error during database initialization: {e}")
+        logger.error(f"Startup migration failed: {e}")
+    
+    # Test v2.2.62 migration
+    logger.info("Running v2.2.62 migration...")
+    try:
+        run_v2_2_62_migrations()
+        logger.info("v2.2.62 migration completed successfully")
+    except Exception as e:
+        logger.error(f"v2.2.62 migration failed: {e}")
+    
+    # Skip v2.2.90 migration - it was causing startup hang
+    # run_v2_2_90_migrations()  # DISABLED - causing startup hang
+    
+    # Create performance indexes
+    logger.info("Creating performance indexes...")
+    try:
+        create_performance_indexes()
+        logger.info("Performance indexes created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create performance indexes: {e}")
+    
+    logger.info("Database initialization completed")
 
 def run_v2_2_90_migrations():
     """Run migrations for v2.2.90 - fix deep_scan column constraint"""
@@ -487,15 +496,22 @@ def create_performance_indexes():
     ]
     
     logger.info("Creating performance indexes...")
-    with db.engine.connect() as conn:
-        for index in indexes:
-            try:
-                conn.execute(text(index))
-            except Exception as e:
-                logger.warning(f"Could not create index: {e}")
-        conn.commit()
+    created_count = 0
+    for index_sql in indexes:
+        try:
+            # Use separate transaction for each index
+            with db.engine.begin() as conn:
+                conn.execute(text(index_sql))
+            created_count += 1
+        except Exception as e:
+            # Index might already exist or column might not exist
+            if 'already exists' not in str(e).lower() and 'does not exist' not in str(e).lower():
+                logger.debug(f"Could not create index: {e}")
     
-    logger.info("Performance indexes created successfully")
+    if created_count > 0:
+        logger.info(f"Created {created_count} performance indexes")
+    else:
+        logger.debug("All performance indexes already exist")
 
 # Initialize on startup for better Docker compatibility
 with app.app_context():
