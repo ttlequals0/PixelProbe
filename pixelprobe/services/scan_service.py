@@ -507,7 +507,8 @@ class ScanService:
                         return {'message': 'Scan completed - no files to process', 'total_files': 0}
                     
                     # Create chunks only if there are files to scan
-                    scan_chunks = self._create_directory_chunks(valid_dirs, scan_state.scan_id)
+                    # For Phase 3 scanning, create file-based chunks, not directory-based!
+                    scan_chunks = self._create_scanning_chunks(total_scan_files, scan_state.scan_id, is_pending_scan, force_rescan, valid_dirs)
                     
                     # Save chunks to database
                     for chunk in scan_chunks:
@@ -1621,6 +1622,47 @@ class ScanService:
         
         return added_count, duplicate_count
     
+    def _create_scanning_chunks(self, total_files: int, scan_id: str, is_pending_scan: bool, 
+                                force_rescan: bool, directories: List[str]) -> List[ScanChunk]:
+        """Create file-based chunks for Phase 3 scanning"""
+        from models import ScanChunk
+        chunks = []
+        
+        # Determine optimal chunk size based on total files
+        if total_files <= 100:
+            chunk_size = total_files  # Single chunk for small scans
+        elif total_files <= 1000:
+            chunk_size = 100  # 100 files per chunk
+        elif total_files <= 10000:
+            chunk_size = 500  # 500 files per chunk
+        else:
+            chunk_size = 1000  # 1000 files per chunk for large scans
+        
+        num_chunks = (total_files + chunk_size - 1) // chunk_size
+        logger.info(f"Creating {num_chunks} file-based chunks for {total_files} files (chunk size: {chunk_size})")
+        
+        # Create file-based chunks
+        for i in range(num_chunks):
+            chunk_id = hashlib.md5(f"{scan_id}:scan_chunk_{i}:{time.time()}".encode()).hexdigest()
+            
+            # Store chunk metadata in directory_path for now (will be refactored later)
+            # Format: "FILE_CHUNK:offset:limit"
+            offset = i * chunk_size
+            limit = min(chunk_size, total_files - offset)
+            
+            chunk = ScanChunk(
+                scan_id=scan_id,
+                chunk_id=chunk_id,
+                directory_path=f"FILE_CHUNK:{offset}:{limit}",
+                phase='scanning',
+                status='pending',
+                files_discovered=limit,  # Set the expected file count
+                files_to_scan=limit
+            )
+            chunks.append(chunk)
+        
+        return chunks
+    
     def _create_directory_chunks(self, directories: List[str], scan_id: str) -> List[ScanChunk]:
         """Create chunks based on directory structure for better organization"""
         chunks = []
@@ -1724,15 +1766,27 @@ class ScanService:
                 return {'added': added, 'duplicates': duplicates}
                 
             elif phase == 'scanning':
-                # Check if this is the special pending files chunk
-                if chunk.directory_path == 'PENDING_FILES':
-                    # Scan ALL pending files regardless of directory
+                # Check if this is a file-based chunk (Phase 3)
+                if chunk.directory_path.startswith('FILE_CHUNK:'):
+                    # Parse the chunk metadata: "FILE_CHUNK:offset:limit"
+                    parts = chunk.directory_path.split(':')
+                    offset = int(parts[1])
+                    limit = int(parts[2])
+                    
+                    # Get the specified range of pending files
+                    files_to_scan = db.session.query(ScanResult).filter(
+                        ScanResult.scan_status == 'pending'
+                    ).order_by(ScanResult.file_path).offset(offset).limit(limit).all()
+                    
+                    logger.info(f"Processing FILE_CHUNK {chunk.chunk_id}: {len(files_to_scan)} files (offset={offset}, limit={limit})")
+                elif chunk.directory_path == 'PENDING_FILES':
+                    # Legacy: Scan ALL pending files regardless of directory
                     files_to_scan = db.session.query(ScanResult).filter(
                         ScanResult.scan_status == 'pending'
                     ).all()
                     logger.info(f"Processing PENDING_FILES chunk: {len(files_to_scan)} pending files to scan")
                 else:
-                    # Scan files in this directory
+                    # Legacy: Scan files in this directory
                     files_to_scan = db.session.query(ScanResult).filter(
                         ScanResult.file_path.like(f"{chunk.directory_path}%"),
                         ScanResult.scan_status == 'pending'
@@ -1798,15 +1852,24 @@ class ScanService:
         db.session.commit()
         
         try:
-            # Check if this is the special pending files chunk
-            if chunk.directory_path == 'PENDING_FILES':
-                # Get ALL pending files regardless of directory
+            # Check if this is a file-based chunk (Phase 3)
+            if chunk.directory_path.startswith('FILE_CHUNK:'):
+                # Parse the chunk metadata: "FILE_CHUNK:offset:limit"
+                parts = chunk.directory_path.split(':')
+                offset = int(parts[1])
+                limit = int(parts[2])
+                
+                # Get count for this specific chunk
+                files_count = limit  # We know exactly how many files are in this chunk
+                logger.info(f"FILE_CHUNK {chunk.chunk_id}: Processing {files_count} files (offset={offset})")
+            elif chunk.directory_path == 'PENDING_FILES':
+                # Legacy: Get ALL pending files regardless of directory
                 files_count = db.session.query(ScanResult).filter(
                     ScanResult.scan_status == 'pending'
                 ).count()
                 logger.info(f"PENDING_FILES chunk: Found {files_count} pending files to scan")
             else:
-                # Query for files in this chunk's directory that need scanning
+                # Legacy: Query for files in this chunk's directory that need scanning
                 # Simply match all files that start with the directory path
                 chunk_dir = chunk.directory_path.rstrip(os.sep)
                 
@@ -1841,8 +1904,14 @@ class ScanService:
                     return
                 
                 # Get batch of files
-                if chunk.directory_path == 'PENDING_FILES':
-                    # Get batch of ALL pending files
+                if chunk.directory_path.startswith('FILE_CHUNK:'):
+                    # For file-based chunks, adjust offset based on chunk's offset
+                    chunk_offset = int(chunk.directory_path.split(':')[1])
+                    files_batch = db.session.query(ScanResult).filter(
+                        ScanResult.scan_status == 'pending'
+                    ).order_by(ScanResult.file_path).offset(chunk_offset + batch_offset).limit(batch_size).all()
+                elif chunk.directory_path == 'PENDING_FILES':
+                    # Legacy: Get batch of ALL pending files
                     files_batch = db.session.query(ScanResult).filter(
                         ScanResult.scan_status == 'pending'
                     ).offset(batch_offset).limit(batch_size).all()
