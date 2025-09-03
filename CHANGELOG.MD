@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added explicit phase_total setting for all three scan phases (discovering, adding, scanning)
   - UI now correctly displays total file count during all scan operations
 
+
 ## [2.2.92] - 2025-09-01
 
 ### Critical Fix
