@@ -223,7 +223,9 @@ def add_configuration():
 @admin_bp.route('/schedules', methods=['GET'])
 def get_schedules():
     """Get all scan schedules"""
-    schedules = ScanSchedule.query.filter_by(is_active=True).all()
+    # Return all schedules (active and inactive) so they can be toggled
+    # DELETE endpoint does hard delete, so truly deleted ones won't appear
+    schedules = ScanSchedule.query.all()
     return jsonify({'schedules': [schedule.to_dict() for schedule in schedules]})
 
 @admin_bp.route('/schedules', methods=['POST'])
@@ -293,10 +295,11 @@ def delete_schedule(schedule_id):
     schedule = ScanSchedule.query.get_or_404(schedule_id)
     
     try:
-        schedule.is_active = False  # Soft delete
+        # Actually delete the schedule from database instead of soft delete
+        db.session.delete(schedule)
         db.session.commit()
         
-        # Update scheduler
+        # Update scheduler to remove the job
         if scheduler:
             scheduler.update_schedules()
         
