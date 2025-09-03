@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.2] - 2025-09-03
+
+### Changed
+- **Stage 4 strict error detection now produces warnings instead of marking files as corrupted**
+  - Stage 4 uses extremely aggressive error detection that often flags non-issues
+  - Container/muxing issues, NAL unit warnings, and minor encoding quirks no longer mark files as corrupted
+  - Files that play normally but fail Stage 4 are now marked with warnings only
+  - Actual corruption is still detected by Stages 1-3
+
 ## [2.3.1] - 2025-09-03 
 
 ### Hotfix

@@ -1810,13 +1810,13 @@ class PixelProbe:
         else:
             enhanced_output.append("Stage 3: Skipped (file < 5GB)")
         
-        # Stage 4: Enhanced error detection with strict flags
+        # Stage 4: Enhanced error detection with strict flags (warnings only - doesn't mark as corrupted)
         strict_corrupted, strict_details = self._check_strict_error_detection(file_path)
-        enhanced_output.append("Stage 4: Strict error detection")
+        enhanced_output.append("Stage 4: Strict error detection (warnings only)")
         if strict_corrupted:
-            is_corrupted = True
-            corruption_details.extend(strict_details)
-            enhanced_output.append(f"  Result: FAILED - {'; '.join(strict_details)}")
+            # Don't mark as corrupted - these are usually container/muxing issues, not actual corruption
+            warning_details.extend([f"Stage 4: {detail}" for detail in strict_details])
+            enhanced_output.append(f"  Result: WARNING - {'; '.join(strict_details)}")
         else:
             enhanced_output.append("  Result: PASSED")
         
@@ -1986,7 +1986,10 @@ class PixelProbe:
         return is_corrupted, corruption_details
     
     def _check_strict_error_detection(self, file_path):
-        """Enhanced error detection with strict error checking flags"""
+        """Enhanced error detection with strict flags - returns warnings only, not corruption
+        
+        These checks are extremely sensitive and often flag container/muxing issues
+        that don't affect playback. Results should be treated as warnings."""
         corruption_details = []
         is_corrupted = False
         
@@ -2004,7 +2007,7 @@ class PixelProbe:
             
             if result.returncode != 0:
                 corruption_details.append("Strict error detection failed")
-                is_corrupted = True
+                # Don't mark as corrupted - these are warnings only
             
             if result.stderr:
                 # Enhanced error pattern recognition
@@ -2031,13 +2034,11 @@ class PixelProbe:
                             nal_unit_only = False
                         logger.info(f"Detected: {description} in {file_path}")
                 
-                # Only mark as corrupted if:
-                # 1. There are non-NAL unit errors, OR
-                # 2. The return code is non-zero AND there are NAL unit errors
-                if found_errors and (not nal_unit_only or result.returncode != 0):
+                # Stage 4 no longer marks as corrupted - all findings are warnings
+                if found_errors:
                     corruption_details.extend(found_errors)
-                    is_corrupted = True
-                    logger.warning(f"Marking as corrupted due to: {', '.join(found_errors)}")
+                    # Don't set is_corrupted = True - these are warnings only
+                    logger.info(f"Stage 4 warnings (not marking as corrupted): {', '.join(found_errors)}")
                 elif nal_unit_only and result.returncode == 0:
                     logger.info(f"NAL unit errors only (not marking as corrupted) for {file_path}")
                     # Don't mark as corrupted, but include in details for warning handling
