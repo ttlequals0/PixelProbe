@@ -144,10 +144,11 @@ class MediaScheduler:
         """Activate a scan schedule"""
         try:
             job_id = f"schedule_{schedule.id}"
+            schedule_id = schedule.id  # Store the ID, not the object
             
-            # Create job function with schedule context
+            # Create job function with schedule ID (not the object to avoid detached instance)
             def job_func():
-                self._run_scheduled_scan(schedule.id)
+                self._run_scheduled_scan(schedule_id)
                 
             # Check if it's an interval or cron format
             if schedule.cron_expression.startswith('interval:'):

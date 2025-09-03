@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.97] - 2025-09-02
+
+### Fixed
+- **Fixed file changes check to handle files without hash**
+  - Files with no stored hash are now treated as changes and will have a hash calculated
+  - Prevents files from being skipped during change detection scan
+  - Ensures all files get properly hashed and scanned
+
+- **Fixed scheduled scan regression causing DetachedInstanceError**
+  - Schedule objects were becoming detached from SQLAlchemy session
+  - Fixed by passing schedule ID instead of object to job function
+  - Scheduled scans now work properly without database session errors
+
+- **Fixed schedule disappearing after disable**
+  - Schedules were not visible after being disabled, preventing re-enable
+  - Changed schedule list API to return both active and inactive schedules
+  - Users can now properly toggle schedules between enabled/disabled states
+
+- **Fixed UI showing "X of 0 files scanned" during scan phases**
+  - phase_total was not being set properly during phase transitions
+  - Added explicit phase_total setting for all three scan phases (discovering, adding, scanning)
+  - UI now correctly displays total file count during all scan operations
+
 ## [2.2.92] - 2025-09-01
 
 ### Critical Fix

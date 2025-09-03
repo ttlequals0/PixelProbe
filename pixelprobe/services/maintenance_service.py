@@ -585,6 +585,18 @@ class MaintenanceService:
             }
         
         try:
+            # If file has no hash, treat it as a change and calculate one
+            if not result.file_hash:
+                current_hash = self._calculate_file_hash(result.file_path)
+                return {
+                    'file_path': result.file_path,
+                    'change_type': 'no_hash',
+                    'stored_hash': None,
+                    'current_hash': current_hash,
+                    'stored_modified': result.last_modified,
+                    'current_modified': datetime.fromtimestamp(os.stat(result.file_path).st_mtime, timezone.utc)
+                }
+            
             # Get current file stats
             stat = os.stat(result.file_path)
             current_modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc)

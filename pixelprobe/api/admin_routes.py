@@ -223,7 +223,8 @@ def add_configuration():
 @admin_bp.route('/schedules', methods=['GET'])
 def get_schedules():
     """Get all scan schedules"""
-    schedules = ScanSchedule.query.filter_by(is_active=True).all()
+    # Return all schedules (both active and inactive) so they can be toggled
+    schedules = ScanSchedule.query.all()
     return jsonify({'schedules': [schedule.to_dict() for schedule in schedules]})
 
 @admin_bp.route('/schedules', methods=['POST'])

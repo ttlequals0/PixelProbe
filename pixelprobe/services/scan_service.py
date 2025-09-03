@@ -218,6 +218,9 @@ class ScanService:
                         # Phase 1: Discovery - Find only new files
                         self.update_progress(0, 0, '', 'discovering')
                         scan_state.update_progress(0, 0, phase='discovering')
+                        scan_state.phase_number = 1
+                        scan_state.phase_current = 0
+                        scan_state.phase_total = 0  # Unknown during discovery
                         scan_state.progress_message = 'Phase 1 of 3: Discovering media files...'
                         db.session.commit()
                         db.session.flush()
@@ -366,6 +369,9 @@ class ScanService:
                     if new_files_count > 0:
                         self.update_progress(0, new_files_count, '', 'adding')
                         scan_state.update_progress(0, new_files_count, phase='adding')
+                        scan_state.phase_number = 2
+                        scan_state.phase_current = 0
+                        scan_state.phase_total = new_files_count  # Fix: Set phase_total for UI display
                         scan_state.progress_message = f'Phase 2 of 3: Adding {new_files_count} new files to database...'
                         db.session.commit()
                         db.session.flush()
@@ -521,6 +527,9 @@ class ScanService:
                     # Update both service and database state for actual scanning
                     self.update_progress(0, total_scan_files, '', 'scanning')
                     scan_state.update_progress(0, total_scan_files, phase='scanning', current_file='')
+                    scan_state.phase_number = 3
+                    scan_state.phase_current = 0
+                    scan_state.phase_total = total_scan_files  # Fix: Set phase_total for UI display
                     scan_state.progress_message = f'Phase 3 of 3: Scanning {total_scan_files} files for corruption...'
                     
                     # Explicit commit to ensure database state is updated
