@@ -42,12 +42,31 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
         # This prevents concurrent scans when multiple tasks are queued
         active_scan = ScanState.query.filter_by(is_active=True).first()
         if active_scan and active_scan.scan_id != scan_id:
-            # Another scan is running with a different scan_id
-            error_msg = f"Another scan is already in progress (scan_id: {active_scan.scan_id}, phase: {active_scan.phase})"
-            logger.error(f"Celery scan task {self.request.id} failed: {error_msg}")
+            # Check if the active scan is actually stuck (no update for 10+ minutes)
+            from datetime import datetime, timezone, timedelta
+            check_time = active_scan.last_update or active_scan.start_time
             
-            # Retry with delay to check again later
-            if self.request.retries < self.max_retries:
+            if check_time:
+                if check_time.tzinfo is None:
+                    check_time = check_time.replace(tzinfo=timezone.utc)
+                
+                time_since_update = datetime.now(timezone.utc) - check_time
+                
+                # If scan hasn't updated in 10 minutes, it's likely stuck
+                if time_since_update > timedelta(minutes=10):
+                    logger.warning(f"Found stuck scan {active_scan.scan_id} (no update for {time_since_update}), marking as crashed")
+                    active_scan.is_active = False
+                    active_scan.phase = 'crashed'
+                    active_scan.error_message = f'Scan stuck - no progress for {time_since_update}'
+                    db.session.commit()
+                    # Now we can proceed with our scan
+                else:
+                    # Another scan is genuinely running
+                    error_msg = f"Another scan is already in progress (scan_id: {active_scan.scan_id}, phase: {active_scan.phase})"
+                    logger.error(f"Celery scan task {self.request.id} failed: {error_msg}")
+                    
+                    # Retry with delay to check again later
+                    if self.request.retries < self.max_retries:
                 retry_delay = 60 * (self.request.retries + 1)  # 60s, 120s, 180s
                 logger.info(f"Retrying scan task {self.request.id} in {retry_delay} seconds")
                 raise self.retry(exc=RuntimeError(error_msg), countdown=retry_delay)

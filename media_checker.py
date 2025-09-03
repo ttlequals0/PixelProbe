@@ -986,13 +986,13 @@ class PixelProbe:
         file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
         file_size_mb = file_size / (1024 * 1024)
         
-        # Base timeout: 30s for most files, 90s for GIFs, scale with file size
+        # Scale timeout with file size, no artificial limit for large files
         if is_gif:
-            # GIFs can be complex with many frames - use longer timeout
-            imagemagick_timeout = min(90 + int(file_size_mb / 10), 180)  # 90s base + 1s per 10MB, max 3 minutes
+            # GIFs can be complex with many frames - scale timeout with file size
+            imagemagick_timeout = 120 + int(file_size_mb / 5)  # 120s base + 1s per 5MB, no max
         else:
-            # Regular images - shorter timeout
-            imagemagick_timeout = min(30 + int(file_size_mb / 5), 120)   # 30s base + 1s per 5MB, max 2 minutes
+            # Regular images - scale timeout with file size
+            imagemagick_timeout = 60 + int(file_size_mb / 10)   # 60s base + 1s per 10MB, no max
         
         logger.info(f"ImageMagick timeout set to {imagemagick_timeout}s for {file_size_mb:.1f}MB {file_ext.upper()} file")
         
@@ -1104,8 +1104,8 @@ class PixelProbe:
             logger.warning(f"ImageMagick error for {file_path}: {str(e)}")
         
         try:
-            # Use same timeout scaling as ImageMagick for consistency
-            ffmpeg_image_timeout = min(30 + int(file_size_mb / 5), 120)  # 30s base + 1s per 5MB, max 2 minutes
+            # Scale timeout with file size, no max limit for large images
+            ffmpeg_image_timeout = 60 + int(file_size_mb / 10)  # 60s base + 1s per 10MB, no max
             result = safe_subprocess_run(
                 ['ffmpeg', '-v', 'error', '-i', file_path, '-f', 'null', '-'],
                 capture_output=True,
@@ -1371,8 +1371,9 @@ class PixelProbe:
         file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
         file_size_gb = file_size / (1024 * 1024 * 1024)
         
-        # Configure shorter timeout for large files to prevent hanging: 30s base + 10s per GB, max 5 minutes
-        timeout_seconds = min(30 + int(file_size_gb * 10), 300)
+        # Configure appropriate timeout for large files: 60s base + 30s per GB, no maximum limit
+        # Large Bluray remux files (30-50GB) need much longer validation times
+        timeout_seconds = 60 + int(file_size_gb * 30)
         logger.info(f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (timeout: {timeout_seconds}s)")
         
         # Enhanced FFmpeg validation with best practices for thorough file checking
@@ -1461,9 +1462,9 @@ class PixelProbe:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         
         except subprocess.TimeoutExpired:
-            corruption_details.append(f"FFmpeg validation timeout ({timeout_seconds}s) - large file may need longer validation")
-            is_corrupted = True
-            logger.warning(f"FFmpeg timeout for {file_path} - {file_size_gb:.2f}GB file exceeded {timeout_seconds}s timeout")
+            # Don't mark as corrupted for timeout - large files legitimately take longer
+            warning_details.append(f"FFmpeg validation timeout ({timeout_seconds}s) - very large file, validation incomplete")
+            logger.warning(f"FFmpeg timeout for {file_path} - {file_size_gb:.2f}GB file exceeded {timeout_seconds}s timeout (not marked as corrupted)")
         except FileNotFoundError:
             logger.warning("FFmpeg not found, skipping advanced video checks")
         except Exception as e:

@@ -522,23 +522,24 @@ with app.app_context():
     init_services()
     scheduler.init_app(app)
     
-    # Clean up any stuck scans from previous runs (7+ days old)
+    # Clean up ALL active scans from previous runs - they can't still be running after restart
     # NOTE: This query happens AFTER migration, so celery_task_id column exists
     try:
         from datetime import datetime, timezone, timedelta
         from models import ScanState
         stuck_scans = ScanState.query.filter(
-            ScanState.is_active == True,
-            ScanState.start_time < datetime.now(timezone.utc) - timedelta(days=7)
+            ScanState.is_active == True
         ).all()
         
         for scan in stuck_scans:
-            logger.warning(f"Found very old scan {scan.id} from {scan.start_time}, marking as errored")
-            scan.error_scan("Scan was abandoned from previous application run")
+            logger.warning(f"Found active scan {scan.id} from {scan.start_time}, marking as crashed (app restarted)")
+            scan.is_active = False
+            scan.phase = 'crashed'
+            scan.error_message = "Application restarted - scan was interrupted"
         
         if stuck_scans:
             db.session.commit()
-            logger.info(f"Cleaned up {len(stuck_scans)} abandoned scans")
+            logger.info(f"Cleaned up {len(stuck_scans)} abandoned scans from previous run")
     except Exception as e:
         # If the query fails (e.g., column doesn't exist yet), log but don't crash
         logger.warning(f"Could not clean up stuck scans on startup: {e}")
