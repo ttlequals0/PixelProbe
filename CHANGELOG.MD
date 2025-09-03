@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2025-09-03 
+
+### Hotfix
+- **Fixed critical IndentationError in tasks.py**
+  - Scan functionality was completely broken due to indentation error on lines 69-76
+  - All scan attempts were failing with HTTP 500 error
+  - Fixed immediately after deployment
+
 ## [2.3.0] - 2025-09-03
 
 ### Critical Fixes
