@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.99] - 2025-09-03
+
+### Fixed
+- **Fixed schedule re-enable functionality**
+  - Restored ability to see and toggle disabled schedules
+  - GET endpoint returns all schedules (active and inactive)
+  - DELETE endpoint still performs hard delete (permanent removal)
+  - Users can now disable/enable schedules without losing them
+
+## [2.2.98] - 2025-09-03
+
+### Fixed
+- **Fixed schedules reappearing after deletion**
+  - Changed schedule deletion from soft delete to hard delete
+  - Schedules are now permanently removed from database when deleted
+  - Prevents deleted schedules from reappearing in the UI
+  - GET /api/schedules now only returns active schedules
+
 ## [2.2.97] - 2025-09-02
 
 ### Fixed

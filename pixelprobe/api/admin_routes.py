@@ -222,9 +222,10 @@ def add_configuration():
 
 @admin_bp.route('/schedules', methods=['GET'])
 def get_schedules():
-    """Get all active scan schedules"""
-    # Only return active schedules since we now do hard deletes
-    schedules = ScanSchedule.query.filter_by(is_active=True).all()
+    """Get all scan schedules"""
+    # Return all schedules (active and inactive) so they can be toggled
+    # DELETE endpoint does hard delete, so truly deleted ones won't appear
+    schedules = ScanSchedule.query.all()
     return jsonify({'schedules': [schedule.to_dict() for schedule in schedules]})
 
 @admin_bp.route('/schedules', methods=['POST'])
