@@ -406,6 +406,9 @@ class ScanState(db.Model):
         try:
             self.files_processed = files_processed
             self.estimated_total = total_files
+            # CRITICAL: Also update phase_total and phase_current to keep UI display consistent
+            self.phase_total = total_files
+            self.phase_current = files_processed
             
             # Update last_update timestamp for stuck scan detection
             self.last_update = datetime.now(timezone.utc)

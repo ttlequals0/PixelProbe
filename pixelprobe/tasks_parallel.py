@@ -476,7 +476,7 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
                 
                 # Wait for all discovery tasks to complete with longer timeout for large directories
                 try:
-                    discovery_results = result.get(timeout=600)  # 10 minute timeout
+                    discovery_results = result.get(timeout=3600)  # 60 minute timeout for very large directories
                     
                     # Combine all discovered files
                     for task_files in discovery_results:

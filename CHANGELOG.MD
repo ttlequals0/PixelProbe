@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [2.3.2] - 2025-09-03
+
+### Changed
+- **Stage 4 strict error detection now produces warnings instead of marking files as corrupted**
+  - Stage 4 uses extremely aggressive error detection that often flags non-issues
+  - Container/muxing issues, NAL unit warnings, and minor encoding quirks no longer mark files as corrupted
+  - Files that play normally but fail Stage 4 are now marked with warnings only
+  - Actual corruption is still detected by Stages 1-3
+
+## [2.3.1] - 2025-09-03 
+
+### Hotfix
+- **Fixed critical IndentationError in tasks.py**
+  - Scan functionality was completely broken due to indentation error on lines 69-76
+  - All scan attempts were failing with HTTP 500 error
+  - Fixed immediately after deployment
+
+## [2.3.0] - 2025-09-03
+
+### Critical Fixes
+- **Fixed validation timeouts for large media files**
+  - Removed artificial timeout limits that were causing false corruption reports
+  - FFmpeg validation timeout now scales with file size (60s base + 30s per GB)
+  - Files timing out are no longer marked as corrupted, only warned
+  - ImageMagick timeouts scale appropriately (120s for GIFs, 60s for images + size scaling)
+  - Discovery phase timeout increased to 60 minutes for very large directories (900k+ files)
+  - Fixes issues with Bluray remux files (30-50GB) being incorrectly marked as corrupted
+
+- **Fixed scan concurrency issues preventing new scans**
+  - Only one scan is now properly enforced at a time
+  - Stuck scan detection improved - scans inactive for 10+ minutes are marked as crashed
+  - All active scans are cleared on application startup (they can't survive a restart)
+  - Fixes issue where stuck scans would block all new scans indefinitely
+  - Prevents scan queue buildup and retry storms seen in logs
+
+- **Fixed Phase 3 progress resetting to "X of 0 files"**
+  - phase_total and phase_current were not being updated during chunk processing
+  - UI would show correct count initially then reset to 0 mid-scan
+  - Fixed by ensuring phase_total and phase_current are always updated with files_processed
+  - Progress percentage no longer drops back to 67% during scanning
+
+
 ## [2.2.99] - 2025-09-03
 
 ### Fixed
@@ -45,7 +88,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - phase_total was not being set properly during phase transitions
   - Added explicit phase_total setting for all three scan phases (discovering, adding, scanning)
   - UI now correctly displays total file count during all scan operations
-
 
 ## [2.2.92] - 2025-09-01
 
