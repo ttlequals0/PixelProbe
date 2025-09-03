@@ -67,13 +67,13 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                     
                     # Retry with delay to check again later
                     if self.request.retries < self.max_retries:
-                retry_delay = 60 * (self.request.retries + 1)  # 60s, 120s, 180s
-                logger.info(f"Retrying scan task {self.request.id} in {retry_delay} seconds")
-                raise self.retry(exc=RuntimeError(error_msg), countdown=retry_delay)
-            else:
-                # Max retries reached, fail the task
-                logger.error(f"Task {self.request.id} failed permanently after {self.max_retries} retries")
-                raise RuntimeError(error_msg)
+                        retry_delay = 60 * (self.request.retries + 1)  # 60s, 120s, 180s
+                        logger.info(f"Retrying scan task {self.request.id} in {retry_delay} seconds")
+                        raise self.retry(exc=RuntimeError(error_msg), countdown=retry_delay)
+                    else:
+                        # Max retries reached, fail the task
+                        logger.error(f"Task {self.request.id} failed permanently after {self.max_retries} retries")
+                        raise RuntimeError(error_msg)
         
         # Update scan state with Celery task ID
         scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
