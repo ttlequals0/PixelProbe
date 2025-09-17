@@ -309,8 +309,9 @@ class TestConcurrency:
                 try:
                     with app.app_context():
                         scan_state = ScanState.get_or_create()
-                        scan_state.files_processed = i * 100
-                        scan_state.estimated_total = 1000
+                        # Ensure values are integers
+                        scan_state.files_processed = int(i * 100)
+                        scan_state.estimated_total = int(1000)
                         db.session.commit()
                     time.sleep(0.1)
                 except Exception as e:
