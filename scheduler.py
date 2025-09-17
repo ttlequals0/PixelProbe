@@ -32,17 +32,6 @@ class MediaScheduler:
         # Schedule default tasks from environment variables
         self._schedule_default_tasks()
         
-        # Schedule stuck scan detection every 5 minutes
-        self.scheduler.add_job(
-            func=self._check_stuck_scans,
-            trigger="interval",
-            minutes=5,
-            id="stuck_scan_checker",
-            name="Check for stuck scans",
-            misfire_grace_time=60
-        )
-        logger.info("Scheduled stuck scan detection to run every 5 minutes")
-        
         # Load saved schedules from database
         with app.app_context():
             self._load_saved_schedules()
@@ -274,15 +263,6 @@ class MediaScheduler:
                     
                 # Update last run time
                 schedule.last_run = datetime.now(timezone.utc)
-                
-                # Update next run time from APScheduler
-                job_id = f"schedule_{schedule_id}"
-                jobs = self.scheduler.get_jobs()
-                for job in jobs:
-                    if job.id == job_id:
-                        schedule.next_run = job.next_run_time
-                        break
-                
                 db.session.commit()
                 
                 # Parse scan paths
@@ -317,15 +297,15 @@ class MediaScheduler:
                     
                     try:
                         if scan_type == 'orphan':
-                            # Run orphan cleanup with longer timeout since it can take time
+                            # Run orphan cleanup
                             response = requests.post(f'{base_url}/api/cleanup-orphaned', 
                                                     headers=headers,
-                                                    timeout=60)
+                                                    timeout=30)
                         elif scan_type == 'file_changes':
-                            # Run file changes scan with longer timeout
+                            # Run file changes scan
                             response = requests.post(f'{base_url}/api/file-changes', 
                                                     headers=headers,
-                                                    timeout=60)
+                                                    timeout=30)
                         else:
                             # Default to normal scan with proper payload
                             payload = {
@@ -337,7 +317,7 @@ class MediaScheduler:
                             response = requests.post(f'{base_url}/api/scan', 
                                                     json=payload,
                                                     headers=headers,
-                                                    timeout=60)
+                                                    timeout=30)
                         
                         if response.status_code == 200:
                             logger.info(f"Scheduled scan {schedule_id} started successfully")
@@ -377,7 +357,7 @@ class MediaScheduler:
                 try:
                     response = requests.post(f'{base_url}/api/cleanup-orphaned', 
                                           headers=headers,
-                                          timeout=60)
+                                          timeout=30)
                     
                     if response.status_code == 200:
                         logger.info("Cleanup task started successfully")
@@ -505,47 +485,6 @@ class MediaScheduler:
         with self.app.app_context():
             self._load_saved_schedules()
             
-    def _check_stuck_scans(self):
-        """Check for stuck scans and mark them as crashed"""
-        try:
-            with self.app.app_context():
-                from datetime import datetime, timezone, timedelta
-                
-                # Consider a scan stuck if no update for 30 minutes
-                # This accounts for large files that can take 20+ minutes to scan
-                stuck_threshold = datetime.now(timezone.utc) - timedelta(minutes=30)
-                
-                # Find active scans with no recent updates
-                stuck_scans = ScanState.query.filter(
-                    ScanState.is_active == True,
-                    ScanState.phase.notin_(['idle', 'completed', 'error', 'crashed', 'cancelled']),
-                    db.or_(
-                        ScanState.last_update == None,
-                        ScanState.last_update < stuck_threshold
-                    )
-                ).all()
-                
-                for scan in stuck_scans:
-                    # Check if scan has been running for more than 10 minutes without update
-                    if scan.last_update and scan.last_update < stuck_threshold:
-                        logger.warning(f"Marking stuck scan {scan.scan_id} as crashed - no update since {scan.last_update}")
-                        scan.is_active = False
-                        scan.phase = 'crashed'
-                        scan.error_message = f"Scan appears stuck - no activity for over 30 minutes (last update: {scan.last_update})"
-                    elif not scan.last_update and scan.start_time < stuck_threshold:
-                        # No last_update field but scan started over 30 minutes ago
-                        logger.warning(f"Marking stuck scan {scan.scan_id} as crashed - started at {scan.start_time} with no updates")
-                        scan.is_active = False
-                        scan.phase = 'crashed'
-                        scan.error_message = f"Scan appears stuck - no activity tracking since start at {scan.start_time}"
-                
-                if stuck_scans:
-                    db.session.commit()
-                    logger.info(f"Marked {len(stuck_scans)} stuck scans as crashed")
-                    
-        except Exception as e:
-            logger.error(f"Error checking for stuck scans: {e}")
-    
     def shutdown(self):
         """Shutdown the scheduler"""
         if self.scheduler.running:

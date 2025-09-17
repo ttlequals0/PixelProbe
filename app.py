@@ -520,29 +520,8 @@ with app.app_context():
     # the celery_task_id column that the ScanState model expects.
     create_tables()
     init_services()
+    scheduler.init_app(app)
     
-
-    # Use a file lock to ensure only one scheduler runs across all workers
-    import fcntl
-    scheduler_lock_file = '/tmp/pixelprobe_scheduler.lock'
-    
-    try:
-        # Try to acquire exclusive lock (non-blocking)
-        lock_file = open(scheduler_lock_file, 'w')
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        
-        # We got the lock, so we're the scheduler process
-        logger.info(f"Acquired scheduler lock in process {os.getpid()}, initializing scheduler")
-        scheduler.init_app(app)
-        
-        # Keep the lock file open to maintain the lock
-        app.scheduler_lock_file = lock_file
-        
-    except (IOError, OSError) as e:
-        # Another process has the lock
-        logger.info(f"Scheduler already running in another process, skipping initialization in process {os.getpid()}")
-    
-
     # Clean up ALL active scans from previous runs - they can't still be running after restart
     # NOTE: This query happens AFTER migration, so celery_task_id column exists
     try:
