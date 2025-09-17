@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.4] - 2025-09-17
+
+### Fixed
+- **Improved video duration metadata extraction**
+  - Now checks both stream-level and container-level duration metadata
+  - Fixes "invalid/missing duration" errors for many H.264 files
+  - Container-level duration used as fallback when stream duration unavailable
+  - Common issue with transport streams and certain container formats
+  - Duration source (stream vs container) now logged for debugging
+
+### Changed
+- **Cleaner scan output formatting**
+  - Video codec and profile now displayed on single line
+  - Duration displays source (stream/container) when available
+  - More informative messages for files without duration metadata
+
 ## [2.3.3] - 2025-09-13
 
 ### Fixed
