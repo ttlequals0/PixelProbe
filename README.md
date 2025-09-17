@@ -6,79 +6,31 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.2.87** - Major upgrade to Ubuntu 24.04 with latest media tools for better decoder support.
+**Version 2.3.3** - Critical scheduler reliability fixes and stuck scan prevention.
 
-## 🚀 What's New in Version 2.2.87
+## 🚀 What's New in Version 2.3.3
 
-### 🎯 Major Infrastructure Upgrade
-- **Ubuntu 24.04 Base**: Upgraded from Ubuntu 22.04 for latest package versions
-- **FFmpeg 6.1.1**: Upgraded from 4.4.2 - significantly better WebP/JPEG decoding
-- **ImageMagick 6.9.13**: Upgraded from 6.9.11 - improved PNG handling
-- **Python 3.12**: Upgraded from 3.11 for better performance
-- **Modern Libraries**: libwebp 1.3.2, libpng 1.6.43 for better format support
+### 🎯 Scheduler Reliability Overhaul
+- **Fixed Next Run Updates**: Scheduled tasks now properly update their next execution time after running
+- **Single Scheduler Instance**: Implemented file-based locking to prevent multiple scheduler instances in production
+- **No More Duplicate Executions**: Eliminates duplicate scheduled scans that were running simultaneously
 
-### 🛡️ Decoder & Warning Fixes
-- **FFmpeg False Positives**: Fixed "invalid data" errors for valid files
-- **ImageMagick PNG Warnings**: Resolved sBIT chunk warnings
-- **Scheduler Reliability**: Fixed missing imports causing scheduled scan failures
-- **Timezone Display**: Fixed PDF/JSON reports showing UTC instead of configured timezone
+### 🛡️ Stuck Scan Prevention & Recovery
+- **Automatic Detection**: Scans stuck for 30+ minutes are automatically detected and marked as crashed
+- **Large File Support**: Extended timeout accounts for 50GB+ files that can take 26+ minutes to scan
+- **Periodic Health Checks**: System checks for stuck scans every 5 minutes
+- **Clean Recovery**: Prevents indefinite blocking of the scan system
 
-## 🚀 Previous Version Highlights (2.2.47)
+### 🔧 Technical Improvements
+- **File-based Locking**: Uses fcntl exclusive lock on `/tmp/pixelprobe_scheduler.lock`
+- **Extended API Timeouts**: Increased scheduler->API timeouts from 30s to 60s
+- **Test Suite Fixes**: Fixed SQLite concurrency issues in test suite
+- **All Scan Types Working**: Normal, orphan, and file_changes scans all work reliably as scheduled
 
-### 🛡️ Database Reliability Enhancements
-- **Connection Pool Recovery**: Automatic recovery from "lost synchronization" errors
-- **Transaction Management**: Robust handling of aborted transactions with automatic rollback
-- **Query Resilience**: Fixed count(*) query errors and ResourceClosedError issues
-- **Schema Migrations**: Added missing database columns (last_update, files_processed)
 
-### 🔧 Critical Production Fixes
-- **UI Updates**: Fixed scan progress not updating in UI during phase 3
-- **Connection Pooling**: Implemented pre-ping, recycling, and automatic bad connection removal
-- **Error Recovery**: Added retry logic with exponential backoff for database operations
-- **Session Management**: Proper cleanup and disposal of corrupted database sessions
+## 📦 Requirements
 
-### 📊 Previous v2.2.45 Features
-- **Parallel Scanning**: All Celery workers utilized for 3-8x faster scanning
-- **Export API**: Multiple format support (CSV, JSON, PDF)
-- **Stuck Scan Recovery**: Automatic detection and recovery
-
-### 🎯 Key Benefits
-- **No More Stuck Scans**: Automatic recovery after 5-10 minutes of no progress
-- **Faster Processing**: Utilizes all available CPU cores through proper worker distribution
-- **Better Large Library Support**: Handles 1M+ file libraries without hanging
-- **Improved Reliability**: Better error handling and partial result recovery
-
-## 🚀 What's New in Version 2.2.0
-
-### 🗄️ PostgreSQL Database Migration
-- **Performance Boost**: 10-50x faster database operations for large datasets
-- **Scalability**: Better handling of massive media libraries
-- **Concurrency**: Improved support for simultaneous operations
-- **Migration Tool**: Automated migration from SQLite to PostgreSQL
-
-### 🧠 Memory Leak Prevention
-- **Output Rotation**: Configurable rotation prevents unbounded memory growth during long scans
-- **Smart Truncation**: Keeps last 80% of output when size limits are reached
-- **Per-Scan Control**: Output rotation can be enabled/disabled per scan
-
-### 📅 Enhanced Scheduled Scans
-- **HTTP Self-Calls**: Fixed Flask context issues that prevented scheduled scans
-- **Better Reliability**: More robust execution of automated scans
-- **Improved Logging**: Better error handling and reporting for scheduled operations
-
-### 🔧 Configuration System
-- **Centralized Config**: New configuration module with environment-based settings
-- **PostgreSQL-First**: Optimized for PostgreSQL with connection pooling
-- **Backward Compatibility**: Existing environment variables still supported
-
-### ⚡ Performance Improvements
-- **Connection Pooling**: 20 base connections with overflow up to 40
-- **Batch Processing**: Optimized for large dataset operations
-- **Statement Timeout**: 5-minute timeout for long-running queries
-
-## 📦 Migration from v2.1.x to v2.2.0
-
-**Important**: v2.2.0 requires PostgreSQL. SQLite is no longer supported.
+**Important**: PixelProbe requires PostgreSQL. SQLite is no longer supported.
 
 ### Quick Migration Steps
 
@@ -100,7 +52,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
          - postgres_data:/var/lib/postgresql/data
    
      mediachecker:
-       image: ttlequals0/pixelprobe:2.2.48
+       image: ttlequals0/pixelprobe:2.3.3
        environment:
          POSTGRES_HOST: postgres
          POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -123,7 +75,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
      -v "/path/to/instance/pixelprobe.db:/app/pixelprobe.db:ro" \
      -e POSTGRES_HOST=postgres \
      -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
-     ttlequals0/pixelprobe:2.2.0 \
+     ttlequals0/pixelprobe:2.3.3 \
      python migrate_to_postgres.py --sqlite-path /app/pixelprobe.db
    ```
 
@@ -399,14 +351,15 @@ Interactive exclusion management with modern UI:
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
 
 **Current stable versions:**
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.1.0)
-- **`ttlequals0/pixelprobe:2.1.0`** - Major milestone with 80+ improvements
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.3.3)
+- **`ttlequals0/pixelprobe:2.3.3`** - Critical scheduler fixes and stuck scan prevention
+- **`ttlequals0/pixelprobe:2.2.87`** - Ubuntu 24.04 with modern media tools
 
 You can specify a specific version in your `docker-compose.yml`:
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.1.0  # or :latest for newest
+    image: ttlequals0/pixelprobe:2.3.3  # or :latest for newest
 ```
 
 ### Development Setup
@@ -481,7 +434,7 @@ The docker-compose.yml is fully configured to use environment variables from you
 ```yaml
 services:
   pixelprobe:
-    image: ttlequals0/pixelprobe:2.0.132  # Specify version
+    image: ttlequals0/pixelprobe:2.3.3  # Specify version
     environment:
       - SCAN_PATHS=/media
       - DATABASE_URL=sqlite:///media_checker.db
