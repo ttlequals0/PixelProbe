@@ -521,6 +521,7 @@ with app.app_context():
     create_tables()
     init_services()
     
+
     # Use a file lock to ensure only one scheduler runs across all workers
     import fcntl
     scheduler_lock_file = '/tmp/pixelprobe_scheduler.lock'
@@ -541,6 +542,7 @@ with app.app_context():
         # Another process has the lock
         logger.info(f"Scheduler already running in another process, skipping initialization in process {os.getpid()}")
     
+
     # Clean up ALL active scans from previous runs - they can't still be running after restart
     # NOTE: This query happens AFTER migration, so celery_task_id column exists
     try:
