@@ -4,11 +4,21 @@
   <img src="static/images/pixelprobe-logo.png" alt="PixelProbe Logo" width="200" height="200">
 </div>
 
+## Overview
+
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
 **Version 2.3.3** - Critical scheduler reliability fixes and stuck scan prevention.
 
-## 🚀 What's New in Version 2.3.3!
+### Why PixelProbe?
+
+- **Protect Your Media**: Automatically detect corrupted files before they cause playback issues
+- **Save Time**: Batch scan entire media libraries instead of checking files individually  
+- **Prevent Data Loss**: Identify failing drives by detecting corruption patterns
+- **Professional Grade**: Uses industry-standard tools (FFmpeg, ImageMagick) for accurate detection
+- **Set and Forget**: Schedule automated scans to continuously monitor your media health
+
+## 🚀 What's New in Version 2.3.3
 
 ### 🎯 Scheduler Reliability Overhaul
 - **Fixed Next Run Updates**: Scheduled tasks now properly update their next execution time after running
@@ -26,95 +36,6 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Extended API Timeouts**: Increased scheduler->API timeouts from 30s to 60s
 - **Test Suite Fixes**: Fixed SQLite concurrency issues in test suite
 - **All Scan Types Working**: Normal, orphan, and file_changes scans all work reliably as scheduled
-
-
-## 📦 Requirements
-
-**Important**: PixelProbe requires PostgreSQL. SQLite is no longer supported.
-
-### Quick Migration Steps
-
-1. **Backup your data**:
-   ```bash
-   cp /path/to/instance/pixelprobe.db /path/to/instance/pixelprobe.db.backup
-   ```
-
-2. **Update Docker Compose** - Add PostgreSQL and Redis services:
-   ```yaml
-   services:
-     postgres:
-       image: postgres:15-alpine
-       environment:
-         POSTGRES_DB: pixelprobe
-         POSTGRES_USER: pixelprobe
-         POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-       volumes:
-         - postgres_data:/var/lib/postgresql/data
-   
-     mediachecker:
-       image: ttlequals0/pixelprobe:2.3.3
-       environment:
-         POSTGRES_HOST: postgres
-         POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-         # ... other settings
-   ```
-
-3. **Set required environment variables**:
-   ```bash
-   export POSTGRES_PASSWORD=your-secure-password
-   ```
-
-4. **Start PostgreSQL and migrate data**:
-   ```bash
-   docker-compose up -d postgres
-   sleep 15
-   
-   # Migrate existing SQLite data
-   docker run --rm \
-     --network pixelprobe_pixelprobe-network \
-     -v "/path/to/instance/pixelprobe.db:/app/pixelprobe.db:ro" \
-     -e POSTGRES_HOST=postgres \
-     -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
-     ttlequals0/pixelprobe:2.3.3 \
-     python migrate_to_postgres.py --sqlite-path /app/pixelprobe.db
-   ```
-
-5. **Start the application**:
-   ```bash
-   docker-compose up -d
-   ```
-
-For detailed migration instructions, see [MIGRATION_v2.2.0.md](MIGRATION_v2.2.0.md).
-
-### ⚠️ Migration Recommendation (v2.2.7+)
-
-**Starting Fresh Recommended**: While migration from previous versions is supported, we recommend starting with a fresh database for v2.2.7+ due to significant scan engine improvements:
-
-- **Clean Start Benefits**: Eliminates any corrupted scan states from previous database constraint issues
-- **Full Fix Coverage**: Ensures all v2.2.7 scan improvements are active from the beginning
-- **No Legacy Issues**: Avoids potential conflicts from old chunk IDs or stuck pending items
-
-**Fresh Start Procedure**:
-```bash
-# Stop container and remove database volume
-docker-compose down
-docker volume rm pixelprobe_postgres_data
-
-# Start fresh with v2.2.7+
-docker-compose up -d
-```
-
-**Migration Still Supported**: If you have important scan history to preserve, the migration tools still work, but you may need to manually clean up any stuck scan states.
-
-
-## 📚 Documentation
-
-- **[Docker Setup Guide](docs/DOCKER_SETUP.md)** - Complete Docker Compose setup with container explanations
-- **[System Architecture](docs/SYSTEM_ARCHITECTURE.md)** - Container architecture, Celery queues, and data flow
-- **[API Documentation](docs/api/README.md)** - Complete REST API reference  
-- **[Architecture Overview](docs/ARCHITECTURE.md)** - Application layers and design
-- **[Performance Tuning](docs/PERFORMANCE_TUNING.md)** - Optimization strategies
-- **[Developer Guide](docs/developer/README.md)** - Development setup and guidelines
 
 ## ✨ Features
 
@@ -191,30 +112,6 @@ The mobile interface is fully responsive and touch-optimized:
 - Collapsible sidebar navigation
 - Card-based design for scan results on mobile
 
-<div align="center">
-  <img src="docs/screenshots/mobile-light-menu.png" alt="Mobile Menu Light" width="300" style="margin: 10px">
-  <img src="docs/screenshots/mobile-dark-results.png" alt="Mobile Results Dark" width="300" style="margin: 10px">
-</div>
-
-### Feature Highlights
-
-#### System Statistics Modal
-![System Statistics](docs/screenshots/system-stats-modal.png)
-
-Comprehensive system overview showing:
-- Database statistics with file counts by status
-- Monitored paths with accessibility status
-- Scan performance metrics
-- File system completion percentages
-
-#### Scan Output Details
-![Scan Output Modal](docs/screenshots/scan-output-modal.png)
-
-Detailed scan results viewer:
-- Shows specific corruption or warning details
-- Displays which tool detected the issue
-- Provides full scan output for debugging
-
 ### Advanced Features
 
 #### Scan Reports
@@ -223,10 +120,7 @@ Detailed scan results viewer:
 Comprehensive scan reporting with history and analytics:
 - View all past scan operations with detailed statistics
 - Filter by scan type (full scan, rescan, deep scan, cleanup, file changes)
-- See duration, files processed, and issues found for each scan
 - Export reports as JSON for data analysis or PDF for documentation
-- Bulk actions: refresh or delete multiple reports at once
-- Actions include viewing details, exporting JSON/PDF, and deleting reports
 
 #### Scheduled Scanning
 ![Scan Schedules](docs/screenshots/features/scan-schedules.png)
@@ -235,26 +129,6 @@ Create and manage automated scan schedules:
 - Support for both cron expressions and simple intervals
 - Multiple scan types: Normal Scan, Orphan Cleanup, File Changes
 - View next run times and last execution status
-- Enable/disable schedules with a single click
-
-![Create Schedule](docs/screenshots/features/create-schedule.png)
-
-Flexible scheduling options:
-- Name your schedules for easy identification
-- Choose between cron expressions for advanced users or simple intervals
-- Select scan type to automate different maintenance tasks
-- Optionally specify custom scan paths
-
-#### Exclusion Management
-![Exclusions Management](docs/screenshots/features/exclusions-management.png)
-
-Interactive exclusion management with modern UI:
-- Add exclusions individually with dedicated input fields
-- Remove specific exclusions with one-click delete buttons
-- See all exclusions at a glance in a clean list format
-- Press Enter to quickly add new exclusions
-- Separate management for paths and file extensions
-- Real-time updates with no page refresh needed
 
 ## 🚀 Quick Start
 
@@ -294,55 +168,74 @@ Interactive exclusion management with modern UI:
 
 ### Docker Image Versions
 
-PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`. Check the [Docker Hub page](https://hub.docker.com/r/ttlequals0/pixelprobe/tags) for all available versions.
+PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
-**Current stable versions:**
 - **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.3.3)
 - **`ttlequals0/pixelprobe:2.3.3`** - Critical scheduler fixes and stuck scan prevention
 - **`ttlequals0/pixelprobe:2.2.87`** - Ubuntu 24.04 with modern media tools
 
-You can specify a specific version in your `docker-compose.yml`:
-```yaml
-services:
-  pixelprobe:
-    image: ttlequals0/pixelprobe:2.3.3  # or :latest for newest
-```
+## 📦 Requirements
 
-### Development Setup
+**Important**: PixelProbe requires PostgreSQL. SQLite is no longer supported.
 
-1. **Clone the repository**:
+### Quick Migration from SQLite
+
+1. **Backup your data**:
    ```bash
-   git clone https://github.com/ttlequals0/PixelProbe.git
-   cd PixelProbe
+   cp /path/to/instance/pixelprobe.db /path/to/instance/pixelprobe.db.backup
    ```
 
-2. **Use development compose file**:
-   ```bash
-   docker-compose -f docker-compose.dev.yml up -d
-   ```
-
-### Manual Installation
-
-1. **Install dependencies**:
-   ```bash
-   # System dependencies
-   sudo apt-get update
-   sudo apt-get install ffmpeg imagemagick libmagic1
+2. **Update Docker Compose** - Add PostgreSQL and Redis services:
+   ```yaml
+   services:
+     postgres:
+       image: postgres:15-alpine
+       environment:
+         POSTGRES_DB: pixelprobe
+         POSTGRES_USER: pixelprobe
+         POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+       volumes:
+         - postgres_data:/var/lib/postgresql/data
    
-   # Python dependencies
-   pip install -r requirements.txt
+     mediachecker:
+       image: ttlequals0/pixelprobe:2.3.3
+       environment:
+         POSTGRES_HOST: postgres
+         POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+         # ... other settings
    ```
 
-2. **Configure environment**:
+3. **Run migration**:
    ```bash
-   cp .env.example .env
-   # Edit .env with your settings
+   docker-compose up -d postgres
+   sleep 15
+   
+   # Migrate existing SQLite data
+   docker run --rm \
+     --network pixelprobe_pixelprobe-network \
+     -v "/path/to/instance/pixelprobe.db:/app/pixelprobe.db:ro" \
+     -e POSTGRES_HOST=postgres \
+     -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
+     ttlequals0/pixelprobe:2.3.3 \
+     python migrate_to_postgres.py --sqlite-path /app/pixelprobe.db
    ```
 
-3. **Run the application**:
-   ```bash
-   python app.py
-   ```
+For detailed migration instructions, see [MIGRATION_v2.2.0.md](MIGRATION_v2.2.0.md).
+
+## 📚 Documentation
+
+### Quick Links
+- **[Docker Setup Guide](docs/DOCKER_SETUP.md)** - Complete Docker Compose setup with container explanations
+- **[System Architecture](docs/SYSTEM_ARCHITECTURE.md)** - Container architecture, Celery queues, and data flow
+- **[API Documentation](docs/api/README.md)** - Complete REST API reference  
+- **[Architecture Overview](docs/ARCHITECTURE.md)** - Application layers and design
+- **[Performance Tuning](docs/PERFORMANCE_TUNING.md)** - Optimization strategies
+- **[Developer Guide](docs/developer/README.md)** - Development setup and guidelines
+
+### API Client Examples
+- **[Python Client](docs/examples/python-client.py)** - Full-featured Python client with CLI
+- **[Node.js Client](docs/examples/nodejs-client.js)** - JavaScript/Node.js client implementation
+- **[Bash Client](docs/examples/bash-client.sh)** - Shell script client using curl and jq
 
 ## Configuration
 
@@ -350,18 +243,12 @@ services:
 
 PixelProbe uses environment variables for all configuration. Copy `.env.example` to `.env` and customize:
 
-```bash
-cp .env.example .env
-```
-
 **Required Variables:**
-
-- `SECRET_KEY` - Secure secret key for Flask sessions (generate with: `python -c "import secrets; print(secrets.token_hex(32))"`)
+- `SECRET_KEY` - Secure secret key for Flask sessions
 - `MEDIA_PATH` - Host path to your media files (for Docker volume mounting)
 
 **Optional Variables:**
-
-- `DATABASE_URL` - Database connection string (default: SQLite)
+- `DATABASE_URL` - Database connection string (default: PostgreSQL)
 - `SCAN_PATHS` - Comma-separated directories to monitor inside container (default: `/media`)
 - `TZ` - Timezone (default: UTC)
 - `MAX_FILES_TO_SCAN` - Performance limit (default: 100)
@@ -372,23 +259,6 @@ cp .env.example .env
 - `EXCLUDED_EXTENSIONS` - File extensions to ignore
 
 See `.env.example` for complete configuration options with examples.
-
-### Docker Configuration
-
-The docker-compose.yml is fully configured to use environment variables from your `.env` file:
-
-```yaml
-services:
-  pixelprobe:
-    image: ttlequals0/pixelprobe:2.3.3  # Specify version
-    environment:
-      - SCAN_PATHS=/media
-      - DATABASE_URL=sqlite:///media_checker.db
-    volumes:
-      - ${MEDIA_PATH}:/media
-```
-
-**Recommended**: Always specify a version tag instead of using `:latest` to ensure consistent deployments.
 
 ### Multiple Scan Paths
 
@@ -410,12 +280,6 @@ export MEDIA_PATH=/mnt/all-media  # Contains subdirs: movies/, tv/, backup/
 # docker-compose.yml uses: SCAN_PATHS=/media/movies,/media/tv,/media/backup
 ```
 
-**For Docker**: Set the `MEDIA_PATH` environment variable for volume mounting:
-```bash
-export MEDIA_PATH=/path/to/your/actual/media
-docker-compose up -d
-```
-
 ## Usage
 
 ### Web Interface
@@ -427,36 +291,25 @@ docker-compose up -d
 5. **File Actions**: 
    - **Rescan**: Re-examine a specific file
    - **Download**: Download the file to your local machine
-6. **Schedules**: Manage automated scan schedules with multiple scan types (v2.0.44+)
-   - Create schedules for normal scans, orphan cleanup, or file changes detection
-   - Use cron expressions or simple intervals
-   - Enable/disable schedules on demand
-7. **Exclusions**: Interactive management of paths and extensions to exclude (v2.0.44+)
-   - Add exclusions individually with dedicated input fields
-   - Remove specific exclusions with one click
-   - Press Enter to quickly add new exclusions
+6. **Schedules**: Manage automated scan schedules with multiple scan types
+7. **Exclusions**: Interactive management of paths and extensions to exclude
 
 ### API Endpoints
 
-The application provides REST API endpoints:
+The application provides REST API endpoints for automation:
 
 - `GET /api/stats` - Get scanning statistics
 - `GET /api/scan-results` - Get paginated scan results
-- `POST /api/scan-all` - Start a full scan of all configured directories
+- `POST /api/scan-all` - Start a full scan
 - `POST /api/scan-file` - Scan a specific file
-- `GET /api/download/<id>` - Download a file
-- `GET /api/schedules` - List all scan schedules (v2.0.41+)
-- `POST /api/schedules` - Create a new scan schedule (v2.0.41+)
-- `PUT /api/schedules/<id>` - Update a scan schedule (v2.0.41+)
-- `DELETE /api/schedules/<id>` - Delete a scan schedule (v2.0.41+)
-- `GET /api/exclusions` - Get current exclusions (v2.0.41+)
-- `PUT /api/exclusions` - Update exclusions (v2.0.41+)
-- `POST /api/exclusions/<type>/<item>` - Add individual exclusion (v2.0.44+)
-- `DELETE /api/exclusions/<type>/<item>` - Remove individual exclusion (v2.0.44+)
+- `GET /api/schedules` - List all scan schedules
+- `POST /api/schedules` - Create a new scan schedule
+- `GET /api/exclusions` - Get current exclusions
+- `PUT /api/exclusions` - Update exclusions
+
+See [API Documentation](docs/api/README.md) for complete reference.
 
 ### Command Line Usage
-
-You can also use the PixelProbe class directly in Python:
 
 ```python
 from media_checker import PixelProbe
@@ -474,39 +327,6 @@ for result in results:
         print(f"Corrupted file: {result['file_path']}")
 ```
 
-## Corruption Detection
-
-PixelProbe uses multiple methods to detect file corruption:
-
-### Video Files
-- **FFmpeg Analysis**: Deep analysis of video streams and metadata
-- **Frame Validation**: Attempts to decode video frames to detect corruption
-- **Quick Scan**: Fast check of first 10 seconds for immediate feedback
-- **Stream Validation**: Verifies video and audio stream integrity
-- **HEVC/ProRes Support**: Specialized detection for modern codecs
-
-### Image Files
-- **PIL Verification**: Uses Python Imaging Library for basic corruption detection
-- **ImageMagick**: Advanced image analysis and validation
-- **Dimension Checks**: Validates image dimensions and properties
-- **Format Validation**: Ensures files match their declared format
-- **RAW/HEIC Support**: Handles camera RAW files and Apple's HEIC format
-
-### Audio Files
-- **FFmpeg Audio Analysis**: Comprehensive audio stream validation
-- **Decode Testing**: Attempts to decode audio to detect corruption
-- **Header Validation**: Checks for missing or corrupted headers
-- **Format-Specific Tests**: 
-  - FLAC: CRC validation and built-in integrity checking
-  - MP3: Frame header validation
-  - Lossless formats: Bit-perfect verification
-- **Deep Scan Mode**: Full file analysis for timestamp and packet errors
-
-### Detection Accuracy
-- **High Confidence**: 100% detection of files with broken headers, truncated files, and I/O errors
-- **Moderate Confidence**: ~85% detection of random corruption patterns
-- **Low Confidence**: ~50% detection of zero-byte overwrites
-
 ## Supported File Formats
 
 ### Video Formats
@@ -515,162 +335,34 @@ PixelProbe uses multiple methods to detect file corruption:
 - **Professional**: ProRes, MXF, DNxHD, DNxHR
 - **Broadcast**: MTS, M2TS, AVCHD
 - **Legacy**: MPG, MPEG, VOB, RM, RMVB
-- **Other**: 3GP, 3G2, F4V, F4P, OGV, ASF, AMV, M2V, SVI
 
 ### Image Formats
 - **Common**: JPEG, PNG, GIF, BMP, TIFF, WebP
 - **Apple**: HEIC, HEIF
-- **RAW Formats**: 
-  - Canon: CR2, CR3
-  - Nikon: NEF, NRW
-  - Sony: ARW, SRF, SR2
-  - Adobe: DNG
-  - Others: ORF (Olympus), RW2 (Panasonic), PEF/PTX (Pentax), RAF (Fujifilm), X3F (Sigma), DCR/KDC (Kodak), MOS (Leaf)
-- **Professional**: PSD, EXR, HDR, SVG
-- **Other**: ICO, PBM, PGM, PPM, PNM, FITS
+- **RAW Formats**: CR2, CR3, NEF, NRW, ARW, DNG, ORF, RW2, PEF, RAF
 
-### Audio Formats (NEW!)
-- **Lossy**: MP3, AAC, M4A, WMA, OGG, OGA, Opus, AMR
-- **Lossless**: FLAC, WAV, AIFF, APE, WV (WavPack), TTA, CAF
-- **Uncompressed**: WAV, AIFF, AU, SND, VOC
+### Audio Formats
+- **Lossy**: MP3, AAC, M4A, WMA, OGG, OGA, Opus
+- **Lossless**: FLAC, WAV, AIFF, APE, WV
 - **High-Resolution**: DSF, DFF (DSD)
 - **Dolby/DTS**: AC3, DTS
-- **Container**: MKA (Matroska Audio), M4B (Audiobook)
-- **Legacy**: RA, RAM (RealAudio), GSM, MIDI
-
-## Performance Considerations
-
-- **Scan Duration**: Video scanning can take 2-20 minutes per file depending on size
-- **Resource Usage**: CPU-intensive during scanning (80-100% utilization)
-- **Memory Usage**: Minimal memory footprint, processes files individually
-- **Disk I/O**: Sequential read access to media files
-
-## Architecture
-
-### Modular Architecture (v2.0.55+)
-
-PixelProbe now features a clean, modular architecture following SOLID principles:
-
-```
-PixelProbe/
-├── app.py                    # Application initialization (250 lines vs 2,500+)
-├── pixelprobe/              # Main package
-│   ├── api/                 # API Route Blueprints
-│   │   ├── scan_routes.py   # Scan endpoints (/api/scan-*)
-│   │   ├── stats_routes.py  # Statistics endpoints (/api/stats, /api/system-info)
-│   │   ├── admin_routes.py  # Admin endpoints (configurations, schedules)
-│   │   ├── export_routes.py # Export endpoints (CSV, view, download)
-│   │   └── maintenance_routes.py # Cleanup and file-changes operations
-│   ├── services/            # Business Logic Layer
-│   │   ├── scan_service.py  # Scanning operations and orchestration
-│   │   ├── stats_service.py # Statistics calculations
-│   │   ├── export_service.py # Export functionality
-│   │   └── maintenance_service.py # Cleanup and monitoring
-│   ├── repositories/        # Data Access Layer
-│   │   ├── base_repository.py # Generic repository pattern
-│   │   ├── scan_repository.py # Scan result data operations
-│   │   └── config_repository.py # Configuration data operations
-│   └── utils/               # Shared Utilities
-│       ├── helpers.py       # Common helper functions
-│       ├── decorators.py    # Route decorators
-│       └── validators.py    # Input validation
-├── tests/                   # Comprehensive Test Suite
-│   ├── conftest.py         # Pytest configuration and fixtures
-│   ├── test_media_checker.py # Core functionality tests
-│   ├── unit/               # Unit tests for each component
-│   │   ├── test_scan_service.py
-│   │   ├── test_stats_service.py
-│   │   └── test_repositories.py
-│   └── integration/        # API integration tests
-├── media_checker.py        # Core corruption detection engine
-├── models.py              # SQLAlchemy database models
-├── static/                # Frontend assets
-├── templates/             # HTML templates
-└── requirements.txt       # Python dependencies
-```
-
-### Key Architectural Benefits
-
-- **Separation of Concerns**: Each module has a single, well-defined responsibility
-- **Testability**: Components can be tested in isolation with comprehensive test coverage
-- **Maintainability**: Changes to one feature don't affect others
-- **Scalability**: Easy to add new features without modifying existing code
-- **API Compatibility**: All endpoints remain unchanged, ensuring backward compatibility
-
-## 🛠️ Utility Tools
-
-The `tools/` directory contains utility scripts for database maintenance and migration tasks. These are useful for:
-
-- Fixing false positives from older versions
-- Adding new database columns
-- Resetting files for rescanning with updated logic
-
-See [tools/README.md](tools/README.md) for detailed documentation on each tool.
-
-## Documentation
-
-Complete documentation is organized in the **[docs/](docs/README.md)** directory.
-
-### Quick Links
-- **[API Reference](docs/api/README.md)** - Complete API documentation
-- **[Migration Guides](docs/migration/)** - Database migration instructions  
-- **[Tools & Scripts](docs/maintenance/TOOLS_AND_SCRIPTS.md)** - Maintenance utilities
-- **[Architecture](docs/ARCHITECTURE.md)** - System design and components
-- **[Developer Guide](docs/developer/README.md)** - Contributing guidelines
-
-### API Client Examples
-- **[Python Client](docs/examples/python-client.py)** - Full-featured Python client with CLI
-- **[Node.js Client](docs/examples/nodejs-client.js)** - JavaScript/Node.js client implementation
-- **[Bash Client](docs/examples/bash-client.sh)** - Shell script client using curl and jq
-
-### Quick Start Examples
-
-#### Python
-```python
-from pixelprobe_client import PixelProbeClient
-
-client = PixelProbeClient("http://localhost:5000")
-client.scan_directory(["/media/photos"])
-stats = client.get_statistics()
-print(f"Corruption rate: {stats['corruption_rate']}%")
-```
-
-#### JavaScript
-```javascript
-const PixelProbeClient = require('./pixelprobe-client');
-
-const client = new PixelProbeClient('http://localhost:5000');
-await client.scanDirectory(['/media/photos']);
-const stats = await client.getStatistics();
-console.log(`Corruption rate: ${stats.corruption_rate}%`);
-```
-
-#### Bash
-```bash
-# Scan directories
-./pixelprobe-client.sh scan /media/photos /media/videos
-
-# Get statistics
-./pixelprobe-client.sh stats
-
-# Export results
-./pixelprobe-client.sh export results.csv
-```
 
 ## Development
 
-### Running in Development Mode
+### Development Setup
 
-```bash
-export FLASK_ENV=development
-python app.py
-```
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/ttlequals0/PixelProbe.git
+   cd PixelProbe
+   ```
+
+2. **Use development compose file**:
+   ```bash
+   docker-compose -f docker-compose.dev.yml up -d
+   ```
 
 ### Testing
-
-PixelProbe includes a comprehensive test suite covering core functionality, services, repositories, and API endpoints.
-
-#### Running Tests
 
 ```bash
 # Install test dependencies
@@ -685,50 +377,7 @@ pytest --cov=pixelprobe --cov-report=html
 # Run specific test categories
 pytest tests/unit/           # Unit tests only
 pytest tests/integration/    # Integration tests only
-pytest tests/test_media_checker.py  # Core functionality tests
-
-# Run with verbose output
-pytest -v
-
-# Run with benchmark tests
-pytest --benchmark-only
 ```
-
-#### Test Categories
-
-- **Unit Tests**: Test individual components in isolation
-  - Service layer tests (scan, stats, export, maintenance)
-  - Repository layer tests (data access patterns)
-  - Utility function tests
-  
-- **Integration Tests**: Test API endpoints and full workflows
-  - API endpoint tests with mock data
-  - Database integration tests
-  - File system operation tests
-  
-- **Performance Tests**: Benchmark critical operations
-  - File scanning performance
-  - Database query optimization
-  - Memory usage monitoring
-
-#### Writing Tests
-
-When contributing, please include tests for new functionality:
-
-```python
-# Example test for new feature
-def test_new_feature(scan_service, mock_scan_result):
-    result = scan_service.new_feature(mock_scan_result)
-    assert result.status == 'success'
-```
-
-### Adding New File Formats
-
-To add support for new file formats:
-
-1. Update `supported_formats` in `PixelProbe.__init__()`
-2. Add detection logic in `_check_*_corruption()` methods
-3. Update the documentation
 
 ### Contributing
 
@@ -739,6 +388,15 @@ To add support for new file formats:
 5. Submit a pull request
 
 ## Troubleshooting
+
+### Database Errors After Updates
+
+If you encounter **"no such table: scan_results"** errors after upgrading:
+
+```bash
+# Quick fix
+docker exec pixelprobe python tools/fix_database_schema.py
+```
 
 ### Common Issues
 
@@ -751,76 +409,7 @@ To add support for new file formats:
 - Ensure the application has read access to your media directories
 - Check file permissions and ownership
 
-**Database errors**:
-- Delete the database file to reset: `rm media_checker.db`
-- Ensure write permissions in the application directory
-
-**Memory issues with large files**:
-- The application processes files individually to minimize memory usage
-- For very large files, consider increasing system swap space
-
-### Logs and Debugging
-
-Enable debug logging by setting `FLASK_ENV=development` in your `.env` file.
-
-## 🛠️ Troubleshooting
-
-### Database Errors After Version Updates
-
-If you encounter **"no such table: scan_results"** errors after upgrading PixelProbe, this indicates the database schema wasn't properly initialized. This typically happens during version upgrades when the container restarts.
-
-**Quick Fix:**
-```bash
-# Run the database schema fix tool
-docker exec pixelprobe python tools/fix_database_schema.py
-```
-
-**What this does:**
-- Creates all missing database tables
-- Runs necessary schema migrations  
-- Creates performance indexes
-- Verifies database accessibility
-
-**Alternative one-liner:**
-```bash
-docker exec pixelprobe python -c "
-from models import db; from app import app; 
-ctx = app.app_context(); ctx.push(); 
-db.create_all(); 
-print('✅ Database tables created'); 
-ctx.pop()
-"
-```
-
-**Note:** New installations should not experience this issue - it's specific to existing installations being upgraded.
-
-### Rate Limiting Issues (429 Errors)
-
-If you see 429 "Too Many Requests" errors in browser console, this has been fixed in version 2.0.72+. Upgrade to the latest version:
-
-```bash
-# Update to latest version
-docker-compose pull
-docker-compose up -d
-```
-
-### Container Won't Start
-
-If the container fails to start, check:
-
-1. **SECRET_KEY is set** in your compose file
-2. **Volume mounts exist** on the host system
-3. **Port 5001 is available** (or change the port mapping)
-
-### Web Interface Not Loading
-
-1. **Check container health**: `docker ps` (should show "healthy")
-2. **Verify port mapping**: Ensure `5001:5000` matches your setup
-3. **Check logs**: `docker logs pixelprobe`
-
-### Performance Issues
-
-For large media libraries:
+**Performance issues with large libraries**:
 - Increase `MAX_SCAN_WORKERS` (default: 4, try 8-16 for powerful systems)
 - Monitor system resources during scanning
 - Use SSD storage for the database if possible
@@ -828,9 +417,8 @@ For large media libraries:
 ### Getting Help
 
 1. **Check logs first**: `docker logs pixelprobe` 
-2. **Try database fix**: Run the schema fix tool above
-3. **Search existing issues**: [GitHub Issues](https://github.com/ttlequals0/PixelProbe/issues)
-4. **Create new issue**: Include logs and system info
+2. **Search existing issues**: [GitHub Issues](https://github.com/ttlequals0/PixelProbe/issues)
+3. **Create new issue**: Include logs and system info
 
 ## License
 
@@ -841,8 +429,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [FFmpeg](https://ffmpeg.org/) for video analysis
 - [ImageMagick](https://imagemagick.org/) for image processing
 - [PIL/Pillow](https://pillow.readthedocs.io/) for Python image handling
-- Inspired by [check-media-integrity](https://github.com/ftarlao/check-media-integrity)
-- Reference implementations from [broken-video-file-detector](https://github.com/EuropaYou/broken-video-file-detector) and [CorruptVideoFileInspector](https://github.com/nhershy/CorruptVideoFileInspector)
+- Inspired by media integrity checkers and corruption detectors
 
 ## Support
 
