@@ -106,81 +106,6 @@ docker-compose up -d
 
 **Migration Still Supported**: If you have important scan history to preserve, the migration tools still work, but you may need to manually clean up any stuck scan states.
 
-## 🎉 What's New in Version 2.1.0
-
-This major release includes 80 versions worth of improvements since 2.0.53:
-
-### 🔒 Security Enhancements
-- **Path Traversal Protection**: Comprehensive validation prevents directory traversal attacks
-- **Command Injection Prevention**: All subprocess calls now use validated safe wrappers
-- **Input Validation**: JSON schema validation on all API endpoints
-- **Rate Limiting**: Configurable limits on API endpoints (200/day, 50/hour default)
-- **CSRF Protection**: Flask-WTF integration for enhanced security
-- **Audit Logging**: Comprehensive security event logging
-
-### 🏗️ Architecture Overhaul
-- **Modular Design**: Separated 2,500+ line monolith into clean, maintainable modules
-- **Layered Architecture**: Clear separation between API routes, business logic, and data access
-- **SOLID Principles**: Each module has single, well-defined responsibility
-- **Repository Pattern**: Clean data access layer with testable components
-- **Improved Testability**: Components can be tested in isolation
-
-### 📊 Scan Reports Feature
-- **Scan History**: View all past scan operations with detailed statistics
-- **Advanced Filtering**: Filter by scan type and status
-- **Export Options**: Export reports as JSON or PDF
-- **Bulk Operations**: Select and manage multiple reports
-- **Performance Metrics**: Track scan duration and efficiency
-
-### 🎵 Audio Format Support
-- **Comprehensive Coverage**: MP3, FLAC, WAV, AAC, OGG, Opus, WMA, and more
-- **Lossless Formats**: FLAC, AIFF, APE, WavPack with integrity checking
-- **High-Resolution**: DSD formats (DSF, DFF) support
-- **Deep Scan Mode**: Detect timestamp issues and packet errors
-- **Format-Specific Tests**: FLAC CRC validation, MP3 frame validation
-
-### 🎥 Enhanced Video Support
-- **HEVC/H.265**: Full support including Main 10 profile detection
-- **Professional Formats**: ProRes, DNxHD/DNxHR, MXF
-- **Broadcast Formats**: AVCHD, MTS, M2TS
-- **Better Detection**: Enhanced corruption detection for modern codecs
-
-### 🖼️ Expanded Image Support
-- **Apple Formats**: HEIC/HEIF support
-- **RAW Formats**: Canon CR2/CR3, Nikon NEF, Sony ARW, Adobe DNG, and more
-- **Professional**: PSD, OpenEXR, HDR, SVG
-- **Scientific**: FITS, Netpbm formats
-
-### ⚡ Performance Optimizations
-- **3-5x Faster Discovery**: Replaced os.walk() with os.scandir()
-- **250x I/O Improvement**: Increased hash chunk size from 4KB to 1MB
-- **Database Performance**: Connection pooling and optimized SQLite pragmas
-- **Batch Processing**: Process up to 100 items per transaction
-- **Progress Tracking**: Real-time ETA calculations for all operations
-
-### 🐛 Major Bug Fixes
-- Fixed scan progress getting stuck at 0% or 67%
-- Fixed rescan scanning entire directories instead of selected files
-- Fixed UI filters and sorting not working properly
-- Fixed database initialization issues after upgrades
-- Fixed rate limiting blocking internal requests
-- Fixed memory issues with 1M+ file databases
-- Fixed timezone handling throughout the application
-- Fixed PDF report generation and formatting
-
-### 🎨 UI Improvements
-- **Bulk Operations**: Enhanced bulk selection and actions
-- **Progress Display**: Shows current file, phase, and ETA
-- **Export Options**: Dropdown menu with CSV, JSON, PDF formats
-- **Dark Mode**: Refined dark mode with better contrast
-- **Mobile Responsive**: Improved mobile interface
-
-### 🔧 Developer Experience
-- **Comprehensive Tests**: 70+ tests covering all components
-- **API Documentation**: OpenAPI/Swagger documentation
-- **Better Logging**: Structured logging with proper levels
-- **Database Tools**: Migration and repair utilities
-- **CI/CD Ready**: Docker multi-stage builds
 
 ## 📚 Documentation
 
@@ -193,21 +118,42 @@ This major release includes 80 versions worth of improvements since 2.0.53:
 
 ## ✨ Features
 
-- **🎬 Comprehensive Media Support**: Detects corruption in videos (MP4, MKV, AVI, MOV, etc.) and images (JPEG, PNG, GIF, etc.)
-- **🔍 Advanced Detection**: Uses FFmpeg, ImageMagick, and PIL for thorough corruption analysis
-- **⚠️ Warning System**: Differentiates between corrupted files and files with minor issues
-- **🌐 Modern Web Interface**: Clean, responsive dark/light mode UI for viewing and managing scan results
-- **💾 Persistent Storage**: SQLite database stores scan results across application restarts
-- **📁 File Management**: Download, view, mark as good, and manage files directly from the web interface
-- **🐳 Docker Support**: Easy deployment with Docker and docker-compose
-- **⚙️ Configurable**: Environment variable configuration for scan directories and behavior
-- **⚡ Parallel Scanning**: Multi-threaded scanning for improved performance with real-time progress
-- **📊 System Statistics**: Detailed system statistics with monitored paths and file tracking
-- **🔄 Bulk Actions**: Select multiple files for rescanning, deep scanning, or marking as good
-- **📈 Phase-Based Progress**: Clear scanning phases showing discovery, database addition, and scanning stages
-- **📅 Scheduled Scanning**: Automated scans with cron or interval-based scheduling
-- **🚫 Path & Extension Exclusions**: Configure paths and file types to exclude from scanning
-- **🔍 Multiple Scan Types**: Normal scan, orphan cleanup, and file changes detection
+### Media Support
+- Comprehensive video format support (MP4, MKV, AVI, MOV, WebM, FLV, etc.)
+- Image format detection (JPEG, PNG, GIF, BMP, TIFF, WebP, etc.)
+- Audio file validation (MP3, FLAC, WAV, AAC, OGG, etc.)
+- Large file support (tested with 50GB+ Bluray remux files)
+
+### Detection Capabilities
+- FFmpeg-based deep video analysis
+- ImageMagick and PIL image validation
+- Smart warning system for minor issues vs critical corruption
+- Multi-stage detection with configurable thresholds
+- Automatic retry logic for transient failures
+
+### Scanning Features
+- Parallel multi-threaded scanning with real-time progress
+- Phase-based scanning (discovery → database → validation)
+- Multiple scan types (normal, orphan cleanup, file changes)
+- Scheduled automated scans with cron or interval support
+- Configurable path and extension exclusions
+- Bulk operations for rescanning and deep analysis
+
+### Web Interface
+- Modern responsive design with dark/light theme support
+- Real-time scan progress with WebSocket updates
+- Advanced filtering and search capabilities
+- Bulk file selection and management
+- Mobile-optimized touch interface
+- Detailed file corruption reports
+
+### System Features
+- PostgreSQL database for reliable persistence
+- Redis-backed task queue for background processing
+- Celery worker pool for distributed scanning
+- Docker deployment with multi-container architecture
+- Comprehensive API for automation
+- Detailed system statistics and monitoring
 
 ## 📸 Screenshots
 
