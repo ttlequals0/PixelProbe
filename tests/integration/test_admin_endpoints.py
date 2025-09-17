@@ -63,10 +63,9 @@ class TestScheduleEndpoints:
             response = client.delete(f'/api/schedules/{schedule_id}')
             assert response.status_code == 204
             
-            # Verify soft deleted
+            # Verify hard deleted (schedule no longer exists)
             schedule = ScanSchedule.query.get(schedule_id)
-            assert schedule is not None
-            assert schedule.is_active is False
+            assert schedule is None
     
     def test_delete_nonexistent_schedule(self, client, db):
         """Test deleting non-existent schedule"""

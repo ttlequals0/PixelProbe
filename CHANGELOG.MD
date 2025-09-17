@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.3] - 2025-09-13
+
+### Fixed
+- **Fixed scheduled task next_run not updating (root cause fix)**
+  - Added proper next_run update after each scheduled job execution
+  - The field now correctly reflects when the next execution will occur
+  - Database stays in sync with APScheduler's internal state
+
+- **Fixed multiple scheduler instances running in gunicorn workers**
+  - Root cause: Each gunicorn worker was starting its own scheduler instance
+  - Solution: Implemented file-based locking to ensure only one scheduler runs
+  - Uses fcntl exclusive lock on `/tmp/pixelprobe_scheduler.lock`
+  - Eliminates duplicate schedule executions at the source
+
+- **Added automatic stuck scan detection and recovery**
+  - Implemented periodic check every 5 minutes for stuck scans
+  - Scans with no activity for 30+ minutes are marked as crashed
+  - Extended timeout to account for large files (50GB+ can take 26+ minutes)
+  - Uses existing `last_update` field which was already being updated
+  - Prevents indefinite blocking of the scan system
+
+- **Fixed scheduler API timeout issues**
+  - Root cause: Default 30s timeout too short for initiating operations
+  - Increased scheduler->API call timeouts to 60 seconds
+  - NOTE: This timeout is only for STARTING the scan/cleanup, not for the operation itself
+  - Operations run asynchronously after being started
+
+### Technical Improvements
+- Scheduler now runs in exactly one process regardless of worker count
+- Removed redundant duplicate prevention checks
+- All scan types (normal, orphan, file_changes) work reliably as scheduled
+
 
 ## [2.3.2] - 2025-09-03
 
@@ -46,7 +78,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - UI would show correct count initially then reset to 0 mid-scan
   - Fixed by ensuring phase_total and phase_current are always updated with files_processed
   - Progress percentage no longer drops back to 67% during scanning
-
 
 ## [2.2.99] - 2025-09-03
 
