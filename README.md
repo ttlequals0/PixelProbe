@@ -8,7 +8,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 
 **Version 2.3.3** - Critical scheduler reliability fixes and stuck scan prevention.
 
-## 🚀 What's New in Version 2.3.3
+## 🚀 What's New in Version 2.3.3!
 
 ### 🎯 Scheduler Reliability Overhaul
 - **Fixed Next Run Updates**: Scheduled tasks now properly update their next execution time after running
