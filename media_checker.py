@@ -1338,23 +1338,49 @@ class PixelProbe:
                     if '10' in pix_fmt:  # e.g., yuv420p10le
                         logger.debug(f"HEVC Main 10 10-bit video detected in {file_path} - valid format")
                 else:
-                    scan_output.append(f"Video stream: {codec_name}")
+                    # Combine codec and profile info on one line for cleaner output
                     if codec_profile:
-                        scan_output.append(f"Profile: {codec_profile}")
+                        scan_output.append(f"Video stream: {codec_name} (Profile: {codec_profile})")
+                    else:
+                        scan_output.append(f"Video stream: {codec_name}")
                     
                 logger.info(f"Video stream found in {file_path}: {codec_name}")
             
-            # Log duration info but don't mark as corrupted - invalid duration doesn't mean corrupted file
-            if video_stream and ('duration' not in video_stream or video_stream.get('duration') in [None, 'N/A'] or 
-                               (isinstance(video_stream.get('duration'), (int, float, str)) and 
-                                float(video_stream.get('duration', 0)) <= 0)):
-                logger.warning(f"Invalid duration in {file_path} - metadata issue, not necessarily corruption")
-                duration = 'invalid/missing'
-                scan_output.append(f"Duration: {duration} (metadata issue)")
+            # Try to get duration from multiple sources - stream level first, then container level
+            duration = None
+            duration_source = None
+            
+            # First try: stream-level duration (most accurate for the video stream)
+            if video_stream and 'duration' in video_stream:
+                try:
+                    stream_duration = float(video_stream.get('duration', 0))
+                    if stream_duration > 0:
+                        duration = stream_duration
+                        duration_source = 'stream'
+                        logger.debug(f"Got duration from video stream for {file_path}: {duration}")
+                except (ValueError, TypeError):
+                    pass
+            
+            # Second try: container/format level duration (common for MP4, MKV, etc.)
+            if duration is None and 'format' in probe and 'duration' in probe['format']:
+                try:
+                    format_duration = float(probe['format'].get('duration', 0))
+                    if format_duration > 0:
+                        duration = format_duration
+                        duration_source = 'container'
+                        logger.debug(f"Got duration from container format for {file_path}: {duration}")
+                except (ValueError, TypeError):
+                    pass
+            
+            # Log the duration result
+            if duration is not None and duration > 0:
+                scan_output.append(f"Duration: {duration:.2f}s (from {duration_source})")
+                logger.info(f"Video duration for {file_path}: {duration:.2f}s (source: {duration_source})")
             else:
-                duration = video_stream.get('duration', 'unknown') if video_stream else 'unknown'
-                scan_output.append(f"Duration: {duration}")
-                logger.info(f"Video duration for {file_path}: {duration}")
+                # Duration missing is common for certain formats (e.g., transport streams)
+                # This is a metadata limitation, not corruption
+                logger.info(f"Duration metadata not available for {file_path} - this is common for certain formats")
+                scan_output.append(f"Duration: not available in metadata")
         
         except ffmpeg.Error as e:
             corruption_details.append(f"FFmpeg probe error: {str(e)}")
@@ -1944,13 +1970,30 @@ class PixelProbe:
         is_corrupted = False
         
         try:
-            # Get video duration first
+            # Get video duration first - try stream level, then container level
             probe = ffmpeg.probe(file_path)
             video_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
-            if not video_stream or 'duration' not in video_stream:
+            
+            duration = None
+            # Try stream-level duration first
+            if video_stream and 'duration' in video_stream:
+                try:
+                    duration = float(video_stream['duration'])
+                except (ValueError, TypeError):
+                    pass
+            
+            # Fall back to container-level duration
+            if duration is None and 'format' in probe and 'duration' in probe['format']:
+                try:
+                    duration = float(probe['format']['duration'])
+                except (ValueError, TypeError):
+                    pass
+            
+            # If we still don't have duration, skip multipoint sampling
+            if duration is None or duration <= 0:
                 return is_corrupted, corruption_details
             
-            duration = float(video_stream['duration'])
+            duration = float(duration)
             sample_points = [
                 (0, 10, "beginning"),
                 (duration * 0.5, 10, "middle"), 
