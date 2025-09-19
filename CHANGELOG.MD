@@ -14,10 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Stuck scan detection now works correctly to mark crashed scans
   - This was preventing scheduled tasks from running (they were being skipped)
 
+- **Critical: Fixed parallel scan state not updating**
+  - Root cause: Workers were processing files but not updating the main scan state
+  - Workers now update scan_state.last_update periodically (every 100 files)
+  - Workers now update scan_state.files_processed with aggregate progress
+  - This fixes scans appearing stuck at 0 files even though workers are active
+
 ### Verified
 - **Scheduled tasks ARE executing** but were being blocked by stuck scans
 - **Stuck scan detection runs every 5 minutes** as designed
-- **Worker processes are functioning** but scan state wasn't updating properly
+- **Worker processes are functioning** and now properly update scan state
 
 ## [2.3.4] - 2025-09-17
 
