@@ -235,9 +235,27 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                             if is_corrupted:
                                 files_corrupted += 1
                             
-                            # Commit every 100 files
+                            # Commit every 100 files and update scan state
                             if files_processed % 100 == 0:
                                 db.session.commit()
+                                
+                                # CRITICAL FIX: Update scan state's last_update to prevent stuck scan detection
+                                # Workers must update the main scan state or it appears frozen
+                                try:
+                                    scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
+                                    if scan_state:
+                                        # Update last_update to show activity
+                                        scan_state.last_update = datetime.now(timezone.utc)
+                                        # Update overall progress (aggregate all chunks)
+                                        total_processed = db.session.query(
+                                            db.func.sum(ScanChunk.files_processed)
+                                        ).filter_by(scan_id=scan_id).scalar() or 0
+                                        scan_state.files_processed = total_processed + files_processed
+                                        db.session.commit()
+                                        logger.debug(f"Updated scan state progress: {scan_state.files_processed} files")
+                                except Exception as e:
+                                    logger.error(f"Failed to update scan state progress: {e}")
+                                    db.session.rollback()
                     
                     files_processed += 1
                     
@@ -252,6 +270,25 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
         chunk.is_complete = True
         chunk.files_processed = files_processed
         db.session.commit()
+        
+        # CRITICAL: Final update of scan state when chunk completes
+        try:
+            scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
+            if scan_state:
+                # Update last_update to show recent activity
+                scan_state.last_update = datetime.now(timezone.utc)
+                
+                # Recalculate total progress from all chunks
+                total_processed = db.session.query(
+                    db.func.sum(ScanChunk.files_processed)
+                ).filter_by(scan_id=scan_id).scalar() or 0
+                
+                scan_state.files_processed = total_processed
+                db.session.commit()
+                logger.info(f"Chunk {chunk_id} complete. Total scan progress: {total_processed}/{scan_state.estimated_total} files")
+        except Exception as e:
+            logger.error(f"Failed to update scan state on chunk completion: {e}")
+            db.session.rollback()
         
         if scan_type == 'orphan_cleanup':
             logger.info(f"Chunk {chunk_id} completed: {orphans_removed} orphans removed")

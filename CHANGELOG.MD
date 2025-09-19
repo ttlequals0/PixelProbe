@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.5] - 2025-09-19
+
+### Fixed
+- **Critical: Fixed stuck scan detection timezone comparison bug**
+  - Root cause: Comparing offset-naive and offset-aware datetimes caused detection to fail
+  - Now properly handles both timezone-aware and naive datetimes from database
+  - Stuck scan detection now works correctly to mark crashed scans
+  - This was preventing scheduled tasks from running (they were being skipped)
+
+- **Critical: Fixed parallel scan state not updating**
+  - Root cause: Workers were processing files but not updating the main scan state
+  - Workers now update scan_state.last_update periodically (every 100 files)
+  - Workers now update scan_state.files_processed with aggregate progress
+  - This fixes scans appearing stuck at 0 files even though workers are active
+
+### Verified
+- **Scheduled tasks ARE executing** but were being blocked by stuck scans
+- **Stuck scan detection runs every 5 minutes** as designed
+- **Worker processes are functioning** and now properly update scan state
+
 ## [2.3.4] - 2025-09-17
 
 ### Fixed
