@@ -513,35 +513,46 @@ class MediaScheduler:
                 
                 # Consider a scan stuck if no update for 30 minutes
                 # This accounts for large files that can take 20+ minutes to scan
-                stuck_threshold = datetime.now(timezone.utc) - timedelta(minutes=30)
+                # Use UTC aware datetime for comparison
+                current_time = datetime.now(timezone.utc)
+                stuck_threshold = current_time - timedelta(minutes=30)
                 
-                # Find active scans with no recent updates
+                # Find active scans
                 stuck_scans = ScanState.query.filter(
                     ScanState.is_active == True,
-                    ScanState.phase.notin_(['idle', 'completed', 'error', 'crashed', 'cancelled']),
-                    db.or_(
-                        ScanState.last_update == None,
-                        ScanState.last_update < stuck_threshold
-                    )
+                    ScanState.phase.notin_(['idle', 'completed', 'error', 'crashed', 'cancelled'])
                 ).all()
                 
+                scans_to_mark = []
                 for scan in stuck_scans:
-                    # Check if scan has been running for more than 10 minutes without update
-                    if scan.last_update and scan.last_update < stuck_threshold:
-                        logger.warning(f"Marking stuck scan {scan.scan_id} as crashed - no update since {scan.last_update}")
+                    # Ensure we have timezone-aware datetimes for comparison
+                    # If the database stores naive datetimes, assume they're in UTC
+                    last_update = scan.last_update
+                    if last_update and last_update.tzinfo is None:
+                        last_update = last_update.replace(tzinfo=timezone.utc)
+                    
+                    start_time = scan.start_time
+                    if start_time and start_time.tzinfo is None:
+                        start_time = start_time.replace(tzinfo=timezone.utc)
+                    
+                    # Check if scan has been running for more than 30 minutes without update
+                    if last_update and last_update < stuck_threshold:
+                        logger.warning(f"Marking stuck scan {scan.scan_id} as crashed - no update since {last_update}")
                         scan.is_active = False
                         scan.phase = 'crashed'
-                        scan.error_message = f"Scan appears stuck - no activity for over 30 minutes (last update: {scan.last_update})"
-                    elif not scan.last_update and scan.start_time < stuck_threshold:
+                        scan.error_message = f"Scan appears stuck - no activity for over 30 minutes (last update: {last_update})"
+                        scans_to_mark.append(scan)
+                    elif not last_update and start_time and start_time < stuck_threshold:
                         # No last_update field but scan started over 30 minutes ago
-                        logger.warning(f"Marking stuck scan {scan.scan_id} as crashed - started at {scan.start_time} with no updates")
+                        logger.warning(f"Marking stuck scan {scan.scan_id} as crashed - started at {start_time} with no updates")
                         scan.is_active = False
                         scan.phase = 'crashed'
-                        scan.error_message = f"Scan appears stuck - no activity tracking since start at {scan.start_time}"
+                        scan.error_message = f"Scan appears stuck - no activity tracking since start at {start_time}"
+                        scans_to_mark.append(scan)
                 
-                if stuck_scans:
+                if scans_to_mark:
                     db.session.commit()
-                    logger.info(f"Marked {len(stuck_scans)} stuck scans as crashed")
+                    logger.info(f"Marked {len(scans_to_mark)} stuck scans as crashed")
                     
         except Exception as e:
             logger.error(f"Error checking for stuck scans: {e}")
