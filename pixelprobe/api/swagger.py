@@ -14,6 +14,22 @@ SWAGGER_UI_DOC_EXPANSION = 'list'
 SWAGGER_UI_OPERATION_ID = True
 SWAGGER_UI_REQUEST_DURATION = True
 
+# Authorization definitions
+authorizations = {
+    'apikey': {
+        'type': 'apiKey',
+        'in': 'header',
+        'name': 'Authorization',
+        'description': 'Bearer token authentication. Use format: Bearer <token>'
+    },
+    'session': {
+        'type': 'apiKey',
+        'in': 'cookie',
+        'name': 'session',
+        'description': 'Session-based authentication via cookie'
+    }
+}
+
 # Initialize API with Swagger documentation
 api = Api(
     api_bp,
@@ -22,7 +38,9 @@ api = Api(
     description='REST API for PixelProbe media file corruption detection system',
     doc='/docs',  # Swagger UI will be available at /api/v1/docs
     ordered=True,
-    validate=True
+    validate=True,
+    authorizations=authorizations,
+    security='apikey'  # Default security for all endpoints
 )
 
 # Define namespaces

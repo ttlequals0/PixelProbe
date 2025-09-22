@@ -113,6 +113,7 @@ def download_file(result_id):
     return send_file(result.file_path, as_attachment=True)
 
 @export_bp.route('/export', methods=['GET', 'POST'])
+@auth_required
 def export_scan_results():
     """Export scan results to CSV, JSON, or PDF
     

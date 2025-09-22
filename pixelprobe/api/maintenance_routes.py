@@ -91,6 +91,7 @@ current_cleanup_thread = None
 current_file_changes_thread = None
 
 @maintenance_bp.route('/test-cleanup')
+@auth_required
 def test_cleanup():
     """Test endpoint to check cleanup state from database"""
     cleanup_record = CleanupState.query.order_by(CleanupState.id.desc()).first()
@@ -108,6 +109,7 @@ def test_cleanup():
 
 @maintenance_bp.route('/cleanup-status')
 @exempt_from_rate_limit
+@auth_required
 def get_cleanup_status():
     """Get current cleanup orphans operation status"""
     try:
@@ -180,6 +182,7 @@ def get_cleanup_status():
 
 @maintenance_bp.route('/file-changes-status')
 @exempt_from_rate_limit
+@auth_required
 def get_file_changes_status():
     """Get current file changes check operation status"""
     try:
@@ -423,6 +426,7 @@ def cleanup_orphaned_files():
     })
 
 @maintenance_bp.route('/file-changes', methods=['GET', 'POST'])
+@auth_required
 def check_file_changes():
     """Check for file changes since last scan"""
     global current_file_changes_thread

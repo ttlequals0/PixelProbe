@@ -271,10 +271,10 @@ class TestPerformance:
         # Allow some variance as parallel overhead can make it slower on small datasets
         assert speedup > 0.8, f"Expected speedup > 0.8x, got {speedup:.2f}x"
     
-    def test_api_response_time(self, client, db):
+    def test_api_response_time(self, authenticated_client, db):
         """Test API endpoint response times"""
         from models import ScanResult
-        
+
         # Create test data
         for i in range(100):
             file = ScanResult(
@@ -285,46 +285,46 @@ class TestPerformance:
             )
             db.session.add(file)
         db.session.commit()
-        
+
         endpoints = [
             ('/api/stats', 'GET', None),
             ('/api/scan-status', 'GET', None),
             ('/api/scan-results?page=1&per_page=50', 'GET', None),
         ]
-        
+
         response_times = {}
-        
+
         for endpoint, method, data in endpoints:
             times = []
-            
+
             # Warm up
             if method == 'GET':
-                client.get(endpoint)
+                authenticated_client.get(endpoint)
             else:
-                client.post(endpoint, json=data)
-            
+                authenticated_client.post(endpoint, json=data)
+
             # Measure response times
             for _ in range(10):
                 start = time.time()
-                
+
                 if method == 'GET':
-                    response = client.get(endpoint)
+                    response = authenticated_client.get(endpoint)
                 else:
-                    response = client.post(endpoint, json=data)
-                
+                    response = authenticated_client.post(endpoint, json=data)
+
                 elapsed = time.time() - start
                 times.append(elapsed)
-                
+
                 assert response.status_code in [200, 409], \
                     f"Endpoint {endpoint} returned {response.status_code}"
-            
+
             avg_time = sum(times) / len(times)
             response_times[endpoint] = avg_time
-            
+
             # Assert response time is acceptable
             assert avg_time < 0.2, \
                 f"Endpoint {endpoint} avg response time {avg_time:.3f}s, expected < 200ms"
-        
+
         # Report results
         print("\nAPI Response Times:")
         for endpoint, avg_time in response_times.items():
@@ -375,7 +375,7 @@ class TestPerformance:
             f"Maximum throughput {max_throughput:.0f} files/s, expected > 1000"
     
     @pytest.mark.slow
-    def test_sustained_load(self, client, db, performance_monitor):
+    def test_sustained_load(self, authenticated_client, db, performance_monitor):
         """Test system behavior under sustained load"""
         import concurrent.futures
         
@@ -391,9 +391,9 @@ class TestPerformance:
             try:
                 # Mix of different operations
                 operations = [
-                    lambda: client.get('/api/stats'),
-                    lambda: client.get('/api/scan-status'),
-                    lambda: client.get('/api/scan-results?page=1'),
+                    lambda: authenticated_client.get('/api/stats'),
+                    lambda: authenticated_client.get('/api/scan-status'),
+                    lambda: authenticated_client.get('/api/scan-results?page=1'),
                 ]
                 
                 operation = random.choice(operations)

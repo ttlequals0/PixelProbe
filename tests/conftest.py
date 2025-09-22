@@ -127,6 +127,37 @@ def client(app):
     return app.test_client()
 
 @pytest.fixture(scope='function')
+def authenticated_client(app, client):
+    """Create an authenticated test client with a test user"""
+    with app.app_context():
+        from models import db, User
+        db.create_all()
+
+        # Create a test admin user
+        test_user = User(
+            username='testadmin',
+            email='testadmin@test.com',
+            is_admin=True
+        )
+        test_user.set_password('testpass123')
+
+        # Clear and add user
+        try:
+            User.query.filter_by(username='testadmin').delete()
+            db.session.commit()
+        except:
+            db.session.rollback()
+
+        db.session.add(test_user)
+        db.session.commit()
+
+        # Login the user
+        client.post('/api/auth/login',
+                   json={'username': 'testadmin', 'password': 'testpass123'})
+
+    return client
+
+@pytest.fixture(scope='function')
 def db(app):
     """Create database for testing"""
     with app.app_context():

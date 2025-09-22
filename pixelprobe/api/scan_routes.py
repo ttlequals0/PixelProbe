@@ -316,6 +316,7 @@ def get_scan_result(result_id):
 
 @scan_bp.route('/scan-file', methods=['POST'])
 @rate_limit("5 per minute")
+@auth_required
 @validate_json_input({
     'file_path': {'required': True, 'type': str, 'max_length': 1000}
 })

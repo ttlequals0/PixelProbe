@@ -296,7 +296,8 @@ def test_authentication_required_for_api(auth_client, app):
 def test_token_expiration(app):
     """Test API token expiration"""
     with app.app_context():
-        user = User(username='testuser', email='test@test.com')
+        # Use unique username to avoid conflicts
+        user = User(username='tokenexpireuser', email='tokenexpire@test.com')
         user.set_password('testpass')
         db.session.add(user)
         db.session.commit()

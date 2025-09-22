@@ -237,6 +237,7 @@ def health_check():
     })
 
 @app.route('/api/version')
+@auth_required
 def get_version():
     """Get application version"""
     logger.info("Version information requested")

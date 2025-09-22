@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from models import db, ScanResult, IgnoredErrorPattern, ScanConfiguration, ScanSchedule
 from scheduler import MediaScheduler
 from pixelprobe.utils.security import validate_json_input, AuditLogger, validate_directory_path
+from auth import auth_required
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ def set_scheduler(sched):
 
 @admin_bp.route('/mark-as-good', methods=['POST'])
 @rate_limit("10 per minute")
+@auth_required
 @validate_json_input({
     'file_ids': {'required': True, 'type': list}
 })
@@ -95,6 +97,7 @@ def get_ignored_patterns():
     } for p in patterns])
 
 @admin_bp.route('/ignored-patterns', methods=['POST'])
+@auth_required
 @validate_json_input({
     'pattern': {'required': True, 'type': str, 'max_length': 200},
     'description': {'required': False, 'type': str, 'max_length': 500}
@@ -140,6 +143,7 @@ def add_ignored_pattern():
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/ignored-patterns/<int:pattern_id>', methods=['DELETE'])
+@auth_required
 def delete_ignored_pattern(pattern_id):
     """Delete an ignored error pattern"""
     pattern = IgnoredErrorPattern.query.get(pattern_id)
@@ -171,6 +175,7 @@ def get_configurations():
     } for c in configs])
 
 @admin_bp.route('/configurations', methods=['POST'])
+@auth_required
 @validate_json_input({
     'path': {'required': True, 'type': str, 'max_length': 1000}
 })

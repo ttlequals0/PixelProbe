@@ -40,6 +40,7 @@ def check_celery_available():
 
 @parallel_scan_bp.route('/scan-parallel-v2', methods=['POST'])
 @rate_limit("2 per minute")
+@auth_required
 @validate_json_input({
     'directories': {'required': True, 'type': list},
     'force_rescan': {'required': False, 'type': bool}
