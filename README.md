@@ -133,21 +133,26 @@ Secure password changes:
 #### Light Mode
 ![Desktop Light Mode](docs/screenshots/desktop-light.png)
 
-The modern desktop interface features:
-- Modern design with clean, professional aesthetics
-- Sidebar navigation for easy access to all features
-- Real-time statistics dashboard showing file health status
-- Advanced filtering and search capabilities
-- Bulk action support for managing multiple files
+The modern light mode interface features:
+- Clean, professional design with over 1 million files scanned
+- Real-time statistics showing total, healthy, corrupted, warning and pending files
+- Intuitive sidebar navigation with authentication features
+- Advanced filtering by status (All Files, Corrupted Only, Warnings Only, Healthy Only)
+- Bulk actions with mark, rescan, download and export capabilities
+- User management and API token access in the account section
+- Dark mode toggle in settings
 
 #### Dark Mode
 ![Desktop Dark Mode](docs/screenshots/desktop-dark.png)
 
-PixelProbe includes a sophisticated dark mode:
-- High contrast design optimized for low-light environments
-- Consistent color scheme across all UI elements
-- Smooth theme transitions
-- Automatic theme persistence
+The sophisticated dark mode interface provides:
+- High contrast design perfect for extended monitoring sessions
+- Green accent colors for excellent visibility
+- Complete feature parity with light mode
+- Account section with user management and password controls
+- System stats and scan reports readily accessible
+- Build info display (v2.4.0) showing current version
+- Seamless theme switching that persists across sessions
 
 ### Mobile Interface
 
