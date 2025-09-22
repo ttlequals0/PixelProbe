@@ -8,7 +8,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.4.0** - Complete authentication system with user management and API tokens.
+**Version 2.4.1** - Enhanced authentication with Swagger UI support and security fixes.
 
 ### Why PixelProbe?
 
@@ -18,7 +18,15 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Professional Grade**: Uses industry-standard tools (FFmpeg, ImageMagick) for accurate detection
 - **Set and Forget**: Schedule automated scans to continuously monitor your media health
 
-## 🚀 What's New in Version 2.4.0
+## 🚀 What's New in Version 2.4.1
+
+### 🔒 Authentication Enhancements
+- **Universal API Protection**: ALL API endpoints now require authentication
+- **Swagger UI Compatibility**: Fixed Bearer token handling for Swagger UI testing
+- **Flexible Token Format**: Supports both `Bearer <token>` and direct token formats
+- **Security Hardening**: Enforced authentication across entire API surface
+
+## 📦 Version 2.4.0 Features
 
 ### 🔐 Complete Authentication System
 - **User Management**: Create and manage multiple user accounts with admin privileges
