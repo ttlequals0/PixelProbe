@@ -11,13 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Security Enhancement**: ALL API endpoints now require authentication
   - Previously some endpoints were accessible without authentication
   - Now enforces authentication across entire API surface
-  - Added @auth_required decorator to all API route handlers
+  - Updated Flask-RESTX Resource methods to use check_auth() function
   - Updated Swagger documentation to show authentication requirements
   - All test fixtures updated to use authenticated_client
 
 ### Fixed
-- Fixed GitHub Actions test failures related to authentication
-- Updated all integration tests to use proper authentication
+- **Swagger UI Authentication**
+  - Fixed Bearer token format in Swagger UI configuration
+  - Authentication now accepts both `Bearer <token>` and `<token>` formats
+  - Swagger UI can now properly authenticate with API tokens
+  - Fixed StatsService method name (get_summary_stats → get_system_info)
+
+- **Test Suite Fixes**
+  - Fixed typo in test_api_endpoints.py (duplicate 'authenticated_' prefix)
+  - Fixed GitHub Actions test failures related to authentication
+  - Updated all integration tests to use proper authentication
 - **Critical Bug Fixes from v2.4.0 Production Logs**
   - Fixed 'tz' is not defined error in scan_routes.py causing ETA calculation failures
   - Fixed database initialization errors with duplicate auth table creation attempts
