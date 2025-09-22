@@ -692,7 +692,7 @@ def get_scan_status():
                             eta_seconds = round(eta_seconds / 300) * 300
                         
                         eta_time = current_time.timestamp() + eta_seconds
-                        eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
+                        eta = datetime.fromtimestamp(eta_time, tz=timezone.utc).isoformat()
                         logger.debug(f"ETA calculated (known total): {eta}, smoothed from {remaining_files / files_per_second:.1f}s")
                     elif current_phase in ['discovering', 'adding'] and current_progress > 10:
                         # During discovery/adding, estimate based on typical scan sizes
@@ -712,7 +712,7 @@ def get_scan_status():
                         else:
                             eta_seconds = round(eta_seconds / 300) * 300
                         eta_time = current_time.timestamp() + eta_seconds
-                        eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
+                        eta = datetime.fromtimestamp(eta_time, tz=timezone.utc).isoformat()
                         logger.debug(f"ETA calculated (estimated): {eta}")
         except Exception as e:
             logger.warning(f"Could not calculate ETA: {e}")

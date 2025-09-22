@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.2] - 2025-09-22
+
+### Fixed
+- **Critical Bug Fixes from v2.4.0 Production Logs**
+  - Fixed 'tz' is not defined error in scan_routes.py causing ETA calculation failures
+  - Fixed database initialization errors with duplicate auth table creation attempts
+  - Fixed authentication migration null created_at constraint violation
+  - Fixed datetime import shadowing in celery tasks causing UnboundLocalError
+  - Improved database initialization to check for existing tables before creation
+  - Fixed race condition where multiple workers tried to create same tables
+
+### Changed
+- Database migration now properly checks for existing tables before creation
+- Authentication tables use IF NOT EXISTS checks to prevent conflicts
+- Improved error handling during database initialization
+
 ## [2.4.1] - 2025-09-21
 
 ### Changed

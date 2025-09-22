@@ -410,52 +410,63 @@ def migrate_database():
 
 def run_auth_migration():
     """Run authentication tables migration for v2.4.0"""
-    from sqlalchemy import text
+    from sqlalchemy import text, inspect
 
     try:
+        # Check if tables already exist
+        inspector = inspect(db.engine)
+        existing_tables = inspector.get_table_names()
+
         with db.engine.connect() as conn:
             # Create users table if it doesn't exist
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    username VARCHAR(80) UNIQUE NOT NULL,
-                    email VARCHAR(120) UNIQUE NOT NULL,
-                    password_hash VARCHAR(128) NOT NULL,
-                    is_admin BOOLEAN NOT NULL DEFAULT TRUE,
-                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    last_login TIMESTAMP WITH TIME ZONE,
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                    first_setup_required BOOLEAN NOT NULL DEFAULT FALSE
-                )
-            """))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"))
+            if 'users' not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        username VARCHAR(80) UNIQUE NOT NULL,
+                        email VARCHAR(120) UNIQUE NOT NULL,
+                        password_hash VARCHAR(128) NOT NULL,
+                        is_admin BOOLEAN NOT NULL DEFAULT TRUE,
+                        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        last_login TIMESTAMP WITH TIME ZONE,
+                        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                        first_setup_required BOOLEAN NOT NULL DEFAULT FALSE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"))
+                logger.info("Created users table via migration")
 
             # Create API tokens table if it doesn't exist
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS api_tokens (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    token VARCHAR(64) UNIQUE NOT NULL,
-                    description VARCHAR(200),
-                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    last_used TIMESTAMP WITH TIME ZONE,
-                    expires_at TIMESTAMP WITH TIME ZONE,
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE
-                )
-            """))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id)"))
+            if 'api_tokens' not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS api_tokens (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        token VARCHAR(64) UNIQUE NOT NULL,
+                        description VARCHAR(200),
+                        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        last_used TIMESTAMP WITH TIME ZONE,
+                        expires_at TIMESTAMP WITH TIME ZONE,
+                        is_active BOOLEAN NOT NULL DEFAULT TRUE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id)"))
+                logger.info("Created api_tokens table via migration")
 
-            # Check if any users exist
-            result = conn.execute(text("SELECT COUNT(*) FROM users"))
-            user_count = result.scalar()
+            # Check if any users exist (only if table exists)
+            if 'users' in existing_tables or 'users' in inspector.get_table_names():
+                result = conn.execute(text("SELECT COUNT(*) FROM users"))
+                user_count = result.scalar()
+            else:
+                user_count = 0
 
-            if user_count == 0:
+            if user_count == 0 and 'users' in inspector.get_table_names():
                 # Create a default admin user that requires setup on first login
                 conn.execute(text("""
-                    INSERT INTO users (username, email, password_hash, is_admin, first_setup_required)
-                    VALUES ('admin', 'admin@pixelprobe.local', '', TRUE, TRUE)
+                    INSERT INTO users (username, email, password_hash, is_admin, first_setup_required, created_at, is_active)
+                    VALUES ('admin', 'admin@pixelprobe.local', '', TRUE, TRUE, CURRENT_TIMESTAMP, TRUE)
                 """))
                 logger.info("Created default admin user (password setup required on first login)")
 

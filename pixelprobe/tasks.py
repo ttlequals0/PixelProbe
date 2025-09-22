@@ -10,7 +10,7 @@ from celery import current_task
 from celery.exceptions import Retry
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from celery_config import celery_app
 from pixelprobe.services.scan_service import ScanService
@@ -43,7 +43,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
         active_scan = ScanState.query.filter_by(is_active=True).first()
         if active_scan and active_scan.scan_id != scan_id:
             # Check if the active scan is actually stuck (no update for 10+ minutes)
-            from datetime import datetime, timezone, timedelta
+            # timedelta already imported at module level
             check_time = active_scan.last_update or active_scan.start_time
             
             if check_time:
