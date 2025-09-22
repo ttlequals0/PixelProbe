@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixed race condition where multiple workers tried to create same tables
   - Database migration now properly checks for existing tables before creation
   - Authentication tables use IF NOT EXISTS checks to prevent conflicts
+- **Authentication Import Fixes**
+  - Fixed missing auth_required import in export_routes.py
+  - Fixed missing auth_required import in maintenance_routes.py
+  - Fixed missing auth_required import in reports_routes.py
+  - Fixed missing auth_required import in scan_routes_parallel.py
+  - Fixed duplicate timezone import in export_routes.py
 
 ## [2.4.0] - 2025-09-21
 
