@@ -12,7 +12,7 @@ class TestScanEndpoints:
     
     def test_get_scan_results(self, authenticated_client, mock_scan_result):
         """Test GET /api/scan-results endpoint"""
-        response = authenticated_authenticated_client.get('/api/scan-results')
+        response = authenticated_client.get('/api/scan-results')
         assert response.status_code == 200
         
         data = json.loads(response.data)
