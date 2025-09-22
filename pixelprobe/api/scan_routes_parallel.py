@@ -11,6 +11,7 @@ import logging
 
 from pixelprobe.utils.security import validate_directory_path, AuditLogger, PathTraversalError, validate_json_input
 from pixelprobe.utils.rate_limiting import rate_limit
+from auth import auth_required
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ def check_celery_available():
 
 @parallel_scan_bp.route('/scan-parallel-v2', methods=['POST'])
 @rate_limit("2 per minute")
+@auth_required
 @validate_json_input({
     'directories': {'required': True, 'type': list},
     'force_rescan': {'required': False, 'type': bool}
@@ -129,6 +131,7 @@ def scan_parallel_v2():
 
 
 @parallel_scan_bp.route('/scan-parallel-v2/status/<scan_id>', methods=['GET'])
+@auth_required
 def get_parallel_scan_status(scan_id):
     """
     Get status of a parallel scan including chunk progress
@@ -202,6 +205,7 @@ def get_parallel_scan_status(scan_id):
 
 
 @parallel_scan_bp.route('/scan-parallel-v2/workers', methods=['GET'])
+@auth_required
 def get_worker_status():
     """
     Get detailed status of all Celery workers

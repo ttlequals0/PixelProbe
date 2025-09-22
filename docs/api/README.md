@@ -11,7 +11,50 @@ PixelProbe provides a RESTful API for managing media file corruption detection. 
 
 ## Authentication
 
-Currently, the API does not require authentication. Future versions will implement JWT-based authentication.
+**As of v2.4.1, all API endpoints require authentication.**
+
+PixelProbe supports two authentication methods:
+
+### 1. Session-Based Authentication (Web UI)
+- Used automatically when logged in through the web interface
+- Managed via secure HTTP-only cookies
+- Best for browser-based access
+
+### 2. API Token Authentication (Programmatic Access)
+- Generate tokens through the web UI under Account → API Tokens
+- Include in requests using the Authorization header
+- Two formats are supported:
+  - Standard: `Authorization: Bearer <your-token>`
+  - Direct: `Authorization: <your-token>` (for Swagger UI compatibility)
+
+#### Example with curl:
+```bash
+# Using Bearer format
+curl -H "Authorization: Bearer your-api-token-here" \
+     http://localhost:5000/api/scan-status
+
+# Using direct format (Swagger UI style)
+curl -H "Authorization: your-api-token-here" \
+     http://localhost:5000/api/scan-status
+```
+
+#### Example with Python:
+```python
+import requests
+
+headers = {
+    'Authorization': 'Bearer your-api-token-here'
+}
+
+response = requests.get('http://localhost:5000/api/scan-status', headers=headers)
+```
+
+### Getting an API Token
+1. Log in to the web interface
+2. Navigate to Account → API Tokens
+3. Click "Create New Token"
+4. Provide a description
+5. Copy the generated token (it won't be shown again)
 
 ## Rate Limiting
 
@@ -46,6 +89,8 @@ Errors are returned with appropriate HTTP status codes and a JSON body:
 Common status codes:
 - `200`: Success
 - `400`: Bad Request (invalid input)
+- `401`: Unauthorized (authentication required)
+- `403`: Forbidden (insufficient permissions)
 - `404`: Not Found
 - `409`: Conflict (e.g., scan already running)
 - `429`: Too Many Requests (rate limit exceeded)

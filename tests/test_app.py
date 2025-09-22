@@ -11,21 +11,21 @@ def test_health_endpoint(client):
     data = response.get_json()
     assert data['status'] == 'healthy'
 
-def test_version_endpoint(client):
+def test_version_endpoint(authenticated_client):
     """Test the version endpoint"""
-    response = client.get('/api/version')
+    response = authenticated_client.get('/api/version')
     assert response.status_code == 200
     data = response.get_json()
     assert 'version' in data
     assert 'github_url' in data
 
-def test_scan_status_endpoint(client, db):
+def test_scan_status_endpoint(authenticated_client, db):
     """Test the scan status endpoint"""
     # Ensure ScanState table exists and has a default entry
     from models import ScanState
     db.create_all()
-    
-    response = client.get('/api/scan-status')
+
+    response = authenticated_client.get('/api/scan-status')
     assert response.status_code == 200
     data = response.get_json()
     
@@ -40,9 +40,9 @@ def test_scan_status_endpoint(client, db):
     assert data['is_running'] is False
     assert data['phase'] in ['idle', 'completed', None]  # None is possible if no scan state
 
-def test_stats_endpoint(client, db, mock_scan_result):
+def test_stats_endpoint(authenticated_client, db, mock_scan_result):
     """Test the stats endpoint"""
-    response = client.get('/api/stats')
+    response = authenticated_client.get('/api/stats')
     assert response.status_code == 200
     data = response.get_json()
     

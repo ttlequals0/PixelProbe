@@ -5,6 +5,106 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2025-09-22
+
+### Changed
+- **Security Enhancement**: ALL API endpoints now require authentication
+  - Previously some endpoints were accessible without authentication
+  - Now enforces authentication across entire API surface
+  - Updated Flask-RESTX Resource methods to use check_auth() function
+  - Updated Swagger documentation to show authentication requirements
+  - All test fixtures updated to use authenticated_client
+
+### Fixed
+- **Swagger UI Authentication**
+  - Fixed Bearer token format in Swagger UI configuration
+  - Authentication now accepts both `Bearer <token>` and `<token>` formats
+  - Swagger UI can now properly authenticate with API tokens
+  - Fixed StatsService method name (get_summary_stats → get_system_info)
+
+- **Test Suite Fixes**
+  - Fixed typo in test_api_endpoints.py (duplicate 'authenticated_' prefix)
+  - Fixed GitHub Actions test failures related to authentication
+  - Updated all integration tests to use proper authentication
+- **Critical Bug Fixes from v2.4.0 Production Logs**
+  - Fixed 'tz' is not defined error in scan_routes.py causing ETA calculation failures
+  - Fixed database initialization errors with duplicate auth table creation attempts
+  - Fixed authentication migration null created_at constraint violation
+  - Fixed datetime import shadowing in celery tasks causing UnboundLocalError
+  - Improved database initialization to check for existing tables before creation
+  - Fixed race condition where multiple workers tried to create same tables
+  - Database migration now properly checks for existing tables before creation
+  - Authentication tables use IF NOT EXISTS checks to prevent conflicts
+- **Authentication Import Fixes**
+  - Fixed missing auth_required import in export_routes.py
+  - Fixed missing auth_required import in maintenance_routes.py
+  - Fixed missing auth_required import in reports_routes.py
+  - Fixed missing auth_required import in scan_routes_parallel.py
+  - Fixed duplicate timezone import in export_routes.py
+
+## [2.4.0] - 2025-09-21
+
+### Added
+- **Complete Authentication System**
+  - User authentication with secure password hashing using bcrypt
+  - Cookie-based session management for web interface
+  - API token authentication for programmatic access
+  - User management interface with create/delete capabilities
+  - Password change functionality
+  - API token management (create/revoke tokens)
+  - First-run admin setup flow
+
+- **Enhanced Security**
+  - All API endpoints now require authentication (cookie or token)
+  - Secure password storage with salted bcrypt hashing
+  - Session management with configurable timeouts
+  - CSRF protection for web forms
+  - API tokens with optional expiration dates
+
+- **User Interface Updates**
+  - Professional login page with PixelProbe branding
+  - Dark/light mode toggle on login page matching main app theme
+  - User management controls in sidebar under Account section
+  - Logout button and current user display
+  - API token management interface
+  - Password change dialog
+
+### Changed
+- **API Access**
+  - All API endpoints now require authentication
+  - Support for both cookie-based (web) and token-based (API) authentication
+  - Backward compatible with API tokens passed as Bearer tokens or query parameters
+
+### Fixed (Post-Implementation)
+- **Authentication System Improvements**
+  - Fixed logout button connection errors when server restarts
+  - Added confirm password dialog for first-run admin setup
+  - Fixed API connection errors on dashboard when session expires
+  - Improved error handling for authentication failures
+  - Fixed token expiration field text cutoff in UI
+  - Added help text explaining tokens never expire by default
+
+- **User Interface Consistency**
+  - Styled all authentication modals to match exclusions/schedule UI
+  - Fixed modal headers to use consistent h3 tags
+  - Applied exclusion-list styling to user and token lists
+  - Updated token creation success dialog to match other modals
+  - Used consistent form-control classes and layouts
+
+### Technical Details
+- New database tables: `users` and `api_tokens`
+- Flask-Login integration for session management
+- bcrypt for password hashing
+- Authentication middleware applied to all protected routes
+- Default admin user created on first run (requires password setup)
+- Automatic database migration on startup for existing installations
+- API tokens never expire by default unless expiration days specified
+
+### Migration Notes
+- Run `python migrations/add_authentication_tables.py` to create auth tables
+- On first run, set admin password through web interface or API
+- Existing deployments will require authentication after upgrade
+
 ## [2.3.5] - 2025-09-19
 
 ### Fixed

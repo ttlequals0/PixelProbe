@@ -43,13 +43,13 @@ class TestBulkReportOperations:
         
         db.session.commit()
     
-    def test_download_multiple_reports_as_zip(self, client, db):
+    def test_download_multiple_reports_as_zip(self, authenticated_client, db):
         """Test downloading multiple reports as ZIP"""
         # Create test data
         self._create_test_reports(db)
         
         # Get available reports
-        response = client.get('/api/scan-reports')
+        response = authenticated_client.get('/api/scan-reports')
         assert response.status_code == 200
         reports = response.json['reports']
         
@@ -57,7 +57,7 @@ class TestBulkReportOperations:
         report_ids = [report['report_id'] for report in reports[:2]]
         
         # Download as ZIP
-        response = client.post('/api/reports/download-multiple', 
+        response = authenticated_client.post('/api/reports/download-multiple', 
                              json={'report_ids': report_ids, 'format': 'zip'})
         
         assert response.status_code == 200
@@ -75,13 +75,13 @@ class TestBulkReportOperations:
                     expected_filename = f"scan_report_{report['report_id']}.json"
                 assert expected_filename in zf.namelist()
     
-    def test_download_multiple_reports_as_pdf(self, client, db):
+    def test_download_multiple_reports_as_pdf(self, authenticated_client, db):
         """Test downloading multiple reports as combined PDF"""
         # Create test data
         self._create_test_reports(db)
         
         # Get available reports
-        response = client.get('/api/scan-reports')
+        response = authenticated_client.get('/api/scan-reports')
         assert response.status_code == 200
         reports = response.json['reports']
         
@@ -89,32 +89,32 @@ class TestBulkReportOperations:
         report_ids = [report['report_id'] for report in reports[:2]]
         
         # Download as PDF
-        response = client.post('/api/reports/download-multiple', 
+        response = authenticated_client.post('/api/reports/download-multiple', 
                              json={'report_ids': report_ids, 'format': 'pdf'})
         
         assert response.status_code == 200
         assert response.content_type == 'application/pdf'
         assert len(response.data) > 0  # PDF should have content
     
-    def test_download_multiple_reports_missing_report_ids(self, client, db):
+    def test_download_multiple_reports_missing_report_ids(self, authenticated_client, db):
         """Test error handling for missing report IDs"""
-        response = client.post('/api/reports/download-multiple', 
+        response = authenticated_client.post('/api/reports/download-multiple', 
                              json={'format': 'zip'})
         
         assert response.status_code == 400
         assert 'report_ids' in response.json['error']
     
-    def test_download_multiple_reports_empty_list(self, client, db):
+    def test_download_multiple_reports_empty_list(self, authenticated_client, db):
         """Test error handling for empty report IDs list"""
-        response = client.post('/api/reports/download-multiple', 
+        response = authenticated_client.post('/api/reports/download-multiple', 
                              json={'report_ids': [], 'format': 'zip'})
         
         assert response.status_code == 400
         assert 'No report IDs provided' in response.json['error']
     
-    def test_download_multiple_reports_invalid_report_ids(self, client, db):
+    def test_download_multiple_reports_invalid_report_ids(self, authenticated_client, db):
         """Test error handling for invalid report IDs"""
-        response = client.post('/api/reports/download-multiple', 
+        response = authenticated_client.post('/api/reports/download-multiple', 
                              json={'report_ids': ['invalid-id-1', 'invalid-id-2'], 'format': 'zip'})
         
         assert response.status_code == 404

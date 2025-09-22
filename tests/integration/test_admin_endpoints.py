@@ -5,10 +5,10 @@ from models import db, ScanSchedule, IgnoredErrorPattern
 class TestScheduleEndpoints:
     """Test schedule management endpoints"""
     
-    def test_create_schedule(self, client, app, db):
+    def test_create_schedule(self, authenticated_client, app, db):
         """Test creating a new schedule"""
         with app.app_context():
-            response = client.post('/api/schedules', 
+            response = authenticated_client.post('/api/schedules', 
                 json={
                     'name': 'Test Schedule',
                     'cron_expression': '0 2 * * *',
@@ -25,7 +25,7 @@ class TestScheduleEndpoints:
             assert schedule is not None
             assert schedule.cron_expression == '0 2 * * *'
     
-    def test_create_schedule_duplicate_name(self, client, app, db):
+    def test_create_schedule_duplicate_name(self, authenticated_client, app, db):
         """Test creating schedule with duplicate name"""
         with app.app_context():
             # Create first schedule
@@ -38,7 +38,7 @@ class TestScheduleEndpoints:
             db.session.commit()
             
             # Try to create duplicate
-            response = client.post('/api/schedules',
+            response = authenticated_client.post('/api/schedules',
                 json={
                     'name': 'Existing Schedule',
                     'cron_expression': '0 2 * * *'
@@ -46,7 +46,7 @@ class TestScheduleEndpoints:
             assert response.status_code == 400
             assert 'already exists' in response.get_json()['error']
     
-    def test_delete_schedule(self, client, app, db):
+    def test_delete_schedule(self, authenticated_client, app, db):
         """Test deleting a schedule"""
         with app.app_context():
             # Create schedule
@@ -60,19 +60,19 @@ class TestScheduleEndpoints:
             schedule_id = schedule.id
             
             # Delete schedule
-            response = client.delete(f'/api/schedules/{schedule_id}')
+            response = authenticated_client.delete(f'/api/schedules/{schedule_id}')
             assert response.status_code == 204
             
             # Verify hard deleted (schedule no longer exists)
             schedule = ScanSchedule.query.get(schedule_id)
             assert schedule is None
     
-    def test_delete_nonexistent_schedule(self, client, db):
+    def test_delete_nonexistent_schedule(self, authenticated_client, db):
         """Test deleting non-existent schedule"""
-        response = client.delete('/api/schedules/99999')
+        response = authenticated_client.delete('/api/schedules/99999')
         assert response.status_code == 404
     
-    def test_get_schedules(self, client, app, db):
+    def test_get_schedules(self, authenticated_client, app, db):
         """Test getting all schedules"""
         with app.app_context():
             # Create test schedules
@@ -95,7 +95,7 @@ class TestScheduleEndpoints:
             db.session.commit()
             
             # Get schedules
-            response = client.get('/api/schedules')
+            response = authenticated_client.get('/api/schedules')
             assert response.status_code == 200
             data = response.get_json()
             
@@ -117,12 +117,12 @@ class TestScheduleEndpoints:
 class TestExclusionEndpoints:
     """Test exclusion management endpoints"""
     
-    def test_add_path_exclusion(self, client, db, app):
+    def test_add_path_exclusion(self, authenticated_client, db, app):
         """Test adding a path exclusion"""
         from models import Exclusion
         
         with app.app_context():
-            response = client.post('/api/exclusions/path',
+            response = authenticated_client.post('/api/exclusions/path',
                 json={'item': '/test/excluded/path'})
             assert response.status_code == 200
             assert 'Path added successfully' in response.get_json()['message']
@@ -135,12 +135,12 @@ class TestExclusionEndpoints:
             assert exclusion is not None
             assert exclusion.is_active is True
     
-    def test_add_extension_exclusion(self, client, db, app):
+    def test_add_extension_exclusion(self, authenticated_client, db, app):
         """Test adding an extension exclusion"""
         from models import Exclusion
         
         with app.app_context():
-            response = client.post('/api/exclusions/extension',
+            response = authenticated_client.post('/api/exclusions/extension',
                 json={'item': '.tmp'})
             assert response.status_code == 200
             assert 'Extension added successfully' in response.get_json()['message']
@@ -153,7 +153,7 @@ class TestExclusionEndpoints:
             assert exclusion is not None
             assert exclusion.is_active is True
     
-    def test_add_duplicate_exclusion(self, client, db, app):
+    def test_add_duplicate_exclusion(self, authenticated_client, db, app):
         """Test adding duplicate exclusion"""
         from models import Exclusion
         
@@ -168,12 +168,12 @@ class TestExclusionEndpoints:
             db.session.commit()
             
             # Try to add duplicate
-            response = client.post('/api/exclusions/path',
+            response = authenticated_client.post('/api/exclusions/path',
                 json={'item': '/existing'})
             assert response.status_code == 400
             assert 'already exists' in response.get_json()['error']
     
-    def test_remove_path_exclusion(self, client, db, app):
+    def test_remove_path_exclusion(self, authenticated_client, db, app):
         """Test removing a path exclusion"""
         from models import Exclusion
         
@@ -188,7 +188,7 @@ class TestExclusionEndpoints:
             db.session.commit()
             
             # Remove exclusion
-            response = client.delete('/api/exclusions/path',
+            response = authenticated_client.delete('/api/exclusions/path',
                 json={'item': '/test/path'})
             assert response.status_code == 200
             assert 'Path removed successfully' in response.get_json()['message']
@@ -201,16 +201,16 @@ class TestExclusionEndpoints:
             assert exclusion is not None
             assert exclusion.is_active is False
     
-    def test_remove_nonexistent_exclusion(self, client, db):
+    def test_remove_nonexistent_exclusion(self, authenticated_client, db):
         """Test removing non-existent exclusion"""
-        response = client.delete('/api/exclusions/path',
+        response = authenticated_client.delete('/api/exclusions/path',
             json={'item': '/nonexistent'})
         assert response.status_code == 404
         assert 'not found' in response.get_json()['error']
     
-    def test_invalid_exclusion_type(self, client, db):
+    def test_invalid_exclusion_type(self, authenticated_client, db):
         """Test invalid exclusion type"""
-        response = client.post('/api/exclusions/invalid',
+        response = authenticated_client.post('/api/exclusions/invalid',
             json={'item': 'test'})
         assert response.status_code == 400
         assert 'Invalid exclusion type' in response.get_json()['error']
@@ -219,10 +219,10 @@ class TestExclusionEndpoints:
 class TestIgnoredPatternsEndpoints:
     """Test ignored patterns endpoints"""
     
-    def test_add_ignored_pattern(self, client, app, db):
+    def test_add_ignored_pattern(self, authenticated_client, app, db):
         """Test adding an ignored pattern"""
         with app.app_context():
-            response = client.post('/api/ignored-patterns',
+            response = authenticated_client.post('/api/ignored-patterns',
                 json={
                     'pattern': 'moov atom not found',
                     'description': 'Test pattern'
@@ -236,7 +236,7 @@ class TestIgnoredPatternsEndpoints:
             assert pattern is not None
             assert pattern.description == 'Test pattern'
     
-    def test_add_duplicate_pattern(self, client, app, db):
+    def test_add_duplicate_pattern(self, authenticated_client, app, db):
         """Test adding duplicate pattern"""
         with app.app_context():
             # Create first pattern
@@ -248,7 +248,7 @@ class TestIgnoredPatternsEndpoints:
             db.session.commit()
             
             # Try to add duplicate
-            response = client.post('/api/ignored-patterns',
+            response = authenticated_client.post('/api/ignored-patterns',
                 json={
                     'pattern': 'duplicate pattern',
                     'description': 'Another pattern'
@@ -256,7 +256,7 @@ class TestIgnoredPatternsEndpoints:
             assert response.status_code == 400
             assert 'already exists' in response.get_json()['error']
     
-    def test_delete_ignored_pattern(self, client, app, db):
+    def test_delete_ignored_pattern(self, authenticated_client, app, db):
         """Test deleting an ignored pattern"""
         with app.app_context():
             # Create pattern
@@ -269,7 +269,7 @@ class TestIgnoredPatternsEndpoints:
             pattern_id = pattern.id
             
             # Delete pattern
-            response = client.delete(f'/api/ignored-patterns/{pattern_id}')
+            response = authenticated_client.delete(f'/api/ignored-patterns/{pattern_id}')
             assert response.status_code == 200
             assert 'deleted successfully' in response.get_json()['message']
             
@@ -278,8 +278,8 @@ class TestIgnoredPatternsEndpoints:
             assert pattern is not None
             assert pattern.is_active is False
     
-    def test_delete_nonexistent_pattern(self, client, db):
+    def test_delete_nonexistent_pattern(self, authenticated_client, db):
         """Test deleting non-existent pattern"""
-        response = client.delete('/api/ignored-patterns/99999')
+        response = authenticated_client.delete('/api/ignored-patterns/99999')
         assert response.status_code == 404
         assert 'not found' in response.get_json()['error']

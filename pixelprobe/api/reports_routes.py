@@ -10,6 +10,7 @@ import pytz
 
 from models import db, ScanReport
 from pixelprobe.utils.security import validate_json_input
+from auth import auth_required
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +411,7 @@ def generate_pdf_report(scan_type, scan_id):
         return jsonify({'error': f'Failed to generate PDF: {str(e)}'}), 500
 
 @reports_bp.route('/scan-reports/<report_id>/pdf')
+@auth_required
 def export_scan_report_pdf(report_id):
     """Export scan report as PDF for compliance"""
     report = ScanReport.query.filter_by(report_id=report_id).first()

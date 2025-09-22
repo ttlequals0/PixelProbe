@@ -6,12 +6,13 @@ This is a demonstration of how app.py would look with the new modular architectu
 import os
 import logging
 from datetime import datetime, timezone
-from flask import Flask, jsonify, send_file, render_template, request
+from flask import Flask, jsonify, send_file, render_template, request, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
+from flask_login import login_required, current_user
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -28,6 +29,10 @@ from pixelprobe.api.export_routes import export_bp
 from pixelprobe.api.maintenance_routes import maintenance_bp
 from pixelprobe.api.reports_routes import reports_bp
 from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
+from pixelprobe.api.auth_routes import auth_bp
+
+# Import authentication module
+from auth import init_auth, auth_required
 
 # Import OpenAPI/Swagger documentation
 try:
@@ -85,6 +90,9 @@ if os.environ.get('DATABASE_URL'):
 # Initialize extensions
 db.init_app(app)
 
+# Initialize authentication
+init_auth(app)
+
 # P1 Implementation: Initialize Celery task queue
 from celery_config import create_celery, init_celery
 celery = create_celery(app)
@@ -132,6 +140,7 @@ csrf.exempt(admin_bp)
 csrf.exempt(export_bp)
 csrf.exempt(maintenance_bp)
 csrf.exempt(reports_bp)
+csrf.exempt(auth_bp)  # Exempt auth endpoints from CSRF
 
 # Initialize scheduler
 scheduler = MediaScheduler()
@@ -157,13 +166,32 @@ def init_services():
     app.config_repository = ConfigurationRepository()
 
 # Register blueprints
+app.register_blueprint(auth_bp)  # Register auth blueprint first
+
+# Import auth decorator wrapper
+from pixelprobe.api.auth_decorator import apply_auth_to_blueprint
+
+# Register and protect API blueprints
 app.register_blueprint(scan_bp)
+apply_auth_to_blueprint(scan_bp)
+
 app.register_blueprint(stats_bp)
+apply_auth_to_blueprint(stats_bp)
+
 app.register_blueprint(admin_bp)
+apply_auth_to_blueprint(admin_bp)
+
 app.register_blueprint(export_bp)
+apply_auth_to_blueprint(export_bp)
+
 app.register_blueprint(maintenance_bp)
+apply_auth_to_blueprint(maintenance_bp)
+
 app.register_blueprint(reports_bp)
+apply_auth_to_blueprint(reports_bp)
+
 app.register_blueprint(parallel_scan_bp)
+apply_auth_to_blueprint(parallel_scan_bp)
 
 # Register Swagger blueprint if available
 if SWAGGER_AVAILABLE:
@@ -183,15 +211,16 @@ set_scheduler(scheduler)
 
 # Basic routes that remain in app.py
 @app.route('/')
+@login_required
 def index():
     """Serve the main application page"""
-    return render_template('index.html', version=__version__, github_url=__github_url__)
+    return render_template('index.html', version=__version__, github_url=__github_url__, user=current_user)
 
 @app.route('/api-docs')
+@login_required
 def api_docs():
     """Redirect to Swagger UI documentation"""
     if SWAGGER_AVAILABLE:
-        from flask import redirect
         return redirect('/api/v1/docs')
     else:
         # Fallback to old documentation if Swagger not available
@@ -208,6 +237,7 @@ def health_check():
     })
 
 @app.route('/api/version')
+@auth_required
 def get_version():
     """Get application version"""
     logger.info("Version information requested")
@@ -348,7 +378,15 @@ def migrate_database():
         logger.info("Startup migrations completed successfully")
     except Exception as e:
         logger.error(f"Startup migration failed: {e}")
-    
+
+    # Run authentication tables migration for v2.4.0
+    logger.info("Checking authentication tables...")
+    try:
+        run_auth_migration()
+        logger.info("Authentication tables verified")
+    except Exception as e:
+        logger.error(f"Authentication migration failed: {e}")
+
     # Test v2.2.62 migration
     logger.info("Running v2.2.62 migration...")
     try:
@@ -369,6 +407,74 @@ def migrate_database():
         logger.error(f"Failed to create performance indexes: {e}")
     
     logger.info("Database initialization completed")
+
+def run_auth_migration():
+    """Run authentication tables migration for v2.4.0"""
+    from sqlalchemy import text, inspect
+
+    try:
+        # Check if tables already exist
+        inspector = inspect(db.engine)
+        existing_tables = inspector.get_table_names()
+
+        with db.engine.connect() as conn:
+            # Create users table if it doesn't exist
+            if 'users' not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        username VARCHAR(80) UNIQUE NOT NULL,
+                        email VARCHAR(120) UNIQUE NOT NULL,
+                        password_hash VARCHAR(128) NOT NULL,
+                        is_admin BOOLEAN NOT NULL DEFAULT TRUE,
+                        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        last_login TIMESTAMP WITH TIME ZONE,
+                        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                        first_setup_required BOOLEAN NOT NULL DEFAULT FALSE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"))
+                logger.info("Created users table via migration")
+
+            # Create API tokens table if it doesn't exist
+            if 'api_tokens' not in existing_tables:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS api_tokens (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        token VARCHAR(64) UNIQUE NOT NULL,
+                        description VARCHAR(200),
+                        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        last_used TIMESTAMP WITH TIME ZONE,
+                        expires_at TIMESTAMP WITH TIME ZONE,
+                        is_active BOOLEAN NOT NULL DEFAULT TRUE
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id)"))
+                logger.info("Created api_tokens table via migration")
+
+            # Check if any users exist (only if table exists)
+            if 'users' in existing_tables or 'users' in inspector.get_table_names():
+                result = conn.execute(text("SELECT COUNT(*) FROM users"))
+                user_count = result.scalar()
+            else:
+                user_count = 0
+
+            if user_count == 0 and 'users' in inspector.get_table_names():
+                # Create a default admin user that requires setup on first login
+                conn.execute(text("""
+                    INSERT INTO users (username, email, password_hash, is_admin, first_setup_required, created_at, is_active)
+                    VALUES ('admin', 'admin@pixelprobe.local', '', TRUE, TRUE, CURRENT_TIMESTAMP, TRUE)
+                """))
+                logger.info("Created default admin user (password setup required on first login)")
+
+            conn.commit()
+
+    except Exception as e:
+        # Don't fail startup if migration issues
+        logger.warning(f"Authentication migration encountered issues: {e}")
 
 def run_v2_2_90_migrations():
     """Run migrations for v2.2.90 - fix deep_scan column constraint"""

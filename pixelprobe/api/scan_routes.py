@@ -8,9 +8,10 @@ from pixelprobe.utils.timezone import from_utc_to_configured
 from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
 from version import __version__
+from auth import auth_required
 
 from pixelprobe.utils.security import (
-    validate_file_path, validate_directory_path, 
+    validate_file_path, validate_directory_path,
     PathTraversalError, AuditLogger, validate_json_input
 )
 # Remove direct limiter imports as we'll use decorators
@@ -172,6 +173,7 @@ def is_scan_running():
     return False
 
 @scan_bp.route('/scan-results')
+@auth_required
 def get_scan_results():
     """Get paginated scan results with optional filters"""
     page = request.args.get('page', 1, type=int)
@@ -288,6 +290,7 @@ def get_scan_results():
     })
 
 @scan_bp.route('/scan-results/<int:result_id>')
+@auth_required
 def get_scan_result(result_id):
     """Get a single scan result by ID"""
     result = ScanResult.query.get_or_404(result_id)
@@ -314,6 +317,7 @@ def get_scan_result(result_id):
 
 @scan_bp.route('/scan-file', methods=['POST'])
 @rate_limit("5 per minute")
+@auth_required
 @validate_json_input({
     'file_path': {'required': True, 'type': str, 'max_length': 1000}
 })
@@ -379,6 +383,7 @@ def scan_file():
 @scan_bp.route('/scan', methods=['POST', 'OPTIONS'])  # Main scan endpoint
 @scan_bp.route('/scan-all', methods=['POST', 'OPTIONS'])  # Deprecated - kept for backward compatibility
 @rate_limit("2 per minute")
+@auth_required
 @validate_json_input({
     'force_rescan': {'required': False, 'type': bool},
     'directories': {'required': False, 'type': list}
@@ -484,6 +489,7 @@ def scan_all():
 
 @scan_bp.route('/scan-status')
 @exempt_from_rate_limit
+@auth_required
 def get_scan_status():
     """Get current scan status and progress"""
     # Get progress from scan service
@@ -689,7 +695,7 @@ def get_scan_status():
                             eta_seconds = round(eta_seconds / 300) * 300
                         
                         eta_time = current_time.timestamp() + eta_seconds
-                        eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
+                        eta = datetime.fromtimestamp(eta_time, tz=timezone.utc).isoformat()
                         logger.debug(f"ETA calculated (known total): {eta}, smoothed from {remaining_files / files_per_second:.1f}s")
                     elif current_phase in ['discovering', 'adding'] and current_progress > 10:
                         # During discovery/adding, estimate based on typical scan sizes
@@ -709,7 +715,7 @@ def get_scan_status():
                         else:
                             eta_seconds = round(eta_seconds / 300) * 300
                         eta_time = current_time.timestamp() + eta_seconds
-                        eta = datetime.fromtimestamp(eta_time, tz=tz).isoformat()
+                        eta = datetime.fromtimestamp(eta_time, tz=timezone.utc).isoformat()
                         logger.debug(f"ETA calculated (estimated): {eta}")
         except Exception as e:
             logger.warning(f"Could not calculate ETA: {e}")
@@ -1336,6 +1342,7 @@ def reset_incomplete_scans():
 
 @scan_bp.route('/diagnose-incomplete-scans', methods=['GET'])
 @rate_limit("5 per minute")
+@auth_required
 def diagnose_incomplete_scans():
     """Diagnose why files show as healthy but have N/A scan details
     
@@ -1392,6 +1399,7 @@ def diagnose_incomplete_scans():
 
 @scan_bp.route('/worker-status')
 @exempt_from_rate_limit
+@auth_required
 def get_worker_status():
     """Get Celery worker status and information"""
     try:
@@ -1439,6 +1447,7 @@ def get_worker_status():
         })
 
 @scan_bp.route('/scan-output/<int:result_id>')
+@auth_required
 def get_scan_output(result_id):
     """Get the detailed scan output for a specific result"""
     result = ScanResult.query.get_or_404(result_id)

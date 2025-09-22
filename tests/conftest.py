@@ -11,7 +11,7 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 
 # Import models first to ensure they're registered with SQLAlchemy
-from models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport, Exclusion
+from models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport, Exclusion, User, APIToken
 
 # Import models to ensure they're available
 from models import ScanState, ScanResult
@@ -41,6 +41,10 @@ def create_test_app():
     _db.init_app(test_app)
     CORS(test_app)
     csrf = CSRFProtect(test_app)
+
+    # Initialize authentication
+    from auth import init_auth
+    init_auth(test_app)
     
     # Import and register blueprints
     from pixelprobe.api.scan_routes import scan_bp
@@ -50,9 +54,11 @@ def create_test_app():
     from pixelprobe.api.maintenance_routes import maintenance_bp
     from pixelprobe.api.reports_routes import reports_bp
     from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
+    from pixelprobe.api.auth_routes import auth_bp
     from scheduler import MediaScheduler
-    
+
     test_app.register_blueprint(scan_bp)
+    test_app.register_blueprint(auth_bp)
     test_app.register_blueprint(stats_bp)
     test_app.register_blueprint(admin_bp)
     test_app.register_blueprint(export_bp)
@@ -68,6 +74,7 @@ def create_test_app():
     csrf.exempt(maintenance_bp)
     csrf.exempt(reports_bp)
     csrf.exempt(parallel_scan_bp)
+    csrf.exempt(auth_bp)
     
     # Set up scheduler without initializing (to avoid DB access before tables exist)
     scheduler = MediaScheduler()
@@ -118,6 +125,37 @@ def app():
 def client(app):
     """Create a test client"""
     return app.test_client()
+
+@pytest.fixture(scope='function')
+def authenticated_client(app, client):
+    """Create an authenticated test client with a test user"""
+    with app.app_context():
+        from models import db, User
+        db.create_all()
+
+        # Create a test admin user
+        test_user = User(
+            username='testadmin',
+            email='testadmin@test.com',
+            is_admin=True
+        )
+        test_user.set_password('testpass123')
+
+        # Clear and add user
+        try:
+            User.query.filter_by(username='testadmin').delete()
+            db.session.commit()
+        except:
+            db.session.rollback()
+
+        db.session.add(test_user)
+        db.session.commit()
+
+        # Login the user
+        client.post('/api/auth/login',
+                   json={'username': 'testadmin', 'password': 'testpass123'})
+
+    return client
 
 @pytest.fixture(scope='function')
 def db(app):

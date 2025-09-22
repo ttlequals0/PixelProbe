@@ -8,7 +8,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.3.3** - Critical scheduler reliability fixes and stuck scan prevention.
+**Version 2.4.1** - Enhanced authentication with Swagger UI support and security fixes.
 
 ### Why PixelProbe?
 
@@ -18,24 +18,36 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Professional Grade**: Uses industry-standard tools (FFmpeg, ImageMagick) for accurate detection
 - **Set and Forget**: Schedule automated scans to continuously monitor your media health
 
-## 🚀 What's New in Version 2.3.3
+## 🚀 What's New in Version 2.4.1
 
-### 🎯 Scheduler Reliability Overhaul
-- **Fixed Next Run Updates**: Scheduled tasks now properly update their next execution time after running
-- **Single Scheduler Instance**: Implemented file-based locking to prevent multiple scheduler instances in production
-- **No More Duplicate Executions**: Eliminates duplicate scheduled scans that were running simultaneously
+### 🔒 Authentication Enhancements
+- **Universal API Protection**: ALL API endpoints now require authentication
+- **Swagger UI Compatibility**: Fixed Bearer token handling for Swagger UI testing
+- **Flexible Token Format**: Supports both `Bearer <token>` and direct token formats
+- **Security Hardening**: Enforced authentication across entire API surface
 
-### 🛡️ Stuck Scan Prevention & Recovery
-- **Automatic Detection**: Scans stuck for 30+ minutes are automatically detected and marked as crashed
-- **Large File Support**: Extended timeout accounts for 50GB+ files that can take 26+ minutes to scan
-- **Periodic Health Checks**: System checks for stuck scans every 5 minutes
-- **Clean Recovery**: Prevents indefinite blocking of the scan system
+## 📦 Version 2.4.0 Features
 
-### 🔧 Technical Improvements
-- **File-based Locking**: Uses fcntl exclusive lock on `/tmp/pixelprobe_scheduler.lock`
-- **Extended API Timeouts**: Increased scheduler->API timeouts from 30s to 60s
-- **Test Suite Fixes**: Fixed SQLite concurrency issues in test suite
-- **All Scan Types Working**: Normal, orphan, and file_changes scans all work reliably as scheduled
+### 🔐 Complete Authentication System
+- **User Management**: Create and manage multiple user accounts with admin privileges
+- **Secure Login**: Session-based authentication with remember me functionality
+- **Password Security**: Bcrypt hashing with minimum 8 character passwords
+- **API Tokens**: Generate and manage API tokens for programmatic access
+- **Token Expiration**: Optional token expiration with configurable lifetime
+- **Password Changes**: Users can securely change their passwords
+- **First-Run Setup**: Automatic setup wizard for initial admin account
+
+### 🛡️ Security Features
+- **Session Management**: Secure cookie-based sessions with httpOnly and sameSite protection
+- **CSRF Protection**: Cross-site request forgery protection on all forms
+- **API Authentication**: Bearer token authentication for API endpoints
+- **Access Control**: Admin-only access to user management features
+- **Automatic Logout**: Configurable session timeout for security
+
+### 📊 Previous Updates (v2.3.3)
+- **Scheduler Reliability**: Fixed scheduled task execution and prevented duplicates
+- **Stuck Scan Prevention**: Automatic detection and recovery from stuck scans
+- **Large File Support**: Extended timeouts for 50GB+ file scanning
 
 ## ✨ Features
 
@@ -73,31 +85,77 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - Redis-backed task queue for background processing
 - Celery worker pool for distributed scanning
 - Docker deployment with multi-container architecture
-- Comprehensive API for automation
+- Comprehensive REST API with OpenAPI documentation
 - Detailed system statistics and monitoring
 
+### Security & Authentication
+- Multi-user support with role-based access control
+- Secure password storage with bcrypt hashing
+- API token authentication for programmatic access
+- Session-based web authentication with CSRF protection
+- First-run setup wizard for initial configuration
+- Audit logging for security events
+
 ## 📸 Screenshots
+
+### Authentication & User Management
+
+#### Login Screen
+![Login Screen](docs/screenshots/auth/login.png)
+
+Secure login interface with:
+- Username/password authentication
+- Remember me functionality
+- Dark mode support
+- First-run setup detection
+
+#### User Management
+![User Management](docs/screenshots/auth/user_management.png)
+
+Comprehensive user administration:
+- Create new users with email and admin privileges
+- View and manage existing users
+- Delete user accounts (admin only)
+- Role-based access control
+
+#### API Token Management
+![API Tokens](docs/screenshots/auth/api_tokens.png)
+
+Programmatic access management:
+- Generate API tokens with descriptions
+- Optional expiration dates
+- View and revoke existing tokens
+- Bearer token authentication
+
+#### Password Management
+![Change Password](docs/screenshots/auth/change_password.png)
+
+Secure password changes:
+- Current password verification
+- New password confirmation
+- Minimum 8 character requirement
+- Bcrypt hashing for security
 
 ### Desktop Interface
 
 #### Light Mode
 ![Desktop Light Mode](docs/screenshots/desktop-light.png)
 
-The modern desktop interface features:
-- Modern design with clean, professional aesthetics
-- Sidebar navigation for easy access to all features
-- Real-time statistics dashboard showing file health status
-- Advanced filtering and search capabilities
-- Bulk action support for managing multiple files
+Features visible in the interface:
+- **Statistics Dashboard**: Real-time display of 1M+ scanned files with health status
+- **Sidebar Navigation**: Quick access to Dashboard, API Documentation, Tools (Start Scan, Cleanup, Check Changes, Schedules, Exclusions), System (Stats, Reports, Build Info), and Account (User Management, API Tokens, Change Password)
+- **File Results Table**: Sortable columns for status, file path, size, type, scan date with bulk actions
+- **Filtering Options**: All Files, Corrupted Only, Warnings Only, Healthy Only
+- **Action Buttons**: Mark as Good, Rescan, Download, Export functionality
 
 #### Dark Mode
 ![Desktop Dark Mode](docs/screenshots/desktop-dark.png)
 
-PixelProbe includes a sophisticated dark mode:
-- High contrast design optimized for low-light environments
-- Consistent color scheme across all UI elements
-- Smooth theme transitions
-- Automatic theme persistence
+Dark mode features:
+- **High Contrast Theme**: Green accent colors for better visibility in low-light environments
+- **Full Feature Parity**: All light mode features available with optimized dark color scheme
+- **Persistent Theme**: Settings toggle remembers preference across sessions
+- **Account Section**: Shows logged-in user (admin) with logout option
 
 ### Mobile Interface
 
@@ -163,16 +221,21 @@ Create and manage automated scan schedules:
 4. **Access the web interface**:
    Open http://localhost:5001 in your browser
 
-5. **Start scanning**:
-   Click "Scan All Files" to begin analyzing your media library
+5. **Initial Setup**:
+   - On first run, you'll be prompted to create an admin account
+   - Enter a secure password (minimum 8 characters)
+   - The system will automatically create the admin user
+
+6. **Start scanning**:
+   - After login, click "Scan All Files" to begin analyzing your media library
+   - Configure exclusions and schedules as needed
 
 ### Docker Image Versions
 
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.3.3)
-- **`ttlequals0/pixelprobe:2.3.3`** - Critical scheduler fixes and stuck scan prevention
-- **`ttlequals0/pixelprobe:2.2.87`** - Ubuntu 24.04 with modern media tools
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.4.0)
+- **`ttlequals0/pixelprobe:2.4.0`** - Complete authentication system with user management
 
 ## 📦 Requirements
 
@@ -198,7 +261,7 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
          - postgres_data:/var/lib/postgresql/data
    
      mediachecker:
-       image: ttlequals0/pixelprobe:2.3.3
+       image: ttlequals0/pixelprobe:2.4.0
        environment:
          POSTGRES_HOST: postgres
          POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -216,7 +279,7 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
      -v "/path/to/instance/pixelprobe.db:/app/pixelprobe.db:ro" \
      -e POSTGRES_HOST=postgres \
      -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
-     ttlequals0/pixelprobe:2.3.3 \
+     ttlequals0/pixelprobe:2.4.0 \
      python migrate_to_postgres.py --sqlite-path /app/pixelprobe.db
    ```
 
@@ -294,20 +357,112 @@ export MEDIA_PATH=/mnt/all-media  # Contains subdirs: movies/, tv/, backup/
 6. **Schedules**: Manage automated scan schedules with multiple scan types
 7. **Exclusions**: Interactive management of paths and extensions to exclude
 
-### API Endpoints
+### API Documentation
 
-The application provides REST API endpoints for automation:
+PixelProbe provides a comprehensive REST API with OpenAPI/Swagger documentation.
 
+#### Interactive API Documentation
+- **Swagger UI**: Available at `/api/v1/docs` when logged in
+- **OpenAPI Spec**: Full API specification with request/response schemas
+- **Try it out**: Test endpoints directly from the documentation
+
+#### Authentication Endpoints
+- `GET /api/auth/status` - Check authentication status
+- `POST /api/auth/login` - User login
+- `POST /api/auth/logout` - User logout
+- `POST /api/auth/setup` - First-run admin setup
+- `GET /api/auth/users` - List all users (admin only)
+- `POST /api/auth/users` - Create new user (admin only)
+- `DELETE /api/auth/users/{id}` - Delete user (admin only)
+- `PUT /api/auth/users/{id}/password` - Change user password
+- `GET /api/auth/tokens` - List user's API tokens
+- `POST /api/auth/tokens` - Create new API token
+- `DELETE /api/auth/tokens/{id}` - Revoke API token
+
+#### Scanning Endpoints
 - `GET /api/stats` - Get scanning statistics
-- `GET /api/scan-results` - Get paginated scan results
-- `POST /api/scan-all` - Start a full scan
-- `POST /api/scan-file` - Scan a specific file
-- `GET /api/schedules` - List all scan schedules
-- `POST /api/schedules` - Create a new scan schedule
-- `GET /api/exclusions` - Get current exclusions
-- `PUT /api/exclusions` - Update exclusions
+- `GET /api/scan-results` - Get paginated scan results with filtering
+- `POST /api/scan` - Start a directory scan
+- `POST /api/scan/parallel` - Start parallel scan with Celery
+- `GET /api/scan-status` - Get current scan progress
+- `POST /api/cancel-scan` - Cancel running scan
+- `POST /api/rescan-file` - Rescan specific file
+- `POST /api/deep-scan` - Perform deep analysis
 
-See [API Documentation](docs/api/README.md) for complete reference.
+#### Maintenance Endpoints
+- `POST /api/cleanup` - Remove orphaned database entries
+- `GET /api/cleanup-status` - Get cleanup operation status
+- `POST /api/file-changes` - Detect file system changes
+- `GET /api/file-changes-status` - Get file changes scan status
+- `POST /api/reset-for-rescan` - Reset files for rescanning
+- `POST /api/reset-files-by-path` - Reset specific files by path
+
+#### Schedule Management
+- `GET /api/schedules` - List all scan schedules
+- `POST /api/schedules` - Create new schedule
+- `PUT /api/schedules/{id}` - Update schedule
+- `DELETE /api/schedules/{id}` - Delete schedule
+- `GET /api/schedule-types` - Get available schedule types
+
+#### System Configuration
+- `GET /api/exclusions` - Get path and extension exclusions
+- `PUT /api/exclusions` - Update exclusions
+- `GET /api/ignored-errors` - Get ignored error patterns
+- `POST /api/ignored-errors` - Add ignored error pattern
+- `DELETE /api/ignored-errors/{id}` - Remove error pattern
+
+#### Data Export
+- `POST /api/export` - Export scan results (CSV, JSON, Excel)
+- `GET /api/reports` - List generated reports
+- `GET /api/reports/{filename}` - Download specific report
+
+### API Authentication
+
+#### Session Authentication (Web UI)
+```javascript
+// Login via web form
+fetch('/api/auth/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+        username: 'admin',
+        password: 'your_password'
+    }),
+    credentials: 'include'
+});
+```
+
+#### Bearer Token Authentication (API)
+```python
+import requests
+
+# Create API token via web UI or API
+headers = {
+    'Authorization': 'Bearer your_api_token_here'
+}
+
+# Make authenticated API request
+response = requests.get(
+    'http://localhost:5000/api/stats',
+    headers=headers
+)
+```
+
+#### cURL Examples
+```bash
+# Login and get session cookie
+curl -X POST http://localhost:5000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"password"}' \
+  -c cookies.txt
+
+# Use session cookie for requests
+curl http://localhost:5000/api/stats -b cookies.txt
+
+# Or use API token
+curl http://localhost:5000/api/stats \
+  -H "Authorization: Bearer your_api_token_here"
+```
 
 ### Command Line Usage
 

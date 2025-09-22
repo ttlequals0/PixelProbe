@@ -12,7 +12,7 @@ from models import db, ScanState, ScanResult, ScanChunk
 class TestScanExecution:
     """Test actual scan execution, not just endpoint availability"""
     
-    def test_scan_can_start_when_no_active_scan(self, client, app, db, test_data_dir):
+    def test_scan_can_start_when_no_active_scan(self, authenticated_client, app, db, test_data_dir):
         """Test that a scan can start when no scan is active"""
         with app.app_context():
             # Ensure no active scans
@@ -20,7 +20,7 @@ class TestScanExecution:
             db.session.commit()
             
             # Try to start a scan with an actual test directory
-            response = client.post('/api/scan-all', 
+            response = authenticated_client.post('/api/scan-all', 
                                   json={'directories': [test_data_dir['test_dir']], 'force_rescan': False})
             
             # Should succeed (200) or return that Celery is not available (503)
@@ -31,7 +31,7 @@ class TestScanExecution:
                 data = response.get_json()
                 assert 'scan_id' in data or 'message' in data
     
-    def test_scan_prevents_concurrent_execution(self, client, app, db, test_data_dir):
+    def test_scan_prevents_concurrent_execution(self, authenticated_client, app, db, test_data_dir):
         """Test that only one scan can run at a time"""
         with app.app_context():
             # Create an active scan
@@ -44,7 +44,7 @@ class TestScanExecution:
             db.session.commit()
             
             # Try to start another scan
-            response = client.post('/api/scan-all',
+            response = authenticated_client.post('/api/scan-all',
                                   json={'directories': [test_data_dir['test_dir']]})
             
             # Should return 409 Conflict
@@ -53,7 +53,7 @@ class TestScanExecution:
             assert 'error' in data
             assert 'already in progress' in data['error'].lower()
     
-    def test_stale_scan_detection_and_cleanup(self, client, app, db, test_data_dir):
+    def test_stale_scan_detection_and_cleanup(self, authenticated_client, app, db, test_data_dir):
         """Test that stale scans are detected and can be cleaned up"""
         with app.app_context():
             from datetime import datetime, timezone, timedelta
@@ -71,7 +71,7 @@ class TestScanExecution:
             
             # The scan should be detected as stale and allow a new scan
             # OR there should be an endpoint to force-clear stale scans
-            response = client.post('/api/stuck-scan-recovery')
+            response = authenticated_client.post('/api/stuck-scan-recovery')
             
             if response.status_code == 200:
                 # Recovery endpoint exists
@@ -79,11 +79,11 @@ class TestScanExecution:
                 assert 'cleaned' in data or 'message' in data
                 
                 # Now a new scan should be able to start
-                response = client.post('/api/scan-all',
+                response = authenticated_client.post('/api/scan-all',
                                       json={'directories': [test_data_dir['test_dir']]})
                 assert response.status_code in [200, 503]
     
-    def test_scan_cancel_actually_stops_scan(self, client, app, db, test_data_dir):
+    def test_scan_cancel_actually_stops_scan(self, authenticated_client, app, db, test_data_dir):
         """Test that cancel-scan actually stops the running scan"""
         with app.app_context():
             # Create an active scan
@@ -96,7 +96,7 @@ class TestScanExecution:
             db.session.commit()
             
             # Cancel the scan
-            response = client.post('/api/cancel-scan')
+            response = authenticated_client.post('/api/cancel-scan')
             assert response.status_code == 200
             
             # Verify scan is no longer active
@@ -105,11 +105,11 @@ class TestScanExecution:
             assert scan.is_active is False
             
             # Now a new scan should be able to start
-            response = client.post('/api/scan-all',
+            response = authenticated_client.post('/api/scan-all',
                                   json={'directories': [test_data_dir['test_dir']]})
             assert response.status_code in [200, 503]
     
-    def test_scan_phase_transitions(self, client, app, db, test_data_dir):
+    def test_scan_phase_transitions(self, authenticated_client, app, db, test_data_dir):
         """Test that scan phases transition correctly"""
         with app.app_context():
             # Create a scan in discovering phase
@@ -124,7 +124,7 @@ class TestScanExecution:
             db.session.commit()
             
             # Check scan status
-            response = client.get('/api/scan-status')
+            response = authenticated_client.get('/api/scan-status')
             assert response.status_code == 200
             data = response.get_json()
             assert data['phase'] == 'discovering'
@@ -137,7 +137,7 @@ class TestScanExecution:
             })
             db.session.commit()
             
-            response = client.get('/api/scan-status')
+            response = authenticated_client.get('/api/scan-status')
             assert response.status_code == 200
             data = response.get_json()
             assert data['phase'] == 'adding'
@@ -148,7 +148,7 @@ class TestScanExecution:
             })
             db.session.commit()
             
-            response = client.get('/api/scan-status')
+            response = authenticated_client.get('/api/scan-status')
             assert response.status_code == 200
             data = response.get_json()
             assert data['phase'] == 'scanning'
@@ -161,11 +161,11 @@ class TestScanExecution:
             db.session.commit()
             
             # Now a new scan should be able to start
-            response = client.post('/api/scan-all',
+            response = authenticated_client.post('/api/scan-all',
                                   json={'directories': [test_data_dir['test_dir']]})
             assert response.status_code in [200, 503]
     
-    def test_scan_parallel_endpoint_execution(self, client, app, db, test_data_dir):
+    def test_scan_parallel_endpoint_execution(self, authenticated_client, app, db, test_data_dir):
         """Test the parallel scan endpoint can actually execute"""
         with app.app_context():
             # Ensure no active scans
@@ -173,7 +173,7 @@ class TestScanExecution:
             db.session.commit()
             
             # Try parallel scan
-            response = client.post('/api/scan-parallel',
+            response = authenticated_client.post('/api/scan-parallel',
                                   json={'directories': [test_data_dir['test_dir']], 'num_workers': 2})
             
             # Should work or indicate Celery not available
@@ -183,7 +183,7 @@ class TestScanExecution:
                 data = response.get_json()
                 assert 'scan_id' in data or 'message' in data
     
-    def test_scan_parallel_v2_endpoint_execution(self, client, app, db, test_data_dir):
+    def test_scan_parallel_v2_endpoint_execution(self, authenticated_client, app, db, test_data_dir):
         """Test the enhanced parallel scan v2 endpoint"""
         with app.app_context():
             # Ensure no active scans
@@ -191,7 +191,7 @@ class TestScanExecution:
             db.session.commit()
             
             # Try parallel scan v2
-            response = client.post('/api/scan-parallel-v2',
+            response = authenticated_client.post('/api/scan-parallel-v2',
                                   json={'directories': [test_data_dir['test_dir']]})
             
             # Should work or indicate Celery not available
@@ -203,7 +203,7 @@ class TestScanExecution:
                 assert 'scan_type' in data
                 assert data['scan_type'] == 'parallel_v2'
     
-    def test_pending_scan_execution(self, client, app, db):
+    def test_pending_scan_execution(self, authenticated_client, app, db):
         """Test that pending file scans can execute"""
         with app.app_context():
             # Create some pending files
@@ -220,7 +220,7 @@ class TestScanExecution:
             db.session.commit()
             
             # Start pending scan
-            response = client.post('/api/force-scan-pending')
+            response = authenticated_client.post('/api/force-scan-pending')
             
             # Should work or indicate no pending files
             assert response.status_code in [200, 404, 503]
@@ -229,7 +229,7 @@ class TestScanExecution:
                 data = response.get_json()
                 assert 'message' in data or 'scan_id' in data
     
-    def test_file_changes_scan_execution(self, client, app, db):
+    def test_file_changes_scan_execution(self, authenticated_client, app, db):
         """Test that file changes scan can execute"""
         with app.app_context():
             # Ensure no active scans
@@ -237,7 +237,7 @@ class TestScanExecution:
             db.session.commit()
             
             # Start file changes scan
-            response = client.post('/api/check-file-changes')
+            response = authenticated_client.post('/api/check-file-changes')
             
             # Should work or return appropriate status
             assert response.status_code in [200, 404, 503]
@@ -246,7 +246,7 @@ class TestScanExecution:
                 data = response.get_json()
                 assert 'message' in data or 'task_id' in data
     
-    def test_orphan_cleanup_execution(self, client, app, db):
+    def test_orphan_cleanup_execution(self, authenticated_client, app, db):
         """Test that orphan cleanup can execute"""
         with app.app_context():
             # Ensure no active scans  
@@ -254,7 +254,7 @@ class TestScanExecution:
             db.session.commit()
             
             # Start orphan cleanup
-            response = client.post('/api/cleanup-orphaned')
+            response = authenticated_client.post('/api/cleanup-orphaned')
             
             # Should work or return appropriate status
             assert response.status_code in [200, 503]
@@ -267,7 +267,7 @@ class TestScanExecution:
 class TestScanStateRecovery:
     """Test scan state recovery mechanisms"""
     
-    def test_stuck_scan_recovery_endpoint(self, client, app, db):
+    def test_stuck_scan_recovery_endpoint(self, authenticated_client, app, db):
         """Test that stuck scan recovery endpoint works"""
         with app.app_context():
             from datetime import datetime, timezone, timedelta
@@ -289,7 +289,7 @@ class TestScanStateRecovery:
             app.scan_service.current_scan_thread = None
             
             # Try recovery
-            response = client.post('/api/recover-stuck-scan')
+            response = authenticated_client.post('/api/recover-stuck-scan')
             assert response.status_code == 200
             
             data = response.get_json()
@@ -305,7 +305,7 @@ class TestScanStateRecovery:
                 # since the endpoint's stuck detection logic may vary
                 assert 'No stuck scan detected' in data.get('message', '')
     
-    def test_force_cleanup_endpoint(self, client, app, db, test_data_dir):
+    def test_force_cleanup_endpoint(self, authenticated_client, app, db, test_data_dir):
         """Test force cleanup of all active scans"""
         with app.app_context():
             # Create multiple active scans (shouldn't happen but test recovery)
@@ -319,7 +319,7 @@ class TestScanStateRecovery:
             db.session.commit()
             
             # Force cleanup
-            response = client.post('/api/force-cleanup-scans')
+            response = authenticated_client.post('/api/force-cleanup-scans')
             
             # Should succeed or endpoint might not exist
             if response.status_code == 200:
@@ -328,6 +328,6 @@ class TestScanStateRecovery:
                 assert active_scans == 0
                 
                 # New scan should be able to start
-                response = client.post('/api/scan-all',
+                response = authenticated_client.post('/api/scan-all',
                                       json={'directories': [test_data_dir['test_dir']]})
                 assert response.status_code in [200, 503]

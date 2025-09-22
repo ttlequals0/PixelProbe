@@ -1,9 +1,12 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask_sqlalchemy import SQLAlchemy
 import json
 import uuid
 import logging
 import os
+import bcrypt
+import secrets
+from flask_login import UserMixin
 
 
 logger = logging.getLogger(__name__)
@@ -669,3 +672,109 @@ class ScanReport(db.Model):
             'scan_id': self.scan_id,
             'created_at': convert_to_tz(self.created_at)
         }
+
+
+class User(UserMixin, db.Model):
+    __tablename__ = 'users'
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    email = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(128), nullable=False)
+    is_admin = db.Column(db.Boolean, nullable=False, default=True)  # All users have admin access
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    last_login = db.Column(db.DateTime(timezone=True), nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    first_setup_required = db.Column(db.Boolean, nullable=False, default=False)
+
+    # Relationship to API tokens
+    api_tokens = db.relationship('APIToken', back_populates='user', cascade='all, delete-orphan')
+
+    def set_password(self, password):
+        """Hash and set the user's password"""
+        self.password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+    def check_password(self, password):
+        """Check if the provided password matches the hash"""
+        if not self.password_hash:
+            return False
+        return bcrypt.checkpw(password.encode('utf-8'), self.password_hash.encode('utf-8'))
+
+    def generate_api_token(self, description=None):
+        """Generate a new API token for this user"""
+        token = APIToken(
+            user_id=self.id,
+            description=description
+        )
+        db.session.add(token)
+        return token
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email,
+            'is_admin': self.is_admin,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'is_active': self.is_active,
+            'first_setup_required': self.first_setup_required,
+            'api_tokens_count': len(self.api_tokens)
+        }
+
+    def __repr__(self):
+        return f'<User {self.username}>'
+
+
+class APIToken(db.Model):
+    __tablename__ = 'api_tokens'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    token = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    description = db.Column(db.String(200))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    last_used = db.Column(db.DateTime(timezone=True), nullable=True)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+
+    # Relationship to user
+    user = db.relationship('User', back_populates='api_tokens')
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not self.token:
+            self.token = secrets.token_urlsafe(48)
+
+    def is_valid(self):
+        """Check if the token is valid (active and not expired)"""
+        if not self.is_active:
+            return False
+        if self.expires_at:
+            # Ensure expires_at is timezone-aware for comparison
+            expires_at = self.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires_at:
+                return False
+        return True
+
+    def update_last_used(self):
+        """Update the last_used timestamp"""
+        self.last_used = datetime.now(timezone.utc)
+        db.session.commit()
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'description': self.description,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'last_used': self.last_used.isoformat() if self.last_used else None,
+            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
+            'is_active': self.is_active,
+            'token_preview': f"{self.token[:8]}..." if self.token else None
+        }
+
+    def __repr__(self):
+        return f'<APIToken {self.id} for user {self.user_id}>'
