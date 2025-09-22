@@ -38,8 +38,7 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    build: .
-    image: pixelprobe:local
+    image: ttlequals0/pixelprobe:latest
     container_name: pixelprobe-app
     environment:
       # Security
@@ -100,8 +99,7 @@ services:
 
   # P1 Celery Worker for distributed task processing
   celery-worker:
-    build: .
-    image: pixelprobe:local
+    image: ttlequals0/pixelprobe:latest
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:
