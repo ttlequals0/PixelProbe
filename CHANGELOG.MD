@@ -9,55 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Complete Authentication System**
-  - User authentication with salted and hashed passwords (bcrypt)
-  - Cookie-based session management with Flask-Login
+  - User authentication with secure password hashing using bcrypt
+  - Cookie-based session management for web interface
   - API token authentication for programmatic access
-  - First-run admin setup flow
-  - User management UI (create, delete users)
+  - User management interface with create/delete capabilities
   - Password change functionality
-  - API token management (create, delete, track usage)
+  - API token management (create/revoke tokens)
+  - First-run admin setup flow
 
-- **Login Page Features**
-  - Beautiful login UI with PixelProbe logo
-  - Dark/light mode toggle with theme persistence
-  - Consistent color scheme with main application
-  - First-time setup detection and guidance
-  - Remember me functionality for sessions
+- **Enhanced Security**
+  - All API endpoints now require authentication (cookie or token)
+  - Secure password storage with salted bcrypt hashing
+  - Session management with configurable timeouts
+  - CSRF protection for web forms
+  - API tokens with optional expiration dates
 
-- **Security Features**
-  - All API endpoints protected by authentication
-  - Support for both cookie and Bearer token authentication
-  - Automatic session management
-  - Token expiration support
-  - Last login and token usage tracking
-
-- **User Management API**
-  - POST /api/auth/login - User login
-  - POST /api/auth/logout - User logout
-  - GET /api/auth/status - Check authentication status
-  - POST /api/auth/setup - Initial admin setup
-  - GET /api/users - List all users (admin only)
-  - POST /api/users - Create new user (admin only)
-  - DELETE /api/users/{id} - Delete user (admin only)
-  - PUT /api/users/{id}/password - Change password
-
-- **API Token Management**
-  - GET /api/tokens - List user's API tokens
-  - POST /api/tokens - Create new API token
-  - DELETE /api/tokens/{id} - Delete API token
+- **User Interface Updates**
+  - Professional login page with PixelProbe branding
+  - Dark/light mode toggle on login page matching main app theme
+  - User management controls in sidebar under Account section
+  - Logout button and current user display
+  - API token management interface
+  - Password change dialog
 
 ### Changed
-- All users have admin access (full control) as per requirements
-- Application now redirects to login page when not authenticated
-- Database schema updated with users and api_tokens tables
+- **API Access**
+  - All API endpoints now require authentication
+  - Support for both cookie-based (web) and token-based (API) authentication
+  - Backward compatible with API tokens passed as Bearer tokens or query parameters
 
 ### Technical Details
-- Added Flask-Login for session management
-- Added bcrypt for secure password hashing
-- Created auth.py module for authentication logic
-- Added auth_routes.py for authentication endpoints
-- Database migration script for auth tables
-- Docker tested and working with PostgreSQL
+- New database tables: `users` and `api_tokens`
+- Flask-Login integration for session management
+- bcrypt for password hashing
+- Authentication middleware applied to all protected routes
+- Default admin user created on first run (requires password setup)
+
+### Migration Notes
+- Run `python migrations/add_authentication_tables.py` to create auth tables
+- On first run, set admin password through web interface or API
+- Existing deployments will require authentication after upgrade
 
 ## [2.3.5] - 2025-09-19
 
