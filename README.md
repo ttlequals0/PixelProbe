@@ -133,8 +133,21 @@ Secure password changes:
 #### Light Mode
 ![Desktop Light Mode](docs/screenshots/desktop-light.png)
 
+Features visible in the interface:
+- **Statistics Dashboard**: Real-time display of 1M+ scanned files with health status
+- **Sidebar Navigation**: Quick access to Dashboard, API Documentation, Tools (Start Scan, Cleanup, Check Changes, Schedules, Exclusions), System (Stats, Reports, Build Info), and Account (User Management, API Tokens, Change Password)
+- **File Results Table**: Sortable columns for status, file path, size, type, scan date with bulk actions
+- **Filtering Options**: All Files, Corrupted Only, Warnings Only, Healthy Only
+- **Action Buttons**: Mark as Good, Rescan, Download, Export functionality
+
 #### Dark Mode
 ![Desktop Dark Mode](docs/screenshots/desktop-dark.png)
+
+Dark mode features:
+- **High Contrast Theme**: Green accent colors for better visibility in low-light environments
+- **Full Feature Parity**: All light mode features available with optimized dark color scheme
+- **Persistent Theme**: Settings toggle remembers preference across sessions
+- **Account Section**: Shows logged-in user (admin) with logout option
 
 ### Mobile Interface
 
