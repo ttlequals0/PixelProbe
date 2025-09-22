@@ -10,6 +10,7 @@ import pytz
 
 from models import db, ScanReport
 from pixelprobe.utils.security import validate_json_input
+from auth import auth_required
 
 logger = logging.getLogger(__name__)
 

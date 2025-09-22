@@ -11,6 +11,7 @@ import logging
 
 from pixelprobe.utils.security import validate_directory_path, AuditLogger, PathTraversalError, validate_json_input
 from pixelprobe.utils.rate_limiting import rate_limit
+from auth import auth_required
 
 logger = logging.getLogger(__name__)
 

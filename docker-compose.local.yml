@@ -1,0 +1,137 @@
+# Docker Compose configuration for local testing of PixelProbe 2.4.1
+# Uses locally built image for testing before pushing to Docker Hub
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    container_name: pixelprobe-postgres-local
+    environment:
+      POSTGRES_DB: pixelprobe
+      POSTGRES_USER: pixelprobe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-testpass123}
+    volumes:
+      - postgres_data_local:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"  # Using 5433 to avoid conflicts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pixelprobe-network-local
+
+  # Redis for Celery
+  redis:
+    image: redis:7-alpine
+    container_name: pixelprobe-redis-local
+    ports:
+      - "6380:6379"  # Using 6380 to avoid conflicts
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pixelprobe-network-local
+
+  # PixelProbe application - LOCAL BUILD
+  pixelprobe:
+    image: pixelprobe:2.4.1-local  # Using local image
+    container_name: pixelprobe-app-local
+    environment:
+      # Security
+      SECRET_KEY: ${SECRET_KEY:-test-secret-key-for-local-testing}
+
+      # PostgreSQL database configuration
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: pixelprobe
+      POSTGRES_USER: pixelprobe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-testpass123}
+
+      # Celery configuration
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+
+      # Application settings
+      FLASK_ENV: ${FLASK_ENV:-development}
+      SCAN_PATHS: ${SCAN_PATHS:-/media}
+      EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
+      EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
+      MAX_WORKERS: ${MAX_WORKERS:-10}
+      BATCH_SIZE: ${BATCH_SIZE:-100}
+      MAX_OUTPUT_SIZE: ${MAX_OUTPUT_SIZE:-10000}
+      OUTPUT_ROTATION_ENABLED: ${OUTPUT_ROTATION_ENABLED:-true}
+      TZ: America/New_York
+
+    volumes:
+      # Mount local media directory for testing
+      - ${MEDIA_PATH:-./test-media}:/media:ro
+
+    ports:
+      - "5001:5000"  # Exposing on port 5001 locally
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+    networks:
+      - pixelprobe-network-local
+
+  # Celery worker - LOCAL BUILD
+  celery-worker:
+    image: pixelprobe:2.4.1-local  # Using local image
+    container_name: pixelprobe-celery-worker-local
+    command: celery -A celery_config worker --loglevel=info --max-memory-per-child=200000 --autoscale=10,3
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: pixelprobe
+      POSTGRES_USER: pixelprobe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-testpass123}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      TZ: America/New_York
+    volumes:
+      - ${MEDIA_PATH:-./test-media}:/media:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - pixelprobe-network-local
+
+  # Flower for Celery monitoring (optional)
+  flower:
+    image: mher/flower:latest
+    container_name: pixelprobe-flower-local
+    command: celery --broker=redis://redis:6379/0 flower --port=5555
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      FLOWER_BASIC_AUTH: ${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin123}
+    ports:
+      - "5556:5555"  # Using 5556 to avoid conflicts
+    depends_on:
+      - redis
+    networks:
+      - pixelprobe-network-local
+
+volumes:
+  postgres_data_local:
+    name: pixelprobe_postgres_data_local
+
+networks:
+  pixelprobe-network-local:
+    driver: bridge
+    name: pixelprobe-network-local

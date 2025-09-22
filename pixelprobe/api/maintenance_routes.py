@@ -9,6 +9,7 @@ import pytz
 
 from models import db, ScanResult, CleanupState, FileChangesState
 from media_checker import PixelProbe
+from auth import auth_required
 from utils import ProgressTracker
 from pixelprobe.services.maintenance_service import MaintenanceService
 
