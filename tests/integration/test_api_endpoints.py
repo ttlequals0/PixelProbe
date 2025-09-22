@@ -28,14 +28,14 @@ class TestScanEndpoints:
     def test_get_scan_results_with_filters(self, authenticated_client, mock_scan_result, mock_corrupted_result):
         """Test scan results with filters"""
         # Test corrupted filter
-        response = authenticated_authenticated_client.get('/api/scan-results?is_corrupted=true')
+        response = authenticated_client.get('/api/scan-results?is_corrupted=true')
         assert response.status_code == 200
         
         data = json.loads(response.data)
         assert all(r['is_corrupted'] == True for r in data['results'])
         
         # Test healthy filter
-        response = authenticated_authenticated_client.get('/api/scan-results?is_corrupted=false')
+        response = authenticated_client.get('/api/scan-results?is_corrupted=false')
         assert response.status_code == 200
         
         data = json.loads(response.data)
@@ -44,7 +44,7 @@ class TestScanEndpoints:
     
     def test_get_single_scan_result(self, authenticated_client, mock_scan_result):
         """Test GET /api/scan-results/<id> endpoint"""
-        response = authenticated_authenticated_client.get(f'/api/scan-results/{mock_scan_result.id}')
+        response = authenticated_client.get(f'/api/scan-results/{mock_scan_result.id}')
         assert response.status_code == 200
         
         data = json.loads(response.data)
@@ -53,7 +53,7 @@ class TestScanEndpoints:
     
     def test_scan_status(self, authenticated_client):
         """Test GET /api/scan-status endpoint"""
-        response = authenticated_authenticated_client.get('/api/scan-status')
+        response = authenticated_client.get('/api/scan-status')
         assert response.status_code == 200
         
         data = json.loads(response.data)
@@ -68,7 +68,7 @@ class TestStatsEndpoints:
     
     def test_get_stats(self, authenticated_client, mock_scan_result):
         """Test GET /api/stats endpoint"""
-        response = authenticated_authenticated_client.get('/api/stats')
+        response = authenticated_client.get('/api/stats')
         assert response.status_code == 200
         
         data = json.loads(response.data)
@@ -82,7 +82,7 @@ class TestStatsEndpoints:
     
     def test_get_system_info(self, authenticated_client, db):
         """Test GET /api/system-info endpoint"""
-        response = authenticated_authenticated_client.get('/api/system-info')
+        response = authenticated_client.get('/api/system-info')
         assert response.status_code == 200
         
         data = json.loads(response.data)
