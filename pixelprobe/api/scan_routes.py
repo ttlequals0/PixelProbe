@@ -8,9 +8,10 @@ from pixelprobe.utils.timezone import from_utc_to_configured
 from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
 from version import __version__
+from auth import auth_required
 
 from pixelprobe.utils.security import (
-    validate_file_path, validate_directory_path, 
+    validate_file_path, validate_directory_path,
     PathTraversalError, AuditLogger, validate_json_input
 )
 # Remove direct limiter imports as we'll use decorators
@@ -172,6 +173,7 @@ def is_scan_running():
     return False
 
 @scan_bp.route('/scan-results')
+@auth_required
 def get_scan_results():
     """Get paginated scan results with optional filters"""
     page = request.args.get('page', 1, type=int)

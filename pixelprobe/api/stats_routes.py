@@ -9,6 +9,7 @@ from functools import wraps
 from models import db, ScanResult
 from version import __version__
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone_name
+from auth import auth_required
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ def exempt_from_rate_limit(f):
 
 @stats_bp.route('/stats')
 @exempt_from_rate_limit
+@auth_required
 def get_stats():
     """Get statistics about scanned files"""
     try:

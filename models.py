@@ -750,8 +750,13 @@ class APIToken(db.Model):
         """Check if the token is valid (active and not expired)"""
         if not self.is_active:
             return False
-        if self.expires_at and datetime.now(timezone.utc) > self.expires_at:
-            return False
+        if self.expires_at:
+            # Ensure expires_at is timezone-aware for comparison
+            expires_at = self.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires_at:
+                return False
         return True
 
     def update_last_used(self):
