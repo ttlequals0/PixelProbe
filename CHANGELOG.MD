@@ -38,12 +38,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Support for both cookie-based (web) and token-based (API) authentication
   - Backward compatible with API tokens passed as Bearer tokens or query parameters
 
+### Fixed (Post-Implementation)
+- **Authentication System Improvements**
+  - Fixed logout button connection errors when server restarts
+  - Added confirm password dialog for first-run admin setup
+  - Fixed API connection errors on dashboard when session expires
+  - Improved error handling for authentication failures
+  - Fixed token expiration field text cutoff in UI
+  - Added help text explaining tokens never expire by default
+
+- **User Interface Consistency**
+  - Styled all authentication modals to match exclusions/schedule UI
+  - Fixed modal headers to use consistent h3 tags
+  - Applied exclusion-list styling to user and token lists
+  - Updated token creation success dialog to match other modals
+  - Used consistent form-control classes and layouts
+
 ### Technical Details
 - New database tables: `users` and `api_tokens`
 - Flask-Login integration for session management
 - bcrypt for password hashing
 - Authentication middleware applied to all protected routes
 - Default admin user created on first run (requires password setup)
+- Automatic database migration on startup for existing installations
+- API tokens never expire by default unless expiration days specified
 
 ### Migration Notes
 - Run `python migrations/add_authentication_tables.py` to create auth tables

@@ -138,16 +138,24 @@ class APIClient {
     async request(endpoint, options = {}) {
         try {
             const headers = { ...options.headers };
-            
+
             // Only add Content-Type for requests with body
             if (options.body) {
                 headers['Content-Type'] = 'application/json';
             }
-            
+
             const response = await fetch(`${this.baseURL}${endpoint}`, {
                 headers,
+                credentials: 'same-origin',
                 ...options
             });
+
+            // Handle authentication failures
+            if (response.status === 401 || response.status === 403) {
+                // Redirect to login if not authenticated
+                window.location.href = '/login';
+                return null;
+            }
 
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -155,6 +163,11 @@ class APIClient {
 
             return await response.json();
         } catch (error) {
+            // Handle network/connection errors silently for stats updates
+            if (endpoint === '/stats' || endpoint === '/system-info') {
+                console.warn('Stats update failed (server may be restarting):', error.message);
+                return null;
+            }
             console.error('API request failed:', error);
             throw error;
         }
@@ -289,9 +302,12 @@ class StatsDashboard {
     async updateStats() {
         try {
             const stats = await this.api.getStats();
-            this.renderStats(stats);
+            if (stats) {
+                this.renderStats(stats);
+            }
         } catch (error) {
-            console.error('Failed to update stats:', error);
+            // Silently handle stats update failures (likely during server restart)
+            console.debug('Stats update skipped:', error.message);
         }
     }
 
@@ -1777,8 +1793,8 @@ class PixelProbeApp {
     }
 
     async showApiDocs() {
-        // Navigate to API documentation page
-        window.location.href = '/api-docs';
+        // Navigate to Swagger UI in the current tab
+        window.location.href = '/api/v1/docs';
     }
 
     async showScanReports() {

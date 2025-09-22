@@ -13,10 +13,18 @@ from auth import authenticate_user, check_first_run, create_initial_admin
 def auth_client(client, app):
     """Client with authentication helpers"""
     with app.app_context():
+        # Create tables if they don't exist
+        db.create_all()
+
         # Clear any existing users
-        APIToken.query.delete()
-        User.query.delete()
-        db.session.commit()
+        try:
+            APIToken.query.delete()
+            User.query.delete()
+            db.session.commit()
+        except Exception as e:
+            # Tables might not exist yet
+            db.session.rollback()
+            db.create_all()
 
     return client
 
@@ -213,6 +221,9 @@ def test_api_token_management(auth_client, app):
     # Delete token
     response = auth_client.delete(f'/api/tokens/{token_id}')
     assert response.status_code == 200
+
+    # Logout from session to properly test token auth
+    auth_client.post('/api/auth/logout')
 
     # Token should no longer work
     response = auth_client.get('/api/auth/status',

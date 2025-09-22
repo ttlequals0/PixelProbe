@@ -9,6 +9,11 @@ from version import __version__
 # Create API blueprint
 api_bp = Blueprint('api_swagger', __name__, url_prefix='/api/v1')
 
+# Custom Swagger UI configuration with dark mode
+SWAGGER_UI_DOC_EXPANSION = 'list'
+SWAGGER_UI_OPERATION_ID = True
+SWAGGER_UI_REQUEST_DURATION = True
+
 # Initialize API with Swagger documentation
 api = Api(
     api_bp,
@@ -21,6 +26,7 @@ api = Api(
 )
 
 # Define namespaces
+auth_ns = Namespace('auth', description='Authentication and user management')
 scan_ns = Namespace('scan', description='Media scanning operations')
 stats_ns = Namespace('stats', description='Statistics and reporting')
 maintenance_ns = Namespace('maintenance', description='Maintenance operations')
@@ -28,6 +34,7 @@ admin_ns = Namespace('admin', description='Administrative functions')
 export_ns = Namespace('export', description='Data export operations')
 
 # Add namespaces to API
+api.add_namespace(auth_ns)
 api.add_namespace(scan_ns)
 api.add_namespace(stats_ns)
 api.add_namespace(maintenance_ns)
@@ -43,6 +50,63 @@ error_model = api.model('Error', {
 success_model = api.model('Success', {
     'message': fields.String(description='Success message'),
     'status': fields.String(description='Operation status')
+})
+
+# Authentication models
+login_model = api.model('Login', {
+    'username': fields.String(required=True, description='Username'),
+    'password': fields.String(required=True, description='Password'),
+    'remember': fields.Boolean(default=False, description='Remember login session')
+})
+
+login_response_model = api.model('LoginResponse', {
+    'success': fields.Boolean(description='Login success status'),
+    'user': fields.Raw(description='User information')
+})
+
+user_model = api.model('User', {
+    'id': fields.Integer(description='User ID'),
+    'username': fields.String(description='Username'),
+    'email': fields.String(description='Email address'),
+    'is_admin': fields.Boolean(description='Admin status'),
+    'created_at': fields.DateTime(description='Creation timestamp'),
+    'last_login': fields.DateTime(description='Last login timestamp')
+})
+
+create_user_model = api.model('CreateUser', {
+    'username': fields.String(required=True, description='Username'),
+    'email': fields.String(required=True, description='Email address'),
+    'password': fields.String(required=True, description='Password (min 8 characters)'),
+    'is_admin': fields.Boolean(default=True, description='Grant admin privileges')
+})
+
+api_token_model = api.model('APIToken', {
+    'id': fields.Integer(description='Token ID'),
+    'description': fields.String(description='Token description'),
+    'created_at': fields.DateTime(description='Creation timestamp'),
+    'last_used': fields.DateTime(description='Last usage timestamp'),
+    'expires_at': fields.DateTime(description='Expiration timestamp')
+})
+
+create_token_model = api.model('CreateToken', {
+    'description': fields.String(required=True, description='Token description'),
+    'expires_in_days': fields.Integer(description='Days until expiration (optional)')
+})
+
+token_response_model = api.model('TokenResponse', {
+    'token': fields.String(description='API token (only shown once)'),
+    'token_info': fields.Raw(description='Token information')
+})
+
+password_change_model = api.model('PasswordChange', {
+    'current_password': fields.String(required=True, description='Current password'),
+    'new_password': fields.String(required=True, description='New password (min 8 characters)')
+})
+
+auth_status_model = api.model('AuthStatus', {
+    'authenticated': fields.Boolean(description='Authentication status'),
+    'first_run': fields.Boolean(description='First run status'),
+    'user': fields.Raw(description='User information if authenticated')
 })
 
 # Scan models
@@ -91,33 +155,42 @@ stats_summary_model = api.model('StatsSummary', {
 })
 
 # Maintenance models
-file_changes_model = api.model('FileChangesStatus', {
-    'is_running': fields.Boolean(description='Whether check is running'),
-    'phase': fields.String(description='Current phase'),
-    'files_processed': fields.Integer(description='Files processed'),
-    'total_files': fields.Integer(description='Total files to check'),
-    'changes_found': fields.Integer(description='Number of changed files found'),
-    'corrupted_found': fields.Integer(description='Number of newly corrupted files'),
-    'progress_percentage': fields.Float(description='Progress percentage'),
-    'progress_message': fields.String(description='Progress message with ETA')
+cleanup_model = api.model('Cleanup', {
+    'deleted_files': fields.Integer(description='Number of database entries removed'),
+    'orphaned_records': fields.Integer(description='Number of orphaned records found'),
+    'message': fields.String(description='Cleanup status message')
 })
 
 cleanup_status_model = api.model('CleanupStatus', {
-    'is_running': fields.Boolean(description='Whether cleanup is running'),
-    'phase': fields.String(description='Current phase'),
-    'files_processed': fields.Integer(description='Files processed'),
-    'total_files': fields.Integer(description='Total files to check'),
-    'orphaned_found': fields.Integer(description='Number of orphaned entries found'),
-    'progress_percentage': fields.Float(description='Progress percentage'),
-    'progress_message': fields.String(description='Progress message with ETA')
+    'deleted_files': fields.Integer(description='Number of database entries removed'),
+    'orphaned_records': fields.Integer(description='Number of orphaned records found'),
+    'message': fields.String(description='Cleanup status message')
 })
 
-# Export models
+file_changes_model = api.model('FileChanges', {
+    'added': fields.Integer(description='Number of files added'),
+    'modified': fields.Integer(description='Number of files modified'),
+    'deleted': fields.Integer(description='Number of files deleted'),
+    'total_changes': fields.Integer(description='Total number of changes'),
+    'message': fields.String(description='Status message')
+})
+
+export_format_model = api.model('ExportFormat', {
+    'format': fields.String(
+        required=True,
+        enum=['csv', 'json', 'excel'],
+        description='Export format'
+    ),
+    'include_all': fields.Boolean(default=False, description='Include all results, not just corrupted files')
+})
+
 export_request_model = api.model('ExportRequest', {
-    'format': fields.String(description='Export format (csv, json, pdf)', enum=['csv', 'json', 'pdf'], default='csv'),
-    'filter': fields.String(description='Filter type', enum=['all', 'corrupted', 'healthy', 'pending', 'error'], default='all'),
-    'search': fields.String(description='Search term to filter file paths'),
-    'file_ids': fields.List(fields.Integer, description='Optional list of specific file IDs to export')
+    'format': fields.String(
+        required=True,
+        enum=['csv', 'json', 'excel'],
+        description='Export format'
+    ),
+    'include_all': fields.Boolean(default=False, description='Include all results, not just corrupted files')
 })
 
 # Configuration models
@@ -137,12 +210,12 @@ schedule_model = api.model('Schedule', {
 # Reset models
 reset_for_rescan_model = api.model('ResetForRescan', {
     'type': fields.String(
-        required=True, 
+        required=True,
         enum=['all', 'selected', 'corrupted', 'error'],
         description='Type of reset: all (reset all files), selected (reset specific files), corrupted (reset corrupted files), error (reset error files)'
     ),
     'file_ids': fields.List(
-        fields.Integer, 
+        fields.Integer,
         description='List of file IDs to reset (required only for type=selected)'
     )
 })
@@ -168,5 +241,100 @@ reset_incomplete_scans_model = api.model('ResetIncompleteScans', {
     'reset_count': fields.Integer(description='Number of files reset to pending'),
     'description': fields.String(description='Description of what was fixed')
 })
+
+# Authentication endpoints documentation
+@auth_ns.route('/status')
+class AuthStatus(Resource):
+    @auth_ns.doc('Check authentication status')
+    @auth_ns.marshal_with(auth_status_model)
+    def get(self):
+        '''Check current authentication status and first-run status'''
+        pass
+
+@auth_ns.route('/login')
+class Login(Resource):
+    @auth_ns.doc('User login')
+    @auth_ns.expect(login_model)
+    @auth_ns.marshal_with(login_response_model)
+    def post(self):
+        '''Authenticate user and create session'''
+        pass
+
+@auth_ns.route('/logout')
+class Logout(Resource):
+    @auth_ns.doc('User logout', security='apikey')
+    @auth_ns.marshal_with(success_model)
+    def post(self):
+        '''Logout current user and invalidate session'''
+        pass
+
+@auth_ns.route('/setup')
+class FirstRunSetup(Resource):
+    @auth_ns.doc('First-run setup')
+    @auth_ns.expect(api.model('FirstRunSetup', {
+        'password': fields.String(required=True, description='Admin password')
+    }))
+    @auth_ns.marshal_with(success_model)
+    def post(self):
+        '''Set up initial admin password on first run'''
+        pass
+
+@auth_ns.route('/users')
+class UserList(Resource):
+    @auth_ns.doc('List users', security='apikey')
+    @auth_ns.marshal_list_with(user_model)
+    def get(self):
+        '''Get list of all users (admin only)'''
+        pass
+
+    @auth_ns.doc('Create user', security='apikey')
+    @auth_ns.expect(create_user_model)
+    @auth_ns.marshal_with(user_model)
+    def post(self):
+        '''Create a new user (admin only)'''
+        pass
+
+@auth_ns.route('/users/<int:user_id>')
+@auth_ns.param('user_id', 'User ID')
+class UserDetail(Resource):
+    @auth_ns.doc('Delete user', security='apikey')
+    @auth_ns.marshal_with(success_model)
+    def delete(self, user_id):
+        '''Delete a user (admin only)'''
+        pass
+
+@auth_ns.route('/users/<int:user_id>/password')
+@auth_ns.param('user_id', 'User ID')
+class PasswordChange(Resource):
+    @auth_ns.doc('Change password', security='apikey')
+    @auth_ns.expect(password_change_model)
+    @auth_ns.marshal_with(success_model)
+    def put(self, user_id):
+        '''Change user password'''
+        pass
+
+@auth_ns.route('/tokens')
+class TokenList(Resource):
+    @auth_ns.doc('List API tokens', security='apikey')
+    @auth_ns.marshal_list_with(api_token_model)
+    def get(self):
+        '''Get list of user API tokens'''
+        pass
+
+    @auth_ns.doc('Create API token', security='apikey')
+    @auth_ns.expect(create_token_model)
+    @auth_ns.marshal_with(token_response_model)
+    def post(self):
+        '''Create a new API token'''
+        pass
+
+@auth_ns.route('/tokens/<int:token_id>')
+@auth_ns.param('token_id', 'Token ID')
+class TokenDetail(Resource):
+    @auth_ns.doc('Delete API token', security='apikey')
+    @auth_ns.marshal_with(success_model)
+    def delete(self, token_id):
+        '''Delete an API token'''
+        pass
 
 # Route implementations will be imported in app.py after blueprint registration

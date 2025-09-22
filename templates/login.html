@@ -296,9 +296,17 @@
 
             <div class="form-group">
                 <label for="password">Password</label>
-                <input type="password" id="password" name="password" required autocomplete="current-password">
+                <input type="password" id="password" name="password" required autocomplete="current-password" minlength="8">
                 <div id="passwordRequirements" class="password-requirements" style="display: none;">
                     Minimum 8 characters required
+                </div>
+            </div>
+
+            <div id="confirmPasswordGroup" class="form-group" style="display: none;">
+                <label for="confirmPassword">Confirm Password</label>
+                <input type="password" id="confirmPassword" name="confirmPassword" autocomplete="new-password" minlength="8">
+                <div id="passwordMismatch" class="error-message" style="display: none;">
+                    Passwords do not match
                 </div>
             </div>
 
@@ -356,8 +364,11 @@
                     document.getElementById('usernameGroup').style.display = 'none';
                     document.getElementById('rememberGroup').style.display = 'none';
                     document.getElementById('passwordRequirements').style.display = 'block';
+                    document.getElementById('confirmPasswordGroup').style.display = 'block';
+                    document.getElementById('confirmPassword').setAttribute('required', 'required');
                     document.getElementById('btnText').textContent = 'Create Admin Account';
                     document.getElementById('username').removeAttribute('required');
+                    document.getElementById('password').setAttribute('autocomplete', 'new-password');
                 }
             } catch (error) {
                 console.error('Failed to check auth status:', error);
@@ -383,6 +394,17 @@
             spinner.style.display = 'block';
 
             const password = document.getElementById('password').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+
+            // Check password match for first run
+            if (setupMode && password !== confirmPassword) {
+                errorDiv.textContent = 'Passwords do not match';
+                errorDiv.style.display = 'block';
+                submitBtn.disabled = false;
+                btnText.style.display = 'inline';
+                spinner.style.display = 'none';
+                return;
+            }
 
             try {
                 let response;
@@ -430,8 +452,12 @@
                             'The admin account exists but needs a password. ' +
                             'Please enter a new password (minimum 8 characters).';
                         document.getElementById('passwordRequirements').style.display = 'block';
+                        document.getElementById('confirmPasswordGroup').style.display = 'block';
+                        document.getElementById('confirmPassword').setAttribute('required', 'required');
                         document.getElementById('btnText').textContent = 'Set Password';
                         document.getElementById('password').value = '';
+                        document.getElementById('confirmPassword').value = '';
+                        document.getElementById('password').setAttribute('autocomplete', 'new-password');
                         document.getElementById('password').focus();
                     } else {
                         errorDiv.textContent = data.error || 'Login failed';

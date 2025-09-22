@@ -93,10 +93,21 @@ const AuthManager = {
      */
     async logout() {
         try {
-            await fetch('/api/auth/logout', { method: 'POST' });
+            const response = await fetch('/api/auth/logout', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+
+            // Always redirect to login, even if the logout fails
+            // (user might already be logged out)
             window.location.href = '/login';
         } catch (error) {
             console.error('Logout failed:', error);
+            // Redirect anyway - connection issues shouldn't prevent logout
+            window.location.href = '/login';
         }
     },
 
@@ -126,18 +137,17 @@ const AuthManager = {
 
             data.users.forEach(user => {
                 const userItem = document.createElement('div');
-                userItem.className = 'user-item';
+                userItem.className = 'exclusion-item';
                 userItem.innerHTML = `
-                    <div class="user-info">
-                        <strong>${user.username}</strong>
-                        <span>${user.email}</span>
-                        ${user.is_admin ? '<span class="badge admin">Admin</span>' : ''}
-                    </div>
-                    <div class="user-actions">
-                        ${user.id !== this.currentUser.id ?
-                            `<button class="btn btn-danger btn-sm" onclick="AuthManager.deleteUser(${user.id})">Delete</button>` :
-                            ''}
-                    </div>
+                    <span>
+                        <strong>${user.username}</strong> - ${user.email}
+                        ${user.is_admin ? ' <span class="badge">ADMIN</span>' : ''}
+                    </span>
+                    ${user.id !== this.currentUser.id ?
+                        `<button class="btn btn-sm btn-danger" onclick="AuthManager.deleteUser(${user.id})">
+                            <i class="fas fa-trash"></i>
+                        </button>` :
+                        ''}
                 `;
                 usersList.appendChild(userItem);
             });
@@ -232,17 +242,23 @@ const AuthManager = {
 
             data.tokens.forEach(token => {
                 const tokenItem = document.createElement('div');
-                tokenItem.className = 'token-item';
+                tokenItem.className = 'exclusion-item';
+                const tokenDetails = [];
+                tokenDetails.push(`Created: ${new Date(token.created_at).toLocaleDateString()}`);
+                if (token.last_used) {
+                    tokenDetails.push(`Last used: ${new Date(token.last_used).toLocaleDateString()}`);
+                }
+                if (token.expires_at) {
+                    tokenDetails.push(`Expires: ${new Date(token.expires_at).toLocaleDateString()}`);
+                }
                 tokenItem.innerHTML = `
-                    <div class="token-info">
-                        <strong>${token.description || 'Unnamed Token'}</strong>
-                        <span>Created: ${new Date(token.created_at).toLocaleDateString()}</span>
-                        ${token.last_used ? `<span>Last used: ${new Date(token.last_used).toLocaleDateString()}</span>` : ''}
-                        ${token.expires_at ? `<span>Expires: ${new Date(token.expires_at).toLocaleDateString()}</span>` : ''}
-                    </div>
-                    <div class="token-actions">
-                        <button class="btn btn-danger btn-sm" onclick="AuthManager.deleteToken(${token.id})">Delete</button>
-                    </div>
+                    <span>
+                        <strong>${token.description || 'Unnamed Token'}</strong><br>
+                        <small style="color: var(--text-secondary);">${tokenDetails.join(' | ')}</small>
+                    </span>
+                    <button class="btn btn-sm btn-danger" onclick="AuthManager.deleteToken(${token.id})">
+                        <i class="fas fa-trash"></i>
+                    </button>
                 `;
                 tokensList.appendChild(tokenItem);
             });
@@ -386,14 +402,20 @@ const AuthManager = {
         modal.innerHTML = `
             <div class="modal-content">
                 <div class="modal-header">
-                    <h2>API Token Created</h2>
-                    <button class="close-btn" onclick="this.closest('.modal').remove()">×</button>
+                    <h3 class="modal-title">API Token Created</h3>
+                    <button class="modal-close" onclick="this.closest('.modal').remove()">×</button>
                 </div>
                 <div class="modal-body">
-                    <p><strong>Important:</strong> Copy this token now. You won't be able to see it again!</p>
-                    <div class="token-display">
-                        <input type="text" value="${token}" readonly id="tokenValue">
-                        <button class="btn btn-primary" onclick="AuthManager.copyToken()">Copy</button>
+                    <div class="exclusions-section">
+                        <div style="padding: 1rem 0; color: var(--text-primary);">
+                            <p style="margin-bottom: 1rem;"><strong>Important:</strong> Copy this token now. You won't be able to see it again!</p>
+                            <div class="exclusion-input-group">
+                                <input type="text" value="${token}" readonly id="tokenValue" class="form-control" style="font-family: monospace;">
+                                <button class="btn btn-primary" onclick="AuthManager.copyToken()">
+                                    <i class="fas fa-copy"></i> Copy
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -423,23 +445,32 @@ const AuthManager = {
         modal.innerHTML = `
             <div class="modal-content">
                 <div class="modal-header">
-                    <h2>User Management</h2>
-                    <button class="close-btn" onclick="document.getElementById('userManagementModal').style.display='none'">×</button>
+                    <h3 class="modal-title">User Management</h3>
+                    <button class="modal-close" onclick="document.getElementById('userManagementModal').style.display='none'">×</button>
                 </div>
                 <div class="modal-body">
-                    <h3>Create New User</h3>
-                    <form onsubmit="AuthManager.createUser(event)">
-                        <input type="text" name="username" placeholder="Username" required>
-                        <input type="email" name="email" placeholder="Email" required>
-                        <input type="password" name="password" placeholder="Password (min 8 characters)" required minlength="8">
-                        <label>
-                            <input type="checkbox" name="is_admin" checked> Admin Access
-                        </label>
-                        <button type="submit" class="btn btn-primary">Create User</button>
-                    </form>
+                    <div class="exclusions-section">
+                        <h4>Create New User</h4>
+                        <form onsubmit="AuthManager.createUser(event); return false;" style="margin-bottom: 1rem;">
+                            <input type="text" name="username" class="form-control" placeholder="Username" required style="margin-bottom: 0.5rem;">
+                            <input type="email" name="email" class="form-control" placeholder="Email" required style="margin-bottom: 0.5rem;">
+                            <input type="password" name="password" class="form-control" placeholder="Password (min 8 characters)" required minlength="8" style="margin-bottom: 0.5rem;">
+                            <label class="checkbox-label" style="display: block; margin-bottom: 1rem;">
+                                <input type="checkbox" name="is_admin" checked>
+                                <span style="margin-left: 0.5rem;">Admin Access</span>
+                            </label>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-plus"></i> Create User
+                            </button>
+                        </form>
+                    </div>
 
-                    <h3>Existing Users</h3>
-                    <div id="usersList"></div>
+                    <div class="exclusions-section">
+                        <h4>Existing Users</h4>
+                        <div id="usersList" class="exclusion-list">
+                            <div class="loading">Loading...</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         `;
@@ -456,19 +487,30 @@ const AuthManager = {
         modal.innerHTML = `
             <div class="modal-content">
                 <div class="modal-header">
-                    <h2>API Tokens</h2>
-                    <button class="close-btn" onclick="document.getElementById('apiTokensModal').style.display='none'">×</button>
+                    <h3 class="modal-title">API Tokens</h3>
+                    <button class="modal-close" onclick="document.getElementById('apiTokensModal').style.display='none'">×</button>
                 </div>
                 <div class="modal-body">
-                    <h3>Create New Token</h3>
-                    <form onsubmit="AuthManager.createToken(event)">
-                        <input type="text" name="description" placeholder="Token description" required>
-                        <input type="number" name="expires_in_days" placeholder="Expires in days (optional)">
-                        <button type="submit" class="btn btn-primary">Create Token</button>
-                    </form>
+                    <div class="exclusions-section">
+                        <h4>Create New Token</h4>
+                        <form onsubmit="AuthManager.createToken(event); return false;">
+                            <div class="exclusion-input-group">
+                                <input type="text" name="description" class="form-control" placeholder="Token description" required>
+                                <input type="number" name="expires_in_days" class="form-control" placeholder="Days" min="1" style="max-width: 100px;" title="Leave empty for no expiration">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-plus"></i> Add
+                                </button>
+                            </div>
+                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">Leave expiration days empty for tokens that never expire</small>
+                        </form>
+                    </div>
 
-                    <h3>Existing Tokens</h3>
-                    <div id="tokensList"></div>
+                    <div class="exclusions-section">
+                        <h4>Existing Tokens</h4>
+                        <div id="tokensList" class="exclusion-list">
+                            <div class="loading">Loading...</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         `;
@@ -485,16 +527,20 @@ const AuthManager = {
         modal.innerHTML = `
             <div class="modal-content">
                 <div class="modal-header">
-                    <h2>Change Password</h2>
-                    <button class="close-btn" onclick="document.getElementById('changePasswordModal').style.display='none'">×</button>
+                    <h3 class="modal-title">Change Password</h3>
+                    <button class="modal-close" onclick="document.getElementById('changePasswordModal').style.display='none'">×</button>
                 </div>
                 <div class="modal-body">
-                    <form onsubmit="AuthManager.changePassword(event)">
-                        <input type="password" name="current_password" placeholder="Current Password" required>
-                        <input type="password" name="new_password" placeholder="New Password (min 8 characters)" required minlength="8">
-                        <input type="password" name="confirm_password" placeholder="Confirm New Password" required minlength="8">
-                        <button type="submit" class="btn btn-primary">Change Password</button>
-                    </form>
+                    <div class="exclusions-section">
+                        <form onsubmit="AuthManager.changePassword(event); return false;">
+                            <input type="password" name="current_password" class="form-control" placeholder="Current Password" required style="margin-bottom: 0.5rem;">
+                            <input type="password" name="new_password" class="form-control" placeholder="New Password (min 8 characters)" required minlength="8" style="margin-bottom: 0.5rem;">
+                            <input type="password" name="confirm_password" class="form-control" placeholder="Confirm New Password" required minlength="8" style="margin-bottom: 1rem;">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-lock"></i> Change Password
+                            </button>
+                        </form>
+                    </div>
                 </div>
             </div>
         `;

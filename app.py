@@ -377,7 +377,15 @@ def migrate_database():
         logger.info("Startup migrations completed successfully")
     except Exception as e:
         logger.error(f"Startup migration failed: {e}")
-    
+
+    # Run authentication tables migration for v2.4.0
+    logger.info("Checking authentication tables...")
+    try:
+        run_auth_migration()
+        logger.info("Authentication tables verified")
+    except Exception as e:
+        logger.error(f"Authentication migration failed: {e}")
+
     # Test v2.2.62 migration
     logger.info("Running v2.2.62 migration...")
     try:
@@ -398,6 +406,63 @@ def migrate_database():
         logger.error(f"Failed to create performance indexes: {e}")
     
     logger.info("Database initialization completed")
+
+def run_auth_migration():
+    """Run authentication tables migration for v2.4.0"""
+    from sqlalchemy import text
+
+    try:
+        with db.engine.connect() as conn:
+            # Create users table if it doesn't exist
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(80) UNIQUE NOT NULL,
+                    email VARCHAR(120) UNIQUE NOT NULL,
+                    password_hash VARCHAR(128) NOT NULL,
+                    is_admin BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_login TIMESTAMP WITH TIME ZONE,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    first_setup_required BOOLEAN NOT NULL DEFAULT FALSE
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"))
+
+            # Create API tokens table if it doesn't exist
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS api_tokens (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    token VARCHAR(64) UNIQUE NOT NULL,
+                    description VARCHAR(200),
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_used TIMESTAMP WITH TIME ZONE,
+                    expires_at TIMESTAMP WITH TIME ZONE,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id)"))
+
+            # Check if any users exist
+            result = conn.execute(text("SELECT COUNT(*) FROM users"))
+            user_count = result.scalar()
+
+            if user_count == 0:
+                # Create a default admin user that requires setup on first login
+                conn.execute(text("""
+                    INSERT INTO users (username, email, password_hash, is_admin, first_setup_required)
+                    VALUES ('admin', 'admin@pixelprobe.local', '', TRUE, TRUE)
+                """))
+                logger.info("Created default admin user (password setup required on first login)")
+
+            conn.commit()
+
+    except Exception as e:
+        # Don't fail startup if migration issues
+        logger.warning(f"Authentication migration encountered issues: {e}")
 
 def run_v2_2_90_migrations():
     """Run migrations for v2.2.90 - fix deep_scan column constraint"""
