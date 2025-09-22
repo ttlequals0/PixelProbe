@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2025-09-21
+
+### Added
+- **Complete Authentication System**
+  - User authentication with salted and hashed passwords (bcrypt)
+  - Cookie-based session management with Flask-Login
+  - API token authentication for programmatic access
+  - First-run admin setup flow
+  - User management UI (create, delete users)
+  - Password change functionality
+  - API token management (create, delete, track usage)
+
+- **Login Page Features**
+  - Beautiful login UI with PixelProbe logo
+  - Dark/light mode toggle with theme persistence
+  - Consistent color scheme with main application
+  - First-time setup detection and guidance
+  - Remember me functionality for sessions
+
+- **Security Features**
+  - All API endpoints protected by authentication
+  - Support for both cookie and Bearer token authentication
+  - Automatic session management
+  - Token expiration support
+  - Last login and token usage tracking
+
+- **User Management API**
+  - POST /api/auth/login - User login
+  - POST /api/auth/logout - User logout
+  - GET /api/auth/status - Check authentication status
+  - POST /api/auth/setup - Initial admin setup
+  - GET /api/users - List all users (admin only)
+  - POST /api/users - Create new user (admin only)
+  - DELETE /api/users/{id} - Delete user (admin only)
+  - PUT /api/users/{id}/password - Change password
+
+- **API Token Management**
+  - GET /api/tokens - List user's API tokens
+  - POST /api/tokens - Create new API token
+  - DELETE /api/tokens/{id} - Delete API token
+
+### Changed
+- All users have admin access (full control) as per requirements
+- Application now redirects to login page when not authenticated
+- Database schema updated with users and api_tokens tables
+
+### Technical Details
+- Added Flask-Login for session management
+- Added bcrypt for secure password hashing
+- Created auth.py module for authentication logic
+- Added auth_routes.py for authentication endpoints
+- Database migration script for auth tables
+- Docker tested and working with PostgreSQL
+
 ## [2.3.5] - 2025-09-19
 
 ### Fixed

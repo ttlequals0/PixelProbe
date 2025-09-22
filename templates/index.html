@@ -87,6 +87,30 @@
                         <small class="text-muted d-block" id="version-info">Loading...</small>
                     </a>
                 </div>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">Account</div>
+                    <a href="#" class="nav-item" onclick="AuthManager.showUserManagement()" title="User Management">
+                        <i class="fas fa-users"></i>
+                        <span>User Management</span>
+                    </a>
+                    <a href="#" class="nav-item" onclick="AuthManager.showApiTokens()" title="API Tokens">
+                        <i class="fas fa-key"></i>
+                        <span>API Tokens</span>
+                    </a>
+                    <a href="#" class="nav-item" onclick="AuthManager.showChangePassword()" title="Change Password">
+                        <i class="fas fa-lock"></i>
+                        <span>Change Password</span>
+                    </a>
+                    <div class="nav-item" style="padding: 10px 15px; border-top: 1px solid var(--border-color); margin-top: 10px;">
+                        <i class="fas fa-user"></i>
+                        <span id="currentUserDisplay" style="font-size: 12px;">Loading...</span>
+                    </div>
+                    <a href="#" class="nav-item" onclick="AuthManager.logout()" title="Logout" style="color: var(--danger-color);">
+                        <i class="fas fa-sign-out-alt"></i>
+                        <span>Logout</span>
+                    </a>
+                </div>
                 
                 <div class="nav-section">
                     <div class="nav-section-title">Settings</div>
@@ -536,6 +560,7 @@
     
     <!-- Scripts -->
     <script src="/static/js/app.js?v={{ version }}"></script>
+    <script src="/static/js/auth.js?v={{ version }}"></script>
     
     <!-- Initialize version info -->
     <script>

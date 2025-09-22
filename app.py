@@ -6,12 +6,13 @@ This is a demonstration of how app.py would look with the new modular architectu
 import os
 import logging
 from datetime import datetime, timezone
-from flask import Flask, jsonify, send_file, render_template, request
+from flask import Flask, jsonify, send_file, render_template, request, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
+from flask_login import login_required, current_user
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -28,6 +29,10 @@ from pixelprobe.api.export_routes import export_bp
 from pixelprobe.api.maintenance_routes import maintenance_bp
 from pixelprobe.api.reports_routes import reports_bp
 from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
+from pixelprobe.api.auth_routes import auth_bp
+
+# Import authentication module
+from auth import init_auth, auth_required
 
 # Import OpenAPI/Swagger documentation
 try:
@@ -85,6 +90,9 @@ if os.environ.get('DATABASE_URL'):
 # Initialize extensions
 db.init_app(app)
 
+# Initialize authentication
+init_auth(app)
+
 # P1 Implementation: Initialize Celery task queue
 from celery_config import create_celery, init_celery
 celery = create_celery(app)
@@ -132,6 +140,7 @@ csrf.exempt(admin_bp)
 csrf.exempt(export_bp)
 csrf.exempt(maintenance_bp)
 csrf.exempt(reports_bp)
+csrf.exempt(auth_bp)  # Exempt auth endpoints from CSRF
 
 # Initialize scheduler
 scheduler = MediaScheduler()
@@ -157,13 +166,32 @@ def init_services():
     app.config_repository = ConfigurationRepository()
 
 # Register blueprints
+app.register_blueprint(auth_bp)  # Register auth blueprint first
+
+# Import auth decorator wrapper
+from pixelprobe.api.auth_decorator import apply_auth_to_blueprint
+
+# Register and protect API blueprints
 app.register_blueprint(scan_bp)
+apply_auth_to_blueprint(scan_bp)
+
 app.register_blueprint(stats_bp)
+apply_auth_to_blueprint(stats_bp)
+
 app.register_blueprint(admin_bp)
+apply_auth_to_blueprint(admin_bp)
+
 app.register_blueprint(export_bp)
+apply_auth_to_blueprint(export_bp)
+
 app.register_blueprint(maintenance_bp)
+apply_auth_to_blueprint(maintenance_bp)
+
 app.register_blueprint(reports_bp)
+apply_auth_to_blueprint(reports_bp)
+
 app.register_blueprint(parallel_scan_bp)
+apply_auth_to_blueprint(parallel_scan_bp)
 
 # Register Swagger blueprint if available
 if SWAGGER_AVAILABLE:
@@ -183,15 +211,16 @@ set_scheduler(scheduler)
 
 # Basic routes that remain in app.py
 @app.route('/')
+@login_required
 def index():
     """Serve the main application page"""
-    return render_template('index.html', version=__version__, github_url=__github_url__)
+    return render_template('index.html', version=__version__, github_url=__github_url__, user=current_user)
 
 @app.route('/api-docs')
+@login_required
 def api_docs():
     """Redirect to Swagger UI documentation"""
     if SWAGGER_AVAILABLE:
-        from flask import redirect
         return redirect('/api/v1/docs')
     else:
         # Fallback to old documentation if Swagger not available
