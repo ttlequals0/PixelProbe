@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from flask import jsonify, request, redirect, url_for, session
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from flask_restx import abort as restx_abort
 from models import User, APIToken, db
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,15 @@ def auth_required(f):
                 return f(*args, **kwargs)
 
         # Not authenticated
-        return jsonify({'error': 'Authentication required'}), 401
+        # For Flask-RESTX Resources, use restx_abort which properly handles JSON responses
+        # For regular Flask routes, return a jsonify response
+        # Check if we're in a Flask-RESTX context by checking if the function is a Resource method
+        try:
+            # Try Flask-RESTX abort first (works for Resource methods)
+            restx_abort(401, 'Authentication required')
+        except:
+            # Fallback for regular Flask routes
+            return jsonify({'error': 'Authentication required'}), 401
 
     return decorated_function
 

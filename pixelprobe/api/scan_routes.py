@@ -290,6 +290,7 @@ def get_scan_results():
     })
 
 @scan_bp.route('/scan-results/<int:result_id>')
+@auth_required
 def get_scan_result(result_id):
     """Get a single scan result by ID"""
     result = ScanResult.query.get_or_404(result_id)
@@ -382,6 +383,7 @@ def scan_file():
 @scan_bp.route('/scan', methods=['POST', 'OPTIONS'])  # Main scan endpoint
 @scan_bp.route('/scan-all', methods=['POST', 'OPTIONS'])  # Deprecated - kept for backward compatibility
 @rate_limit("2 per minute")
+@auth_required
 @validate_json_input({
     'force_rescan': {'required': False, 'type': bool},
     'directories': {'required': False, 'type': list}
@@ -487,6 +489,7 @@ def scan_all():
 
 @scan_bp.route('/scan-status')
 @exempt_from_rate_limit
+@auth_required
 def get_scan_status():
     """Get current scan status and progress"""
     # Get progress from scan service
@@ -1339,6 +1342,7 @@ def reset_incomplete_scans():
 
 @scan_bp.route('/diagnose-incomplete-scans', methods=['GET'])
 @rate_limit("5 per minute")
+@auth_required
 def diagnose_incomplete_scans():
     """Diagnose why files show as healthy but have N/A scan details
     
@@ -1395,6 +1399,7 @@ def diagnose_incomplete_scans():
 
 @scan_bp.route('/worker-status')
 @exempt_from_rate_limit
+@auth_required
 def get_worker_status():
     """Get Celery worker status and information"""
     try:
@@ -1442,6 +1447,7 @@ def get_worker_status():
         })
 
 @scan_bp.route('/scan-output/<int:result_id>')
+@auth_required
 def get_scan_output(result_id):
     """Get the detailed scan output for a specific result"""
     result = ScanResult.query.get_or_404(result_id)

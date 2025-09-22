@@ -131,6 +131,7 @@ def scan_parallel_v2():
 
 
 @parallel_scan_bp.route('/scan-parallel-v2/status/<scan_id>', methods=['GET'])
+@auth_required
 def get_parallel_scan_status(scan_id):
     """
     Get status of a parallel scan including chunk progress
@@ -204,6 +205,7 @@ def get_parallel_scan_status(scan_id):
 
 
 @parallel_scan_bp.route('/scan-parallel-v2/workers', methods=['GET'])
+@auth_required
 def get_worker_status():
     """
     Get detailed status of all Celery workers
