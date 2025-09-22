@@ -40,8 +40,17 @@ def init_auth(app):
         auth_header = request.headers.get('Authorization')
         if auth_header:
             try:
-                scheme, token = auth_header.split(' ', 1)
-                if scheme.lower() == 'bearer':
+                token = None
+                # Check if it has Bearer prefix
+                if ' ' in auth_header:
+                    scheme, token = auth_header.split(' ', 1)
+                    if scheme.lower() == 'bearer':
+                        token = token
+                else:
+                    # No space means it's just the token (from Swagger UI)
+                    token = auth_header
+
+                if token:
                     api_token = APIToken.query.filter_by(token=token, is_active=True).first()
                     if api_token and api_token.is_valid():
                         api_token.update_last_used()
@@ -76,12 +85,17 @@ def auth_required(f):
         token = None
 
         if auth_header:
-            try:
-                scheme, token = auth_header.split(' ', 1)
-                if scheme.lower() != 'bearer':
-                    token = None
-            except ValueError:
-                pass
+            # Check if it has Bearer prefix
+            if ' ' in auth_header:
+                try:
+                    scheme, token = auth_header.split(' ', 1)
+                    if scheme.lower() != 'bearer':
+                        token = None
+                except ValueError:
+                    pass
+            else:
+                # No space means it's just the token (from Swagger UI)
+                token = auth_header
 
         # Fallback to query parameter
         if not token:
@@ -96,17 +110,51 @@ def auth_required(f):
                 return f(*args, **kwargs)
 
         # Not authenticated
-        # For Flask-RESTX Resources, use restx_abort which properly handles JSON responses
-        # For regular Flask routes, return a jsonify response
-        # Check if we're in a Flask-RESTX context by checking if the function is a Resource method
-        try:
-            # Try Flask-RESTX abort first (works for Resource methods)
-            restx_abort(401, 'Authentication required')
-        except:
-            # Fallback for regular Flask routes
-            return jsonify({'error': 'Authentication required'}), 401
+        return jsonify({'error': 'Authentication required'}), 401
 
     return decorated_function
+
+
+def check_auth():
+    """Check if the current request is authenticated
+
+    Returns True if authenticated, False otherwise.
+    Use this inside Flask-RESTX Resource methods instead of the decorator.
+    """
+    # Check if user is authenticated via session
+    if current_user.is_authenticated:
+        return True
+
+    # Check for API token
+    auth_header = request.headers.get('Authorization')
+    token = None
+
+    if auth_header:
+        # Check if it has Bearer prefix
+        if ' ' in auth_header:
+            try:
+                scheme, token = auth_header.split(' ', 1)
+                if scheme.lower() != 'bearer':
+                    token = None
+            except ValueError:
+                pass
+        else:
+            # No space means it's just the token (from Swagger UI)
+            token = auth_header
+
+    # Fallback to query parameter
+    if not token:
+        token = request.args.get('api_token')
+
+    if token:
+        api_token = APIToken.query.filter_by(token=token, is_active=True).first()
+        if api_token and api_token.is_valid():
+            api_token.update_last_used()
+            # Store user in request context
+            request.current_user = api_token.user
+            return True
+
+    return False
 
 
 def admin_required(f):
@@ -175,14 +223,25 @@ def get_authenticated_user(request):
     # Check for API token in header
     auth_header = request.headers.get('Authorization')
     if auth_header:
-        try:
-            scheme, token = auth_header.split(' ', 1)
-            if scheme.lower() == 'bearer':
-                api_token = APIToken.query.filter_by(token=token, is_active=True).first()
-                if api_token and api_token.is_valid():
-                    return api_token.user
-        except ValueError:
-            pass
+        token = None
+        # Check if it has Bearer prefix
+        if ' ' in auth_header:
+            try:
+                scheme, token = auth_header.split(' ', 1)
+                if scheme.lower() == 'bearer':
+                    token = token
+                else:
+                    token = None
+            except ValueError:
+                pass
+        else:
+            # No space means it's just the token (from Swagger UI)
+            token = auth_header
+
+        if token:
+            api_token = APIToken.query.filter_by(token=token, is_active=True).first()
+            if api_token and api_token.is_valid():
+                return api_token.user
 
     # Check for API token in query parameter
     token = request.args.get('api_token')

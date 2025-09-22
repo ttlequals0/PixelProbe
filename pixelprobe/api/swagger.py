@@ -16,11 +16,13 @@ SWAGGER_UI_REQUEST_DURATION = True
 
 # Authorization definitions
 authorizations = {
-    'apikey': {
+    'Bearer': {
         'type': 'apiKey',
         'in': 'header',
         'name': 'Authorization',
-        'description': 'Bearer token authentication. Use format: Bearer <token>'
+        'description': 'Add a valid bearer token. The value should be: Bearer <your-token>',
+        'scheme': 'bearer',
+        'bearerFormat': 'JWT'
     },
     'session': {
         'type': 'apiKey',
@@ -40,7 +42,7 @@ api = Api(
     ordered=True,
     validate=True,
     authorizations=authorizations,
-    security='apikey'  # Default security for all endpoints
+    security='Bearer'  # Default security for all endpoints
 )
 
 # Define namespaces
@@ -280,7 +282,7 @@ class Login(Resource):
 
 @auth_ns.route('/logout')
 class Logout(Resource):
-    @auth_ns.doc('User logout', security='apikey')
+    @auth_ns.doc('User logout', security='Bearer')
     @auth_ns.marshal_with(success_model)
     def post(self):
         '''Logout current user and invalidate session'''
@@ -299,13 +301,13 @@ class FirstRunSetup(Resource):
 
 @auth_ns.route('/users')
 class UserList(Resource):
-    @auth_ns.doc('List users', security='apikey')
+    @auth_ns.doc('List users', security='Bearer')
     @auth_ns.marshal_list_with(user_model)
     def get(self):
         '''Get list of all users (admin only)'''
         pass
 
-    @auth_ns.doc('Create user', security='apikey')
+    @auth_ns.doc('Create user', security='Bearer')
     @auth_ns.expect(create_user_model)
     @auth_ns.marshal_with(user_model)
     def post(self):
@@ -315,7 +317,7 @@ class UserList(Resource):
 @auth_ns.route('/users/<int:user_id>')
 @auth_ns.param('user_id', 'User ID')
 class UserDetail(Resource):
-    @auth_ns.doc('Delete user', security='apikey')
+    @auth_ns.doc('Delete user', security='Bearer')
     @auth_ns.marshal_with(success_model)
     def delete(self, user_id):
         '''Delete a user (admin only)'''
@@ -324,7 +326,7 @@ class UserDetail(Resource):
 @auth_ns.route('/users/<int:user_id>/password')
 @auth_ns.param('user_id', 'User ID')
 class PasswordChange(Resource):
-    @auth_ns.doc('Change password', security='apikey')
+    @auth_ns.doc('Change password', security='Bearer')
     @auth_ns.expect(password_change_model)
     @auth_ns.marshal_with(success_model)
     def put(self, user_id):
@@ -333,13 +335,13 @@ class PasswordChange(Resource):
 
 @auth_ns.route('/tokens')
 class TokenList(Resource):
-    @auth_ns.doc('List API tokens', security='apikey')
+    @auth_ns.doc('List API tokens', security='Bearer')
     @auth_ns.marshal_list_with(api_token_model)
     def get(self):
         '''Get list of user API tokens'''
         pass
 
-    @auth_ns.doc('Create API token', security='apikey')
+    @auth_ns.doc('Create API token', security='Bearer')
     @auth_ns.expect(create_token_model)
     @auth_ns.marshal_with(token_response_model)
     def post(self):
@@ -349,7 +351,7 @@ class TokenList(Resource):
 @auth_ns.route('/tokens/<int:token_id>')
 @auth_ns.param('token_id', 'Token ID')
 class TokenDetail(Resource):
-    @auth_ns.doc('Delete API token', security='apikey')
+    @auth_ns.doc('Delete API token', security='Bearer')
     @auth_ns.marshal_with(success_model)
     def delete(self, token_id):
         '''Delete an API token'''

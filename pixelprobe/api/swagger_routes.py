@@ -4,7 +4,7 @@ OpenAPI/Swagger route implementations
 
 from flask import request, jsonify, current_app
 from flask_restx import Resource
-from auth import auth_required
+from auth import check_auth
 from pixelprobe.api.swagger import (
     api, scan_ns, stats_ns, maintenance_ns, admin_ns, export_ns,
     scan_directories_model, scan_status_model, stats_summary_model,
@@ -26,9 +26,12 @@ class ScanDirectories(Resource):
     @scan_ns.response(200, 'Scan started successfully', success_model)
     @scan_ns.response(400, 'Invalid request', error_model)
     @scan_ns.response(409, 'Scan already in progress', error_model)
-    @auth_required
     def post(self):
         """Start a new media scan on specified directories"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         try:
             data = request.get_json()
             scan_service = current_app.scan_service
@@ -48,9 +51,13 @@ class ScanDirectories(Resource):
 class ScanStatus(Resource):
     @scan_ns.doc('get_scan_status')
     @scan_ns.response(200, 'Current scan status', scan_status_model)
-    @auth_required
+    @scan_ns.response(401, 'Authentication required')
     def get(self):
         """Get current scan status"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from models import ScanState
         scan_state = ScanState.get_or_create()
         
@@ -93,9 +100,12 @@ class CancelScan(Resource):
     @scan_ns.doc('cancel_scan')
     @scan_ns.response(200, 'Scan cancelled', success_model)
     @scan_ns.response(400, 'No active scan', error_model)
-    @auth_required
     def post(self):
         """Cancel the current scan"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         try:
             scan_service = current_app.scan_service
             result = scan_service.cancel_scan()
@@ -110,9 +120,12 @@ class ParallelScanV2(Resource):
     @scan_ns.response(200, 'Parallel scan started', parallel_scan_response_model)
     @scan_ns.response(400, 'Invalid request', error_model)
     @scan_ns.response(503, 'Celery workers not available', error_model)
-    @auth_required
     def post(self):
         """Start enhanced parallel scan that distributes work across all Celery workers"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from pixelprobe.api.scan_routes_parallel import scan_parallel_v2
         from flask import current_app
         with current_app.test_request_context(
@@ -127,9 +140,12 @@ class ParallelScanStatus(Resource):
     @scan_ns.doc('get_parallel_scan_status')
     @scan_ns.response(200, 'Scan status retrieved')
     @scan_ns.response(404, 'Scan not found', error_model)
-    @auth_required
     def get(self, scan_id):
         """Get detailed status of a parallel scan including chunk progress"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from pixelprobe.api.scan_routes_parallel import get_parallel_scan_status
         from flask import current_app
         with current_app.test_request_context(
@@ -142,9 +158,12 @@ class ParallelScanStatus(Resource):
 class WorkerStatus(Resource):
     @scan_ns.doc('get_worker_status')
     @scan_ns.response(200, 'Worker status retrieved')
-    @auth_required
     def get(self):
         """Get detailed status of all Celery workers"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from pixelprobe.api.scan_routes_parallel import get_worker_status
         from flask import current_app
         with current_app.test_request_context(
@@ -167,9 +186,12 @@ class ForceCleanupScan(Resource):
     @scan_ns.doc('force_cleanup_scan')
     @scan_ns.response(200, 'Scan forcefully cleaned up')
     @scan_ns.response(500, 'Internal error', error_model)
-    @auth_required
     def post(self):
         """Force cleanup of all active scans - emergency recovery"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from models import db, ScanState
         from datetime import datetime, timezone
         
@@ -222,13 +244,16 @@ class ResetIncompleteScans(Resource):
     @scan_ns.doc('reset_incomplete_scans')
     @scan_ns.response(200, 'Incomplete scans reset', reset_incomplete_scans_model)
     @scan_ns.response(500, 'Internal error', error_model)
-    @auth_required
     def post(self):
         """Reset files marked as completed but with incomplete scan data
         
         Finds and resets files that show 'N/A' for Tool Details and Scan Date
         due to the v2.2.59 chunk query bug that prevented actual scanning.
         """
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from models import db, ScanResult
         from sqlalchemy import or_
         
@@ -297,9 +322,12 @@ class ResetFilesByPath(Resource):
     @scan_ns.response(200, 'Files reset', reset_result_model)
     @scan_ns.response(400, 'Invalid request', error_model)
     @scan_ns.response(500, 'Internal error', error_model)
-    @auth_required
     def post(self):
         """Reset specific files by their paths"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from models import db, ScanResult
         
         data = request.get_json() or {}
@@ -341,11 +369,14 @@ class ResetFilesByPath(Resource):
 class StatsSummary(Resource):
     @stats_ns.doc('get_stats_summary')
     @stats_ns.response(200, 'Statistics summary', stats_summary_model)
-    @auth_required
     def get(self):
         """Get comprehensive statistics summary"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         stats_service = current_app.stats_service
-        return stats_service.get_summary_stats()
+        return stats_service.get_system_info()
 
 @stats_ns.route('/corrupted')
 class CorruptedFiles(Resource):
@@ -354,9 +385,12 @@ class CorruptedFiles(Resource):
     @stats_ns.param('per_page', 'Items per page', type='integer', default=20)
     @stats_ns.param('sort_by', 'Sort field', type='string', default='discovered_date')
     @stats_ns.param('sort_order', 'Sort order', type='string', enum=['asc', 'desc'], default='desc')
-    @auth_required
     def get(self):
         """Get paginated list of corrupted files"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         stats_service = current_app.stats_service
         
         page = request.args.get('page', 1, type=int)
@@ -377,9 +411,12 @@ class FileChanges(Resource):
     @maintenance_ns.doc('check_file_changes')
     @maintenance_ns.response(200, 'File changes check started', success_model)
     @maintenance_ns.response(409, 'Check already in progress', error_model)
-    @auth_required
     def post(self):
         """Start checking for file changes"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         try:
             maintenance_service = current_app.maintenance_service
             result = maintenance_service.start_file_changes_check()
@@ -391,9 +428,12 @@ class FileChanges(Resource):
 class FileChangesStatus(Resource):
     @maintenance_ns.doc('get_file_changes_status')
     @maintenance_ns.response(200, 'File changes status', file_changes_model)
-    @auth_required
     def get(self):
         """Get file changes check status"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         maintenance_service = current_app.maintenance_service
         return maintenance_service.get_file_changes_status()
 
@@ -402,9 +442,12 @@ class CleanupOrphaned(Resource):
     @maintenance_ns.doc('cleanup_orphaned')
     @maintenance_ns.response(200, 'Cleanup started', success_model)
     @maintenance_ns.response(409, 'Cleanup already in progress', error_model)
-    @auth_required
     def post(self):
         """Start cleanup of orphaned database entries"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         try:
             maintenance_service = current_app.maintenance_service
             result = maintenance_service.start_cleanup()
@@ -416,9 +459,12 @@ class CleanupOrphaned(Resource):
 class CleanupStatus(Resource):
     @maintenance_ns.doc('get_cleanup_status')
     @maintenance_ns.response(200, 'Cleanup status', cleanup_status_model)
-    @auth_required
     def get(self):
         """Get cleanup operation status"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         maintenance_service = current_app.maintenance_service
         return maintenance_service.get_cleanup_status()
 
@@ -426,9 +472,12 @@ class CleanupStatus(Resource):
 @admin_ns.route('/configuration')
 class Configuration(Resource):
     @admin_ns.doc('get_configuration')
-    @auth_required
     def get(self):
         """Get all configuration values"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from models import Configuration
         configs = Configuration.query.all()
         return [config.to_dict() for config in configs]
@@ -436,9 +485,12 @@ class Configuration(Resource):
     @admin_ns.doc('update_configuration')
     @admin_ns.expect(config_model)
     @admin_ns.response(200, 'Configuration updated', success_model)
-    @auth_required
     def post(self):
         """Update configuration value"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from models import Configuration, db
         data = request.get_json()
         
@@ -455,9 +507,12 @@ class Configuration(Resource):
 @admin_ns.route('/schedules')
 class Schedules(Resource):
     @admin_ns.doc('get_schedules')
-    @auth_required
     def get(self):
         """Get all scheduled scans"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from models import ScanSchedule
         schedules = ScanSchedule.query.all()
         return [schedule.to_dict() for schedule in schedules]
@@ -465,9 +520,12 @@ class Schedules(Resource):
     @admin_ns.doc('create_schedule')
     @admin_ns.expect(schedule_model)
     @admin_ns.response(200, 'Schedule created', success_model)
-    @auth_required
     def post(self):
         """Create a new scheduled scan"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from models import ScanSchedule, db
         import json
         
@@ -499,9 +557,12 @@ class Export(Resource):
     @export_ns.param('search', 'Search term to filter file paths', type='string')
     @export_ns.response(200, 'Export successful')
     @export_ns.response(400, 'Invalid request', error_model)
-    @auth_required
     def get(self):
         """Export scan results with GET parameters"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         # Import here to avoid circular dependency
         from pixelprobe.api.export_routes import export_scan_results
         from flask import current_app
@@ -512,9 +573,12 @@ class Export(Resource):
         ):
             return export_scan_results()
 
-    @auth_required
     def post(self):
         """Export scan results with POST body"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         # Import here to avoid circular dependency
         from pixelprobe.api.export_routes import export_scan_results
         from flask import current_app
@@ -530,9 +594,12 @@ class ViewFile(Resource):
     @export_ns.doc('view_file')
     @export_ns.response(200, 'File streamed successfully')
     @export_ns.response(404, 'File not found', error_model)
-    @auth_required
     def get(self, result_id):
         """View/stream a media file (supports range requests for video streaming)"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from pixelprobe.api.export_routes import view_file
         from flask import current_app
         with current_app.test_request_context(
@@ -547,9 +614,12 @@ class DownloadFile(Resource):
     @export_ns.doc('download_file')
     @export_ns.response(200, 'File download started')
     @export_ns.response(404, 'File not found', error_model)
-    @auth_required
     def get(self, result_id):
         """Download a media file"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
         from pixelprobe.api.export_routes import download_file
         from flask import current_app
         with current_app.test_request_context(
