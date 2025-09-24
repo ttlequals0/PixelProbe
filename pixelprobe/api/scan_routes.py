@@ -805,6 +805,7 @@ def get_scan_status():
 
 @scan_bp.route('/cancel-scan', methods=['POST'])
 @rate_limit("10 per minute")
+@auth_required
 def cancel_scan():
     """Cancel the current scan"""
     logger.info("Cancel scan endpoint called")
@@ -819,6 +820,7 @@ def cancel_scan():
 @scan_bp.route('/force-cleanup-scan', methods=['POST'])
 @scan_bp.route('/scan/recovery', methods=['POST'])  # New consolidated endpoint
 @rate_limit("5 per minute")
+@auth_required
 def force_cleanup_scan():
     """Force cleanup of stuck scan states - emergency recovery endpoint
     
@@ -862,6 +864,7 @@ def force_cleanup_scan():
 
 @scan_bp.route('/scan-parallel', methods=['POST'])
 @rate_limit("2 per minute")
+@auth_required
 def scan_parallel():
     """Start a parallel scan with multiple workers"""
     # Check if a scan is already running (thread or Celery)
@@ -1014,6 +1017,7 @@ def scan_parallel():
 
 @scan_bp.route('/reset-stuck-scans', methods=['POST'])
 @rate_limit("5 per minute")
+@auth_required
 def reset_stuck_scans():
     """[DEPRECATED - Use /scan/recovery instead] Reset files that are stuck in 'scanning' state and clear active scan state"""
     try:
@@ -1055,6 +1059,7 @@ def reset_stuck_scans():
 
 @scan_bp.route('/reset-for-rescan', methods=['POST'])
 @rate_limit("5 per minute")
+@auth_required
 def reset_for_rescan():
     """Reset files for rescanning based on criteria"""
     data = request.get_json() or {}
@@ -1118,6 +1123,7 @@ def reset_for_rescan():
 
 @scan_bp.route('/recover-stuck-scan', methods=['POST'])
 @rate_limit("5 per minute")
+@auth_required
 def recover_stuck_scan():
     """[DEPRECATED - Use /scan/recovery instead] Attempt to recover from a stuck scan state"""
     try:
@@ -1174,6 +1180,7 @@ def recover_stuck_scan():
 
 @scan_bp.route('/force-scan-pending', methods=['POST'])
 @rate_limit("2 per minute")
+@auth_required
 def force_scan_pending():
     """Force scan all pending files regardless of directory"""
     try:
@@ -1241,6 +1248,7 @@ def force_scan_pending():
 
 @scan_bp.route('/reset-files-by-path', methods=['POST'])
 @rate_limit("5 per minute")
+@auth_required
 def reset_files_by_path():
     """Reset specific files by their paths"""
     data = request.get_json() or {}
@@ -1277,6 +1285,7 @@ def reset_files_by_path():
 
 @scan_bp.route('/reset-incomplete-scans', methods=['POST'])
 @rate_limit("2 per minute")
+@auth_required
 def reset_incomplete_scans():
     """Reset files that were marked as completed but have incomplete scan data
     

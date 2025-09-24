@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 export_bp = Blueprint('export', __name__, url_prefix='/api')
 
 @export_bp.route('/view/<int:result_id>', methods=['GET', 'OPTIONS'])
+@auth_required
 def view_file(result_id):
     """View/stream a media file"""
     # Handle OPTIONS request for CORS preflight
@@ -100,6 +101,7 @@ def view_file(result_id):
     return response
 
 @export_bp.route('/download/<int:result_id>')
+@auth_required
 def download_file(result_id):
     """Download a media file"""
     result = ScanResult.query.get_or_404(result_id)

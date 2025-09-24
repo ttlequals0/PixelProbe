@@ -228,8 +228,9 @@ def api_docs():
 
 @app.route('/health')
 @limiter.exempt
+@auth_required
 def health_check():
-    """Health check endpoint"""
+    """Health check endpoint - requires authentication"""
     return jsonify({
         'status': 'healthy',
         'version': __version__,

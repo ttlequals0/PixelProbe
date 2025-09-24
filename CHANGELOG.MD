@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.3] - 2025-09-24
+
+### Changed
+- Development version bump to 2.4.3
+- Preparing for next release cycle
+
+## [2.4.2] - 2025-09-24
+
+### CRITICAL Security Fixes
+- **Added Missing Authentication to 25+ API Endpoints**
+  - ALL API endpoints now require authentication without exception
+  - Fixed critical vulnerability where many admin and control endpoints were exposed
+  - Secured endpoints include:
+    - Admin configuration: /api/configurations, /api/schedules, /api/exclusions, /api/ignored-patterns
+    - Scan control: /api/cancel-scan, /api/force-cleanup-scan, /api/scan-parallel
+    - File access: /api/view/*, /api/download/*
+    - System info: /api/system-info
+    - Recovery endpoints: All /api/reset-* and /api/recover-* endpoints
+  - Health check endpoint (/health) now requires authentication
+  - Only authentication endpoints (/api/auth/*) remain public for login functionality
+  - This fixes a CRITICAL vulnerability allowing unauthorized system access
+
+### Fixed
+- **FFmpeg Validation Timeout Issues**
+  - Removed timeout limits for FFmpeg validation to ensure complete file scanning
+  - Files of any size will now be fully validated regardless of time required
+  - Fixed issue where large files (>2GB) were timing out at 228 seconds
+  - Removed timeout for both video and image FFmpeg validation
+
+- **Scheduled Tasks Authentication Failure**
+  - Fixed scheduler tasks failing with 401 authentication errors
+  - Added support for internal scheduler requests to bypass authentication
+  - Scheduler can now execute scans and cleanup tasks without authentication issues
+  - Internal requests are identified by X-Internal-Request: scheduler header
+
+- **Scan Results Not Appearing in UI**
+  - Fixed issue where newly scanned items weren't appearing in web interface
+  - Corrected scan result return values to include files_discovered and corrupted_found counts
+  - Scan service now properly returns scan statistics for Celery tasks
+  - Database queries now correctly count discovered and corrupted files
+
+- **Orphan Cleanup Functionality**
+  - Orphan cleanup tasks now execute properly with scheduler authentication fix
+  - Scheduled cleanup operations can run without manual intervention
+
+### Technical Details
+- Authentication module (auth.py) updated to recognize internal scheduler requests
+- Scan service (scan_service.py) updated to return complete scan statistics
+- Media checker (media_checker.py) updated to remove all FFmpeg timeout restrictions
+- All scheduled tasks can now run autonomously without authentication failures
+
 ## [2.4.1] - 2025-09-22
 
 ### Changed
