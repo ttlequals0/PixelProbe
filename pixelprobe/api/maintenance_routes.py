@@ -257,6 +257,7 @@ def get_file_changes_status():
         })
 
 @maintenance_bp.route('/cancel-cleanup', methods=['POST'])
+@auth_required
 def cancel_cleanup():
     """Cancel the current cleanup operation"""
     try:
@@ -282,6 +283,7 @@ def cancel_cleanup():
         return jsonify({'error': str(e)}), 500
 
 @maintenance_bp.route('/reset-cleanup-state', methods=['POST'])
+@auth_required
 def reset_cleanup_state():
     """Force reset cleanup state in case of stuck operation"""
     try:
@@ -318,6 +320,7 @@ def reset_cleanup_state():
         return jsonify({'error': str(e)}), 500
 
 @maintenance_bp.route('/cancel-file-changes', methods=['POST'])
+@auth_required
 def cancel_file_changes():
     """Cancel the current file changes check operation"""
     try:
@@ -343,6 +346,7 @@ def cancel_file_changes():
         return jsonify({'error': str(e)}), 500
 
 @maintenance_bp.route('/reset-file-changes-state', methods=['POST'])
+@auth_required
 def reset_file_changes_state():
     """Force reset file changes state in case of stuck operation"""
     try:
@@ -380,6 +384,7 @@ def reset_file_changes_state():
         return jsonify({'error': str(e)}), 500
 
 @maintenance_bp.route('/cleanup-orphaned', methods=['POST'])
+@auth_required
 def cleanup_orphaned_files():
     """Start cleanup of orphaned database entries"""
     global current_cleanup_thread
@@ -545,6 +550,7 @@ def check_file_changes_async(app, check_id):
             logger.error(f"Failed to update file changes record on error: {str(commit_error)}")
 
 @maintenance_bp.route('/vacuum', methods=['POST'])
+@auth_required
 def vacuum_database():
     """Vacuum the SQLite database to optimize storage"""
     try:

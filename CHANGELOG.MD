@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.4] - 2025-09-25
+
+### Fixed
+- **Orphan Scan Operation Failures**
+  - Fixed "Working outside of application context" error when starting orphan cleanup via API
+  - Added proper Flask application context handling for background cleanup threads
+  - Fixed maintenance service to properly handle app context in threaded operations
+  - Orphan cleanup now starts correctly from both web UI and API endpoints
+
+- **CRITICAL Security Fix: Missing Authentication on 13 API Endpoints**
+  - **Maintenance Endpoints (6 endpoints):**
+    - Added @auth_required to /api/cleanup-orphaned
+    - Added @auth_required to /api/cancel-cleanup
+    - Added @auth_required to /api/reset-cleanup-state
+    - Added @auth_required to /api/cancel-file-changes
+    - Added @auth_required to /api/reset-file-changes-state
+    - Added @auth_required to /api/vacuum
+  - **Report Endpoints (7 endpoints):**
+    - Added @auth_required to /api/scan-reports (list all reports)
+    - Added @auth_required to /api/scan-reports/<id> (get single report)
+    - Added @auth_required to /api/scan-reports/<id>/export (export report)
+    - Added @auth_required to /api/generate-pdf-report/<type>/<id>
+    - Added @auth_required to /api/scan-reports/latest (get latest reports)
+    - Added @auth_required to /api/scan-reports/<id> DELETE (delete report)
+    - Added @auth_required to /api/reports/download-multiple (bulk download)
+  - **ALL API endpoints now require authentication** - no exceptions
+
+### Technical Details
+- Modified MaintenanceService.start_cleanup() to capture Flask app context before starting threads
+- Added _run_cleanup_with_context() wrapper method to ensure database operations have proper context
+- Similarly fixed start_file_changes_check() for consistency
+- Fixed both direct API endpoints and Swagger API endpoints for orphan cleanup
+
 ## [2.4.3] - 2025-09-24
 
 ### Changed

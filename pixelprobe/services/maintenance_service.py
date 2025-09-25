@@ -54,9 +54,11 @@ class MaintenanceService:
     
     def start_cleanup(self) -> Dict:
         """Start cleanup of orphaned database entries"""
+        from flask import current_app
+
         if self.cleanup_thread and self.cleanup_thread.is_alive():
             raise RuntimeError("Cleanup operation already in progress")
-        
+
         # Reset state
         with self.cleanup_lock:
             self.cleanup_state.update({
@@ -69,37 +71,48 @@ class MaintenanceService:
                 'start_time': time.time(),
                 'cancel_requested': False
             })
-        
-        # Create cleanup state in database
-        cleanup_record = CleanupState(
-            start_time=datetime.now(timezone.utc),
-            is_active=True,
-            phase='starting',
-            phase_number=1
-        )
-        db.session.add(cleanup_record)
-        db.session.commit()
-        
-        # Start cleanup in background
+
+        # Create cleanup state in database - ensure we have app context
+        try:
+            cleanup_record = CleanupState(
+                start_time=datetime.now(timezone.utc),
+                is_active=True,
+                phase='starting',
+                phase_number=1
+            )
+            db.session.add(cleanup_record)
+            db.session.commit()
+            cleanup_id = cleanup_record.id
+        except Exception as e:
+            logger.error(f"Error creating cleanup record: {str(e)}")
+            # If we can't create DB record, still start cleanup with a UUID
+            cleanup_id = str(uuid.uuid4())
+
+        # Get app instance for thread context
+        app = current_app._get_current_object()
+
+        # Start cleanup in background with app context
         self.cleanup_thread = threading.Thread(
-            target=self._run_cleanup,
-            args=(cleanup_record.id,)
+            target=self._run_cleanup_with_context,
+            args=(app, cleanup_id)
         )
         self.cleanup_thread.start()
-        
+
         return {
             'message': 'Cleanup operation started',
-            'cleanup_id': cleanup_record.id
+            'cleanup_id': cleanup_id
         }
     
     def start_file_changes_check(self) -> Dict:
         """Start checking for file changes"""
+        from flask import current_app
+
         if self.file_changes_thread and self.file_changes_thread.is_alive():
             raise RuntimeError("File changes check already in progress")
-        
+
         # Create unique check ID
         check_id = str(uuid.uuid4())
-        
+
         # Reset state
         with self.file_changes_lock:
             self.file_changes_state.update({
@@ -113,25 +126,31 @@ class MaintenanceService:
                 'start_time': time.time(),
                 'cancel_requested': False
             })
-        
-        # Create file changes state in database
-        file_changes_record = FileChangesState(
-            check_id=check_id,
-            start_time=datetime.now(timezone.utc),
-            is_active=True,
-            phase='starting',
-            phase_number=1
-        )
-        db.session.add(file_changes_record)
-        db.session.commit()
-        
-        # Start file changes check in background
+
+        # Create file changes state in database - ensure we have app context
+        try:
+            file_changes_record = FileChangesState(
+                check_id=check_id,
+                start_time=datetime.now(timezone.utc),
+                is_active=True,
+                phase='starting',
+                phase_number=1
+            )
+            db.session.add(file_changes_record)
+            db.session.commit()
+        except Exception as e:
+            logger.error(f"Error creating file changes record: {str(e)}")
+
+        # Get app instance for thread context
+        app = current_app._get_current_object()
+
+        # Start file changes check in background with app context
         self.file_changes_thread = threading.Thread(
-            target=self._run_file_changes_check,
-            args=(check_id,)
+            target=self._run_file_changes_check_with_context,
+            args=(app, check_id)
         )
         self.file_changes_thread.start()
-        
+
         return {
             'message': 'File changes check started',
             'check_id': check_id
@@ -208,7 +227,17 @@ class MaintenanceService:
         
         return {'message': 'Cleanup state reset successfully'}
     
-    def _run_cleanup(self, cleanup_id: int):
+    def _run_cleanup_with_context(self, app, cleanup_id):
+        """Run cleanup with app context"""
+        with app.app_context():
+            self._run_cleanup(cleanup_id)
+
+    def _run_file_changes_check_with_context(self, app, check_id):
+        """Run file changes check with app context"""
+        with app.app_context():
+            self._run_file_changes_check(check_id)
+
+    def _run_cleanup(self, cleanup_id):
         """Run the cleanup operation"""
         try:
             cleanup_record = CleanupState.query.get(cleanup_id)

@@ -37,6 +37,7 @@ def convert_to_timezone(dt):
     return dt.astimezone(tz).isoformat()
 
 @reports_bp.route('/scan-reports')
+@auth_required
 def get_scan_reports():
     """Get paginated scan reports with optional filters"""
     page = request.args.get('page', 1, type=int)
@@ -100,6 +101,7 @@ def get_scan_reports():
     })
 
 @reports_bp.route('/scan-reports/<report_id>')
+@auth_required
 def get_scan_report(report_id):
     """Get a single scan report by ID"""
     report = ScanReport.query.filter_by(report_id=report_id).first()
@@ -153,6 +155,7 @@ def get_scan_report(report_id):
     return jsonify(report_dict)
 
 @reports_bp.route('/scan-reports/<report_id>/export')
+@auth_required
 def export_scan_report(report_id):
     """Export scan report as JSON with full scan results"""
     report = ScanReport.query.filter_by(report_id=report_id).first()
@@ -227,6 +230,7 @@ def export_scan_report(report_id):
     return response
 
 @reports_bp.route('/generate-pdf-report/<scan_type>/<scan_id>')
+@auth_required
 def generate_pdf_report(scan_type, scan_id):
     """Generate PDF report for scan results with tool and details"""
     try:
@@ -850,6 +854,7 @@ def export_scan_report_pdf(report_id):
         return jsonify({'error': f'Failed to generate PDF: {str(e)}'}), 500
 
 @reports_bp.route('/scan-reports/latest')
+@auth_required
 def get_latest_scan_reports():
     """Get the latest report for each scan type"""
     scan_types = ['full_scan', 'rescan', 'cleanup', 'file_changes']
@@ -886,6 +891,7 @@ def get_latest_scan_reports():
     return jsonify(latest_reports)
 
 @reports_bp.route('/scan-reports/<report_id>', methods=['DELETE'])
+@auth_required
 def delete_scan_report(report_id):
     """Delete a scan report by ID"""
     report = ScanReport.query.filter_by(report_id=report_id).first()
@@ -901,6 +907,7 @@ def delete_scan_report(report_id):
         return jsonify({'error': f'Failed to delete report: {str(e)}'}), 500
 
 @reports_bp.route('/reports/download-multiple', methods=['POST'])
+@auth_required
 @validate_json_input({
     'report_ids': {'required': True, 'type': list},
     'format': {'required': False, 'type': str}
