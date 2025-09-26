@@ -272,18 +272,19 @@ class MaintenanceService:
             # Create progress tracker for cleanup
             progress_tracker = ProgressTracker('cleanup')
             
-            orphaned_entries = []
+            orphaned_ids = []  # Store IDs instead of objects
+            orphaned_paths = []  # Store paths for logging
             orphaned_count = 0
-            
+
             for i, result in enumerate(all_results):
                 if self._is_cancelled(cleanup_record):
                     break
-                
+
                 # Update progress
                 cleanup_record.files_processed = i + 1
                 cleanup_record.phase_current = i + 1
                 cleanup_record.current_file = result.file_path
-                
+
                 # Update progress message with current file and ETA
                 cleanup_record.progress_message = progress_tracker.get_progress_message(
                     f'Phase 2 of 3: Checking {total_files} files on filesystem',
@@ -291,10 +292,11 @@ class MaintenanceService:
                     total_files,
                     os.path.basename(result.file_path)
                 )
-                
+
                 # Check if file exists
                 if not os.path.exists(result.file_path):
-                    orphaned_entries.append(result)
+                    orphaned_ids.append(result.id)  # Store ID instead of object
+                    orphaned_paths.append(result.file_path)  # Store path for logging
                     orphaned_count += 1
                     cleanup_record.orphaned_found = orphaned_count
                     logger.info(f"Found orphaned entry: {result.file_path}")
@@ -323,31 +325,35 @@ class MaintenanceService:
                 return
             
             # Phase 3: Delete orphaned entries from database
-            if orphaned_entries:
+            if orphaned_ids:
                 cleanup_record.phase = 'deleting_entries'
                 cleanup_record.phase_number = 3
                 cleanup_record.progress_message = f'Phase 3 of 3: Removing {orphaned_count} orphaned entries from database...'
-                cleanup_record.total_files = len(orphaned_entries)
-                cleanup_record.phase_total = len(orphaned_entries)
+                cleanup_record.total_files = len(orphaned_ids)
+                cleanup_record.phase_total = len(orphaned_ids)
                 cleanup_record.files_processed = 0
                 cleanup_record.phase_current = 0
                 db.session.commit()
-                
+
                 # Delete orphaned entries in batches for performance
                 deleted_count = 0
                 batch_size = 50
-                
-                for i in range(0, len(orphaned_entries), batch_size):
+
+                for i in range(0, len(orphaned_ids), batch_size):
                     if self._is_cancelled(cleanup_record):
                         break
-                        
-                    batch = orphaned_entries[i:i + batch_size]
-                    
-                    for entry in batch:
-                        db.session.delete(entry)
+
+                    batch_ids = orphaned_ids[i:i + batch_size]
+                    batch_paths = orphaned_paths[i:i + batch_size]
+
+                    # Delete by IDs to avoid detached instance issues
+                    ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
+
+                    # Log the deletions
+                    for path in batch_paths:
                         deleted_count += 1
-                        logger.info(f"Deleted orphaned entry: {entry.file_path}")
-                    
+                        logger.info(f"Deleted orphaned entry: {path}")
+
                     # Commit batch
                     db.session.commit()
                     
@@ -372,7 +378,7 @@ class MaintenanceService:
             else:
                 cleanup_record.phase = 'complete'
                 if orphaned_count > 0:
-                    deleted_count = len(orphaned_entries) if orphaned_entries else orphaned_count
+                    deleted_count = len(orphaned_ids) if orphaned_ids else orphaned_count
                     cleanup_record.progress_message = f'Cleanup complete. Deleted {deleted_count} orphaned database entries.'
                 else:
                     cleanup_record.progress_message = 'Cleanup complete. No orphaned entries found.'
@@ -382,7 +388,8 @@ class MaintenanceService:
             db.session.commit()
             
             # Create scan report for cleanup operation
-            if cleanup_record.phase == 'complete':
+            # Always try to create a report even if there was an error, as long as we have some data
+            if cleanup_record.phase in ('complete', 'error'):
                 self._create_cleanup_report(cleanup_record)
             
             with self.cleanup_lock:
@@ -390,8 +397,16 @@ class MaintenanceService:
                 self.cleanup_state['phase'] = cleanup_record.phase
                 
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            logger.error(f"Error during cleanup: {e}", exc_info=True)  # Add stack trace
             self._handle_cleanup_error(cleanup_id, str(e))
+
+            # Try to create error report
+            try:
+                cleanup_record = CleanupState.query.get(cleanup_id)
+                if cleanup_record:
+                    self._create_cleanup_report(cleanup_record)
+            except Exception as report_error:
+                logger.error(f"Failed to create error report: {report_error}")
     
     def _create_cleanup_report(self, cleanup_record: CleanupState):
         """Create a report for the cleanup operation"""
@@ -592,7 +607,8 @@ class MaintenanceService:
             db.session.commit()
             
             # Create scan report for file changes operation
-            if file_changes_record.phase == 'complete':
+            # Always try to create a report even if there was an error, as long as we have some data
+            if file_changes_record.phase in ('complete', 'error'):
                 self._create_file_changes_report(file_changes_record)
             
             with self.file_changes_lock:
@@ -600,8 +616,16 @@ class MaintenanceService:
                 self.file_changes_state['phase'] = file_changes_record.phase
                 
         except Exception as e:
-            logger.error(f"Error during file changes check: {e}")
+            logger.error(f"Error during file changes check: {e}", exc_info=True)  # Add stack trace
             self._handle_file_changes_error(check_id, str(e))
+
+            # Try to create error report
+            try:
+                file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                if file_changes_record:
+                    self._create_file_changes_report(file_changes_record)
+            except Exception as report_error:
+                logger.error(f"Failed to create error report: {report_error}")
     
     def _check_file_changes(self, result: ScanResult, checker: PixelProbe) -> Optional[Dict]:
         """Check if a file has changed since last scan"""

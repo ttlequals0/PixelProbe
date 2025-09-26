@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.5] - 2025-09-26
+
+### Fixed
+- **Orphan Scan Report Generation**
+  - Fixed SQLAlchemy "Instance has been deleted" error during orphan cleanup deletion phase
+  - Changed deletion logic to use IDs instead of ORM objects to avoid detached instance issues
+  - Now uses bulk delete with `ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete()`
+  - Reports are now generated even when cleanup encounters errors
+  - Added error report generation in exception handler
+
+- **File Changes Check Report Generation**
+  - Ensured reports are generated even when file changes check encounters errors
+  - Added error report generation in exception handler
+  - Both maintenance operations now consistently generate reports for error tracking
+
+### Improved
+- Enhanced error logging with stack traces for better debugging
+- More robust report generation that works in error scenarios
+
 ## [2.4.4] - 2025-09-25
 
 ### Fixed
