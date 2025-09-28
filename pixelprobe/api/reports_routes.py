@@ -403,7 +403,8 @@ def generate_pdf_report(scan_type, scan_id):
             
             elements.append(table)
             
-            # Show count for large result sets\n            if len(results) >= 1000:
+            # Show count for large result sets
+            if len(results) >= 1000:
                 elements.append(Spacer(1, 0.1*inch))
                 elements.append(Paragraph(f"Total results: {len(results):,}", styles['Normal']))
         
