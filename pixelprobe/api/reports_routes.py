@@ -328,7 +328,7 @@ def generate_pdf_report(scan_type, scan_id):
             # For other scan types, get recent results
             results = ScanResult.query.filter(
                 ScanResult.scan_date.isnot(None)
-            ).order_by(ScanResult.scan_date.desc()).limit(500).all()
+            ).order_by(ScanResult.scan_date.desc()).all()  # No limit - show all results
         
         if not results:
             elements.append(Paragraph("No scan results found.", styles['Normal']))
@@ -403,9 +403,9 @@ def generate_pdf_report(scan_type, scan_id):
             
             elements.append(table)
             
-            if len(results) >= 500:
+            # Show count for large result sets\n            if len(results) >= 1000:
                 elements.append(Spacer(1, 0.1*inch))
-                elements.append(Paragraph("Note: Showing first 500 results", styles['Normal']))
+                elements.append(Paragraph(f"Total results: {len(results):,}", styles['Normal']))
         
         # Build PDF
         doc.build(elements)
@@ -696,9 +696,8 @@ def export_scan_report_pdf(report_id):
                 else:
                     files_data = [['File Path', 'Status', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
                 
-                # Add file rows (limit to first 2000 for PDF size - increased for cleanup reports)
-                limit = 2000 if report.scan_type == 'cleanup' else 500
-                for file in scanned_files[:limit]:
+                # Add ALL file rows - no limits, show everything in the report
+                for file in scanned_files:
                     if report.scan_type == 'cleanup':
                         # Simple row for cleanup reports
                         file_path_para = Paragraph(file.file_path, cell_style)
@@ -773,8 +772,8 @@ def export_scan_report_pdf(report_id):
                 
                 elements.append(files_table)
                 
-                limit = 2000 if report.scan_type == 'cleanup' else 500
-                if len(scanned_files) > limit:
+                # Show total count for large reports
+                if len(scanned_files) >= 1000:
                     elements.append(Spacer(1, 0.1*inch))
                     # Define footer style here
                     footer_style = ParagraphStyle(
@@ -784,7 +783,7 @@ def export_scan_report_pdf(report_id):
                         textColor=colors.HexColor('#7f8c8d'),
                         alignment=TA_CENTER
                     )
-                    elements.append(Paragraph(f"Note: Showing first 500 of {len(scanned_files)} total files", footer_style))
+                    elements.append(Paragraph(f"Total files in report: {len(scanned_files):,}", footer_style))
             else:
                 elements.append(Paragraph("No files were scanned during this scan.", styles['Normal']))
         
@@ -893,7 +892,7 @@ def export_scan_report_pdf(report_id):
                     </tr>
             """
             
-            for file in scanned_files[:500]:  # Limit display to 500 files
+            for file in scanned_files:  # Show ALL files, no limits
                 status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
                 size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
                 file_type = file.file_type or 'Unknown'
@@ -913,7 +912,7 @@ def export_scan_report_pdf(report_id):
             html_content += "</table>"
             
             if len(scanned_files) > 500:
-                html_content += f"<p><em>Note: Showing first 500 of {len(scanned_files)} total files</em></p>"
+                html_content += f"<p><em>Total files in report: {len(scanned_files):,}</em></p>"
         
         html_content += f"""
             <div class="footer">
@@ -1182,9 +1181,9 @@ def download_multiple_reports():
                             
                             elements.append(table)
                             
-                            if len(scanned_files) >= 500:
+                            if len(scanned_files) >= 1000:
                                 elements.append(Spacer(1, 0.1*inch))
-                                elements.append(Paragraph("Note: Showing first 500 results", styles['Normal']))
+                                elements.append(Paragraph(f"Total results: {len(results):,}", styles['Normal']))
                 
                 # Build PDF
                 doc.build(elements)

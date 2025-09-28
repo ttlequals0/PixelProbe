@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.7] - 2025-09-27
+
+### Fixed
+- **Removed ALL file limits from PDF reports**
+  - PDF reports now include ALL files with NO limits (previously limited to 500-2000 files)
+  - All scan types (full_scan, rescan, cleanup, file_changes) now show complete results
+  - Reports show total file count for transparency when there are 1000+ files
+  - This ensures complete audit trails and compliance documentation
+  - The whole point of reports is to see EVERYTHING, not a subset
+
+### Changed
+- Removed artificial 500/2000 file limits from all PDF generation code
+- Database queries no longer limit results to 500 records
+- Footer messages changed from "Showing first X of Y" to "Total files: Y"
+
 ## [2.4.6] - 2025-09-27
 
 ### Fixed
