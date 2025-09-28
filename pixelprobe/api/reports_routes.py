@@ -169,44 +169,62 @@ def export_scan_report(report_id):
     report_dict['end_time'] = convert_to_timezone(report.end_time)
     report_dict['created_at'] = convert_to_timezone(report.created_at)
     
-    # Add scan results - same as PDF report
+    # Add scan results - handle cleanup reports differently
     from models import ScanResult
-    scanned_files = ScanResult.query.filter(
-        ScanResult.scan_date >= report.start_time,
-        ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
-    ).order_by(ScanResult.file_path).all()
-    
-    # Include detailed file results
-    file_results = []
-    for file in scanned_files:
-        file_data = {
-            'file_path': file.file_path,
-            'status': 'corrupted' if file.is_corrupted and not file.marked_as_good else ('warning' if file.has_warnings and not file.marked_as_good else 'healthy'),
-            'file_size': file.file_size,
-            'file_type': file.file_type,
-            'scan_tool': file.scan_tool,
-            'scan_date': convert_to_timezone(file.scan_date) if file.scan_date else None,
-            'is_corrupted': file.is_corrupted,
-            'has_warnings': file.has_warnings,
-            'marked_as_good': file.marked_as_good,
-            'corruption_details': file.corruption_details,
-            'warning_details': file.warning_details,
-            'error_message': file.error_message,
-            'scan_duration': file.scan_duration,
-            'file_hash': file.file_hash,
-            'last_modified': convert_to_timezone(file.last_modified) if file.last_modified else None
-        }
-        
-        # Include scan output summary if available
-        if file.scan_output and not file.is_corrupted:
-            # Extract meaningful info from scan output
-            output_lines = (file.scan_output or '').split('\n')
-            for line in output_lines[:5]:
-                if 'Duration:' in line or 'Video:' in line or 'Audio:' in line:
-                    file_data['scan_output_summary'] = line.strip()
-                    break
-        
-        file_results.append(file_data)
+
+    if report.scan_type == 'cleanup' and report.directories_scanned:
+        # For cleanup reports, the orphaned files list is stored in directories_scanned field
+        file_results = []
+        try:
+            orphaned_files_list = json.loads(report.directories_scanned)
+            if isinstance(orphaned_files_list, list):
+                for file_path in orphaned_files_list:
+                    file_results.append({
+                        'file_path': file_path,
+                        'status': 'orphaned',
+                        'action': 'deleted',
+                        'scan_date': convert_to_timezone(report.end_time) if report.end_time else None
+                    })
+        except Exception as e:
+            logger.warning(f"Could not parse orphaned files list: {e}")
+    else:
+        # For other scan types, get actual scan results
+        scanned_files = ScanResult.query.filter(
+            ScanResult.scan_date >= report.start_time,
+            ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
+        ).order_by(ScanResult.file_path).all()
+
+        # Include detailed file results
+        file_results = []
+        for file in scanned_files:
+            file_data = {
+                'file_path': file.file_path,
+                'status': 'corrupted' if file.is_corrupted and not file.marked_as_good else ('warning' if file.has_warnings and not file.marked_as_good else 'healthy'),
+                'file_size': file.file_size,
+                'file_type': file.file_type,
+                'scan_tool': file.scan_tool,
+                'scan_date': convert_to_timezone(file.scan_date) if file.scan_date else None,
+                'is_corrupted': file.is_corrupted,
+                'has_warnings': file.has_warnings,
+                'marked_as_good': file.marked_as_good,
+                'corruption_details': file.corruption_details,
+                'warning_details': file.warning_details,
+                'error_message': file.error_message,
+                'scan_duration': file.scan_duration,
+                'file_hash': file.file_hash,
+                'last_modified': convert_to_timezone(file.last_modified) if file.last_modified else None
+            }
+
+            # Include scan output summary if available
+            if file.scan_output and not file.is_corrupted:
+                # Extract meaningful info from scan output
+                output_lines = (file.scan_output or '').split('\n')
+                for line in output_lines[:5]:
+                    if 'Duration:' in line or 'Video:' in line or 'Audio:' in line:
+                        file_data['scan_output_summary'] = line.strip()
+                        break
+
+            file_results.append(file_data)
     
     report_dict['scan_results'] = file_results
     report_dict['total_files_in_report'] = len(file_results)
@@ -615,68 +633,130 @@ def export_scan_report_pdf(report_id):
             wordWrap='CJK'
         )
         
-        # Add scanned files list
-        if report.scan_type in ['full_scan', 'rescan']:
+        # Add scanned files list or orphaned files list
+        if report.scan_type in ['full_scan', 'rescan', 'cleanup', 'file_changes']:
             elements.append(PageBreak())
-            elements.append(Paragraph("Scanned Files", heading_style))
+
+            # Choose appropriate title based on scan type
+            if report.scan_type == 'cleanup':
+                elements.append(Paragraph("Orphaned Files Removed", heading_style))
+            elif report.scan_type == 'file_changes':
+                elements.append(Paragraph("Changed Files", heading_style))
+            else:
+                elements.append(Paragraph("Scanned Files", heading_style))
             
-            # Query files scanned during this scan period
+            # Query files based on scan type
             from models import ScanResult
-            scanned_files = ScanResult.query.filter(
-                ScanResult.scan_date >= report.start_time,
-                ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
-            ).order_by(ScanResult.file_path).all()
+
+            if report.scan_type == 'cleanup':
+                # For cleanup reports, the orphaned files list is stored in directories_scanned field as JSON
+                scanned_files = []
+
+                if report.directories_scanned:
+                    try:
+                        # The directories_scanned field contains the list of orphaned files for cleanup reports
+                        orphaned_files_list = json.loads(report.directories_scanned)
+
+                        # Create pseudo ScanResult objects for display
+                        class OrphanedFile:
+                            def __init__(self, file_path):
+                                self.file_path = file_path
+                                self.is_corrupted = False
+                                self.marked_as_good = False
+                                self.has_warnings = False
+                                self.file_size = 0
+                                self.file_type = 'Orphaned'
+                                self.scan_tool = 'Cleanup'
+                                self.corruption_details = None
+                                self.warning_details = None
+                                self.error_message = 'File no longer exists'
+                                self.scan_output = None
+                                self.scan_date = report.end_time
+
+                        if isinstance(orphaned_files_list, list):
+                            scanned_files = [OrphanedFile(file_path) for file_path in orphaned_files_list]
+                        else:
+                            logger.warning(f"Unexpected type for orphaned_files_list: {type(orphaned_files_list)}")
+                    except Exception as e:
+                        logger.warning(f"Could not parse orphaned files list from cleanup report: {e}")
+                        # Fallback: try to get from scan_results during the period
+                        scanned_files = []
+            else:
+                # For other scan types, query normally
+                scanned_files = ScanResult.query.filter(
+                    ScanResult.scan_date >= report.start_time,
+                    ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
+                ).order_by(ScanResult.file_path).all()
             
             if scanned_files:
                 # Create files table header
-                files_data = [['File Path', 'Status', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
+                if report.scan_type == 'cleanup':
+                    # Simpler header for cleanup reports
+                    files_data = [['File Path', 'Status', 'Action']]
+                else:
+                    files_data = [['File Path', 'Status', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
                 
-                # Add file rows (limit to first 500 for PDF size)
-                for file in scanned_files[:500]:
-                    status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
-                    if file.has_warnings and not file.marked_as_good:
-                        status = 'Warning'
-                    
-                    size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
-                    file_type = file.file_type or 'Unknown'
-                    scan_tool = file.scan_tool or 'N/A'
-                    scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
-                    
-                    # Combine details from various fields - show all available information
-                    details = []
-                    if file.corruption_details:
-                        details.append(file.corruption_details)
-                    if file.warning_details:
-                        details.append(file.warning_details)
-                    if file.error_message:
-                        details.append(file.error_message)
-                    # If no specific details but file is healthy, add a brief scan output excerpt
-                    if not details and file.scan_output and not file.is_corrupted:
-                        # Extract meaningful info from scan output
-                        output_lines = (file.scan_output or '').split('\n')
-                        for line in output_lines[:3]:  # Check first 3 lines
-                            if 'Duration:' in line or 'Video:' in line or 'Audio:' in line:
-                                details.append(line.strip()[:50])
-                                break
-                    details_text = ' '.join(details)[:100] + '...' if len(' '.join(details)) > 100 else ' '.join(details) if details else ''
-                    
-                    # Wrap file path in Paragraph for text wrapping
-                    file_path_para = Paragraph(file.file_path, cell_style)
-                    details_para = Paragraph(details_text, cell_style) if details_text else ''
-                    
-                    files_data.append([
-                        file_path_para,  # Wrapped for proper text flow
-                        status,
-                        size,
-                        file_type,
-                        scan_tool,
-                        details_para,
-                        scan_date
-                    ])
+                # Add file rows (limit to first 2000 for PDF size - increased for cleanup reports)
+                limit = 2000 if report.scan_type == 'cleanup' else 500
+                for file in scanned_files[:limit]:
+                    if report.scan_type == 'cleanup':
+                        # Simple row for cleanup reports
+                        file_path_para = Paragraph(file.file_path, cell_style)
+                        files_data.append([
+                            file_path_para,
+                            'Orphaned',
+                            'Deleted'
+                        ])
+                    else:
+                        # Full details for other scan types
+                        status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
+                        if file.has_warnings and not file.marked_as_good:
+                            status = 'Warning'
+
+                        size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
+                        file_type = file.file_type or 'Unknown'
+                        scan_tool = file.scan_tool or 'N/A'
+                        scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+
+                        # Combine details from various fields - show all available information
+                        details = []
+                        if file.corruption_details:
+                            details.append(file.corruption_details)
+                        if file.warning_details:
+                            details.append(file.warning_details)
+                        if file.error_message:
+                            details.append(file.error_message)
+                        # If no specific details but file is healthy, add a brief scan output excerpt
+                        if not details and file.scan_output and not file.is_corrupted:
+                            # Extract meaningful info from scan output
+                            output_lines = (file.scan_output or '').split('\n')
+                            for line in output_lines[:3]:  # Check first 3 lines
+                                if 'Duration:' in line or 'Video:' in line or 'Audio:' in line:
+                                    details.append(line.strip()[:50])
+                                    break
+                        details_text = ' '.join(details)[:100] + '...' if len(' '.join(details)) > 100 else ' '.join(details) if details else ''
+
+                        # Wrap file path in Paragraph for text wrapping
+                        file_path_para = Paragraph(file.file_path, cell_style)
+                        details_para = Paragraph(details_text, cell_style) if details_text else ''
+
+                        files_data.append([
+                            file_path_para,  # Wrapped for proper text flow
+                            status,
+                            size,
+                            file_type,
+                            scan_tool,
+                            details_para,
+                            scan_date
+                        ])
                 
-                # Create files table with wider columns using full page width
-                # Total width = 11 inches (landscape) - 0.6 inches margins = 10.4 inches available
-                files_table = Table(files_data, colWidths=[3.8*inch, 0.7*inch, 0.7*inch, 0.9*inch, 0.7*inch, 2.6*inch, 1.0*inch], repeatRows=1)
+                # Create files table with appropriate columns based on scan type
+                if report.scan_type == 'cleanup':
+                    # Simpler table for cleanup with just 3 columns
+                    files_table = Table(files_data, colWidths=[7.4*inch, 1.5*inch, 1.5*inch], repeatRows=1)
+                else:
+                    # Full table for other scan types
+                    files_table = Table(files_data, colWidths=[3.8*inch, 0.7*inch, 0.7*inch, 0.9*inch, 0.7*inch, 2.6*inch, 1.0*inch], repeatRows=1)
                 files_table.setStyle(TableStyle([
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                     ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
@@ -693,7 +773,8 @@ def export_scan_report_pdf(report_id):
                 
                 elements.append(files_table)
                 
-                if len(scanned_files) > 500:
+                limit = 2000 if report.scan_type == 'cleanup' else 500
+                if len(scanned_files) > limit:
                     elements.append(Spacer(1, 0.1*inch))
                     # Define footer style here
                     footer_style = ParagraphStyle(

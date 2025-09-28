@@ -244,6 +244,9 @@ class MaintenanceService:
             if not cleanup_record:
                 logger.error(f"Cleanup record not found: {cleanup_id}")
                 return
+
+            # Keep track of orphaned files for the report
+            self.orphaned_files_list = []
             
             # Phase 1: Scanning database
             cleanup_record.phase = 'scanning_database'
@@ -300,6 +303,8 @@ class MaintenanceService:
                     orphaned_count += 1
                     cleanup_record.orphaned_found = orphaned_count
                     logger.info(f"Found orphaned entry: {result.file_path}")
+                    # Store for report
+                    self.orphaned_files_list.append(result.file_path)
                 
                 # Update progress periodically
                 if i % 100 == 0:
@@ -390,7 +395,7 @@ class MaintenanceService:
             # Create scan report for cleanup operation
             # Always try to create a report even if there was an error, as long as we have some data
             if cleanup_record.phase in ('complete', 'error'):
-                self._create_cleanup_report(cleanup_record)
+                self._create_cleanup_report(cleanup_record, getattr(self, 'orphaned_files_list', []))
             
             with self.cleanup_lock:
                 self.cleanup_state['is_running'] = False
@@ -404,18 +409,18 @@ class MaintenanceService:
             try:
                 cleanup_record = CleanupState.query.get(cleanup_id)
                 if cleanup_record:
-                    self._create_cleanup_report(cleanup_record)
+                    self._create_cleanup_report(cleanup_record, getattr(self, 'orphaned_files_list', []))
             except Exception as report_error:
                 logger.error(f"Failed to create error report: {report_error}")
     
-    def _create_cleanup_report(self, cleanup_record: CleanupState):
+    def _create_cleanup_report(self, cleanup_record: CleanupState, orphaned_files_list=None):
         """Create a report for the cleanup operation"""
         try:
             # Calculate duration
             duration_seconds = None
             if cleanup_record.start_time and cleanup_record.end_time:
                 duration_seconds = (cleanup_record.end_time - cleanup_record.start_time).total_seconds()
-            
+
             # Create the report
             report = ScanReport(
                 scan_type='cleanup',
@@ -429,6 +434,12 @@ class MaintenanceService:
                 orphaned_records_deleted=cleanup_record.orphaned_found,  # All found orphans are deleted
                 created_at=datetime.now(timezone.utc)
             )
+
+            # Store the list of orphaned files in directories_scanned field as JSON
+            # This field is repurposed for cleanup reports to store the orphaned files list
+            if orphaned_files_list:
+                import json
+                report.directories_scanned = json.dumps(orphaned_files_list)
             
             db.session.add(report)
             db.session.commit()

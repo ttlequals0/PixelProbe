@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.6] - 2025-09-27
+
+### Fixed
+- **Orphan Cleanup PDF Reports Missing Files List**
+  - PDF reports for cleanup operations now include the complete list of removed files
+  - Stores orphaned files list in ScanReport.directories_scanned field as JSON
+  - PDF generation updated to display up to 2000 orphaned files (increased from 500 limit)
+  - JSON exports also properly include orphaned files list for cleanup reports
+  - Cleanup reports now have consistent data between PDF and JSON formats
+
+### Improved
+- Better handling of cleanup report data storage and retrieval
+- Simplified table format for orphaned files in PDF (File Path, Status, Action)
+- More efficient PDF generation for large numbers of orphaned files
+
 ## [2.4.5] - 2025-09-26
 
 ### Fixed
