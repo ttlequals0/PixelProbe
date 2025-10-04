@@ -388,11 +388,15 @@ def reset_file_changes_state():
 def cleanup_orphaned_files():
     """Start cleanup of orphaned database entries"""
     global current_cleanup_thread
-    
+
     # Check if cleanup is already running
     if current_cleanup_thread and current_cleanup_thread.is_alive():
         return jsonify({'error': 'Cleanup operation already in progress'}), 409
-    
+
+    # Get optional file_paths parameter for scoped orphan checking
+    data = request.get_json() or {}
+    file_paths = data.get('file_paths', [])
+
     # Reset state
     with cleanup_state_lock:
         cleanup_state.update({
@@ -405,7 +409,7 @@ def cleanup_orphaned_files():
             'start_time': time.time(),
             'cancel_requested': False
         })
-    
+
     # Create cleanup state in database
     cleanup_record = CleanupState(
         start_time=datetime.now(timezone.utc),
@@ -415,20 +419,26 @@ def cleanup_orphaned_files():
     )
     db.session.add(cleanup_record)
     db.session.commit()
-    
+
     # Start cleanup in background thread - capture app instance for thread context
     app = current_app._get_current_object()
     current_cleanup_thread = threading.Thread(
         target=cleanup_orphaned_async,
-        args=(app, cleanup_record.id,),
+        args=(app, cleanup_record.id, file_paths),
         name=f'cleanup_{cleanup_record.id}'
     )
     current_cleanup_thread.start()
-    
+
+    if file_paths:
+        message = f'Cleanup operation started for {len(file_paths)} specific file(s)'
+    else:
+        message = 'Cleanup operation started for all files'
+
     return jsonify({
         'status': 'started',
-        'message': 'Cleanup operation started',
-        'cleanup_id': cleanup_record.id
+        'message': message,
+        'cleanup_id': cleanup_record.id,
+        'file_count': len(file_paths) if file_paths else None
     })
 
 @maintenance_bp.route('/file-changes', methods=['GET', 'POST'])
@@ -436,14 +446,18 @@ def cleanup_orphaned_files():
 def check_file_changes():
     """Check for file changes since last scan"""
     global current_file_changes_thread
-    
+
     # Check if file changes check is already running
     if current_file_changes_thread and current_file_changes_thread.is_alive():
         return jsonify({'error': 'File changes check already in progress'}), 409
-    
+
+    # Get optional file_paths parameter for scoped file changes checking
+    data = request.get_json() or {}
+    file_paths = data.get('file_paths', [])
+
     # Create unique check ID
     check_id = str(uuid.uuid4())
-    
+
     # Reset state
     with file_changes_state_lock:
         file_changes_state.update({
@@ -457,7 +471,7 @@ def check_file_changes():
             'start_time': time.time(),
             'cancel_requested': False
         })
-    
+
     # Create file changes state in database
     file_changes_record = FileChangesState(
         check_id=check_id,
@@ -468,23 +482,35 @@ def check_file_changes():
     )
     db.session.add(file_changes_record)
     db.session.commit()
-    
+
     # Start file changes check in background thread - capture app instance for thread context
     app = current_app._get_current_object()
     current_file_changes_thread = threading.Thread(
         target=check_file_changes_async,
-        args=(app, check_id,)
+        args=(app, check_id, file_paths)
     )
     current_file_changes_thread.start()
-    
+
+    if file_paths:
+        message = f'File changes check started for {len(file_paths)} specific file(s)'
+    else:
+        message = 'File changes check started for all files'
+
     return jsonify({
         'status': 'started',
-        'message': 'File changes check started',
-        'check_id': check_id
+        'message': message,
+        'check_id': check_id,
+        'file_count': len(file_paths) if file_paths else None
     })
 
-def cleanup_orphaned_async(app, cleanup_id):
-    """Async function to cleanup orphaned database entries"""
+def cleanup_orphaned_async(app, cleanup_id, file_paths=None):
+    """Async function to cleanup orphaned database entries
+
+    Args:
+        app: Flask app instance
+        cleanup_id: ID of the cleanup record
+        file_paths: Optional list of specific file paths to check (if None, checks all files)
+    """
     try:
         with app.app_context():
             with db.session.get_bind().connect() as connection:
@@ -494,14 +520,14 @@ def cleanup_orphaned_async(app, cleanup_id):
                     if not cleanup_record:
                         logger.error(f"Cleanup record {cleanup_id} not found")
                         return
-                    
+
                     # Create maintenance service instance
                     database_url = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
                     maintenance_service = MaintenanceService(database_url)
-                    
-                    # Run the cleanup using the maintenance service logic
-                    maintenance_service._run_cleanup(cleanup_record.id)
-                
+
+                    # Run the cleanup using the maintenance service logic with optional file_paths filter
+                    maintenance_service._run_cleanup(cleanup_record.id, file_paths=file_paths)
+
     except Exception as e:
         logger.error(f"Error in cleanup_orphaned_async: {str(e)}")
         try:
@@ -516,8 +542,14 @@ def cleanup_orphaned_async(app, cleanup_id):
         except Exception as commit_error:
             logger.error(f"Failed to update cleanup record on error: {str(commit_error)}")
 
-def check_file_changes_async(app, check_id):
-    """Async function to check file changes"""
+def check_file_changes_async(app, check_id, file_paths=None):
+    """Async function to check file changes
+
+    Args:
+        app: Flask app instance
+        check_id: Unique ID for this check
+        file_paths: Optional list of specific file paths to check (if None, checks all files)
+    """
     try:
         with app.app_context():
             with db.session.get_bind().connect() as connection:
@@ -527,14 +559,14 @@ def check_file_changes_async(app, check_id):
                     if not check_record:
                         logger.error(f"File changes record {check_id} not found")
                         return
-                    
+
                     # Create maintenance service instance
                     database_url = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
                     maintenance_service = MaintenanceService(database_url)
-                    
-                    # Run the file changes check using the maintenance service logic
-                    maintenance_service._run_file_changes_check(check_record.check_id)
-                
+
+                    # Run the file changes check using the maintenance service logic with optional file_paths filter
+                    maintenance_service._run_file_changes_check(check_record.check_id, file_paths=file_paths)
+
     except Exception as e:
         logger.error(f"Error in check_file_changes_async: {str(e)}")
         try:

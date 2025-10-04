@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.10] - 2025-10-04
+
+### Fixed
+- **Individual File Action Scoping Bug**
+  - Fixed critical bug where individual file actions (Orphan Check, Change Check) were scanning ALL files in database instead of only the selected file
+  - Both `/api/cleanup-orphaned` and `/api/file-changes` endpoints now properly accept and filter by `file_paths` parameter
+  - Orphan cleanup now only checks specified files when `file_paths` is provided
+  - File changes check now only scans specified files when `file_paths` is provided
+  - Added comprehensive logging to show scope of operations (e.g., "Cleanup scoped to 1 specific file(s)")
+
+### Technical Details
+- Updated `cleanup_orphaned_files()` endpoint to extract `file_paths` from request JSON
+- Modified `cleanup_orphaned_async()` to pass `file_paths` parameter to maintenance service
+- Enhanced `_run_cleanup()` to filter `ScanResult.query.filter(ScanResult.file_path.in_(file_paths))` when file_paths provided
+- Updated `check_file_changes()` endpoint to extract `file_paths` from request JSON
+- Modified `check_file_changes_async()` to pass `file_paths` parameter to maintenance service
+- Enhanced `_run_file_changes_check()` to filter database queries by file_paths when provided
+- Both operations now show accurate totals and progress messages based on scoped file list
+- Backend properly respects frontend's `file_paths: [file.file_path]` parameter sent by `orphanCheckFile()` and `changeCheckFile()` functions
+
 ## [2.4.9] - 2025-10-03
 
 ### Fixed

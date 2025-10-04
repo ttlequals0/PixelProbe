@@ -237,8 +237,13 @@ class MaintenanceService:
         with app.app_context():
             self._run_file_changes_check(check_id)
 
-    def _run_cleanup(self, cleanup_id):
-        """Run the cleanup operation"""
+    def _run_cleanup(self, cleanup_id, file_paths=None):
+        """Run the cleanup operation
+
+        Args:
+            cleanup_id: ID of the cleanup record
+            file_paths: Optional list of specific file paths to check (if None, checks all files)
+        """
         try:
             cleanup_record = CleanupState.query.get(cleanup_id)
             if not cleanup_record:
@@ -247,15 +252,25 @@ class MaintenanceService:
 
             # Keep track of orphaned files for the report
             self.orphaned_files_list = []
-            
+
             # Phase 1: Scanning database
             cleanup_record.phase = 'scanning_database'
             cleanup_record.phase_number = 1
-            cleanup_record.progress_message = 'Phase 1 of 3: Scanning database entries...'
-            db.session.commit()
-            
-            # Get all database entries
-            all_results = ScanResult.query.all()
+
+            # Get database entries - either all or filtered by file_paths
+            if file_paths:
+                cleanup_record.progress_message = f'Phase 1 of 3: Scanning {len(file_paths)} specific file(s) in database...'
+                db.session.commit()
+                # Filter to only the specified file paths
+                all_results = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+                logger.info(f"Cleanup scoped to {len(file_paths)} specific file(s), found {len(all_results)} in database")
+            else:
+                cleanup_record.progress_message = 'Phase 1 of 3: Scanning database entries...'
+                db.session.commit()
+                # Get all database entries
+                all_results = ScanResult.query.all()
+                logger.info(f"Cleanup scanning all {len(all_results)} files in database")
+
             total_files = len(all_results)
             
             cleanup_record.total_files = total_files
@@ -471,24 +486,37 @@ class MaintenanceService:
             # Don't fail the cleanup operation if report creation fails
             return None
     
-    def _run_file_changes_check(self, check_id: str):
-        """Run the file changes check operation"""
+    def _run_file_changes_check(self, check_id: str, file_paths=None):
+        """Run the file changes check operation
+
+        Args:
+            check_id: Unique ID for this check
+            file_paths: Optional list of specific file paths to check (if None, checks all files)
+        """
         try:
             file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
             if not file_changes_record:
                 logger.error(f"File changes record not found: {check_id}")
                 return
-            
+
             # Phase 1: Starting
             file_changes_record.phase = 'starting'
             file_changes_record.phase_number = 1
             file_changes_record.phase_total = 1
             file_changes_record.phase_current = 0
-            file_changes_record.progress_message = 'Phase 1 of 3: Starting file changes check...'
-            db.session.commit()
-            
-            # Get total count
-            total_files = ScanResult.query.count()
+
+            # Get total count - either all files or filtered by file_paths
+            if file_paths:
+                file_changes_record.progress_message = f'Phase 1 of 3: Starting file changes check for {len(file_paths)} specific file(s)...'
+                db.session.commit()
+                total_files = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).count()
+                logger.info(f"File changes check scoped to {len(file_paths)} specific file(s), found {total_files} in database")
+            else:
+                file_changes_record.progress_message = 'Phase 1 of 3: Starting file changes check...'
+                db.session.commit()
+                total_files = ScanResult.query.count()
+                logger.info(f"File changes check scanning all {total_files} files in database")
+
             file_changes_record.total_files = total_files
             file_changes_record.phase_current = 1
             db.session.commit()
@@ -520,14 +548,18 @@ class MaintenanceService:
             batch_size = 100  # Reduced from 1000 for better responsiveness
             last_id = 0
             files_processed = 0
-            
+
             while files_processed < total_files:
                 if self._is_cancelled_file_changes(file_changes_record):
                     break
-                
+
                 # Use ID-based pagination instead of offset for better performance
                 try:
-                    batch = ScanResult.query.filter(ScanResult.id > last_id).order_by(ScanResult.id).limit(batch_size).all()
+                    # Build query with optional file_paths filter
+                    query = ScanResult.query.filter(ScanResult.id > last_id)
+                    if file_paths:
+                        query = query.filter(ScanResult.file_path.in_(file_paths))
+                    batch = query.order_by(ScanResult.id).limit(batch_size).all()
                     
                     if not batch:
                         logger.info(f"No more files to process after ID {last_id}")
