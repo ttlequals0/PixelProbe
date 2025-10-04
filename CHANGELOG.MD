@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.9] - 2025-10-03
+
+### Fixed
+- **Critical Race Condition in Scan Start Logic**
+  - Implemented database row-level locking with `SELECT FOR UPDATE NOWAIT` to prevent multiple scans from starting simultaneously
+  - Fixed race condition where checking if scan is running and starting new scan were not atomic operations
+  - Scan state is now locked during scan initialization to ensure only one scan can start at a time
+  - Added proper error handling for lock acquisition failures with user-friendly messaging
+
+- **Improved Orphan File Detection**
+  - Enhanced file existence checking with multiple detection methods for robustness
+  - Now uses `os.path.exists()`, `os.path.isfile()`, and `os.path.lexists()` to catch edge cases
+  - Properly detects broken symlinks and inaccessible files as orphans
+  - Added detailed logging for files that fail accessibility checks
+  - Fixed issue where some non-existent files were not being removed during orphan cleanup
+
+### Added
+- **Action Dropdown for Bulk Operations**
+  - Replaced single "Rescan" button with comprehensive "Actions" dropdown
+  - Bulk actions now include:
+    - Rescan - Re-scan selected files
+    - Orphan Check - Check if selected files still exist on filesystem
+    - Change Check - Check if selected files have been modified since last scan
+  - Dropdown automatically enables/disables based on file selection
+
+- **Action Dropdown for Individual File Operations**
+  - Added "Actions" dropdown menu to each file row (desktop and mobile views)
+  - Individual file actions include:
+    - Rescan - Re-scan this specific file
+    - Orphan Check - Check if this file still exists
+    - Change Check - Check if this file has been modified
+  - Unified action interface across bulk and individual operations
+
+### Technical Details
+- Database locking uses PostgreSQL's `FOR UPDATE NOWAIT` to prevent deadlocks
+- Orphan cleanup now handles OSError and IOError exceptions gracefully
+- UI dropdowns use consistent toggle behavior with outside-click-to-close functionality
+- All new JavaScript functions properly close dropdowns after action selection
+
 ## [2.4.8] - 2025-09-28
 
 ### Fixed

@@ -392,19 +392,39 @@ def scan_all():
     """Start scanning all media files in configured directories"""
     if request.method == 'OPTIONS':
         return '', 200
-    
-    # Check if a scan is already running (thread or Celery)
-    if is_scan_running():
-        # Get current scan status for more informative error message
-        scan_state = ScanState.get_or_create()
-        if scan_state and scan_state.is_active:
+
+    # ATOMIC: Use database row-level locking to prevent race conditions
+    # Lock the scan state row for update to ensure only one scan can start
+    try:
+        scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
+        if not scan_state:
+            scan_state = ScanState()
+            db.session.add(scan_state)
+            db.session.flush()
+            scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
+
+        # Check if a scan is already running while we hold the lock
+        if scan_state.is_active and scan_state.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
             phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
-        else:
-            phase_info = ""
+            db.session.rollback()
+            return jsonify({
+                'error': f'A scan is already in progress{phase_info}. Please wait for it to complete or use /api/cancel-scan to stop it.'
+            }), 409
+
+        # If we got here, no scan is running - we can proceed with the lock held
+        # Mark as starting immediately while we hold the lock
+        scan_state.is_active = True
+        scan_state.phase = 'initializing'
+        db.session.commit()
+
+    except Exception as lock_error:
+        # If we can't acquire the lock, another scan is starting
+        db.session.rollback()
+        logger.warning(f"Could not acquire scan lock: {lock_error}")
         return jsonify({
-            'error': f'A scan is already in progress{phase_info}. Please wait for it to complete or use /api/cancel-scan to stop it.'
+            'error': 'A scan is already starting. Please wait a moment and try again.'
         }), 409
-    
+
     # Get scan configuration
     data = request.get_json() or {}
     force_rescan = data.get('force_rescan', False)

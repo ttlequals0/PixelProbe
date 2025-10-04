@@ -1187,4 +1187,50 @@ textarea.form-control {
     width: 16px;
     text-align: center;
 }
+
+/* Action dropdown styles */
+.action-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.action-dropdown .dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    min-width: 180px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    margin-top: 4px;
+    padding: 4px 0;
+    list-style: none;
+}
+
+.action-dropdown .dropdown-menu li {
+    margin: 0;
+    padding: 0;
+}
+
+.action-dropdown .dropdown-menu .dropdown-item {
+    display: block;
+    padding: 8px 16px;
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: background-color 0.15s ease-in-out;
+    cursor: pointer;
+}
+
+.action-dropdown .dropdown-menu .dropdown-item:hover {
+    background-color: var(--bg-tertiary);
+}
+
+.action-dropdown .dropdown-menu .dropdown-item i {
+    margin-right: 8px;
+    width: 16px;
+    text-align: center;
+}
 EOF < /dev/null

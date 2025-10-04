@@ -296,8 +296,27 @@ class MaintenanceService:
                     os.path.basename(result.file_path)
                 )
 
-                # Check if file exists
-                if not os.path.exists(result.file_path):
+                # Check if file exists - use multiple methods for robust detection
+                file_exists = False
+                try:
+                    # Method 1: os.path.exists() - fast but may have issues with symlinks
+                    if os.path.exists(result.file_path):
+                        file_exists = True
+                    # Method 2: Try to stat the file directly - more reliable
+                    elif os.path.isfile(result.file_path):
+                        file_exists = True
+                    # Method 3: Check if path exists at all (directory or file)
+                    elif os.path.lexists(result.file_path):
+                        # lexists returns True even for broken symlinks
+                        # If lexists is True but exists is False, it's a broken symlink - treat as orphan
+                        file_exists = False
+                        logger.info(f"Found broken symlink or inaccessible file: {result.file_path}")
+                except (OSError, IOError) as e:
+                    # If we get an error accessing the file, treat it as orphaned
+                    logger.warning(f"Error accessing file {result.file_path}: {e} - treating as orphan")
+                    file_exists = False
+
+                if not file_exists:
                     orphaned_ids.append(result.id)  # Store ID instead of object
                     orphaned_paths.append(result.file_path)  # Store path for logging
                     orphaned_count += 1
@@ -759,37 +778,7 @@ class MaintenanceService:
         with self.file_changes_lock:
             self.file_changes_state['is_running'] = False
             self.file_changes_state['phase'] = 'error'
-    
-    def _create_cleanup_report(self, cleanup_record: CleanupState):
-        """Create a scan report for cleanup operation"""
-        try:
-            # Calculate duration
-            duration = None
-            if cleanup_record.start_time and cleanup_record.end_time:
-                duration = (cleanup_record.end_time - cleanup_record.start_time).total_seconds()
-            
-            # Create scan report
-            report = ScanReport(
-                scan_type='cleanup',
-                start_time=cleanup_record.start_time,
-                end_time=cleanup_record.end_time,
-                duration_seconds=duration,
-                total_files_discovered=cleanup_record.total_files,
-                files_scanned=cleanup_record.files_processed,
-                orphaned_records_found=cleanup_record.orphaned_found,
-                orphaned_records_deleted=cleanup_record.orphaned_found,  # Assuming all found were deleted
-                status='completed' if cleanup_record.phase == 'complete' else cleanup_record.phase,
-                error_message=cleanup_record.error_message
-            )
-            
-            db.session.add(report)
-            db.session.commit()
-            
-            logger.info(f"Created cleanup report {report.report_id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to create cleanup report: {e}")
-    
+
     def _create_file_changes_report(self, file_changes_record: FileChangesState):
         """Create a scan report for file changes operation"""
         try:

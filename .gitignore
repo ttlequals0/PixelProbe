@@ -164,3 +164,4 @@ test-venv/
 pixelprobe.db
 *.db
 docs/development/
+docker-compose.local.yml

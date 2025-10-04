@@ -1077,9 +1077,24 @@ class TableManager {
                     <button class="btn btn-secondary" onclick="app.viewFile(${file.id})">
                         <i class="fas fa-eye"></i> View
                     </button>
-                    <button class="btn btn-secondary" onclick="app.rescanFile(${file.id})">
-                        <i class="fas fa-sync"></i> Rescan
-                    </button>
+                    <!-- Individual File Actions Dropdown for Mobile -->
+                    <div class="action-dropdown" style="display: inline-block;">
+                        <button class="btn btn-secondary" type="button"
+                                onclick="app.toggleActionDropdown(event, 'mobile-file-action-menu-${file.id}')">
+                            <i class="fas fa-tasks"></i> Actions <i class="fas fa-caret-down"></i>
+                        </button>
+                        <ul class="dropdown-menu" id="mobile-file-action-menu-${file.id}" style="display: none;">
+                            <li><a class="dropdown-item" href="#" onclick="app.rescanFile(${file.id}); return false;">
+                                <i class="fas fa-sync"></i> Rescan
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
+                                <i class="fas fa-search"></i> Orphan Check
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
+                                <i class="fas fa-exchange-alt"></i> Change Check
+                            </a></li>
+                        </ul>
+                    </div>
                     ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
                         <button class="btn btn-secondary" onclick="app.viewScanOutput(${file.id})">
                             <i class="fas fa-file-alt"></i> Details
@@ -1115,9 +1130,24 @@ class TableManager {
                     <button class="btn btn-sm btn-secondary" onclick="app.viewFile(${file.id})">
                         <i class="fas fa-eye"></i> View
                     </button>
-                    <button class="btn btn-sm btn-secondary" onclick="app.rescanFile(${file.id})">
-                        <i class="fas fa-sync"></i> Rescan
-                    </button>
+                    <!-- Individual File Actions Dropdown -->
+                    <div class="action-dropdown" style="display: inline-block;">
+                        <button class="btn btn-sm btn-secondary" type="button"
+                                onclick="app.toggleActionDropdown(event, 'file-action-menu-${file.id}')">
+                            <i class="fas fa-tasks"></i> Actions <i class="fas fa-caret-down"></i>
+                        </button>
+                        <ul class="dropdown-menu" id="file-action-menu-${file.id}" style="display: none;">
+                            <li><a class="dropdown-item" href="#" onclick="app.rescanFile(${file.id}); return false;">
+                                <i class="fas fa-sync"></i> Rescan
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
+                                <i class="fas fa-search"></i> Orphan Check
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
+                                <i class="fas fa-exchange-alt"></i> Change Check
+                            </a></li>
+                        </ul>
+                    </div>
                     ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
                         <button class="btn btn-sm btn-secondary" onclick="app.viewScanOutput(${file.id})">
                             <i class="fas fa-file-alt"></i> Details
@@ -1245,9 +1275,9 @@ class TableManager {
         if (selectionInfo) {
             selectionInfo.textContent = count > 0 ? `${count} files selected` : '';
         }
-        
+
         // Enable/disable bulk action buttons
-        const buttons = ['#mark-good-btn', '#deep-scan-btn', '#rescan-btn', '#download-btn'];
+        const buttons = ['#mark-good-btn', '#deep-scan-btn', '#rescan-btn', '#download-btn', '#bulk-action-btn'];
         buttons.forEach(selector => {
             const btn = document.querySelector(selector);
             if (btn) {
@@ -1586,7 +1616,7 @@ class PixelProbeApp {
                 this.showNotification('A scan is already in progress', 'warning');
                 return;
             }
-            
+
             // Get file path first
             const response = await fetch(`/api/scan-results/${fileId}`);
             if (response.ok) {
@@ -1594,7 +1624,7 @@ class PixelProbeApp {
                 // Use scan-parallel which will mark as pending and start full scan
                 const scanResponse = await this.api.request('/scan-parallel', {
                     method: 'POST',
-                    body: JSON.stringify({ 
+                    body: JSON.stringify({
                         file_paths: [file.file_path]
                     })
                 });
@@ -1605,6 +1635,68 @@ class PixelProbeApp {
             }
         } catch (error) {
             this.showNotification(error.message || 'Failed to rescan file', 'error');
+        }
+    }
+
+    async orphanCheckFile(fileId) {
+        try {
+            // Get file path first
+            const response = await fetch(`/api/scan-results/${fileId}`);
+            if (response.ok) {
+                const file = await response.json();
+                // Start orphan check for this file
+                const orphanResponse = await fetch('/api/cleanup-orphaned', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        file_paths: [file.file_path]
+                    })
+                });
+
+                if (orphanResponse.ok) {
+                    this.showNotification('Orphan check started for file', 'success');
+                    this.progress.startMonitoring('cleanup');
+                } else {
+                    throw new Error('Failed to start orphan check');
+                }
+            } else {
+                throw new Error('Failed to get file info');
+            }
+        } catch (error) {
+            this.showNotification(error.message || 'Failed to start orphan check', 'error');
+        }
+    }
+
+    async changeCheckFile(fileId) {
+        try {
+            // Get file path first
+            const response = await fetch(`/api/scan-results/${fileId}`);
+            if (response.ok) {
+                const file = await response.json();
+                // Start file changes check for this file
+                const changeResponse = await fetch('/api/file-changes', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        file_paths: [file.file_path]
+                    })
+                });
+
+                if (changeResponse.ok) {
+                    this.showNotification('Change check started for file', 'success');
+                    this.progress.startMonitoring('file_changes');
+                } else {
+                    throw new Error('Failed to start change check');
+                }
+            } else {
+                throw new Error('Failed to get file info');
+            }
+        } catch (error) {
+            this.showNotification(error.message || 'Failed to start change check', 'error');
         }
     }
 
@@ -2430,14 +2522,14 @@ class PixelProbeApp {
 
         try {
             const fileIds = Array.from(this.table.selectedFiles);
-            
+
             // First, reset the selected files for rescanning
             const resetResponse = await fetch('/api/reset-for-rescan', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ 
+                body: JSON.stringify({
                     type: 'selected',
                     file_ids: fileIds
                 })
@@ -2463,7 +2555,7 @@ class PixelProbeApp {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ 
+                body: JSON.stringify({
                     file_paths: filePaths,
                     force_rescan: true  // Force rescan to actually re-scan the files
                 })
@@ -2478,6 +2570,115 @@ class PixelProbeApp {
             }
         } catch (error) {
             this.showNotification('Failed to start rescan', 'error');
+        }
+    }
+
+    async orphanScanSelected() {
+        if (this.table.selectedFiles.size === 0) {
+            this.showNotification('No files selected', 'warning');
+            return;
+        }
+
+        try {
+            const fileIds = Array.from(this.table.selectedFiles);
+
+            // Get file paths for the selected files
+            const filePaths = [];
+            for (const fileId of fileIds) {
+                const response = await fetch(`/api/scan-results/${fileId}`);
+                if (response.ok) {
+                    const result = await response.json();
+                    filePaths.push(result.file_path);
+                }
+            }
+
+            // Start orphan check for selected files
+            const response = await fetch('/api/cleanup-orphaned', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    file_paths: filePaths
+                })
+            });
+
+            if (response.ok) {
+                this.showNotification(`Orphan check started for ${fileIds.length} files`, 'success');
+                this.progress.startMonitoring('cleanup');
+            } else {
+                throw new Error('Orphan check failed');
+            }
+        } catch (error) {
+            this.showNotification('Failed to start orphan check', 'error');
+        }
+    }
+
+    async changeCheckSelected() {
+        if (this.table.selectedFiles.size === 0) {
+            this.showNotification('No files selected', 'warning');
+            return;
+        }
+
+        try {
+            const fileIds = Array.from(this.table.selectedFiles);
+
+            // Get file paths for the selected files
+            const filePaths = [];
+            for (const fileId of fileIds) {
+                const response = await fetch(`/api/scan-results/${fileId}`);
+                if (response.ok) {
+                    const result = await response.json();
+                    filePaths.push(result.file_path);
+                }
+            }
+
+            // Start file changes check for selected files
+            const response = await fetch('/api/file-changes', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    file_paths: filePaths
+                })
+            });
+
+            if (response.ok) {
+                this.showNotification(`Change check started for ${fileIds.length} files`, 'success');
+                this.progress.startMonitoring('file_changes');
+            } else {
+                throw new Error('Change check failed');
+            }
+        } catch (error) {
+            this.showNotification('Failed to start change check', 'error');
+        }
+    }
+
+    toggleActionDropdown(event, dropdownId) {
+        event.stopPropagation();
+        const dropdown = document.getElementById(dropdownId);
+
+        // Close all other dropdowns
+        document.querySelectorAll('.dropdown-menu').forEach(menu => {
+            if (menu.id !== dropdownId) {
+                menu.style.display = 'none';
+            }
+        });
+
+        // Toggle current dropdown
+        dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+
+        // Close on outside click
+        const closeDropdown = (e) => {
+            if (!e.target.closest('.action-dropdown')) {
+                dropdown.style.display = 'none';
+                document.removeEventListener('click', closeDropdown);
+            }
+        };
+
+        if (dropdown.style.display === 'block') {
+            setTimeout(() => document.addEventListener('click', closeDropdown), 0);
         }
     }
 
