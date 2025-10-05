@@ -394,7 +394,7 @@ def cleanup_orphaned_files():
         return jsonify({'error': 'Cleanup operation already in progress'}), 409
 
     # Get optional file_paths parameter for scoped orphan checking
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     file_paths = data.get('file_paths', [])
 
     # Reset state
@@ -452,7 +452,7 @@ def check_file_changes():
         return jsonify({'error': 'File changes check already in progress'}), 409
 
     # Get optional file_paths parameter for scoped file changes checking
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     file_paths = data.get('file_paths', [])
 
     # Create unique check ID
