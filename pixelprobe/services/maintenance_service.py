@@ -54,9 +54,11 @@ class MaintenanceService:
     
     def start_cleanup(self) -> Dict:
         """Start cleanup of orphaned database entries"""
+        from flask import current_app
+
         if self.cleanup_thread and self.cleanup_thread.is_alive():
             raise RuntimeError("Cleanup operation already in progress")
-        
+
         # Reset state
         with self.cleanup_lock:
             self.cleanup_state.update({
@@ -69,37 +71,48 @@ class MaintenanceService:
                 'start_time': time.time(),
                 'cancel_requested': False
             })
-        
-        # Create cleanup state in database
-        cleanup_record = CleanupState(
-            start_time=datetime.now(timezone.utc),
-            is_active=True,
-            phase='starting',
-            phase_number=1
-        )
-        db.session.add(cleanup_record)
-        db.session.commit()
-        
-        # Start cleanup in background
+
+        # Create cleanup state in database - ensure we have app context
+        try:
+            cleanup_record = CleanupState(
+                start_time=datetime.now(timezone.utc),
+                is_active=True,
+                phase='starting',
+                phase_number=1
+            )
+            db.session.add(cleanup_record)
+            db.session.commit()
+            cleanup_id = cleanup_record.id
+        except Exception as e:
+            logger.error(f"Error creating cleanup record: {str(e)}")
+            # If we can't create DB record, still start cleanup with a UUID
+            cleanup_id = str(uuid.uuid4())
+
+        # Get app instance for thread context
+        app = current_app._get_current_object()
+
+        # Start cleanup in background with app context
         self.cleanup_thread = threading.Thread(
-            target=self._run_cleanup,
-            args=(cleanup_record.id,)
+            target=self._run_cleanup_with_context,
+            args=(app, cleanup_id)
         )
         self.cleanup_thread.start()
-        
+
         return {
             'message': 'Cleanup operation started',
-            'cleanup_id': cleanup_record.id
+            'cleanup_id': cleanup_id
         }
     
     def start_file_changes_check(self) -> Dict:
         """Start checking for file changes"""
+        from flask import current_app
+
         if self.file_changes_thread and self.file_changes_thread.is_alive():
             raise RuntimeError("File changes check already in progress")
-        
+
         # Create unique check ID
         check_id = str(uuid.uuid4())
-        
+
         # Reset state
         with self.file_changes_lock:
             self.file_changes_state.update({
@@ -113,25 +126,31 @@ class MaintenanceService:
                 'start_time': time.time(),
                 'cancel_requested': False
             })
-        
-        # Create file changes state in database
-        file_changes_record = FileChangesState(
-            check_id=check_id,
-            start_time=datetime.now(timezone.utc),
-            is_active=True,
-            phase='starting',
-            phase_number=1
-        )
-        db.session.add(file_changes_record)
-        db.session.commit()
-        
-        # Start file changes check in background
+
+        # Create file changes state in database - ensure we have app context
+        try:
+            file_changes_record = FileChangesState(
+                check_id=check_id,
+                start_time=datetime.now(timezone.utc),
+                is_active=True,
+                phase='starting',
+                phase_number=1
+            )
+            db.session.add(file_changes_record)
+            db.session.commit()
+        except Exception as e:
+            logger.error(f"Error creating file changes record: {str(e)}")
+
+        # Get app instance for thread context
+        app = current_app._get_current_object()
+
+        # Start file changes check in background with app context
         self.file_changes_thread = threading.Thread(
-            target=self._run_file_changes_check,
-            args=(check_id,)
+            target=self._run_file_changes_check_with_context,
+            args=(app, check_id)
         )
         self.file_changes_thread.start()
-        
+
         return {
             'message': 'File changes check started',
             'check_id': check_id
@@ -208,22 +227,50 @@ class MaintenanceService:
         
         return {'message': 'Cleanup state reset successfully'}
     
-    def _run_cleanup(self, cleanup_id: int):
-        """Run the cleanup operation"""
+    def _run_cleanup_with_context(self, app, cleanup_id):
+        """Run cleanup with app context"""
+        with app.app_context():
+            self._run_cleanup(cleanup_id)
+
+    def _run_file_changes_check_with_context(self, app, check_id):
+        """Run file changes check with app context"""
+        with app.app_context():
+            self._run_file_changes_check(check_id)
+
+    def _run_cleanup(self, cleanup_id, file_paths=None):
+        """Run the cleanup operation
+
+        Args:
+            cleanup_id: ID of the cleanup record
+            file_paths: Optional list of specific file paths to check (if None, checks all files)
+        """
         try:
             cleanup_record = CleanupState.query.get(cleanup_id)
             if not cleanup_record:
                 logger.error(f"Cleanup record not found: {cleanup_id}")
                 return
-            
+
+            # Keep track of orphaned files for the report
+            self.orphaned_files_list = []
+
             # Phase 1: Scanning database
             cleanup_record.phase = 'scanning_database'
             cleanup_record.phase_number = 1
-            cleanup_record.progress_message = 'Phase 1 of 3: Scanning database entries...'
-            db.session.commit()
-            
-            # Get all database entries
-            all_results = ScanResult.query.all()
+
+            # Get database entries - either all or filtered by file_paths
+            if file_paths:
+                cleanup_record.progress_message = f'Phase 1 of 3: Scanning {len(file_paths)} specific file(s) in database...'
+                db.session.commit()
+                # Filter to only the specified file paths
+                all_results = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+                logger.info(f"Cleanup scoped to {len(file_paths)} specific file(s), found {len(all_results)} in database")
+            else:
+                cleanup_record.progress_message = 'Phase 1 of 3: Scanning database entries...'
+                db.session.commit()
+                # Get all database entries
+                all_results = ScanResult.query.all()
+                logger.info(f"Cleanup scanning all {len(all_results)} files in database")
+
             total_files = len(all_results)
             
             cleanup_record.total_files = total_files
@@ -243,18 +290,19 @@ class MaintenanceService:
             # Create progress tracker for cleanup
             progress_tracker = ProgressTracker('cleanup')
             
-            orphaned_entries = []
+            orphaned_ids = []  # Store IDs instead of objects
+            orphaned_paths = []  # Store paths for logging
             orphaned_count = 0
-            
+
             for i, result in enumerate(all_results):
                 if self._is_cancelled(cleanup_record):
                     break
-                
+
                 # Update progress
                 cleanup_record.files_processed = i + 1
                 cleanup_record.phase_current = i + 1
                 cleanup_record.current_file = result.file_path
-                
+
                 # Update progress message with current file and ETA
                 cleanup_record.progress_message = progress_tracker.get_progress_message(
                     f'Phase 2 of 3: Checking {total_files} files on filesystem',
@@ -262,13 +310,35 @@ class MaintenanceService:
                     total_files,
                     os.path.basename(result.file_path)
                 )
-                
-                # Check if file exists
-                if not os.path.exists(result.file_path):
-                    orphaned_entries.append(result)
+
+                # Check if file exists - use multiple methods for robust detection
+                file_exists = False
+                try:
+                    # Method 1: os.path.exists() - fast but may have issues with symlinks
+                    if os.path.exists(result.file_path):
+                        file_exists = True
+                    # Method 2: Try to stat the file directly - more reliable
+                    elif os.path.isfile(result.file_path):
+                        file_exists = True
+                    # Method 3: Check if path exists at all (directory or file)
+                    elif os.path.lexists(result.file_path):
+                        # lexists returns True even for broken symlinks
+                        # If lexists is True but exists is False, it's a broken symlink - treat as orphan
+                        file_exists = False
+                        logger.info(f"Found broken symlink or inaccessible file: {result.file_path}")
+                except (OSError, IOError) as e:
+                    # If we get an error accessing the file, treat it as orphaned
+                    logger.warning(f"Error accessing file {result.file_path}: {e} - treating as orphan")
+                    file_exists = False
+
+                if not file_exists:
+                    orphaned_ids.append(result.id)  # Store ID instead of object
+                    orphaned_paths.append(result.file_path)  # Store path for logging
                     orphaned_count += 1
                     cleanup_record.orphaned_found = orphaned_count
                     logger.info(f"Found orphaned entry: {result.file_path}")
+                    # Store for report
+                    self.orphaned_files_list.append(result.file_path)
                 
                 # Update progress periodically
                 if i % 100 == 0:
@@ -294,31 +364,35 @@ class MaintenanceService:
                 return
             
             # Phase 3: Delete orphaned entries from database
-            if orphaned_entries:
+            if orphaned_ids:
                 cleanup_record.phase = 'deleting_entries'
                 cleanup_record.phase_number = 3
                 cleanup_record.progress_message = f'Phase 3 of 3: Removing {orphaned_count} orphaned entries from database...'
-                cleanup_record.total_files = len(orphaned_entries)
-                cleanup_record.phase_total = len(orphaned_entries)
+                cleanup_record.total_files = len(orphaned_ids)
+                cleanup_record.phase_total = len(orphaned_ids)
                 cleanup_record.files_processed = 0
                 cleanup_record.phase_current = 0
                 db.session.commit()
-                
+
                 # Delete orphaned entries in batches for performance
                 deleted_count = 0
                 batch_size = 50
-                
-                for i in range(0, len(orphaned_entries), batch_size):
+
+                for i in range(0, len(orphaned_ids), batch_size):
                     if self._is_cancelled(cleanup_record):
                         break
-                        
-                    batch = orphaned_entries[i:i + batch_size]
-                    
-                    for entry in batch:
-                        db.session.delete(entry)
+
+                    batch_ids = orphaned_ids[i:i + batch_size]
+                    batch_paths = orphaned_paths[i:i + batch_size]
+
+                    # Delete by IDs to avoid detached instance issues
+                    ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
+
+                    # Log the deletions
+                    for path in batch_paths:
                         deleted_count += 1
-                        logger.info(f"Deleted orphaned entry: {entry.file_path}")
-                    
+                        logger.info(f"Deleted orphaned entry: {path}")
+
                     # Commit batch
                     db.session.commit()
                     
@@ -343,7 +417,7 @@ class MaintenanceService:
             else:
                 cleanup_record.phase = 'complete'
                 if orphaned_count > 0:
-                    deleted_count = len(orphaned_entries) if orphaned_entries else orphaned_count
+                    deleted_count = len(orphaned_ids) if orphaned_ids else orphaned_count
                     cleanup_record.progress_message = f'Cleanup complete. Deleted {deleted_count} orphaned database entries.'
                 else:
                     cleanup_record.progress_message = 'Cleanup complete. No orphaned entries found.'
@@ -353,25 +427,34 @@ class MaintenanceService:
             db.session.commit()
             
             # Create scan report for cleanup operation
-            if cleanup_record.phase == 'complete':
-                self._create_cleanup_report(cleanup_record)
+            # Always try to create a report even if there was an error, as long as we have some data
+            if cleanup_record.phase in ('complete', 'error'):
+                self._create_cleanup_report(cleanup_record, getattr(self, 'orphaned_files_list', []))
             
             with self.cleanup_lock:
                 self.cleanup_state['is_running'] = False
                 self.cleanup_state['phase'] = cleanup_record.phase
                 
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            logger.error(f"Error during cleanup: {e}", exc_info=True)  # Add stack trace
             self._handle_cleanup_error(cleanup_id, str(e))
+
+            # Try to create error report
+            try:
+                cleanup_record = CleanupState.query.get(cleanup_id)
+                if cleanup_record:
+                    self._create_cleanup_report(cleanup_record, getattr(self, 'orphaned_files_list', []))
+            except Exception as report_error:
+                logger.error(f"Failed to create error report: {report_error}")
     
-    def _create_cleanup_report(self, cleanup_record: CleanupState):
+    def _create_cleanup_report(self, cleanup_record: CleanupState, orphaned_files_list=None):
         """Create a report for the cleanup operation"""
         try:
             # Calculate duration
             duration_seconds = None
             if cleanup_record.start_time and cleanup_record.end_time:
                 duration_seconds = (cleanup_record.end_time - cleanup_record.start_time).total_seconds()
-            
+
             # Create the report
             report = ScanReport(
                 scan_type='cleanup',
@@ -385,6 +468,12 @@ class MaintenanceService:
                 orphaned_records_deleted=cleanup_record.orphaned_found,  # All found orphans are deleted
                 created_at=datetime.now(timezone.utc)
             )
+
+            # Store the list of orphaned files in directories_scanned field as JSON
+            # This field is repurposed for cleanup reports to store the orphaned files list
+            if orphaned_files_list:
+                import json
+                report.directories_scanned = json.dumps(orphaned_files_list)
             
             db.session.add(report)
             db.session.commit()
@@ -397,24 +486,37 @@ class MaintenanceService:
             # Don't fail the cleanup operation if report creation fails
             return None
     
-    def _run_file_changes_check(self, check_id: str):
-        """Run the file changes check operation"""
+    def _run_file_changes_check(self, check_id: str, file_paths=None):
+        """Run the file changes check operation
+
+        Args:
+            check_id: Unique ID for this check
+            file_paths: Optional list of specific file paths to check (if None, checks all files)
+        """
         try:
             file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
             if not file_changes_record:
                 logger.error(f"File changes record not found: {check_id}")
                 return
-            
+
             # Phase 1: Starting
             file_changes_record.phase = 'starting'
             file_changes_record.phase_number = 1
             file_changes_record.phase_total = 1
             file_changes_record.phase_current = 0
-            file_changes_record.progress_message = 'Phase 1 of 3: Starting file changes check...'
-            db.session.commit()
-            
-            # Get total count
-            total_files = ScanResult.query.count()
+
+            # Get total count - either all files or filtered by file_paths
+            if file_paths:
+                file_changes_record.progress_message = f'Phase 1 of 3: Starting file changes check for {len(file_paths)} specific file(s)...'
+                db.session.commit()
+                total_files = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).count()
+                logger.info(f"File changes check scoped to {len(file_paths)} specific file(s), found {total_files} in database")
+            else:
+                file_changes_record.progress_message = 'Phase 1 of 3: Starting file changes check...'
+                db.session.commit()
+                total_files = ScanResult.query.count()
+                logger.info(f"File changes check scanning all {total_files} files in database")
+
             file_changes_record.total_files = total_files
             file_changes_record.phase_current = 1
             db.session.commit()
@@ -446,14 +548,18 @@ class MaintenanceService:
             batch_size = 100  # Reduced from 1000 for better responsiveness
             last_id = 0
             files_processed = 0
-            
+
             while files_processed < total_files:
                 if self._is_cancelled_file_changes(file_changes_record):
                     break
-                
+
                 # Use ID-based pagination instead of offset for better performance
                 try:
-                    batch = ScanResult.query.filter(ScanResult.id > last_id).order_by(ScanResult.id).limit(batch_size).all()
+                    # Build query with optional file_paths filter
+                    query = ScanResult.query.filter(ScanResult.id > last_id)
+                    if file_paths:
+                        query = query.filter(ScanResult.file_path.in_(file_paths))
+                    batch = query.order_by(ScanResult.id).limit(batch_size).all()
                     
                     if not batch:
                         logger.info(f"No more files to process after ID {last_id}")
@@ -563,7 +669,8 @@ class MaintenanceService:
             db.session.commit()
             
             # Create scan report for file changes operation
-            if file_changes_record.phase == 'complete':
+            # Always try to create a report even if there was an error, as long as we have some data
+            if file_changes_record.phase in ('complete', 'error'):
                 self._create_file_changes_report(file_changes_record)
             
             with self.file_changes_lock:
@@ -571,8 +678,16 @@ class MaintenanceService:
                 self.file_changes_state['phase'] = file_changes_record.phase
                 
         except Exception as e:
-            logger.error(f"Error during file changes check: {e}")
+            logger.error(f"Error during file changes check: {e}", exc_info=True)  # Add stack trace
             self._handle_file_changes_error(check_id, str(e))
+
+            # Try to create error report
+            try:
+                file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
+                if file_changes_record:
+                    self._create_file_changes_report(file_changes_record)
+            except Exception as report_error:
+                logger.error(f"Failed to create error report: {report_error}")
     
     def _check_file_changes(self, result: ScanResult, checker: PixelProbe) -> Optional[Dict]:
         """Check if a file has changed since last scan"""
@@ -695,37 +810,7 @@ class MaintenanceService:
         with self.file_changes_lock:
             self.file_changes_state['is_running'] = False
             self.file_changes_state['phase'] = 'error'
-    
-    def _create_cleanup_report(self, cleanup_record: CleanupState):
-        """Create a scan report for cleanup operation"""
-        try:
-            # Calculate duration
-            duration = None
-            if cleanup_record.start_time and cleanup_record.end_time:
-                duration = (cleanup_record.end_time - cleanup_record.start_time).total_seconds()
-            
-            # Create scan report
-            report = ScanReport(
-                scan_type='cleanup',
-                start_time=cleanup_record.start_time,
-                end_time=cleanup_record.end_time,
-                duration_seconds=duration,
-                total_files_discovered=cleanup_record.total_files,
-                files_scanned=cleanup_record.files_processed,
-                orphaned_records_found=cleanup_record.orphaned_found,
-                orphaned_records_deleted=cleanup_record.orphaned_found,  # Assuming all found were deleted
-                status='completed' if cleanup_record.phase == 'complete' else cleanup_record.phase,
-                error_message=cleanup_record.error_message
-            )
-            
-            db.session.add(report)
-            db.session.commit()
-            
-            logger.info(f"Created cleanup report {report.report_id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to create cleanup report: {e}")
-    
+
     def _create_file_changes_report(self, file_changes_record: FileChangesState):
         """Create a scan report for file changes operation"""
         try:

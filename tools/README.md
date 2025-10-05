@@ -15,7 +15,7 @@ python tools/script_name.py --execute
 
 ## Tool Categories
 
-### 🔧 Database Schema Tools
+###  Database Schema Tools
 
 | Script | Purpose | When to Use |
 |--------|---------|------------|
@@ -24,7 +24,7 @@ python tools/script_name.py --execute
 | `add_cancel_requested_columns.py` | Add cancellation tracking | Adding scan cancellation support |
 | `add_missing_column_manual.py` | Manually add any missing column | Schema sync issues |
 
-### 🎯 False Positive Fixes
+###  False Positive Fixes
 
 #### Video Files
 | Script | Fixes | Pattern |
@@ -45,7 +45,7 @@ python tools/script_name.py --execute
 | `fix_imagemagick_utf8_errors.py` | UTF-8 decode errors | "utf-8 codec can't decode" |
 | `reset_imagemagick_utf8_files.py` | Reset UTF-8 flagged files | Prepare for rescan |
 
-### 📊 Analysis Tools
+###  Analysis Tools
 
 | Script | Purpose | Output |
 |--------|---------|--------|
@@ -63,14 +63,14 @@ python tools/script_name.py --execute
 | `app_startup_migration.py` | Runtime migrations | Auto-run on startup |
 | `run_migration.py` | Legacy migration runner | Wrapper script |
 
-### ⚙️ System Utilities
+###  System Utilities
 
 | Script | Purpose | Usage |
 |--------|---------|--------|
 | `update_version.py` | Update version number | `python update_version.py 2.2.47` |
 | `patches/v2_2_47_fixes.py` | v2.2.47 specific fixes | Applied patches |
 
-### ⚠️ Utility Scripts
+###  Utility Scripts
 
 | Script | Purpose | Warning |
 |--------|---------|---------|

@@ -38,7 +38,7 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: pixelprobe:2.4.0
+    image: ttlequals0/pixelprobe:2.4
     container_name: pixelprobe-test-app
     environment:
       # Security
@@ -98,7 +98,7 @@ services:
 
   # Celery Worker for distributed task processing
   celery-worker:
-    image: pixelprobe:2.4.0
+    image: ttlequals0/pixelprobe:2.4
     container_name: pixelprobe-test-celery-worker
     command: python celery_worker.py
     environment:
@@ -140,3 +140,5 @@ networks:
 
 volumes:
   test_postgres_data:
+
+  

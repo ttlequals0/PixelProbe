@@ -18,17 +18,17 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Professional Grade**: Uses industry-standard tools (FFmpeg, ImageMagick) for accurate detection
 - **Set and Forget**: Schedule automated scans to continuously monitor your media health
 
-## 🚀 What's New in Version 2.4.1
+##  What's New in Version 2.4.1
 
-### 🔒 Authentication Enhancements
+###  Authentication Enhancements
 - **Universal API Protection**: ALL API endpoints now require authentication
 - **Swagger UI Compatibility**: Fixed Bearer token handling for Swagger UI testing
 - **Flexible Token Format**: Supports both `Bearer <token>` and direct token formats
 - **Security Hardening**: Enforced authentication across entire API surface
 
-## 📦 Version 2.4.0 Features
+##  Version 2.4.0 Features
 
-### 🔐 Complete Authentication System
+###  Complete Authentication System
 - **User Management**: Create and manage multiple user accounts with admin privileges
 - **Secure Login**: Session-based authentication with remember me functionality
 - **Password Security**: Bcrypt hashing with minimum 8 character passwords
@@ -37,19 +37,19 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Password Changes**: Users can securely change their passwords
 - **First-Run Setup**: Automatic setup wizard for initial admin account
 
-### 🛡️ Security Features
+### 🛡 Security Features
 - **Session Management**: Secure cookie-based sessions with httpOnly and sameSite protection
 - **CSRF Protection**: Cross-site request forgery protection on all forms
 - **API Authentication**: Bearer token authentication for API endpoints
 - **Access Control**: Admin-only access to user management features
 - **Automatic Logout**: Configurable session timeout for security
 
-### 📊 Previous Updates (v2.3.3)
+###  Previous Updates (v2.3.3)
 - **Scheduler Reliability**: Fixed scheduled task execution and prevented duplicates
 - **Stuck Scan Prevention**: Automatic detection and recovery from stuck scans
 - **Large File Support**: Extended timeouts for 50GB+ file scanning
 
-## ✨ Features
+##  Features
 
 ### Media Support
 - Comprehensive video format support (MP4, MKV, AVI, MOV, WebM, FLV, etc.)
@@ -188,7 +188,7 @@ Create and manage automated scan schedules:
 - Multiple scan types: Normal Scan, Orphan Cleanup, File Changes
 - View next run times and last execution status
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Using Docker (Recommended)
 
@@ -237,7 +237,7 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 - **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.4.0)
 - **`ttlequals0/pixelprobe:2.4.0`** - Complete authentication system with user management
 
-## 📦 Requirements
+##  Requirements
 
 **Important**: PixelProbe requires PostgreSQL. SQLite is no longer supported.
 

@@ -5,6 +5,206 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.10] - 2025-10-04
+
+### Fixed
+- **Individual File Action Scoping Bug**
+  - Fixed critical bug where individual file actions (Orphan Check, Change Check) were scanning ALL files in database instead of only the selected file
+  - Both `/api/cleanup-orphaned` and `/api/file-changes` endpoints now properly accept and filter by `file_paths` parameter
+  - Orphan cleanup now only checks specified files when `file_paths` is provided
+  - File changes check now only scans specified files when `file_paths` is provided
+  - Added comprehensive logging to show scope of operations (e.g., "Cleanup scoped to 1 specific file(s)")
+
+### Technical Details
+- Updated `cleanup_orphaned_files()` endpoint to extract `file_paths` from request JSON
+- Modified `cleanup_orphaned_async()` to pass `file_paths` parameter to maintenance service
+- Enhanced `_run_cleanup()` to filter `ScanResult.query.filter(ScanResult.file_path.in_(file_paths))` when file_paths provided
+- Updated `check_file_changes()` endpoint to extract `file_paths` from request JSON
+- Modified `check_file_changes_async()` to pass `file_paths` parameter to maintenance service
+- Enhanced `_run_file_changes_check()` to filter database queries by file_paths when provided
+- Both operations now show accurate totals and progress messages based on scoped file list
+- Backend properly respects frontend's `file_paths: [file.file_path]` parameter sent by `orphanCheckFile()` and `changeCheckFile()` functions
+
+## [2.4.9] - 2025-10-03
+
+### Fixed
+- **Critical Race Condition in Scan Start Logic**
+  - Implemented database row-level locking with `SELECT FOR UPDATE NOWAIT` to prevent multiple scans from starting simultaneously
+  - Fixed race condition where checking if scan is running and starting new scan were not atomic operations
+  - Scan state is now locked during scan initialization to ensure only one scan can start at a time
+  - Added proper error handling for lock acquisition failures with user-friendly messaging
+
+- **Improved Orphan File Detection**
+  - Enhanced file existence checking with multiple detection methods for robustness
+  - Now uses `os.path.exists()`, `os.path.isfile()`, and `os.path.lexists()` to catch edge cases
+  - Properly detects broken symlinks and inaccessible files as orphans
+  - Added detailed logging for files that fail accessibility checks
+  - Fixed issue where some non-existent files were not being removed during orphan cleanup
+
+### Added
+- **Action Dropdown for Bulk Operations**
+  - Replaced single "Rescan" button with comprehensive "Actions" dropdown
+  - Bulk actions now include:
+    - Rescan - Re-scan selected files
+    - Orphan Check - Check if selected files still exist on filesystem
+    - Change Check - Check if selected files have been modified since last scan
+  - Dropdown automatically enables/disables based on file selection
+
+- **Action Dropdown for Individual File Operations**
+  - Added "Actions" dropdown menu to each file row (desktop and mobile views)
+  - Individual file actions include:
+    - Rescan - Re-scan this specific file
+    - Orphan Check - Check if this file still exists
+    - Change Check - Check if this file has been modified
+  - Unified action interface across bulk and individual operations
+
+### Technical Details
+- Database locking uses PostgreSQL's `FOR UPDATE NOWAIT` to prevent deadlocks
+- Orphan cleanup now handles OSError and IOError exceptions gracefully
+- UI dropdowns use consistent toggle behavior with outside-click-to-close functionality
+- All new JavaScript functions properly close dropdowns after action selection
+
+## [2.4.8] - 2025-09-28
+
+### Fixed
+- **Critical IndentationError in reports_routes.py**
+  - Fixed IndentationError at line 407 that prevented app from starting
+  - Removed embedded newline character in Python comment that caused incorrect indentation
+  - This fix resolves the production crash where gunicorn workers failed to boot
+
+## [2.4.7] - 2025-09-27
+
+### Fixed
+- **Removed ALL file limits from PDF reports**
+  - PDF reports now include ALL files with NO limits (previously limited to 500-2000 files)
+  - All scan types (full_scan, rescan, cleanup, file_changes) now show complete results
+  - Reports show total file count for transparency when there are 1000+ files
+  - This ensures complete audit trails and compliance documentation
+  - The whole point of reports is to see EVERYTHING, not a subset
+
+### Changed
+- Removed artificial 500/2000 file limits from all PDF generation code
+- Database queries no longer limit results to 500 records
+- Footer messages changed from "Showing first X of Y" to "Total files: Y"
+
+## [2.4.6] - 2025-09-27
+
+### Fixed
+- **Orphan Cleanup PDF Reports Missing Files List**
+  - PDF reports for cleanup operations now include the complete list of removed files
+  - Stores orphaned files list in ScanReport.directories_scanned field as JSON
+  - PDF generation updated to display up to 2000 orphaned files (increased from 500 limit)
+  - JSON exports also properly include orphaned files list for cleanup reports
+  - Cleanup reports now have consistent data between PDF and JSON formats
+
+### Improved
+- Better handling of cleanup report data storage and retrieval
+- Simplified table format for orphaned files in PDF (File Path, Status, Action)
+- More efficient PDF generation for large numbers of orphaned files
+
+## [2.4.5] - 2025-09-26
+
+### Fixed
+- **Orphan Scan Report Generation**
+  - Fixed SQLAlchemy "Instance has been deleted" error during orphan cleanup deletion phase
+  - Changed deletion logic to use IDs instead of ORM objects to avoid detached instance issues
+  - Now uses bulk delete with `ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete()`
+  - Reports are now generated even when cleanup encounters errors
+  - Added error report generation in exception handler
+
+- **File Changes Check Report Generation**
+  - Ensured reports are generated even when file changes check encounters errors
+  - Added error report generation in exception handler
+  - Both maintenance operations now consistently generate reports for error tracking
+
+### Improved
+- Enhanced error logging with stack traces for better debugging
+- More robust report generation that works in error scenarios
+
+## [2.4.4] - 2025-09-25
+
+### Fixed
+- **Orphan Scan Operation Failures**
+  - Fixed "Working outside of application context" error when starting orphan cleanup via API
+  - Added proper Flask application context handling for background cleanup threads
+  - Fixed maintenance service to properly handle app context in threaded operations
+  - Orphan cleanup now starts correctly from both web UI and API endpoints
+
+- **CRITICAL Security Fix: Missing Authentication on 13 API Endpoints**
+  - **Maintenance Endpoints (6 endpoints):**
+    - Added @auth_required to /api/cleanup-orphaned
+    - Added @auth_required to /api/cancel-cleanup
+    - Added @auth_required to /api/reset-cleanup-state
+    - Added @auth_required to /api/cancel-file-changes
+    - Added @auth_required to /api/reset-file-changes-state
+    - Added @auth_required to /api/vacuum
+  - **Report Endpoints (7 endpoints):**
+    - Added @auth_required to /api/scan-reports (list all reports)
+    - Added @auth_required to /api/scan-reports/<id> (get single report)
+    - Added @auth_required to /api/scan-reports/<id>/export (export report)
+    - Added @auth_required to /api/generate-pdf-report/<type>/<id>
+    - Added @auth_required to /api/scan-reports/latest (get latest reports)
+    - Added @auth_required to /api/scan-reports/<id> DELETE (delete report)
+    - Added @auth_required to /api/reports/download-multiple (bulk download)
+  - **ALL API endpoints now require authentication** - no exceptions
+
+### Technical Details
+- Modified MaintenanceService.start_cleanup() to capture Flask app context before starting threads
+- Added _run_cleanup_with_context() wrapper method to ensure database operations have proper context
+- Similarly fixed start_file_changes_check() for consistency
+- Fixed both direct API endpoints and Swagger API endpoints for orphan cleanup
+
+## [2.4.3] - 2025-09-24
+
+### Changed
+- Development version bump to 2.4.3
+- Preparing for next release cycle
+
+## [2.4.2] - 2025-09-24
+
+### CRITICAL Security Fixes
+- **Added Missing Authentication to 25+ API Endpoints**
+  - ALL API endpoints now require authentication without exception
+  - Fixed critical vulnerability where many admin and control endpoints were exposed
+  - Secured endpoints include:
+    - Admin configuration: /api/configurations, /api/schedules, /api/exclusions, /api/ignored-patterns
+    - Scan control: /api/cancel-scan, /api/force-cleanup-scan, /api/scan-parallel
+    - File access: /api/view/*, /api/download/*
+    - System info: /api/system-info
+    - Recovery endpoints: All /api/reset-* and /api/recover-* endpoints
+  - Health check endpoint (/health) now requires authentication
+  - Only authentication endpoints (/api/auth/*) remain public for login functionality
+  - This fixes a CRITICAL vulnerability allowing unauthorized system access
+
+### Fixed
+- **FFmpeg Validation Timeout Issues**
+  - Removed timeout limits for FFmpeg validation to ensure complete file scanning
+  - Files of any size will now be fully validated regardless of time required
+  - Fixed issue where large files (>2GB) were timing out at 228 seconds
+  - Removed timeout for both video and image FFmpeg validation
+
+- **Scheduled Tasks Authentication Failure**
+  - Fixed scheduler tasks failing with 401 authentication errors
+  - Added support for internal scheduler requests to bypass authentication
+  - Scheduler can now execute scans and cleanup tasks without authentication issues
+  - Internal requests are identified by X-Internal-Request: scheduler header
+
+- **Scan Results Not Appearing in UI**
+  - Fixed issue where newly scanned items weren't appearing in web interface
+  - Corrected scan result return values to include files_discovered and corrupted_found counts
+  - Scan service now properly returns scan statistics for Celery tasks
+  - Database queries now correctly count discovered and corrupted files
+
+- **Orphan Cleanup Functionality**
+  - Orphan cleanup tasks now execute properly with scheduler authentication fix
+  - Scheduled cleanup operations can run without manual intervention
+
+### Technical Details
+- Authentication module (auth.py) updated to recognize internal scheduler requests
+- Scan service (scan_service.py) updated to return complete scan statistics
+- Media checker (media_checker.py) updated to remove all FFmpeg timeout restrictions
+- All scheduled tasks can now run autonomously without authentication failures
+
 ## [2.4.1] - 2025-09-22
 
 ### Changed

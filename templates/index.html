@@ -223,14 +223,29 @@
                                 <span class="selection-info text-muted"></span>
                             </div>
                             <div class="d-flex gap-2">
-                                <button class="btn btn-secondary" onclick="app.markSelectedAsGood()" 
+                                <button class="btn btn-secondary" onclick="app.markSelectedAsGood()"
                                         id="mark-good-btn" disabled>
                                     <i class="fas fa-check"></i> Mark as Good
                                 </button>
-                                <button class="btn btn-secondary" onclick="app.rescanSelected()" 
-                                        id="rescan-btn" disabled>
-                                    <i class="fas fa-sync"></i> Rescan
-                                </button>
+                                <!-- Action Dropdown for Bulk Operations -->
+                                <div class="action-dropdown">
+                                    <button class="btn btn-secondary" type="button"
+                                            id="bulk-action-btn" disabled
+                                            onclick="app.toggleActionDropdown(event, 'bulk-action-menu')">
+                                        <i class="fas fa-tasks"></i> Actions <i class="fas fa-caret-down"></i>
+                                    </button>
+                                    <ul class="dropdown-menu" id="bulk-action-menu" style="display: none;">
+                                        <li><a class="dropdown-item" href="#" onclick="app.rescanSelected(); return false;">
+                                            <i class="fas fa-sync"></i> Rescan
+                                        </a></li>
+                                        <li><a class="dropdown-item" href="#" onclick="app.orphanScanSelected(); return false;">
+                                            <i class="fas fa-search"></i> Orphan Check
+                                        </a></li>
+                                        <li><a class="dropdown-item" href="#" onclick="app.changeCheckSelected(); return false;">
+                                            <i class="fas fa-exchange-alt"></i> Change Check
+                                        </a></li>
+                                    </ul>
+                                </div>
                                 <button class="btn btn-secondary" onclick="app.downloadSelected()"
                                         id="download-btn" disabled>
                                     <i class="fas fa-download"></i> Download

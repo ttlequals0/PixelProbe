@@ -269,11 +269,10 @@ class TestConcurrency:
         scan_thread.join(timeout=5)
         cleanup_thread.join(timeout=5)
         
-        # Both operations can run simultaneously in current implementation
-        # or one might fail with 400 if paths are invalid
+        # Both operations should fail with 401 (Unauthorized) since we added authentication
         statuses = [results['scan'], results['cleanup']]
-        # At least one operation should complete (200 or 400 for bad request)
-        assert any(s in [200, 400] for s in statuses if s), "At least one operation should complete"
+        # Both should return 401 for unauthorized access
+        assert all(s == 401 for s in statuses if s), "Both operations should return 401 without authentication"
     
     def test_scan_state_consistency_under_load(self, app, db):
         """Test scan state consistency under concurrent read/write load"""

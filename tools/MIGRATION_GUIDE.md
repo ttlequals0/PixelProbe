@@ -67,10 +67,10 @@ Terminated blocking connections
 The script will show verification results:
 ```
 5. Verifying migration...
-   ✅ scan_state.last_update: OK
-   ✅ scan_chunks.files_processed: OK
+    scan_state.last_update: OK
+    scan_chunks.files_processed: OK
 
-✅ Migration completed successfully!
+ Migration completed successfully!
 ```
 
 ### Step 5: Restart PixelProbe

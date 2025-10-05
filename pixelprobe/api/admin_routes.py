@@ -86,6 +86,7 @@ def mark_as_good():
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/ignored-patterns')
+@auth_required
 def get_ignored_patterns():
     """Get all ignored error patterns"""
     patterns = IgnoredErrorPattern.query.filter_by(is_active=True).all()
@@ -164,6 +165,7 @@ def delete_ignored_pattern(pattern_id):
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/configurations')
+@auth_required
 def get_configurations():
     """Get all scan configurations"""
     configs = ScanConfiguration.query.all()
@@ -226,6 +228,7 @@ def add_configuration():
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/schedules', methods=['GET'])
+@auth_required
 def get_schedules():
     """Get all scan schedules"""
     # Return all schedules (active and inactive) so they can be toggled
@@ -234,6 +237,7 @@ def get_schedules():
     return jsonify({'schedules': [schedule.to_dict() for schedule in schedules]})
 
 @admin_bp.route('/schedules', methods=['POST'])
+@auth_required
 def create_schedule():
     """Create a new scan schedule"""
     data = request.get_json()
@@ -268,6 +272,7 @@ def create_schedule():
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/schedules/<int:schedule_id>', methods=['PUT'])
+@auth_required
 def update_schedule(schedule_id):
     """Update a scan schedule"""
     schedule = ScanSchedule.query.get_or_404(schedule_id)
@@ -295,6 +300,7 @@ def update_schedule(schedule_id):
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/schedules/<int:schedule_id>', methods=['DELETE'])
+@auth_required
 def delete_schedule(schedule_id):
     """Delete a scan schedule"""
     schedule = ScanSchedule.query.get_or_404(schedule_id)
@@ -315,6 +321,7 @@ def delete_schedule(schedule_id):
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/exclusions', methods=['GET'])
+@auth_required
 def get_exclusions():
     """Get current exclusion settings from database"""
     try:
@@ -340,6 +347,7 @@ def get_exclusions():
         return jsonify({'paths': [], 'extensions': []})
 
 @admin_bp.route('/exclusions', methods=['PUT'])
+@auth_required
 def update_exclusions():
     """Update all exclusion settings in database"""
     data = request.get_json()
@@ -371,6 +379,7 @@ def update_exclusions():
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['POST'])
+@auth_required
 def add_exclusion(exclusion_type):
     """Add a single exclusion (path or extension) to database"""
     # Validate exclusion type
@@ -415,6 +424,7 @@ def add_exclusion(exclusion_type):
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['DELETE'])
+@auth_required
 def remove_exclusion(exclusion_type):
     """Remove a single exclusion (path or extension) from database"""
     # Validate exclusion type

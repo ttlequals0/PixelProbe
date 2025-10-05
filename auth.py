@@ -76,6 +76,10 @@ def auth_required(f):
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # Allow internal scheduler requests without authentication
+        if request.headers.get('X-Internal-Request') == 'scheduler':
+            return f(*args, **kwargs)
+
         # Check if user is authenticated via session
         if current_user.is_authenticated:
             return f(*args, **kwargs)
@@ -121,6 +125,10 @@ def check_auth():
     Returns True if authenticated, False otherwise.
     Use this inside Flask-RESTX Resource methods instead of the decorator.
     """
+    # Allow internal scheduler requests without authentication
+    if request.headers.get('X-Internal-Request') == 'scheduler':
+        return True
+
     # Check if user is authenticated via session
     if current_user.is_authenticated:
         return True

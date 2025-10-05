@@ -16,11 +16,11 @@ Welcome to the PixelProbe documentation! This directory contains all technical d
 - **[v2.2.46-47 Migration](migration/MIGRATION_v2.2.46-47.md)** - Database schema updates and fixes
 - **[Migration Tools Guide](../tools/MIGRATION_GUIDE.md)** - How to use migration scripts
 
-### 🛠️ Maintenance & Tools
+###  Maintenance & Tools
 - **[Tools and Scripts](maintenance/TOOLS_AND_SCRIPTS.md)** - Complete reference for all maintenance tools
 - **[Tools Directory](../tools/README.md)** - Migration and utility scripts
 
-### 👩‍💻 Development
+### 👩‍ Development
 - **[Developer Guide](developer/README.md)** - Setup and contribution guidelines
 - **[API Consolidation Plan](development/API_CONSOLIDATION_PLAN.md)** - API improvement roadmap
 - **[Audit Implementation Plan](development/2.1_AUDIT_IMPLEMENTATION_PLAN.md)** - v2.1 audit and implementation details
@@ -31,7 +31,7 @@ Welcome to the PixelProbe documentation! This directory contains all technical d
 - **[Scan Types Documentation](api/SCAN_TYPES_DOCUMENTATION.md)** - Comprehensive guide to all 7 scan types
 - **[OpenAPI Specification](api/openapi.yaml)** - OpenAPI 3.0 specification
 
-### 💻 Integration Examples
+###  Integration Examples
 - **[Python Client](examples/python-client.py)** - Full-featured Python client
 - **[Node.js Client](examples/nodejs-client.js)** - JavaScript/Node.js implementation
 - **[Bash Client](examples/bash-client.sh)** - Shell script using curl
@@ -40,7 +40,7 @@ Welcome to the PixelProbe documentation! This directory contains all technical d
 ### 📸 Screenshots
 - **[UI Screenshots](screenshots/)** - Visual guide to the interface
 
-## 🚀 Quick Links
+##  Quick Links
 
 ### For Users
 1. Start with [Docker Setup](DOCKER_SETUP.md) for installation
@@ -67,7 +67,7 @@ When contributing documentation:
 - Test all code examples
 - Maintain consistent formatting
 
-## 🔍 Finding Information
+##  Finding Information
 
 - **Installation**: See [Docker Setup](DOCKER_SETUP.md)
 - **API Usage**: Check [API Reference](api/README.md)

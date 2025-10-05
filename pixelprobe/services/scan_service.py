@@ -614,13 +614,22 @@ class ScanService:
                 # Get final scan state for results
                 final_scan_state = ScanState.query.get(scan_state_id)
                 if final_scan_state:
+                    # Get the count of files discovered and corrupted from ScanResult table
+                    from models import ScanResult
+                    files_discovered = db.session.query(ScanResult).filter_by(scan_id=final_scan_state.scan_id).count()
+                    corrupted_found = db.session.query(ScanResult).filter_by(
+                        scan_id=final_scan_state.scan_id,
+                        is_corrupted=True
+                    ).count()
                     return {
                         'status': 'completed',
                         'message': 'Scan completed',
                         'directories': valid_dirs,
                         'force_rescan': force_rescan,
                         'num_workers': num_workers,
-                        'files_processed': final_scan_state.files_processed,
+                        'files_processed': final_scan_state.files_processed or 0,
+                        'files_discovered': files_discovered,
+                        'corrupted_found': corrupted_found,
                         'phase': final_scan_state.phase
                     }
                 else:
@@ -782,13 +791,23 @@ class ScanService:
                 # Get final scan state for results
                 final_scan_state = ScanState.query.get(scan_state_id)
                 if final_scan_state:
+                    # Get the count of files discovered and corrupted from ScanResult table
+                    from models import ScanResult
+                    files_discovered = db.session.query(ScanResult).filter_by(scan_id=final_scan_state.scan_id).count()
+                    corrupted_found = db.session.query(ScanResult).filter_by(
+                        scan_id=final_scan_state.scan_id,
+                        is_corrupted=True
+                    ).count()
                     return {
                         'status': 'completed',
                         'message': f'Scan completed for {len(valid_files)} files',
                         'files': len(valid_files),
                         'force_rescan': force_rescan,
-                                'num_workers': num_workers,
-                        'files_processed': final_scan_state.files_processed,
+                        'num_workers': num_workers,
+                        'files_processed': final_scan_state.files_processed or 0,
+                        'files_scanned': final_scan_state.files_processed or 0,  # For compatibility
+                        'files_discovered': files_discovered,
+                        'corrupted_found': corrupted_found,
                         'phase': final_scan_state.phase
                     }
                 else:

@@ -117,6 +117,7 @@ def get_stats():
             return jsonify({'error': 'Database query failed'}), 500
 
 @stats_bp.route('/system-info')
+@auth_required
 def get_system_info():
     """Get comprehensive system information - optimized to read from database"""
     try:
