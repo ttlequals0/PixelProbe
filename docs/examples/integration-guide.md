@@ -397,7 +397,7 @@ jobs:
           curl -s http://localhost:5000/api/scan-results?is_corrupted=true | jq -r '.results[].file_path'
           exit 1
         else
-          echo "✅ No corrupted files found!"
+          echo " No corrupted files found!"
         fi
 ```
 
@@ -483,7 +483,7 @@ def validate_before_backup(directories):
         print("Please review and fix corrupted files before backup.")
         return False
     
-    print(f"✅ All {stats['scanned_files']} files validated successfully!")
+    print(f" All {stats['scanned_files']} files validated successfully!")
     return True
 
 if __name__ == "__main__":
@@ -553,7 +553,7 @@ def scan_new_media(file_path):
             file_result = scan_results['results'][0]
             
             if file_result['is_corrupted']:
-                print(f"⚠️  WARNING: File is corrupted!")
+                print(f"  WARNING: File is corrupted!")
                 print(f"Error: {file_result['error_message']}")
                 
                 # Move to quarantine
@@ -569,7 +569,7 @@ def scan_new_media(file_path):
                 
                 return False
             else:
-                print("✅ File is healthy!")
+                print(" File is healthy!")
                 return True
     
     except Exception as e:
@@ -729,7 +729,7 @@ def handle_webhook():
         
         if stats['corrupted_files'] > 0:
             message = {
-                "text": f"⚠️ PixelProbe found {stats['corrupted_files']} corrupted files!",
+                "text": f" PixelProbe found {stats['corrupted_files']} corrupted files!",
                 "attachments": [{
                     "color": "danger",
                     "fields": [

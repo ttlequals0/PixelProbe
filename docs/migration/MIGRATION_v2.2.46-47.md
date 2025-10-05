@@ -2,7 +2,7 @@
 
 ## Critical Database Schema Updates Required
 
-### ⚠️ IMPORTANT: Database Migration Required
+###  IMPORTANT: Database Migration Required
 Version 2.2.46 and 2.2.47 require database schema updates before the application will function properly. These versions add critical database columns and connection improvements.
 
 ## Migration Steps

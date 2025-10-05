@@ -264,7 +264,7 @@ python3 tests/fixtures/media_samples/download_missing_samples.py
 ```bash
 ./tools/delete_files_from_csv.sh corrupted_files.csv
 ```
-**⚠️ Warning:** This permanently deletes files!
+** Warning:** This permanently deletes files!
 
 #### `tools/reset_nal_files_direct.sh`
 **Purpose:** Direct database reset of NAL-flagged files  
