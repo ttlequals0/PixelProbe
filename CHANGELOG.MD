@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.13] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Parallel Scanning Not Working for Full Scans**
+  - Fixed hardcoded `num_workers=1` in Celery tasks that disabled parallel scanning for full scans
+  - Full scans now properly use `MAX_WORKERS` configuration (e.g., 24 workers as configured)
+  - This was causing scans to run sequentially instead of in parallel, making them drastically slower
+  - Example: With `MAX_WORKERS=24`, scans will now process 24 files simultaneously instead of 1
+  - **Performance Impact**: This fix can improve scan performance by up to 24x depending on hardware
+
+### Technical Details
+- Modified `pixelprobe/tasks.py` (line 107-109) to use `Config.MAX_WORKERS` instead of hardcoded value
+- Previous code: `num_workers = 1 if scan_type in ['full', 'pending'] else 4`
+- New code: `num_workers = Config.MAX_WORKERS`
+- Affects `scan_media_task` when `scan_type` is 'full' or 'pending'
+- Users with `MAX_WORKERS=24` in docker-compose will now see true parallel execution
+
+## [2.4.12] - 2025-10-16
+
+### Fixed
+- **Media Viewer Audio Not Working**
+  - Fixed video player audio being disabled or muted in media viewer
+  - Added explicit audio enablement: `this.volume = 1.0; this.muted = false;` on video metadata load
+  - Added explicit audio enablement for audio player elements
+  - Video and audio players now properly initialize with full volume and unmuted state
+  - Resolves browser autoplay policy conflicts that could prevent audio playback
+
+### Technical Details
+- Modified video player in `static/js/app.js` (line 1561) to set `volume = 1.0` and `muted = false` on metadata load
+- Modified audio player in `static/js/app.js` (line 1579) to ensure proper audio initialization
+- Added unique player IDs for debugging and state management
+
 ## [2.4.11] - 2025-10-16
 
 ### Security

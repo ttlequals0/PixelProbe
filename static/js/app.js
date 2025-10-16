@@ -1555,10 +1555,10 @@ class PixelProbeApp {
                 <div style="position: relative; width: 100%; max-width: 800px; margin: 0 auto;">
                     <video id="video-player-${file.id}"
                            class="video-player"
-                           controls 
+                           controls
                            preload="metadata"
                            style="width: 100%; display: block;"
-                           onloadedmetadata="console.log('Video metadata loaded for file ${file.id}')"
+                           onloadedmetadata="console.log('Video metadata loaded for file ${file.id}'); this.volume = 1.0; this.muted = false;"
                            onerror="app.handleVideoError(${file.id})">
                         <source src="${videoUrl}" type="${fileType}">
                         <source src="${videoUrl}" type="video/mp4">
@@ -1573,7 +1573,10 @@ class PixelProbeApp {
             `;
         } else if (fileType.startsWith('audio/')) {
             content = `
-                <audio controls style="width: 100%; display: block; margin: 0 auto;">
+                <audio id="audio-player-${file.id}"
+                       controls
+                       style="width: 100%; display: block; margin: 0 auto;"
+                       onloadedmetadata="this.volume = 1.0; this.muted = false;">
                     <source src="/api/view/${file.id}" type="${fileType}">
                     Your browser does not support the audio element.
                 </audio>

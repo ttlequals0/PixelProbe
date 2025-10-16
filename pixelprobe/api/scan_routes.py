@@ -490,10 +490,11 @@ def scan_all():
         else:
             # Fallback to direct scan service (backward compatibility)
             logger.info("Celery not available, using direct scan service")
+            from config import Config
             result = current_app.scan_service.scan_directories(
-                validated_dirs, 
-                force_rescan=force_rescan, 
-                num_workers=1
+                validated_dirs,
+                force_rescan=force_rescan,
+                num_workers=Config.MAX_WORKERS  # Use configured MAX_WORKERS instead of hardcoded 1
             )
             result['celery_enabled'] = False
             return jsonify(result)
@@ -1248,10 +1249,11 @@ def force_scan_pending():
             })
         else:
             # Fallback to direct scan service
+            from config import Config
             result = current_app.scan_service.scan_directories(
                 directories=['PENDING_FILES_SCAN'],  # Special marker
                 force_rescan=False,
-                num_workers=1
+                num_workers=Config.MAX_WORKERS  # Use configured MAX_WORKERS instead of hardcoded 1
             )
             
             result['celery_enabled'] = False

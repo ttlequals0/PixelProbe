@@ -103,8 +103,9 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
         
         # Execute scan based on type
         if scan_type in ['full', 'parallel', 'pending']:
-            # Determine parameters based on scan type
-            num_workers = 1 if scan_type in ['full', 'pending'] else 4
+            # Use configured MAX_WORKERS instead of hardcoded 1
+            from config import Config
+            num_workers = Config.MAX_WORKERS
             
             # Note: ScanService handles progress internally via database updates
             # The progress_callback defined above is for Celery task state updates
@@ -133,10 +134,11 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             # Discovery is handled internally by scan_directories
             # There's no separate discover_files method in ScanService
             # Run a regular scan which includes discovery phase
+            from config import Config
             result = scan_service.scan_directories(
                 directories=paths,
                 force_rescan=False,  # Don't force rescan for discovery
-                num_workers=1,
+                num_workers=Config.MAX_WORKERS,  # Use configured MAX_WORKERS instead of hardcoded 1
                 async_mode=False  # Run synchronously in Celery task
             )
             
