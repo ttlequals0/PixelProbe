@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.24] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Fixed thread_local Scope Bug from v2.4.23**
+  - Moved thread_local creation outside the batch processing loop
+  - **Problem**: v2.4.23 still created 100+ connections and had "too many clients" errors
+    - `thread_local = threading.local()` was created INSIDE the batch loop (line 1996)
+    - Batch loop processes files in batches of 100 (line 1939: `for batch_offset in range(...)`)
+    - Each batch iteration created a NEW thread_local object
+    - ThreadPoolExecutor threads saw a "new" thread_local each batch
+    - Result: 101 connection initializations for ~10,000 files in 100-file batches
+  - **Solution**: Create thread_local ONCE per chunk, before the batch loop
+    - Moved `thread_local = threading.local()` to line 1941 (before batch loop)
+    - Now persists across all batches in a chunk
+    - With MAX_WORKERS=10: only 10 PixelProbe instances created for entire chunk
+    - Eliminates repeated connection initialization per batch
+  - Changed scan_service.py lines 1938-1941 and 1999
+
+### Technical Details
+- **Before (v2.4.23)**: thread_local created per batch → 100+ instances for 100 batches
+- **After (v2.4.24)**: thread_local created once → 10 instances total (one per thread)
+- Batch loop processes 100 files per iteration
+- Thread-local storage now persists across all batch iterations  
+- Total connections: 60 (main app) + 10 (worker threads) = 70 maximum
+
 ## [2.4.23] - 2025-10-16
 
 ### Fixed

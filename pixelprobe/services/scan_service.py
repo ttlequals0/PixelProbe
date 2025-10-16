@@ -1934,7 +1934,12 @@ class ScanService:
             errors = 0
             batch_size = 100  # Moderate batch size to balance memory and performance
             last_commit_count = 0  # Track when we last committed
-            
+
+            # Thread-local storage for PixelProbe instances (create ONCE per chunk, not per batch)
+            # This must be outside the batch loop so it persists across batches
+            import threading
+            thread_local = threading.local() if num_workers > 1 else None
+
             # Process files in batches to avoid loading all into memory
             for batch_offset in range(0, files_count, batch_size):
                 if self.scan_cancelled:
@@ -1942,7 +1947,7 @@ class ScanService:
                     chunk.end_time = datetime.now(timezone.utc)
                     db.session.commit()
                     return
-                
+
                 # Get batch of files
                 if chunk.directory_path.startswith('FILE_CHUNK:'):
                     # For file-based chunks, adjust offset based on chunk's offset
@@ -1982,7 +1987,6 @@ class ScanService:
                 if num_workers > 1:
                     from concurrent.futures import ThreadPoolExecutor, as_completed
                     from flask import current_app
-                    import threading
 
                     # Capture Flask app for worker threads
                     app = current_app._get_current_object()
@@ -1992,8 +1996,7 @@ class ScanService:
                     from media_checker import load_exclusions_with_patterns
                     excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
 
-                    # Thread-local storage for PixelProbe instances (one per worker thread)
-                    thread_local = threading.local()
+                    # Note: thread_local is now created ONCE per chunk (line 1941), not per batch
 
                     def scan_single_file(file_result):
                         """Scan a single file in a worker thread"""
