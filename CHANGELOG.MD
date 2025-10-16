@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.17] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Database Session Conflict in Parallel File Scanning**
+  - Fixed SQLAlchemy error: "This session is provisioning a new connection; concurrent operations are not permitted"
+  - Multiple worker threads were sharing the same PixelProbe instance and database session
+  - Each thread now creates its own PixelProbe instance with a dedicated database session
+  - Parallel file scanning now works correctly without session conflicts
+
+### Technical Details
+- Modified `scan_single_file()` function in `_scan_chunk_files()` to create thread-local PixelProbe instances
+- Each worker thread instantiates its own PixelProbe with separate database session
+- Prevents concurrent access to the same SQLAlchemy session from multiple threads
+- Maintains all parallel scanning performance benefits from v2.4.15
+
 ## [2.4.16] - 2025-10-16
 
 ### Fixed

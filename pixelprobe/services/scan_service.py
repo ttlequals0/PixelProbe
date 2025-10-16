@@ -1978,13 +1978,26 @@ class ScanService:
                     app = current_app._get_current_object()
                     scanned_lock = threading.Lock()
 
+                    # Get exclusions for creating thread-local PixelProbe instances
+                    from utils import load_exclusions_with_patterns
+                    excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
+
                     def scan_single_file(file_result):
                         """Scan a single file in a worker thread"""
                         with app.app_context():
                             if self.scan_cancelled:
                                 return None
                             try:
-                                checker.scan_file(file_result.file_path, force_rescan=force_rescan)
+                                # Create a thread-local PixelProbe instance to avoid session conflicts
+                                # Each thread needs its own database session
+                                from media_checker import PixelProbe
+                                thread_checker = PixelProbe(
+                                    database_path=self.database_uri,
+                                    excluded_paths=excluded_paths,
+                                    excluded_extensions=excluded_extensions,
+                                    error_patterns=excluded_patterns
+                                )
+                                thread_checker.scan_file(file_result.file_path, force_rescan=force_rescan)
                                 return file_result, True, None
                             except Exception as e:
                                 return file_result, False, str(e)
