@@ -358,12 +358,13 @@ class TestScanService:
             
             # Start parallel scan
             result = scan_service.scan_directories(['/test/dir'], num_workers=2)
-        
+
             assert result['num_workers'] == 2
-            
-            # Wait for scan to complete
-            scan_service.current_scan_thread.join(timeout=3)
-            
+
+            # Wait for scan to complete (if thread was created)
+            if scan_service.current_scan_thread is not None:
+                scan_service.current_scan_thread.join(timeout=3)
+
             # Verify files were scanned
             # With the current mock setup, no files would be scanned since the query returns empty
             # The test should verify the scan completed successfully

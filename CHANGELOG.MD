@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.11] - 2025-10-16
+
+### Security
+- **CRITICAL: Removed Insecure Default Admin Credentials**
+  - Removed automatic default admin user creation with empty password
+  - Removed insecure password-setting logic in login endpoint that accepted ANY 8+ character password on first login
+  - No default credentials exist on fresh installations - admin account must be explicitly created
+  - Admin creation now requires intentional use of `/api/auth/setup` endpoint or web setup wizard
+  - **ACTION REQUIRED**: Existing deployments should verify their admin password and change it if compromised
+  - **Migration Note**: This is a breaking change for automated deployments - update deployment scripts to call `/api/auth/setup` on first run
+
+### Fixed
+- **Multi-Worker Database Initialization Race Condition**
+  - Fixed error logging for PostgreSQL race conditions during multi-worker startup
+  - Now catches `IntegrityError` and `ProgrammingError` in addition to `OperationalError`
+  - Suppresses benign "duplicate key" errors from pg_type_typname_nsp_index constraint
+  - Reduces ERROR-level logs to DEBUG-level for expected race condition scenarios
+  - No functional changes - tables were being created correctly, just with noisy error logs
+
+### Changed
+- Authentication workflow now enforces explicit first-run setup
+- Login endpoint (`/api/auth/login`) now only performs authentication, no longer accepts setup passwords
+- Updated documentation in README.md to clarify secure first-run setup process
+
+### Technical Details
+- Removed default admin user creation from `app.py` migration (line 165-167)
+- Removed default admin user creation from `migrations/add_authentication_tables.py` (line 62-64)
+- Simplified `/api/auth/login` endpoint to remove insecure password setup shortcut (auth_routes.py:57-78)
+- First-run setup must now use dedicated `/api/auth/setup` endpoint which properly validates and creates admin user
+- `check_first_run()` and `create_initial_admin()` functions remain secure and unchanged
+- Enhanced table creation error handling in `create_tables()` to properly catch all PostgreSQL race condition exceptions (app.py:312-318)
+
 ## [2.4.10] - 2025-10-04
 
 ### Fixed

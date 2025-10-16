@@ -309,9 +309,12 @@ def create_tables():
                         try:
                             table.create(db.engine)
                             logger.info(f"Created table: {table_name}")
-                        except exc.OperationalError as e:
-                            # Table might have been created by another worker
-                            if "already exists" not in str(e):
+                        except (exc.OperationalError, exc.IntegrityError, exc.ProgrammingError) as e:
+                            # Table might have been created by another worker - suppress common race condition errors
+                            err_str = str(e).lower()
+                            if any(msg in err_str for msg in ["already exists", "duplicate key", "typname_nsp_index"]):
+                                logger.debug(f"Table {table_name} already created by another worker")
+                            else:
                                 logger.error(f"Error creating table {table_name}: {str(e)}")
                 
                 logger.info("Database tables verified successfully")
@@ -456,20 +459,9 @@ def run_auth_migration():
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id)"))
                 logger.info("Created api_tokens table via migration")
 
-            # Check if any users exist (only if table exists)
-            if 'users' in existing_tables or 'users' in inspector.get_table_names():
-                result = conn.execute(text("SELECT COUNT(*) FROM users"))
-                user_count = result.scalar()
-            else:
-                user_count = 0
-
-            if user_count == 0 and 'users' in inspector.get_table_names():
-                # Create a default admin user that requires setup on first login
-                conn.execute(text("""
-                    INSERT INTO users (username, email, password_hash, is_admin, first_setup_required, created_at, is_active)
-                    VALUES ('admin', 'admin@pixelprobe.local', '', TRUE, TRUE, CURRENT_TIMESTAMP, TRUE)
-                """))
-                logger.info("Created default admin user (password setup required on first login)")
+            # No longer create default admin user automatically
+            # Users must use the /api/auth/setup endpoint on first run
+            logger.info("Authentication tables migration completed")
 
             conn.commit()
 

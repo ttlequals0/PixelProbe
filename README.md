@@ -221,10 +221,20 @@ Create and manage automated scan schedules:
 4. **Access the web interface**:
    Open http://localhost:5001 in your browser
 
-5. **Initial Setup**:
-   - On first run, you'll be prompted to create an admin account
-   - Enter a secure password (minimum 8 characters)
-   - The system will automatically create the admin user
+5. **Initial Setup** (IMPORTANT - First Run Only):
+
+   On first run, you must create the admin account via the setup endpoint:
+
+   ```bash
+   # Create admin user with your chosen password
+   curl -X POST http://localhost:5001/api/auth/setup \
+     -H "Content-Type: application/json" \
+     -d '{"password":"YourSecurePassword123"}'
+   ```
+
+   Or visit http://localhost:5001/login and follow the first-run setup wizard.
+
+   **Security Note**: No default admin account exists. You must explicitly create it on first run.
 
 6. **Start scanning**:
    - After login, click "Scan All Files" to begin analyzing your media library

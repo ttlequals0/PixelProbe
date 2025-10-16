@@ -59,17 +59,9 @@ def run_migration():
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id)"))
 
-            # Check if any users exist
-            result = conn.execute(text("SELECT COUNT(*) FROM users"))
-            user_count = result.scalar()
-
-            if user_count == 0:
-                # Create a default admin user that requires setup on first login
-                conn.execute(text("""
-                    INSERT INTO users (username, email, password_hash, is_admin, first_setup_required)
-                    VALUES ('admin', 'admin@pixelprobe.local', '', TRUE, TRUE)
-                """))
-                logger.info("Created default admin user (password setup required on first login)")
+            # No longer create default admin user automatically
+            # Users must use the /api/auth/setup endpoint on first run
+            logger.info("Authentication tables created. Use /api/auth/setup to create initial admin user.")
 
             conn.commit()
             logger.info("Authentication tables created successfully")

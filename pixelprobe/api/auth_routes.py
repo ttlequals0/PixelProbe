@@ -65,32 +65,7 @@ def api_login():
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
 
-    # Check if user needs first-time setup
-    if username == 'admin':
-        admin_user = User.query.filter_by(username='admin').first()
-        if admin_user and admin_user.first_setup_required:
-            if not password or len(password) < 8:
-                return jsonify({
-                    'error': 'First-time setup required',
-                    'first_setup': True,
-                    'message': 'Please set a password (minimum 8 characters)'
-                }), 400
-
-            # Set the password for first-time setup
-            admin_user.set_password(password)
-            admin_user.first_setup_required = False
-            admin_user.last_login = datetime.now(timezone.utc)
-            db.session.commit()
-
-            # Log them in
-            login_user(admin_user, remember=remember)
-            return jsonify({
-                'success': True,
-                'message': 'Password set successfully',
-                'user': admin_user.to_dict()
-            })
-
-    # Normal authentication
+    # Normal authentication only - no auto password setup
     user = authenticate_user(username, password)
     if not user:
         return jsonify({'error': 'Invalid username or password'}), 401
