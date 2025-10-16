@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.19] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Scans Completely Broken - ImportError**
+  - Fixed import error introduced in v2.4.17: "cannot import name 'load_exclusions_with_patterns' from 'utils'"
+  - In v2.4.17, parallel scanning code incorrectly imported `load_exclusions_with_patterns` from `utils` module
+  - This function actually exists in `media_checker` module, not `utils`
+  - All scans would fail immediately with ImportError when trying to scan file chunks
+  - Corrected import from `utils` to `media_checker` on line 1985 in scan_service.py
+
+### Technical Details
+- The function `load_exclusions_with_patterns` is defined in media_checker.py and properly imported at module level (line 15)
+- In v2.4.17, thread-local PixelProbe instantiation code mistakenly tried to import from wrong module
+- This broke all parallel file scanning operations since v2.4.17
+- Fixed by changing `from utils import load_exclusions_with_patterns` to `from media_checker import load_exclusions_with_patterns`
+
 ## [2.4.18] - 2025-10-16
 
 ### Fixed

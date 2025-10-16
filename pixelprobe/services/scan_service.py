@@ -1982,7 +1982,7 @@ class ScanService:
                     scanned_lock = threading.Lock()
 
                     # Get exclusions for creating thread-local PixelProbe instances
-                    from utils import load_exclusions_with_patterns
+                    from media_checker import load_exclusions_with_patterns
                     excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
 
                     def scan_single_file(file_result):
