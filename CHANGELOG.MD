@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.22] - 2025-10-16
+
+### Fixed
+- **Fixed NullPool Concurrent Operation Errors from v2.4.21**
+  - Changed thread-local instances from NullPool to StaticPool
+  - **Problem**: NullPool in v2.4.21 caused "This session is provisioning a new connection; concurrent operations are not permitted" errors
+  - NullPool creates/destroys connections on-demand, causing issues when session tries concurrent operations (e.g., progress updates)
+  - **Solution**: StaticPool provides single persistent connection per worker
+    - Each worker gets ONE connection that stays open (vs NullPool's create/destroy per operation)
+    - With MAX_WORKERS=10: 10 workers × 1 connection = 10 connections from workers
+    - Main app pool: 20+40=60 connections, total: 70 (well under PostgreSQL default 100)
+  - Changed media_checker.py line 207 from NullPool to StaticPool
+  - Maintains the connection pool exhaustion fix while eliminating concurrent operation errors
+
+### Technical Details
+- **Final Connection Pooling Strategy**:
+  - Main application: QueuePool with pool_size=20, max_overflow=40 (default SQLAlchemy behavior)
+  - Thread-local workers: StaticPool with 1 persistent connection per worker
+  - Total connections: 60 (main) + 10 (workers with MAX_WORKERS=10) = 70 connections maximum
+
 ## [2.4.21] - 2025-10-16
 
 ### Fixed

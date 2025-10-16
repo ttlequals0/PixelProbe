@@ -204,29 +204,30 @@ class PixelProbe:
             try:
                 from sqlalchemy import create_engine
                 from sqlalchemy.orm import sessionmaker
-                from sqlalchemy.pool import NullPool
-                # Thread-local instances use NullPool to avoid connection pool exhaustion
-                # Main app already has a connection pool, these instances are short-lived
+                from sqlalchemy.pool import StaticPool
+                # Thread-local instances use StaticPool with single persistent connection
+                # This avoids both connection pool exhaustion AND NullPool's concurrent operation errors
                 if self.database_path.startswith('postgresql://'):
-                    # Use NullPool for thread-local instances to prevent connection exhaustion
-                    # With MAX_WORKERS=10, each would create pool_size=5+max_overflow=10=15 connections
-                    # That's 150 connections just from workers, exceeding PostgreSQL max_connections (100)
+                    # Use StaticPool with single connection per worker
+                    # With MAX_WORKERS=10: 10 workers × 1 connection = 10 connections from workers
+                    # Main app pool: 20+40=60, workers: 10, total: 70 (well under PostgreSQL default 100)
+                    # NullPool caused "concurrent operations not permitted" errors during progress updates
                     self._db_engine = create_engine(
                         self.database_path,
-                        poolclass=NullPool,  # No pooling - creates/closes connection per operation
+                        poolclass=StaticPool,  # Single persistent connection per engine
                         connect_args={
                             'connect_timeout': 10,
                             'application_name': 'pixelprobe_worker'
                         }
                     )
                 else:
-                    # SQLite or other database - also use NullPool for consistency
+                    # SQLite or other database - also use StaticPool for consistency
                     self._db_engine = create_engine(
                         self.database_path,
-                        poolclass=NullPool
+                        poolclass=StaticPool
                     )
                 self._db_session_factory = sessionmaker(bind=self._db_engine)
-                logger.info("Thread-local database connection initialized (NullPool)")
+                logger.info("Thread-local database connection initialized (StaticPool with 1 connection)")
             except Exception as e:
                 logger.error(f"Failed to initialize database connection: {e}")
                 self._db_engine = None
