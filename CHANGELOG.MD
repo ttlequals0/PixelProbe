@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.16] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Syntax Error Preventing App Startup**
+  - Fixed Python syntax error in scan_service.py line 2124
+  - `except` block was incorrectly indented outside the for loop instead of inside
+  - This caused `SyntaxError: expected 'except' or 'finally' block` preventing workers from booting
+  - App now starts successfully with version 2.4.15 parallel scanning features
+
+### Technical Details
+- Fixed indentation of `except Exception as e:` block at line 2124 in scan_service.py
+- The except block needed to be inside the for loop to match the try block at line 2063
+- Changed from 5 levels of indentation to 6 levels to properly align with try block
+
 ## [2.4.15] - 2025-10-16
 
 ### Fixed

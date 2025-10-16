@@ -2120,10 +2120,10 @@ class ScanService:
                                         last_commit_count = scanned
                                 except Exception as e2:
                                     logger.error(f"Failed to recover progress update: {e2}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error scanning {file_result.file_path}: {e}")
-                        errors += 1
+
+                        except Exception as e:
+                            logger.error(f"Error scanning {file_result.file_path}: {e}")
+                            errors += 1
             
             chunk.files_scanned = scanned
             chunk.status = 'completed'
