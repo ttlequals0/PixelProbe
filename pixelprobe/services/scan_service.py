@@ -1264,7 +1264,8 @@ class ScanService:
                     return None
                 # For parallel scan, we can't pass cumulative counts, so pass 0
                 # The main thread will handle updating the cumulative progress
-                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, scan_state)
+                # Pass num_workers so files within each chunk are scanned in parallel
+                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, scan_state, num_workers=num_workers)
                 return chunk, chunk.files_scanned or 0
         
         with ThreadPoolExecutor(max_workers=min(num_workers, len(chunks))) as executor:
@@ -1874,9 +1875,14 @@ class ScanService:
         
         return count
     
-    def _scan_chunk_files(self, chunk: ScanChunk, checker: PixelProbe, force_rescan: bool = False, 
-                          total_scanned_so_far: int = 0, total_to_scan: int = 0, scan_state: ScanState = None):
-        """Scan files in a chunk that are already in the database"""
+    def _scan_chunk_files(self, chunk: ScanChunk, checker: PixelProbe, force_rescan: bool = False,
+                          total_scanned_so_far: int = 0, total_to_scan: int = 0, scan_state: ScanState = None,
+                          num_workers: int = 1):
+        """Scan files in a chunk that are already in the database
+
+        Args:
+            num_workers: Number of parallel workers to use for scanning files within this chunk
+        """
         chunk.status = 'processing'
         chunk.phase = 'scanning'
         chunk.start_time = datetime.now(timezone.utc)
@@ -1961,63 +1967,148 @@ class ScanService:
                 
                 if not files_batch:
                     break  # No more files
-                
-                for file_result in files_batch:
-                    if self.scan_cancelled:
-                        chunk.status = 'cancelled'
-                        chunk.end_time = datetime.now(timezone.utc)
-                        db.session.commit()
-                        return
-                    
-                    try:
-                        # Scan the file
-                        checker.scan_file(file_result.file_path, force_rescan=force_rescan)
-                        scanned += 1
-                        
-                        # Update progress with cumulative counts
-                        current_total = total_scanned_so_far + scanned
-                        
-                        # Update progress every 10 files for real-time feedback
-                        if scanned % 10 == 0 or scanned == 1 or scanned == batch_offset + 1:
-                            self.update_progress(current_total, total_to_scan, 
-                                               file_result.file_path, 'scanning')
-                        
-                        # Commit based on scan size to balance real-time updates with performance
-                        # For small scans (<20 files), update EVERY file for immediate UI feedback
-                        # For medium scans, update every 5-10 files
-                        # For large scans, update less frequently to reduce database overhead
-                        if total_to_scan < 20:
-                            update_threshold = 1  # Update every file for small scans
-                        elif total_to_scan < 100:
-                            update_threshold = 5  # Update every 5 files for medium scans
-                        elif total_to_scan < 1000:
-                            update_threshold = 10  # Update every 10 files
-                        else:
-                            update_threshold = 50  # Update every 50 files for large scans
-                        
-                        if scan_state and (scanned - last_commit_count) >= update_threshold:
+
+                # Use parallel processing if num_workers > 1
+                if num_workers > 1:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    from flask import current_app
+                    import threading
+
+                    # Capture Flask app for worker threads
+                    app = current_app._get_current_object()
+                    scanned_lock = threading.Lock()
+
+                    def scan_single_file(file_result):
+                        """Scan a single file in a worker thread"""
+                        with app.app_context():
+                            if self.scan_cancelled:
+                                return None
                             try:
-                                scan_state.files_processed = current_total
-                                scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
-                                
-                                # Update progress message with current file info
-                                from utils import ProgressTracker
-                                progress_tracker = ProgressTracker('scan')
-                                scan_state.progress_message = progress_tracker.get_progress_message(
-                                    f'Phase 3 of 3: Scanning files',
-                                    current_total,
-                                    total_to_scan,
-                                    os.path.basename(file_result.file_path)
-                                )
-                                db.session.commit()
-                                last_commit_count = scanned
-                                
-                                # Memory management - cleanup every 1000 files
-                                if scanned % 1000 == 0:
-                                    import gc
-                                    gc.collect()
+                                checker.scan_file(file_result.file_path, force_rescan=force_rescan)
+                                return file_result, True, None
                             except Exception as e:
-                                logger.error(f"Failed to update progress for file {file_result.file_path}: {e}")
+                                return file_result, False, str(e)
+
+                    # Process files in parallel
+                    with ThreadPoolExecutor(max_workers=num_workers) as file_executor:
+                        future_to_file = {file_executor.submit(scan_single_file, f): f for f in files_batch}
+
+                        for future in as_completed(future_to_file):
+                            if self.scan_cancelled:
+                                chunk.status = 'cancelled'
+                                chunk.end_time = datetime.now(timezone.utc)
+                                db.session.commit()
+                                return
+
+                            result = future.result()
+                            if result is None:
+                                continue
+
+                            file_result, success, error = result
+
+                            with scanned_lock:
+                                if success:
+                                    scanned += 1
+                                else:
+                                    errors += 1
+                                    logger.error(f"Error scanning {file_result.file_path}: {error}")
+
+                                # Update progress (less frequently for parallel to reduce contention)
+                                current_total = total_scanned_so_far + scanned
+
+                                if scanned % 10 == 0 or scanned == 1:
+                                    self.update_progress(current_total, total_to_scan,
+                                                       file_result.file_path, 'scanning')
+
+                                # Determine update threshold
+                                if total_to_scan < 20:
+                                    update_threshold = 1
+                                elif total_to_scan < 100:
+                                    update_threshold = 5
+                                elif total_to_scan < 1000:
+                                    update_threshold = 10
+                                else:
+                                    update_threshold = 50
+
+                                if scan_state and (scanned - last_commit_count) >= update_threshold:
+                                    try:
+                                        scan_state.files_processed = current_total
+                                        scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+
+                                        from utils import ProgressTracker
+                                        progress_tracker = ProgressTracker('scan')
+                                        scan_state.progress_message = progress_tracker.get_progress_message(
+                                            f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
+                                            current_total,
+                                            total_to_scan,
+                                            os.path.basename(file_result.file_path)
+                                        )
+                                        db.session.commit()
+                                        last_commit_count = scanned
+
+                                        if scanned % 1000 == 0:
+                                            import gc
+                                            gc.collect()
+                                    except Exception as e:
+                                        logger.error(f"Failed to update progress: {e}")
+                else:
+                    # Sequential processing (original code)
+                    for file_result in files_batch:
+                        if self.scan_cancelled:
+                            chunk.status = 'cancelled'
+                            chunk.end_time = datetime.now(timezone.utc)
+                            db.session.commit()
+                            return
+
+                        try:
+                            # Scan the file
+                            checker.scan_file(file_result.file_path, force_rescan=force_rescan)
+                            scanned += 1
+
+                            # Update progress with cumulative counts
+                            current_total = total_scanned_so_far + scanned
+
+                            # Update progress every 10 files for real-time feedback
+                            if scanned % 10 == 0 or scanned == 1 or scanned == batch_offset + 1:
+                                self.update_progress(current_total, total_to_scan,
+                                                   file_result.file_path, 'scanning')
+
+                            # Commit based on scan size to balance real-time updates with performance
+                            # For small scans (<20 files), update EVERY file for immediate UI feedback
+                            # For medium scans, update every 5-10 files
+                            # For large scans, update less frequently to reduce database overhead
+                            if total_to_scan < 20:
+                                update_threshold = 1  # Update every file for small scans
+                            elif total_to_scan < 100:
+                                update_threshold = 5  # Update every 5 files for medium scans
+                            elif total_to_scan < 1000:
+                                update_threshold = 10  # Update every 10 files
+                            else:
+                                update_threshold = 50  # Update every 50 files for large scans
+
+                            if scan_state and (scanned - last_commit_count) >= update_threshold:
+                                try:
+                                    scan_state.files_processed = current_total
+                                    scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+
+                                    # Update progress message with current file info
+                                    from utils import ProgressTracker
+                                    progress_tracker = ProgressTracker('scan')
+                                    scan_state.progress_message = progress_tracker.get_progress_message(
+                                        f'Phase 3 of 3: Scanning files',
+                                        current_total,
+                                        total_to_scan,
+                                        os.path.basename(file_result.file_path)
+                                    )
+                                    db.session.commit()
+                                    last_commit_count = scanned
+
+                                    # Memory management - cleanup every 1000 files
+                                    if scanned % 1000 == 0:
+                                        import gc
+                                        gc.collect()
+                                except Exception as e:
+                                    logger.error(f"Failed to update progress for file {file_result.file_path}: {e}")
                                 # Try to recover the database session
                                 try:
                                     db.session.rollback()
