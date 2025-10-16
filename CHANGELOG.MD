@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.23] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Fixed PixelProbe Instance Creation Per File**
+  - Changed from creating new PixelProbe instance per file to one per worker thread
+  - **Problem**: v2.4.22 still had "concurrent operations not permitted" errors
+    - Code was creating a NEW PixelProbe instance for EVERY file scanned
+    - Each new instance initialized a new database connection  
+    - With thousands of files, this created thousands of connection initialization attempts
+    - Progress updates would fail when connection was still being provisioned
+  - **Solution**: Use `threading.local()` to cache one PixelProbe instance per worker thread
+    - Thread-local storage: each worker thread gets exactly ONE PixelProbe instance
+    - That instance is reused for ALL files scanned by that thread
+    - With MAX_WORKERS=10: only 10 PixelProbe instances total (one per thread)
+    - Eliminates repeated connection initialization
+  - Changed scan_service.py lines 1995-2017 to use thread-local storage
+  - This finally resolves the concurrent operation errors
+
+### Technical Details
+- **Before**: New PixelProbe instance per file → thousands of connection inits
+- **After**: One PixelProbe instance per worker thread → 10 connection inits total  
+- Uses Python's `threading.local()` to store per-thread instances
+- Each thread checks `if not hasattr(thread_local, 'checker')` before creating instance
+- Total connections: 60 (main app) + 10 (worker threads) = 70 maximum
+
+## [2.4.22] - 2025-10-16
 ## [2.4.22] - 2025-10-16
 
 ### Fixed

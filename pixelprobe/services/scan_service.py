@@ -1992,22 +1992,26 @@ class ScanService:
                     from media_checker import load_exclusions_with_patterns
                     excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
 
+                    # Thread-local storage for PixelProbe instances (one per worker thread)
+                    thread_local = threading.local()
+
                     def scan_single_file(file_result):
                         """Scan a single file in a worker thread"""
                         with app.app_context():
                             if self.scan_cancelled:
                                 return None
                             try:
-                                # Create a thread-local PixelProbe instance to avoid session conflicts
-                                # Each thread needs its own database session
-                                from media_checker import PixelProbe
-                                thread_checker = PixelProbe(
-                                    database_path=self.database_uri,
-                                    excluded_paths=excluded_paths,
-                                    excluded_extensions=excluded_extensions,
-                                    excluded_patterns=excluded_patterns
-                                )
-                                thread_checker.scan_file(file_result.file_path, force_rescan=force_rescan)
+                                # Get or create thread-local PixelProbe instance (one per thread, not per file)
+                                # This avoids creating thousands of connections for thousands of files
+                                if not hasattr(thread_local, 'checker'):
+                                    from media_checker import PixelProbe
+                                    thread_local.checker = PixelProbe(
+                                        database_path=self.database_uri,
+                                        excluded_paths=excluded_paths,
+                                        excluded_extensions=excluded_extensions,
+                                        excluded_patterns=excluded_patterns
+                                    )
+                                thread_local.checker.scan_file(file_result.file_path, force_rescan=force_rescan)
                                 return file_result, True, None
                             except Exception as e:
                                 return file_result, False, str(e)
