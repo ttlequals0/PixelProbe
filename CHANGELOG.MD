@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.18] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Batch Insert Failure Causing Scan to Hang**
+  - Fixed SQLAlchemy error during bulk insert: "INSERT value for column scan_results.file_size is explicitly rendered as a boundparameter"
+  - When file info retrieval failed, error records were missing required fields (`file_size`, `file_type`, `last_modified`)
+  - SQLAlchemy created bind parameters for missing fields, causing PostgreSQL bulk insert to fail repeatedly
+  - Scans would get stuck in a loop trying to insert error records
+  - Error records now include default values: `file_size=0`, `file_type='unknown'`, `last_modified=current_time`
+
+### Technical Details
+- Modified error case in `_scan_chunk_files()` at lines 1596-1609 in scan_service.py
+- Added missing required fields with sensible defaults for files that fail info retrieval
+- Ensures all batch inserts can complete successfully even when some files have errors
+- Prevents scan from getting stuck on problematic files
+
 ## [2.4.17] - 2025-10-16
 
 ### Fixed

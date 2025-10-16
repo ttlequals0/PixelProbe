@@ -1602,7 +1602,10 @@ class ScanService:
                     'marked_as_good': False,
                     'file_exists': True,
                     'has_warnings': False,
-                    'deep_scan': False  # Temporary until migration runs
+                    'deep_scan': False,  # Temporary until migration runs
+                    'file_size': 0,  # Default for files with errors
+                    'file_type': 'unknown',  # Default MIME type
+                    'last_modified': datetime.now(timezone.utc)  # Use current time as fallback
                 })
         
         # Bulk insert with duplicate handling
