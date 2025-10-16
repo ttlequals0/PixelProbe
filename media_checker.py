@@ -199,39 +199,34 @@ class PixelProbe:
         self._init_database_connection()
         
     def _init_database_connection(self):
-        """Initialize database connection pool for reuse"""
+        """Initialize database connection for thread-local instances"""
         if self.database_path:
             try:
                 from sqlalchemy import create_engine
                 from sqlalchemy.orm import sessionmaker
-                # Optimized connection pool settings matching main app
-                # Parse database URI to extract connection parameters
+                from sqlalchemy.pool import NullPool
+                # Thread-local instances use NullPool to avoid connection pool exhaustion
+                # Main app already has a connection pool, these instances are short-lived
                 if self.database_path.startswith('postgresql://'):
-                    # Use same settings as main app for consistency
+                    # Use NullPool for thread-local instances to prevent connection exhaustion
+                    # With MAX_WORKERS=10, each would create pool_size=5+max_overflow=10=15 connections
+                    # That's 150 connections just from workers, exceeding PostgreSQL max_connections (100)
                     self._db_engine = create_engine(
                         self.database_path,
-                        pool_size=5,
-                        pool_pre_ping=True,
-                        pool_recycle=3600,
-                        max_overflow=10,
-                        pool_timeout=30,
+                        poolclass=NullPool,  # No pooling - creates/closes connection per operation
                         connect_args={
                             'connect_timeout': 10,
-                            'application_name': 'pixelprobe_checker'
+                            'application_name': 'pixelprobe_worker'
                         }
                     )
                 else:
-                    # SQLite or other database
+                    # SQLite or other database - also use NullPool for consistency
                     self._db_engine = create_engine(
                         self.database_path,
-                        pool_size=5,
-                        pool_pre_ping=True,
-                        pool_recycle=3600,
-                        max_overflow=10,
-                        pool_timeout=30
+                        poolclass=NullPool
                     )
                 self._db_session_factory = sessionmaker(bind=self._db_engine)
-                logger.info("Database connection pool initialized")
+                logger.info("Thread-local database connection initialized (NullPool)")
             except Exception as e:
                 logger.error(f"Failed to initialize database connection: {e}")
                 self._db_engine = None
@@ -595,10 +590,7 @@ class PixelProbe:
             if file_size > 10 * 1024 * 1024 * 1024:
                 chunk_size = 16 * 1024 * 1024  # 16MB chunks for 10GB+ files
                 logger.info(f"Hashing large file ({file_size/1024/1024/1024:.1f}GB) with 16MB chunks: {file_path}")
-            
-            # Maximum time allowed for hashing (5 minutes)
-            MAX_HASH_TIME = 300
-            
+
             with open(file_path, "rb") as f:
                 while True:
                     chunk = f.read(chunk_size)
@@ -606,14 +598,9 @@ class PixelProbe:
                         break
                     hash_sha256.update(chunk)
                     bytes_processed += len(chunk)
-                    
-                    # Check for timeout
-                    elapsed = time.time() - start_time
-                    if elapsed > MAX_HASH_TIME:
-                        logger.warning(f"Hash calculation timeout for {file_path} after {elapsed:.1f}s")
-                        return f"TIMEOUT_HASH_{bytes_processed}"
-                    
+
                     # Log progress for large files every 100MB
+                    elapsed = time.time() - start_time
                     if bytes_processed % (100 * 1024 * 1024) == 0:
                         mb_processed = bytes_processed / (1024 * 1024)
                         mb_per_sec = mb_processed / elapsed if elapsed > 0 else 0

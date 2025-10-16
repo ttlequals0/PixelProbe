@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.21] - 2025-10-16
+
+### Fixed
+- **CRITICAL: PostgreSQL Connection Pool Exhaustion**
+  - Fixed "too many clients already" errors during parallel scanning
+  - Thread-local PixelProbe instances now use NullPool instead of creating connection pools
+  - **Problem**: With MAX_WORKERS=10, each worker created pool_size=5 + max_overflow=10 = 15 connections
+    - 10 workers × 15 connections = 150 connections from workers alone
+    - Main app pool: 20 + 40 = 60 connections
+    - Total: 210 potential connections, but PostgreSQL default max_connections = 100
+  - **Solution**: Thread-local instances use NullPool (creates/closes connection per operation)
+    - Main app still uses connection pooling for efficiency
+    - Workers create connections only when needed, no pool overhead
+    - Prevents connection exhaustion regardless of MAX_WORKERS setting
+  - Changed media_checker.py lines 201-231 to use NullPool for thread-local instances
+
+- **Removed Hash Calculation Timeout**
+  - Removed 5-minute (300 second) timeout on hash calculation that was causing incomplete hashes for large files
+  - Large media files (10GB+ movies, 4K content) on slower storage (NAS/NFS) were timing out at 300.2s
+  - Hash integrity is critical for detecting file corruption - timeouts defeat the purpose
+  - Files will now hash completely regardless of size or storage speed
+  - Removed MAX_HASH_TIME=300 and timeout check from media_checker.py lines 599-614
+  - Progress logging every 100MB still occurs to monitor large file hashing
+
+### Technical Details
+- **Connection Pooling Strategy**:
+  - Main application (config.py): pool_size=20, max_overflow=40 (up to 60 connections)
+  - Thread-local workers (media_checker.py): NullPool (no pooling, on-demand connections)
+  - Prevents connection exhaustion while maintaining performance
+
+- **Hash Calculation**:
+  - Uses adaptive chunk sizes: 1MB (files <1GB), 4MB (1-10GB), 16MB (>10GB)
+  - Progress logged every 100MB showing MB/s throughput
+  - Completion time logged for hashes taking >10 seconds
+
 ## [2.4.20] - 2025-10-16
 
 ### Fixed
