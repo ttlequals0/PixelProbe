@@ -1947,9 +1947,16 @@ class ScanService:
                 if chunk.directory_path.startswith('FILE_CHUNK:'):
                     # For file-based chunks, adjust offset based on chunk's offset
                     chunk_offset = int(chunk.directory_path.split(':')[1])
-                    files_batch = db.session.query(ScanResult).filter(
-                        ScanResult.scan_status == 'pending'
-                    ).order_by(ScanResult.file_path).offset(chunk_offset + batch_offset).limit(batch_size).all()
+                    if force_rescan:
+                        # Rescan ALL files, not just pending
+                        files_batch = db.session.query(ScanResult).order_by(
+                            ScanResult.file_path
+                        ).offset(chunk_offset + batch_offset).limit(batch_size).all()
+                    else:
+                        # Normal scan: only pending files
+                        files_batch = db.session.query(ScanResult).filter(
+                            ScanResult.scan_status == 'pending'
+                        ).order_by(ScanResult.file_path).offset(chunk_offset + batch_offset).limit(batch_size).all()
                 elif chunk.directory_path == 'PENDING_FILES':
                     # Legacy: Get batch of ALL pending files
                     files_batch = db.session.query(ScanResult).filter(
@@ -1998,7 +2005,7 @@ class ScanService:
                                     database_path=self.database_uri,
                                     excluded_paths=excluded_paths,
                                     excluded_extensions=excluded_extensions,
-                                    error_patterns=excluded_patterns
+                                    excluded_patterns=excluded_patterns
                                 )
                                 thread_checker.scan_file(file_result.file_path, force_rescan=force_rescan)
                                 return file_result, True, None

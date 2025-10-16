@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.20] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Multiple Issues Breaking Scans**
+  - Fixed FILE_CHUNK query not respecting force_rescan flag
+    - When force_rescan=True (rescan-all), only 'pending' files were being scanned instead of ALL files
+    - This caused 226 files (18005 total - 17779 pending) to be skipped during force rescan
+    - Now correctly queries all files when force_rescan=True, only pending when False
+  - Fixed incorrect parameter name in thread-local PixelProbe instantiation
+    - Used `error_patterns` instead of correct parameter name `excluded_patterns`
+    - Caused all parallel file scanning to fail with: "PixelProbe.__init__() got an unexpected keyword argument 'error_patterns'"
+    - Every file scan in every chunk would fail with this error
+
+### Verified
+- **Parallel Scanning Works for All Scan Types**
+  - scan-all (force_rescan=False): Uses parallel chunk processing + parallel file processing within chunks
+  - rescan-all (force_rescan=True): Uses parallel chunk processing + parallel file processing within chunks
+  - Both use Config.MAX_WORKERS for parallelism at both chunk and file levels
+  - ThreadPoolExecutor used for chunk-level parallelism (line 1271)
+  - ThreadPoolExecutor used for file-level parallelism within each chunk (line 2018)
+
+### Technical Details
+- Fixed query on lines 1950-1959 in scan_service.py to check force_rescan flag
+- Changed parameter from `error_patterns` to `excluded_patterns` on line 2008
+- Parallel scanning architecture:
+  - When num_workers > 1: `_parallel_scan_chunks()` processes chunks in parallel
+  - Within each chunk: `_scan_chunk_files()` with num_workers parameter processes files in parallel
+  - Double parallelism: chunks processed in parallel AND files within chunks processed in parallel
+
 ## [2.4.19] - 2025-10-16
 
 ### Fixed
