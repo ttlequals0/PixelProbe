@@ -614,11 +614,10 @@ class ScanService:
                 # Get final scan state for results
                 final_scan_state = ScanState.query.get(scan_state_id)
                 if final_scan_state:
-                    # Get the count of files discovered and corrupted from ScanResult table
+                    # Get corrupted file count from ScanResult table
+                    # Note: ScanResult doesn't have scan_id, so we query all corrupted files
                     from models import ScanResult
-                    files_discovered = db.session.query(ScanResult).filter_by(scan_id=final_scan_state.scan_id).count()
                     corrupted_found = db.session.query(ScanResult).filter_by(
-                        scan_id=final_scan_state.scan_id,
                         is_corrupted=True
                     ).count()
                     return {
@@ -628,7 +627,7 @@ class ScanService:
                         'force_rescan': force_rescan,
                         'num_workers': num_workers,
                         'files_processed': final_scan_state.files_processed or 0,
-                        'files_discovered': files_discovered,
+                        'files_discovered': final_scan_state.discovery_count or 0,
                         'corrupted_found': corrupted_found,
                         'phase': final_scan_state.phase
                     }
@@ -791,11 +790,10 @@ class ScanService:
                 # Get final scan state for results
                 final_scan_state = ScanState.query.get(scan_state_id)
                 if final_scan_state:
-                    # Get the count of files discovered and corrupted from ScanResult table
+                    # Get corrupted file count from ScanResult table
+                    # Note: ScanResult doesn't have scan_id, so we query all corrupted files
                     from models import ScanResult
-                    files_discovered = db.session.query(ScanResult).filter_by(scan_id=final_scan_state.scan_id).count()
                     corrupted_found = db.session.query(ScanResult).filter_by(
-                        scan_id=final_scan_state.scan_id,
                         is_corrupted=True
                     ).count()
                     return {
@@ -806,7 +804,7 @@ class ScanService:
                         'num_workers': num_workers,
                         'files_processed': final_scan_state.files_processed or 0,
                         'files_scanned': final_scan_state.files_processed or 0,  # For compatibility
-                        'files_discovered': files_discovered,
+                        'files_discovered': final_scan_state.discovery_count or 0,
                         'corrupted_found': corrupted_found,
                         'phase': final_scan_state.phase
                     }
@@ -1254,14 +1252,20 @@ class ScanService:
         
         # Create progress tracker for scan
         progress_tracker = ProgressTracker('scan')
-        
+
+        # Capture Flask app for worker threads
+        from flask import current_app
+        app = current_app._get_current_object()
+
         def scan_chunk(chunk):
-            if self.scan_cancelled:
-                return None
-            # For parallel scan, we can't pass cumulative counts, so pass 0
-            # The main thread will handle updating the cumulative progress
-            self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, scan_state)
-            return chunk, chunk.files_scanned or 0
+            # Set up Flask app context for worker thread
+            with app.app_context():
+                if self.scan_cancelled:
+                    return None
+                # For parallel scan, we can't pass cumulative counts, so pass 0
+                # The main thread will handle updating the cumulative progress
+                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, scan_state)
+                return chunk, chunk.files_scanned or 0
         
         with ThreadPoolExecutor(max_workers=min(num_workers, len(chunks))) as executor:
             # First, get file counts for all chunks to get accurate total

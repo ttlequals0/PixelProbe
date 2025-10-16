@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.14] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Parallel Scanning Crash in Production**
+  - Fixed "Working outside of application context" error in parallel scanning worker threads
+  - Worker threads in ThreadPoolExecutor now properly set up Flask application context
+  - Fixed database error: "Entity namespace for 'scan_results' has no property 'scan_id'"
+  - Removed incorrect `scan_id` filter on ScanResult queries (ScanResult table doesn't have scan_id column)
+  - Now uses `ScanState.discovery_count` for files_discovered instead of querying with non-existent column
+
+### Technical Details
+- Modified `_parallel_scan_chunks()` in scan_service.py to capture Flask app and create app context in worker threads
+- Fixed two locations (lines 619 and 795) where code was incorrectly filtering ScanResult by non-existent scan_id
+- Changed to use `ScanState.discovery_count` for files_discovered count
+- Changed to query all corrupted files instead of filtering by scan_id
+
 ## [2.4.13] - 2025-10-16
 
 ### Fixed
