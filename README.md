@@ -321,11 +321,17 @@ PixelProbe uses environment variables for all configuration. Copy `.env.example`
 - `MEDIA_PATH` - Host path to your media files (for Docker volume mounting)
 
 **Optional Variables:**
-- `DATABASE_URL` - Database connection string (default: PostgreSQL)
 - `SCAN_PATHS` - Comma-separated directories to monitor inside container (default: `/media`)
 - `TZ` - Timezone (default: UTC)
-- `MAX_FILES_TO_SCAN` - Performance limit (default: 100)
-- `MAX_SCAN_WORKERS` - Parallel scanning threads (default: 4)
+- `MAX_WORKERS` - Parallel file scanning workers (default: 10, recommended: 10-24)
+  * Controls parallelism within each scan task
+  * Higher values = faster scans but more CPU/memory usage
+  * Each worker creates 1 database connection
+  * Total connections = 60 (main app) + MAX_WORKERS
+- `BATCH_SIZE` - Files per batch during discovery (default: 100)
+- `CELERY_CONCURRENCY` - Concurrent Celery tasks (default: 4)
+  * Controls how many scan tasks can run simultaneously
+  * Independent from MAX_WORKERS
 - `PERIODIC_SCAN_SCHEDULE` - Automated scanning schedule
 - `CLEANUP_SCHEDULE` - Automated cleanup schedule
 - `EXCLUDED_PATHS` - Paths to ignore during scanning
@@ -575,9 +581,10 @@ docker exec pixelprobe python tools/fix_database_schema.py
 - Check file permissions and ownership
 
 **Performance issues with large libraries**:
-- Increase `MAX_SCAN_WORKERS` (default: 4, try 8-16 for powerful systems)
+- Increase `MAX_WORKERS` (default: 10, try 16-24 for powerful systems)
 - Monitor system resources during scanning
 - Use SSD storage for the database if possible
+- Adjust `CELERY_CONCURRENCY` if running multiple scans simultaneously
 
 ### Getting Help
 

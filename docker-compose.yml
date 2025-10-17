@@ -1,5 +1,17 @@
 # Docker Compose configuration for PixelProbe
 # Production deployment using latest stable image
+#
+# Key Performance Settings:
+# - MAX_WORKERS: Controls parallel file scanning (default: 10)
+#   * Higher values = faster scans but more memory/CPU usage
+#   * Recommended: 10-24 for most systems
+#   * Each worker creates 1 database connection
+#   * Total connections = 60 (main app) + MAX_WORKERS
+#   * Keep under PostgreSQL max_connections (default: 100)
+#
+# - CELERY_CONCURRENCY: Number of concurrent Celery tasks (default: 4)
+#   * Controls how many scan tasks can run simultaneously
+#   * Independent from MAX_WORKERS (which controls parallelism within each task)
 
 services:
   # PostgreSQL database
@@ -119,6 +131,7 @@ services:
       # Worker-specific settings
       SECRET_KEY: ${SECRET_KEY}
       FLASK_ENV: ${FLASK_ENV:-production}
+      MAX_WORKERS: ${MAX_WORKERS:-10}  # Parallel file scanning workers per task
       
     volumes:
       # Media files access (read-only for scanning)

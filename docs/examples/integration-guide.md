@@ -393,7 +393,7 @@ jobs:
       run: |
         CORRUPTED=$(curl -s http://localhost:5000/api/stats/summary | jq -r '.corrupted_files')
         if [[ "$CORRUPTED" -gt 0 ]]; then
-          echo "❌ Found $CORRUPTED corrupted files!"
+          echo "[ERROR] Found $CORRUPTED corrupted files!"
           curl -s http://localhost:5000/api/scan-results?is_corrupted=true | jq -r '.results[].file_path'
           exit 1
         else
@@ -472,7 +472,7 @@ def validate_before_backup(directories):
     corrupted_count = stats['corrupted_files']
     
     if corrupted_count > 0:
-        print(f"❌ Found {corrupted_count} corrupted files!")
+        print(f"[ERROR] Found {corrupted_count} corrupted files!")
         
         # Get details of corrupted files
         corrupted = client.get_corrupted_files()
