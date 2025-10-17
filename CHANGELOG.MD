@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.27] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Fixed Double Parallelism Bug**
+  - Disabled file-level parallelism when chunk-level parallelism is active
+  - **Root Cause Identified from v2.4.26 Debug Logs**:
+    - Outer ThreadPoolExecutor at scan_service.py:1271 for chunk-level parallelism
+    - Inner ThreadPoolExecutor at scan_service.py:1950 for file-level parallelism
+    - With 10 chunks and MAX_WORKERS=10: 10 chunk threads each creating 10 file threads
+    - Result: 10 × 10 = 100 total threads and 100 database connections
+    - Evidence: ThreadPoolExecutor-2 through ThreadPoolExecutor-11 (10 executors) each with _0 through _9 (10 threads)
+  - **Solution**: Use sequential file processing when multiple chunks are processed in parallel
+    - When chunk_workers > 1: Set file workers to 1 per chunk
+    - When chunk_workers = 1: Use full num_workers for file-level parallelism
+    - Example with 10 chunks: 10 chunk workers × 1 file worker = 10 total threads
+    - Example with 1 chunk: 1 chunk worker × 10 file workers = 10 total threads
+  - Changed scan_service.py lines 1260-1276
+
+### Technical Details
+- **Before (v2.4.26)**: Chunk parallelism AND file parallelism = chunks × workers × workers connections
+- **After (v2.4.27)**: Chunk parallelism OR file parallelism = MAX_WORKERS connections
+- Total connections now: 60 (main app) + MAX_WORKERS (parallel workers) = 60 + MAX_WORKERS total
+- Example with MAX_WORKERS=24: 60 + 24 = 84 connections (under PostgreSQL default 100 limit)
+- Parallelism strategy: Use chunk-level when chunks > 1, file-level when chunks = 1
+- **Why v2.4.25/26 failed**: Both levels of parallelism were active simultaneously
+  - With MAX_WORKERS=24 and 10 chunks: 10 chunk workers × 24 file workers = 240 worker connections
+  - Total: 60 + 240 = 300 connections (exceeded PostgreSQL limit, causing "too many clients" errors)
+
 ## [2.4.26] - 2025-10-16
 
 ### Added

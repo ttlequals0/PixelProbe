@@ -1264,11 +1264,17 @@ class ScanService:
                     return None
                 # For parallel scan, we can't pass cumulative counts, so pass 0
                 # The main thread will handle updating the cumulative progress
-                # Pass num_workers so files within each chunk are scanned in parallel
-                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, scan_state, num_workers=num_workers)
+                # CRITICAL: When processing chunks in parallel, disable file-level parallelism
+                # to avoid double parallelism (chunks × files = too many threads/connections)
+                # Use sequential file processing (num_workers=1) when chunk_workers > 1
+                chunk_file_workers = 1 if chunk_workers > 1 else num_workers
+                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, scan_state, num_workers=chunk_file_workers)
                 return chunk, chunk.files_scanned or 0
-        
-        with ThreadPoolExecutor(max_workers=min(num_workers, len(chunks))) as executor:
+
+        chunk_workers = min(num_workers, len(chunks))
+        logger.info(f"Processing {len(chunks)} chunks with {chunk_workers} chunk workers, {1 if chunk_workers > 1 else num_workers} file workers per chunk")
+
+        with ThreadPoolExecutor(max_workers=chunk_workers) as executor:
             # First, get file counts for all chunks to get accurate total
             logger.info("Calculating total files to scan across all chunks...")
             chunk_counts = {}
