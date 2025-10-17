@@ -1940,9 +1940,26 @@ class ScanService:
             import threading
             thread_local = threading.local() if num_workers > 1 else None
 
+            # For parallel processing, create ThreadPoolExecutor ONCE outside batch loop
+            # This ensures the same threads are reused across batches, making threading.local() work
+            file_executor = None
+            if num_workers > 1:
+                from concurrent.futures import ThreadPoolExecutor
+                from flask import current_app
+                file_executor = ThreadPoolExecutor(max_workers=num_workers)
+                app = current_app._get_current_object()
+                scanned_lock = threading.Lock()
+
+                # Get exclusions for creating thread-local PixelProbe instances
+                from media_checker import load_exclusions_with_patterns
+                excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
+
             # Process files in batches to avoid loading all into memory
             for batch_offset in range(0, files_count, batch_size):
                 if self.scan_cancelled:
+                    # Clean up ThreadPoolExecutor before cancelling
+                    if file_executor:
+                        file_executor.shutdown(wait=True)
                     chunk.status = 'cancelled'
                     chunk.end_time = datetime.now(timezone.utc)
                     db.session.commit()
@@ -1985,19 +2002,9 @@ class ScanService:
 
                 # Use parallel processing if num_workers > 1
                 if num_workers > 1:
-                    from concurrent.futures import ThreadPoolExecutor, as_completed
-                    from flask import current_app
+                    from concurrent.futures import as_completed
 
-                    # Capture Flask app for worker threads
-                    app = current_app._get_current_object()
-                    scanned_lock = threading.Lock()
-
-                    # Get exclusions for creating thread-local PixelProbe instances
-                    from media_checker import load_exclusions_with_patterns
-                    excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
-
-                    # Note: thread_local is now created ONCE per chunk (line 1941), not per batch
-
+                    # Define scan function inside batch loop to capture batch-specific variables
                     def scan_single_file(file_result):
                         """Scan a single file in a worker thread"""
                         with app.app_context():
@@ -2006,6 +2013,8 @@ class ScanService:
                             try:
                                 # Get or create thread-local PixelProbe instance (one per thread, not per file)
                                 # This avoids creating thousands of connections for thousands of files
+                                # Because ThreadPoolExecutor is now OUTSIDE the batch loop, threads are reused
+                                # and threading.local() storage persists across batches
                                 if not hasattr(thread_local, 'checker'):
                                     from media_checker import PixelProbe
                                     thread_local.checker = PixelProbe(
@@ -2019,68 +2028,70 @@ class ScanService:
                             except Exception as e:
                                 return file_result, False, str(e)
 
-                    # Process files in parallel
-                    with ThreadPoolExecutor(max_workers=num_workers) as file_executor:
-                        future_to_file = {file_executor.submit(scan_single_file, f): f for f in files_batch}
+                    # Submit files to the EXISTING ThreadPoolExecutor (created outside batch loop)
+                    future_to_file = {file_executor.submit(scan_single_file, f): f for f in files_batch}
 
-                        for future in as_completed(future_to_file):
-                            if self.scan_cancelled:
-                                chunk.status = 'cancelled'
-                                chunk.end_time = datetime.now(timezone.utc)
-                                db.session.commit()
-                                return
+                    for future in as_completed(future_to_file):
+                        if self.scan_cancelled:
+                            # Clean up ThreadPoolExecutor before cancelling
+                            if file_executor:
+                                file_executor.shutdown(wait=True)
+                            chunk.status = 'cancelled'
+                            chunk.end_time = datetime.now(timezone.utc)
+                            db.session.commit()
+                            return
 
-                            result = future.result()
-                            if result is None:
-                                continue
+                        result = future.result()
+                        if result is None:
+                            continue
 
-                            file_result, success, error = result
+                        file_result, success, error = result
 
-                            with scanned_lock:
-                                if success:
-                                    scanned += 1
-                                else:
-                                    errors += 1
-                                    logger.error(f"Error scanning {file_result.file_path}: {error}")
+                        with scanned_lock:
+                            if success:
+                                scanned += 1
+                            else:
+                                errors += 1
+                                logger.error(f"Error scanning {file_result.file_path}: {error}")
 
-                                # Update progress (less frequently for parallel to reduce contention)
-                                current_total = total_scanned_so_far + scanned
+                            # Update progress (less frequently for parallel to reduce contention)
+                            current_total = total_scanned_so_far + scanned
 
-                                if scanned % 10 == 0 or scanned == 1:
-                                    self.update_progress(current_total, total_to_scan,
-                                                       file_result.file_path, 'scanning')
+                            if scanned % 10 == 0 or scanned == 1:
+                                self.update_progress(current_total, total_to_scan,
+                                                   file_result.file_path, 'scanning')
 
-                                # Determine update threshold
-                                if total_to_scan < 20:
-                                    update_threshold = 1
-                                elif total_to_scan < 100:
-                                    update_threshold = 5
-                                elif total_to_scan < 1000:
-                                    update_threshold = 10
-                                else:
-                                    update_threshold = 50
+                            # Determine update threshold
+                            if total_to_scan < 20:
+                                update_threshold = 1
+                            elif total_to_scan < 100:
+                                update_threshold = 5
+                            elif total_to_scan < 1000:
+                                update_threshold = 10
+                            else:
+                                update_threshold = 50
 
-                                if scan_state and (scanned - last_commit_count) >= update_threshold:
-                                    try:
-                                        scan_state.files_processed = current_total
-                                        scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+                            if scan_state and (scanned - last_commit_count) >= update_threshold:
+                                try:
+                                    scan_state.files_processed = current_total
+                                    scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
 
-                                        from utils import ProgressTracker
-                                        progress_tracker = ProgressTracker('scan')
-                                        scan_state.progress_message = progress_tracker.get_progress_message(
-                                            f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
-                                            current_total,
-                                            total_to_scan,
-                                            os.path.basename(file_result.file_path)
-                                        )
-                                        db.session.commit()
-                                        last_commit_count = scanned
+                                    from utils import ProgressTracker
+                                    progress_tracker = ProgressTracker('scan')
+                                    scan_state.progress_message = progress_tracker.get_progress_message(
+                                        f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
+                                        current_total,
+                                        total_to_scan,
+                                        os.path.basename(file_result.file_path)
+                                    )
+                                    db.session.commit()
+                                    last_commit_count = scanned
 
-                                        if scanned % 1000 == 0:
-                                            import gc
-                                            gc.collect()
-                                    except Exception as e:
-                                        logger.error(f"Failed to update progress: {e}")
+                                    if scanned % 1000 == 0:
+                                        import gc
+                                        gc.collect()
+                                except Exception as e:
+                                    logger.error(f"Failed to update progress: {e}")
                 else:
                     # Sequential processing (original code)
                     for file_result in files_batch:
@@ -2154,7 +2165,12 @@ class ScanService:
                         except Exception as e:
                             logger.error(f"Error scanning {file_result.file_path}: {e}")
                             errors += 1
-            
+
+            # Clean up ThreadPoolExecutor after all batches are processed
+            if file_executor:
+                file_executor.shutdown(wait=True)
+                logger.info("ThreadPoolExecutor shut down successfully")
+
             chunk.files_scanned = scanned
             chunk.status = 'completed'
             chunk.end_time = datetime.now(timezone.utc)

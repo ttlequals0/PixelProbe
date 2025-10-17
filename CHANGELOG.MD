@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.25] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Fixed ThreadPoolExecutor Scope Bug from v2.4.24**
+  - Moved ThreadPoolExecutor creation outside the batch processing loop
+  - **Problem**: v2.4.24 still created 101 connections despite thread_local fix
+    - ThreadPoolExecutor was created INSIDE the batch loop (line 2023: `with ThreadPoolExecutor(...)`)
+    - Batch loop processes files in batches of 100
+    - Each batch iteration created a NEW ThreadPoolExecutor with 10 new threads
+    - NEW threads mean threading.local() creates NEW storage (defeats the purpose!)
+    - Result: 100 batches × 10 workers = potential for 1000 thread creations (saw 101 in logs)
+    - All 101 connections initialized at same timestamp (19:47:11.302-333ms)
+  - **Solution**: Create ThreadPoolExecutor ONCE outside batch loop
+    - Moved ThreadPoolExecutor creation to lines 1943-1955 (before batch loop)
+    - Same thread pool (and thus same threads) reused across all batches
+    - threading.local() storage now persists correctly across batches
+    - With MAX_WORKERS=10: only 10 threads created total, each reused for ~1,800 files
+    - Added proper cleanup: `file_executor.shutdown(wait=True)` after all batches complete
+  - Changed scan_service.py lines 1943-1955, 2001-2042, and added cleanup at 2163-2166
+
+### Technical Details
+- **Before (v2.4.24)**: ThreadPoolExecutor per batch → 100+ thread creations
+- **After (v2.4.25)**: ThreadPoolExecutor created once → 10 threads total (reused)
+- Thread pool now initialized once with all required context (app, locks, exclusions)
+- Threads are reused across all 100-file batches in a chunk
+- Total connections: 60 (main app) + 10 (worker threads) = 70 maximum
+- **Why v2.4.24 failed**: thread_local was outside batch loop, but ThreadPoolExecutor was inside
+- **Key insight**: Must keep BOTH thread_local AND ThreadPoolExecutor outside batch loop
+
 ## [2.4.24] - 2025-10-16
 
 ### Fixed
