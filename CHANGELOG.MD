@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.28] - 2025-10-16
+
+### Added
+- **Debug logging for MAX_WORKERS environment variable**
+  - Added logging in Celery task to show both Config.MAX_WORKERS value and raw environment variable
+  - Helps diagnose why workers might default to 10 instead of configured value (e.g., 24)
+  - Log format: `Celery task using MAX_WORKERS={value} (env var: {raw_env_value})`
+  - Added at pixelprobe/tasks.py:110
+
+### Technical Details
+- This is a diagnostic release to help identify environment variable configuration issues
+- If MAX_WORKERS shows as 10 when it should be 24, check:
+  - Docker compose celery-worker environment section has MAX_WORKERS: 24
+  - Container has been recreated after docker-compose.yml changes (docker-compose down && docker-compose up -d)
+
 ## [2.4.27] - 2025-10-16
 
 ### Fixed

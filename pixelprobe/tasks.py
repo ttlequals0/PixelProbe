@@ -105,8 +105,10 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
         if scan_type in ['full', 'parallel', 'pending']:
             # Use configured MAX_WORKERS instead of hardcoded 1
             from config import Config
+            import os
             num_workers = Config.MAX_WORKERS
-            
+            logger.info(f"Celery task using MAX_WORKERS={num_workers} (env var: {os.getenv('MAX_WORKERS', 'NOT SET')})")
+
             # Note: ScanService handles progress internally via database updates
             # The progress_callback defined above is for Celery task state updates
             result = scan_service.scan_directories(
