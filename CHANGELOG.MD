@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.26] - 2025-10-16
+
+### Added
+- **Debug Logging for Connection Pool Investigation**
+  - Added comprehensive logging to track ThreadPoolExecutor creation and lifecycle
+  - Logs executor creation with max_workers parameter
+  - Logs batch submission details (offset, size, file count)
+  - Logs thread-local PixelProbe instance creation per thread (with thread ID and name)
+  - Logs executor shutdown to confirm proper cleanup
+  - **Purpose**: Investigate why v2.4.25 still shows 100 connections in first batch instead of 10
+  - **Analysis from v2.4.25 logs**:
+    - First batch: 100 connections at 00:47:47 (should be 10)
+    - Subsequent batches: 10 connections each (correct)
+    - Total: 141 connections instead of expected 10
+    - Files ARE being scanned but intermittently FAILING to save due to "too many clients"
+
+### Investigation Notes
+- v2.4.25 logs show connection pattern: 1 + 100 + 10 + 10 + 10 + 10 = 141 connections
+- MAX_WORKERS confirmed as 10 in logs
+- ThreadPoolExecutor with max_workers=10 should NEVER create more than 10 threads
+- Hypothesis: Either deployed code doesn't match committed code, OR there's a race condition
+- This version adds logging to definitively identify the root cause
+
 ## [2.4.25] - 2025-10-16
 
 ### Fixed

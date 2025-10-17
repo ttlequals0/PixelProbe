@@ -1946,7 +1946,9 @@ class ScanService:
             if num_workers > 1:
                 from concurrent.futures import ThreadPoolExecutor
                 from flask import current_app
+                logger.info(f"Creating ThreadPoolExecutor with max_workers={num_workers} for chunk {chunk.chunk_id}")
                 file_executor = ThreadPoolExecutor(max_workers=num_workers)
+                logger.info(f"ThreadPoolExecutor created: {file_executor}, max_workers={num_workers}")
                 app = current_app._get_current_object()
                 scanned_lock = threading.Lock()
 
@@ -2004,9 +2006,15 @@ class ScanService:
                 if num_workers > 1:
                     from concurrent.futures import as_completed
 
+                    logger.info(f"Processing batch at offset {batch_offset}, batch size: {len(files_batch)}")
+
                     # Define scan function inside batch loop to capture batch-specific variables
                     def scan_single_file(file_result):
                         """Scan a single file in a worker thread"""
+                        import threading as thread_module
+                        current_thread_id = thread_module.current_thread().ident
+                        current_thread_name = thread_module.current_thread().name
+
                         with app.app_context():
                             if self.scan_cancelled:
                                 return None
@@ -2016,6 +2024,7 @@ class ScanService:
                                 # Because ThreadPoolExecutor is now OUTSIDE the batch loop, threads are reused
                                 # and threading.local() storage persists across batches
                                 if not hasattr(thread_local, 'checker'):
+                                    logger.info(f"[Thread {current_thread_name}/{current_thread_id}] Creating NEW PixelProbe instance for this thread")
                                     from media_checker import PixelProbe
                                     thread_local.checker = PixelProbe(
                                         database_path=self.database_uri,
@@ -2023,13 +2032,19 @@ class ScanService:
                                         excluded_extensions=excluded_extensions,
                                         excluded_patterns=excluded_patterns
                                     )
+                                    logger.info(f"[Thread {current_thread_name}/{current_thread_id}] PixelProbe instance created")
+                                # else:
+                                #     logger.debug(f"[Thread {current_thread_name}/{current_thread_id}] Reusing existing PixelProbe instance")
+
                                 thread_local.checker.scan_file(file_result.file_path, force_rescan=force_rescan)
                                 return file_result, True, None
                             except Exception as e:
                                 return file_result, False, str(e)
 
                     # Submit files to the EXISTING ThreadPoolExecutor (created outside batch loop)
+                    logger.info(f"Submitting {len(files_batch)} files to ThreadPoolExecutor")
                     future_to_file = {file_executor.submit(scan_single_file, f): f for f in files_batch}
+                    logger.info(f"All {len(files_batch)} files submitted to executor")
 
                     for future in as_completed(future_to_file):
                         if self.scan_cancelled:
@@ -2168,8 +2183,9 @@ class ScanService:
 
             # Clean up ThreadPoolExecutor after all batches are processed
             if file_executor:
+                logger.info(f"Shutting down ThreadPoolExecutor for chunk {chunk.chunk_id}")
                 file_executor.shutdown(wait=True)
-                logger.info("ThreadPoolExecutor shut down successfully")
+                logger.info(f"ThreadPoolExecutor shut down successfully for chunk {chunk.chunk_id}")
 
             chunk.files_scanned = scanned
             chunk.status = 'completed'
