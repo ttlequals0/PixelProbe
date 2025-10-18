@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.29] - 2025-10-17
+
+### Fixed
+- **UI: Fixed greyed out volume controls in video/audio player**
+  - Removed `this.muted = false` from video player onloadedmetadata handler (static/js/app.js:1561)
+  - Removed `this.muted = false` from audio player onloadedmetadata handler (static/js/app.js:1579)
+  - **Root Cause**: Browser autoplay policies block programmatic unmuting without user interaction
+  - **Solution**: Let browser handle muting/unmuting through native controls
+  - Changed files: static/js/app.js lines 1561 and 1579
+
+### Technical Details
+- Modern browsers enforce autoplay policies that prevent videos/audio from unmuting without user interaction
+- Attempting to set `muted = false` programmatically causes volume controls to be disabled/greyed out
+- Now respects browser policies and allows users to control volume naturally
+
 ## [2.4.28] - 2025-10-16
 
 ### Added
@@ -13,6 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Helps diagnose why workers might default to 10 instead of configured value (e.g., 24)
   - Log format: `Celery task using MAX_WORKERS={value} (env var: {raw_env_value})`
   - Added at pixelprobe/tasks.py:110
+
+### Changed
+- **Documentation cleanup: Removed emojis from all documentation**
+  - Replaced emojis in CHANGELOG.MD with text markers ([DONE], [FAILED], [WARNING])
+  - Updated docs/examples/integration-guide.md to use [ERROR] instead of emoji
+  - Improves compatibility with markdown parsers and terminal displays
+
+### Fixed
+- **docker-compose.yml: Added missing MAX_WORKERS to celery-worker**
+  - Added `MAX_WORKERS: ${MAX_WORKERS:-10}` to celery-worker environment section
+  - Added comprehensive header documentation explaining MAX_WORKERS and CELERY_CONCURRENCY
+  - Ensures celery workers use same parallelism settings as main app
+
+### Documentation
+- **README.md: Comprehensive MAX_WORKERS documentation**
+  - Updated environment variables section with detailed MAX_WORKERS explanation
+  - Fixed incorrect variable name (MAX_SCAN_WORKERS → MAX_WORKERS)
+  - Added connection pool math: Total = 60 (main app) + MAX_WORKERS
+  - Documented relationship between MAX_WORKERS and CELERY_CONCURRENCY
 
 ### Technical Details
 - This is a diagnostic release to help identify environment variable configuration issues
