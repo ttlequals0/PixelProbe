@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.30] - 2025-10-20
+
+### Fixed
+- **CRITICAL: Fixed Celery Task Race Condition Causing Database Corruption**
+  - Added distributed locking using Redis to prevent concurrent scan initialization
+  - **Root Cause**: Multiple Celery workers simultaneously retrying failed scans created race condition
+  - **Symptoms**: `psycopg2.DatabaseError: error with status PGRES_TUPLES_OK and no message from the libpq`
+  - **Evidence from logs**: Oct 18 22:44:09 - multiple workers (ForkPoolWorker-15, 16, 1, 2) all tried to create scans simultaneously
+  - **Solution**: Distributed lock `pixelprobe:scan:initialization` prevents workers from colliding during task retries
+  - Changed files: pixelprobe/tasks.py, celery_config.py
+
+- **Improved Database Error Handling**
+  - Added transaction rollback on errors to prevent session corruption
+  - Detect and handle `PGRES_TUPLES_OK` errors specifically (don't retry these)
+  - Separate retry logic for connection errors vs session corruption
+  - Added comprehensive traceback logging for better debugging
+  - Changed file: pixelprobe/tasks.py lines 260-317
+
+- **Enhanced Retry Logic with Exponential Backoff + Jitter**
+  - Added random jitter (0-10s) to retry delays to prevent thundering herd
+  - Exponential backoff: 30s, 60s, 120s (+ jitter) instead of linear 60s, 120s, 180s
+  - Prevents all workers from retrying at exactly the same time
+  - Changed file: pixelprobe/tasks.py lines 115-118, 151-154
+
+### Added
+- **Distributed Locking Infrastructure**
+  - `get_redis_client()` - Parse CELERY_BROKER_URL and connect to Redis
+  - `distributed_lock()` context manager for Redis-based distributed locks
+  - Auto-release timeout (5 minutes) prevents deadlocks if worker crashes
+  - Blocking timeout (15 seconds) prevents infinite waits
+  - Graceful degradation if Redis unavailable (logs warning, proceeds without lock)
+  - Added at: pixelprobe/tasks.py lines 25-86
+
+- **Task Deduplication Settings**
+  - `task_track_started: True` - Track when tasks actually start execution
+  - `task_ignore_result: False` - Store results for monitoring
+  - Helps Celery detect duplicate task execution
+  - Added at: celery_config.py lines 64-66
+
+### Technical Details
+
+**The Race Condition Explained:**
+1. Scan 19 crashes or gets stuck
+2. Multiple Celery workers receive retry task 7c0ad2ed-9a3b-499c-9ef8-aa0ef432a97e
+3. Worker A checks "is scan running?" → NO
+4. Worker B checks "is scan running?" → NO (race!)
+5. Worker A starts creating scan state → locks database
+6. Worker B tries to create scan state → gets "scan already in progress"
+7. Both retry multiple times (60s, 120s, 180s)
+8. Database connection pool exhausted/corrupted
+9. PostgreSQL returns: `error with status PGRES_TUPLES_OK and no message from the libpq`
+
+**The Fix:**
+- Distributed Redis lock ensures only ONE worker can initialize a scan at a time
+- Double-check pattern: Acquire lock → Check database → Proceed
+- Prevents race condition even if multiple workers retry simultaneously
+- Lock auto-releases after 5 minutes if worker crashes (prevents deadlock)
+
+**Error Handling Improvements:**
+- `PGRES_TUPLES_OK` errors don't retry (session corruption, can't recover)
+- Connection errors retry with 30s, 60s, 120s backoff (might be transient)
+- All errors trigger `db.session.rollback()` before retry (clean up session state)
+
+**Connection Math (Still Safe):**
+- Main app: 60 connections (pool_size=20 + max_overflow=40)
+- Workers: MAX_WORKERS connections (default 10, user configured 24)
+- Total: 60 + 24 = 84 connections (under PostgreSQL limit of 100)
+- No connection pool exhaustion - the bug was race condition, not pool size
+
 ## [2.4.29] - 2025-10-17
 
 ### Fixed
