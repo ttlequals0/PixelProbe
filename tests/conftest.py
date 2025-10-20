@@ -29,7 +29,10 @@ def create_test_app():
     from flask_sqlalchemy import SQLAlchemy
     from flask_cors import CORS
     from flask_wtf.csrf import CSRFProtect
-    
+
+    # Set SECRET_KEY environment variable for tests (required by config.py)
+    os.environ['SECRET_KEY'] = 'test-secret-key'
+
     test_app = Flask(__name__)
     test_app.config['TESTING'] = True
     test_app.config['SECRET_KEY'] = 'test-secret-key'
