@@ -648,10 +648,46 @@ class ScanService:
         """Scan specific files only"""
         if self.is_scan_running():
             raise RuntimeError("Another scan is already in progress")
-        
-        # Validate files exist
+
+        # Validate files exist - with comprehensive debugging
+        import pwd
+        import getpass
+
+        try:
+            current_user = getpass.getuser()
+            current_uid = os.getuid()
+            current_gid = os.getgid()
+            logger.info(f"scan_files running as user: {current_user} (uid={current_uid}, gid={current_gid})")
+        except Exception as e:
+            logger.warning(f"Could not determine current user: {e}")
+
+        logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Validating {len(file_paths)} file paths for existence")
+
+        # Log first 3 paths with full details
+        for i, path in enumerate(file_paths[:3]):
+            logger.info(f"Sample path {i+1}: {path}")
+            logger.info(f"  - Is absolute: {os.path.isabs(path)}")
+            logger.info(f"  - Exists: {os.path.exists(path)}")
+            if os.path.exists(path):
+                try:
+                    stat_info = os.stat(path)
+                    logger.info(f"  - Size: {stat_info.st_size}, Mode: {oct(stat_info.st_mode)}")
+                except Exception as e:
+                    logger.warning(f"  - Could not stat: {e}")
+
         valid_files = [f for f in file_paths if os.path.exists(f)]
+        invalid_count = len(file_paths) - len(valid_files)
+
+        if invalid_count > 0:
+            logger.error(f"{invalid_count}/{len(file_paths)} files failed existence check")
+            # Log first 3 invalid paths
+            invalid_samples = [f for f in file_paths if not os.path.exists(f)][:3]
+            for inv_path in invalid_samples:
+                logger.error(f"  Invalid path: {inv_path}")
+
         if not valid_files:
+            logger.error(f"NO valid files found out of {len(file_paths)} provided")
             raise ValueError("No valid files provided")
         
         logger.info(f"Starting scan of {len(valid_files)} specific files")
