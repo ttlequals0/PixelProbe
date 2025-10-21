@@ -262,6 +262,37 @@ volumes:
   - /media/music:/music:ro
 ```
 
+**IMPORTANT - User Permissions:**
+Both the `mediachecker` (web app) and `celery-worker` containers **MUST run as the same user** to access mounted media files. Add the `user:` directive to both services:
+
+```yaml
+services:
+  mediachecker:
+    # ... other settings ...
+    user: "1000:1000"  # Use your host user's UID:GID
+    volumes:
+      - /media/movies:/movies:ro
+
+  celery-worker:
+    # ... other settings ...
+    user: "1000:1000"  # MUST match mediachecker user
+    volumes:
+      - /media/movies:/movies:ro
+```
+
+To find your user's UID and GID on the host:
+```bash
+id -u  # Shows UID (typically 1000)
+id -g  # Shows GID (typically 1000)
+```
+
+Or use environment variables for flexibility:
+```yaml
+user: "${PUID:-1000}:${PGID:-1000}"
+```
+
+**Why this matters:** If the web app and Celery worker run as different users, the worker will get "No valid files provided" errors even though files exist, because the worker user can't access the mounted media directories.
+
 ### Database Persistence
 
 The PostgreSQL data is stored in a named volume:

@@ -1,6 +1,12 @@
 # Docker Compose configuration for PixelProbe
 # Production deployment using latest stable image
 #
+# IMPORTANT: User Permissions
+# - The pixelprobe app and celery-worker MUST run as the same user
+# - This ensures both services can access mounted media files
+# - Add 'user: "1000:1000"' (or your host user's UID:GID) to both services
+# - Example: user: "${PUID:-1000}:${PGID:-1000}"
+#
 # Key Performance Settings:
 # - MAX_WORKERS: Controls parallel file scanning (default: 10)
 #   * Higher values = faster scans but more memory/CPU usage
