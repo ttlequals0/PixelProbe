@@ -918,18 +918,19 @@ def scan_parallel():
                 # Use Celery task queue
                 from pixelprobe.tasks import scan_files_task
                 from uuid import uuid4
-                
+
                 # Generate scan ID
                 scan_id = str(uuid4())
-                
-                # Queue the file scan task
+
+                # Queue the file scan task with parallel workers
                 task = scan_files_task.delay(
                     scan_id=scan_id,
                     file_paths=file_paths,
-                    force_rescan=force_rescan
+                    force_rescan=force_rescan,
+                    num_workers=num_workers  # Pass num_workers for parallel scanning
                 )
-                
-                logger.info(f"Queued file scan task {task.id} for {len(file_paths)} files")
+
+                logger.info(f"Queued file scan task {task.id} for {len(file_paths)} files with {num_workers} workers")
                 
                 return jsonify({
                     'status': 'queued',

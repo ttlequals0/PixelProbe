@@ -378,27 +378,35 @@ def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
 
 @celery_app.task(bind=True, max_retries=2,
                  soft_time_limit=None, time_limit=None)  # No timeout for file scan tasks
-def scan_files_task(self, scan_id, file_paths, force_rescan=False):
+def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=None):
     """
     Background task for scanning specific files
-    
+
     Args:
         scan_id (str): Unique scan identifier
         file_paths (list): List of specific file paths to scan
         force_rescan (bool): Whether to force rescan of existing files
-        
+        num_workers (int): Number of parallel workers to use (default: use MAX_WORKERS from config)
+
     Returns:
         dict: File scan results
     """
     logger.info(f"Starting Celery file scan task {self.request.id} for scan_id: {scan_id}")
-    
+
     try:
         from pixelprobe.services.scan_service import ScanService
         from flask import current_app
-        
+        from config import Config
+
         database_uri = current_app.config['SQLALCHEMY_DATABASE_URI']
         scan_service = ScanService(database_uri)
-        
+
+        # Use provided num_workers or default to MAX_WORKERS from config
+        if num_workers is None:
+            num_workers = Config.MAX_WORKERS
+
+        logger.info(f"Scanning {len(file_paths)} files with {num_workers} parallel workers")
+
         def progress_callback(progress_data):
             """Update file scan progress"""
             current_task.update_state(
@@ -411,12 +419,13 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False):
                     'scan_id': scan_id
                 }
             )
-        
-        # Execute file scanning using the scan service
+
+        # Execute file scanning using the scan service with parallel workers
         # Note: ScanService handles progress internally via database updates
         result = scan_service.scan_files(
             file_paths=file_paths,
             force_rescan=force_rescan,
+            num_workers=num_workers,  # Enable parallel scanning
             async_mode=False  # Run synchronously in Celery task
         )
         
