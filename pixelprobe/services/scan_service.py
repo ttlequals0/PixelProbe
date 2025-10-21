@@ -43,17 +43,19 @@ class ScanService:
         """Check if a scan is currently running"""
         # Check thread-based scanning
         thread_running = self.current_scan_thread is not None and self.current_scan_thread.is_alive()
-        
+
         # Check database for active scan (covers Celery-based scans)
         db_scan_active = False
         try:
             scan_state = ScanState.get_or_create()
-            db_scan_active = scan_state.is_active and scan_state.phase in ['discovering', 'adding', 'scanning']
+            # CRITICAL: Include 'initializing' phase to prevent scans from getting stuck
+            # Without this, stuck scans in 'initializing' phase would block new scans forever
+            db_scan_active = scan_state.is_active and scan_state.phase in ['initializing', 'discovering', 'adding', 'scanning']
         except Exception as e:
             logger.debug(f"Could not check database scan state: {e}")
-        
+
         is_running = thread_running or db_scan_active
-        
+
         logger.debug(f"is_scan_running check: thread_running={thread_running}, "
                     f"db_scan_active={db_scan_active}, result={is_running}")
         return is_running

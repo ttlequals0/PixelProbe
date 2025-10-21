@@ -125,7 +125,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             # This double-check pattern ensures we don't have stale database state
             active_scan = ScanState.query.filter_by(is_active=True).first()
             if active_scan and active_scan.scan_id != scan_id:
-                # Check if the active scan is actually stuck (no update for 10+ minutes)
+                # Check if the active scan is actually stuck (no update for 5+ minutes)
                 check_time = active_scan.last_update or active_scan.start_time
 
                 if check_time:
@@ -134,8 +134,9 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
 
                     time_since_update = datetime.now(timezone.utc) - check_time
 
-                    # If scan hasn't updated in 10 minutes, it's likely stuck
-                    if time_since_update > timedelta(minutes=10):
+                    # If scan hasn't updated in 5 minutes, it's likely stuck
+                    # Reduced from 10 minutes to detect stuck scans faster
+                    if time_since_update > timedelta(minutes=5):
                         logger.warning(f"Found stuck scan {active_scan.scan_id} (no update for {time_since_update}), marking as crashed")
                         active_scan.is_active = False
                         active_scan.phase = 'crashed'
