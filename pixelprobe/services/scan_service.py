@@ -1409,66 +1409,71 @@ class ScanService:
                 logger.info(f"Workers used: {num_workers}")
                 logger.info(f"=== END SCAN ===")
     
-    def _parallel_scan(self, checker: PixelProbe, files: List[str], 
+    def _parallel_scan(self, checker: PixelProbe, files: List[str],
                       force_rescan: bool, num_workers: int, scan_state: ScanState, scan_state_id: int):
         """Perform parallel scan of files"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        
+        import threading
+
         total_files = len(files)
         completed = 0
-        
+
         # Create progress tracker for scan
         progress_tracker = ProgressTracker('scan')
-        
+
+        # Thread lock for database operations to prevent concurrent session access
+        db_lock = threading.Lock()
+
         def scan_file(file_path):
             if self.scan_cancelled:
                 return None
             try:
                 return checker.scan_file(file_path, force_rescan=force_rescan)
             except Exception as e:
-                logger.error(f"Error scanning file {file_path}: {e}")
+                logger.error(f"Error scanning {file_path}: {e}")
                 return None
-        
+
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             # Submit all files for scanning
             future_to_file = {executor.submit(scan_file, f): f for f in files}
-            
+
             # Process completed scans
             for future in as_completed(future_to_file):
                 if self.scan_cancelled:
                     executor.shutdown(wait=False)
                     break
-                
+
                 file_path = future_to_file[future]
                 completed += 1
-                
+
                 self.update_progress(completed, total_files, file_path, 'scanning')
-                
-                # Update scan state progress
-                try:
-                    scan_state.update_progress(completed, total_files, current_file=file_path)
-                    
-                    # Update progress message with current file and ETA
-                    scan_state.progress_message = progress_tracker.get_progress_message(
-                        f'Phase 3 of 3: Scanning {total_files} files for corruption',
-                        completed,
-                        total_files,
-                        os.path.basename(file_path)
-                    )
-                    db.session.commit()
-                except Exception as e:
-                    logger.error(f"Failed to update progress for file {file_path}: {e}")
-                    # Try to recover the database session
+
+                # Update scan state progress with thread-safe database access
+                with db_lock:
                     try:
-                        db.session.rollback()
-                        # Re-get scan state and try again
-                        scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
-                        if scan_state:
-                            scan_state.update_progress(completed, total_files, current_file=file_path)
-                            db.session.commit()
-                    except Exception as e2:
-                        logger.error(f"Failed to recover progress update: {e2}")
-                
+                        scan_state.update_progress(completed, total_files, current_file=file_path)
+
+                        # Update progress message with current file and ETA
+                        scan_state.progress_message = progress_tracker.get_progress_message(
+                            f'Phase 3 of 3: Scanning {total_files} files for corruption',
+                            completed,
+                            total_files,
+                            os.path.basename(file_path)
+                        )
+                        db.session.commit()
+                    except Exception as e:
+                        logger.error(f"Failed to update progress for file {file_path}: {e}")
+                        # Try to recover the database session
+                        try:
+                            db.session.rollback()
+                            # Re-get scan state and try again
+                            scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                            if scan_state:
+                                scan_state.update_progress(completed, total_files, current_file=file_path)
+                                db.session.commit()
+                        except Exception as e2:
+                            logger.error(f"Failed to recover progress update: {e2}")
+
                 # Log progress every 10 files for UI debugging
                 if completed % 10 == 0:
                     logger.info(f"Parallel scan progress: {completed}/{total_files} files processed")
@@ -2349,89 +2354,93 @@ class ScanService:
         """Parallel scan of selected files organized by chunks"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
-        
-        # Thread-safe counter
+
+        # Thread-safe counter and database lock
         files_scanned_lock = threading.Lock()
+        db_lock = threading.Lock()
         files_scanned = 0
         selected_files_set = set(selected_files)
-        
+
         # Create progress tracker
         progress_tracker = ProgressTracker('scan')
-        
+
         def scan_chunk_files(chunk):
             nonlocal files_scanned
             if self.scan_cancelled:
                 return 0
-                
-            # Update chunk status
-            chunk.status = 'processing'
-            chunk.phase = 'scanning'
-            chunk.start_time = datetime.now(timezone.utc)
-            db.session.commit()
-            
+
+            # Update chunk status with thread-safe database access
+            with db_lock:
+                chunk.status = 'processing'
+                chunk.phase = 'scanning'
+                chunk.start_time = datetime.now(timezone.utc)
+                db.session.commit()
+
             chunk_scanned = 0
             # Scan only selected files in this chunk
             for file_path in selected_files:
                 if self.scan_cancelled:
                     break
-                    
+
                 # Check if file belongs to this chunk
                 if file_path.startswith(chunk.directory_path + os.sep) or os.path.dirname(file_path) == chunk.directory_path:
                     try:
                         checker.scan_file(file_path, force_rescan=force_rescan)
                         chunk_scanned += 1
-                        
+
                         with files_scanned_lock:
                             files_scanned += 1
                             self.update_progress(files_scanned, len(selected_files), file_path, 'scanning')
-                            
+
                     except Exception as e:
                         logger.error(f"Error scanning {file_path}: {e}")
-            
-            # Update chunk completion
-            chunk.files_scanned = chunk_scanned
-            chunk.status = 'completed'
-            chunk.end_time = datetime.now(timezone.utc)
-            db.session.commit()
-            
+
+            # Update chunk completion with thread-safe database access
+            with db_lock:
+                chunk.files_scanned = chunk_scanned
+                chunk.status = 'completed'
+                chunk.end_time = datetime.now(timezone.utc)
+                db.session.commit()
+
             return chunk_scanned
-        
+
         # Process chunks in parallel
         with ThreadPoolExecutor(max_workers=min(num_workers, len(chunks))) as executor:
             future_to_chunk = {executor.submit(scan_chunk_files, chunk): chunk for chunk in chunks}
-            
+
             completed_chunks = 0
             for future in as_completed(future_to_chunk):
                 if self.scan_cancelled:
                     executor.shutdown(wait=False)
                     break
-                    
+
                 chunk = future_to_chunk[future]
                 completed_chunks += 1
-                
-                # Update scan state with error recovery
-                try:
-                    scan_state.current_chunk_index = completed_chunks
-                    scan_state.update_progress(files_scanned, len(selected_files), current_file='')
-                    scan_state.progress_message = progress_tracker.get_progress_message(
-                        f'Scanning {len(selected_files)} selected files (parallel)',
-                        files_scanned,
-                        len(selected_files),
-                        f"Completed {completed_chunks}/{len(chunks)} directories"
-                    )
-                    db.session.commit()
-                except Exception as e:
-                    logger.error(f"Failed to update progress for chunk {chunk.directory_path}: {e}")
-                    # Try to recover the database session
+
+                # Update scan state with thread-safe database access
+                with db_lock:
                     try:
-                        db.session.rollback()
-                        # Re-get scan state and try again
-                        scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
-                        if scan_state:
-                            scan_state.update_progress(files_scanned, len(selected_files), current_file='')
-                            db.session.commit()
-                    except Exception as e2:
-                        logger.error(f"Failed to recover progress update: {e2}")
+                        scan_state.current_chunk_index = completed_chunks
+                        scan_state.update_progress(files_scanned, len(selected_files), current_file='')
+                        scan_state.progress_message = progress_tracker.get_progress_message(
+                            f'Scanning {len(selected_files)} selected files (parallel)',
+                            files_scanned,
+                            len(selected_files),
+                            f"Completed {completed_chunks}/{len(chunks)} directories"
+                        )
+                        db.session.commit()
+                    except Exception as e:
+                        logger.error(f"Failed to update progress for chunk {chunk.directory_path}: {e}")
+                        # Try to recover the database session
+                        try:
+                            db.session.rollback()
+                            # Re-get scan state and try again
+                            scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                            if scan_state:
+                                scan_state.update_progress(files_scanned, len(selected_files), current_file='')
+                                db.session.commit()
+                        except Exception as e2:
+                            logger.error(f"Failed to recover progress update: {e2}")
         
         # Complete scan
         if self.scan_cancelled:
