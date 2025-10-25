@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.34] - 2025-10-25
+
+### Fixed
+- **CRITICAL: Fixed SQLAlchemy concurrent session errors during parallel file scanning**
+  - Added `threading.Lock()` to serialize database operations in parallel scanning methods
+  - **Root Cause**: Multiple threads from `ThreadPoolExecutor` calling `db.session.commit()` concurrently
+  - **Symptoms**: `sqlalchemy.exc.InvalidRequestError: This session is provisioning a new connection; concurrent operations are not permitted`
+  - **Evidence from logs**: Multiple scan errors during parallel file processing (17 errors in first scan, 5 in second)
+  - **Solution**: Thread locks serialize database writes while maintaining parallel file scanning performance
+  - Changed files:
+    - `pixelprobe/services/scan_service.py` - Added `db_lock = threading.Lock()` to `_parallel_scan()` method (lines 1412-1500)
+    - `pixelprobe/services/scan_service.py` - Added `db_lock = threading.Lock()` to `_parallel_scan_selected_chunks()` method (lines 2351-2443)
+  - All database operations now wrapped with `with db_lock:` context manager
+
+### Technical Details
+
+**The Threading Issue Explained:**
+1. Parallel scan uses `ThreadPoolExecutor` with `num_workers` threads for performance
+2. Each thread completion triggers `as_completed()` callback
+3. Callback updates scan progress with `scan_state.update_progress()` and `db.session.commit()`
+4. Multiple threads complete simultaneously → concurrent `db.session.commit()` calls
+5. SQLAlchemy sessions are NOT thread-safe → "concurrent operations not permitted" error
+6. Files fail to scan despite successful FFmpeg/ImageMagick processing
+
+**The Fix:**
+- `threading.Lock()` ensures only ONE thread can access database at a time
+- File scanning remains parallel (performance maintained)
+- Only database writes are serialized (minimal overhead)
+- Lock prevents race conditions during progress updates
+- Thread-safe counter with separate lock for statistics
+
+**Performance Impact:**
+- No degradation to file scanning speed (still parallel)
+- Negligible overhead for database lock (writes are fast)
+- Scans complete successfully without errors
+
 ## [2.4.30] - 2025-10-20
 
 ### Fixed

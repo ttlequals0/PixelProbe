@@ -8,7 +8,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.4.1** - Enhanced authentication with Swagger UI support and security fixes.
+**Version 2.4.34** - Critical fix for SQLAlchemy concurrent session errors during parallel scanning.
 
 ### Why PixelProbe?
 
@@ -18,9 +18,21 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Professional Grade**: Uses industry-standard tools (FFmpeg, ImageMagick) for accurate detection
 - **Set and Forget**: Schedule automated scans to continuously monitor your media health
 
-##  What's New in Version 2.4.1
+##  What's New in Version 2.4.34
 
-###  Authentication Enhancements
+### Critical Bug Fix
+- **Fixed SQLAlchemy concurrent session errors**: Resolved "concurrent operations are not permitted" errors during parallel file scanning
+- **Thread-safe database access**: Added threading locks to serialize database operations while maintaining parallel scanning performance
+- **Production tested**: Verified fix resolves all scan failures reported in production logs
+
+## Previous Version Highlights
+
+###  Version 2.4.30 - Race Condition Fix
+- **Fixed Celery task race condition**: Prevented database corruption from concurrent scan initialization
+- **Distributed locking**: Added Redis-based locks to prevent worker collisions
+- **Enhanced retry logic**: Exponential backoff with jitter to prevent thundering herd
+
+###  Version 2.4.1 - Authentication Enhancements
 - **Universal API Protection**: ALL API endpoints now require authentication
 - **Swagger UI Compatibility**: Fixed Bearer token handling for Swagger UI testing
 - **Flexible Token Format**: Supports both `Bearer <token>` and direct token formats
@@ -244,7 +256,9 @@ Create and manage automated scan schedules:
 
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.4.0)
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.4.34)
+- **`ttlequals0/pixelprobe:2.4.34`** - Critical bug fix for parallel scanning thread safety
+- **`ttlequals0/pixelprobe:2.4.30`** - Fixed Celery race condition with distributed locking
 - **`ttlequals0/pixelprobe:2.4.0`** - Complete authentication system with user management
 
 ##  Requirements
