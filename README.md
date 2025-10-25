@@ -18,33 +18,6 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Professional Grade**: Uses industry-standard tools (FFmpeg, ImageMagick) for accurate detection
 - **Set and Forget**: Schedule automated scans to continuously monitor your media health
 
-## What's New in Version 2.4.34
-
-### Parallel Scanning
-- **Thread-safe database access**: Fixed SQLAlchemy concurrent session errors during parallel file scanning
-- **Performance improvements**: Maintains parallel scanning speed while ensuring data integrity
-- **Production tested**: Verified against real-world production workloads
-
-### Authentication & Security
-- **Multi-user support**: Role-based access control with admin privileges
-- **Secure password storage**: Bcrypt hashing with minimum 8 character passwords
-- **API token authentication**: Generate and manage tokens for programmatic access
-- **Session management**: Cookie-based sessions with CSRF protection
-- **First-run setup**: Secure admin account creation wizard
-
-### Scanning Features
-- **Parallel file processing**: Configurable worker threads (10-24 workers recommended)
-- **Multiple scan types**: Full scan, orphan cleanup, file changes detection
-- **Real-time progress**: Live updates with ETA calculations
-- **Scheduled scans**: Automated scanning with cron expressions or intervals
-- **Smart exclusions**: Configure paths and file extensions to skip
-
-### Reporting & Monitoring
-- **Comprehensive reports**: PDF and JSON export for scan results
-- **Scan history**: Complete audit trail of all operations
-- **System statistics**: Real-time monitoring of scan performance
-- **Detailed file info**: File hash, corruption status, scan timestamps
-
 ## Features
 
 ### Media Support
@@ -61,12 +34,13 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - Automatic retry logic for transient failures
 
 ### Scanning Features
-- Parallel multi-threaded scanning with real-time progress
-- Phase-based scanning (discovery → database → validation)
-- Multiple scan types (normal, orphan cleanup, file changes)
-- Scheduled automated scans with cron or interval support
-- Configurable path and extension exclusions
-- Bulk operations for rescanning and deep analysis
+- **Parallel multi-threaded scanning**: Configurable worker threads (10-24 workers recommended) with thread-safe database access
+- **Real-time progress**: Live updates with ETA calculations and phase tracking
+- **Multiple scan types**: Full scan, orphan cleanup, file changes detection
+- **Scheduled automated scans**: Cron expressions or simple intervals for hands-free monitoring
+- **Smart exclusions**: Configure paths and file extensions to skip
+- **Phase-based scanning**: Discovery → Database → Validation workflow
+- **Bulk operations**: Rescan multiple files, deep analysis, batch actions
 
 ### Web Interface
 - Modern responsive design with dark/light theme support
@@ -77,20 +51,20 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - Detailed file corruption reports
 
 ### System Features
-- PostgreSQL database for reliable persistence
-- Redis-backed task queue for background processing
-- Celery worker pool for distributed scanning
-- Docker deployment with multi-container architecture
-- Comprehensive REST API with OpenAPI documentation
-- Detailed system statistics and monitoring
+- **PostgreSQL database**: Reliable ACID-compliant data storage
+- **Redis-backed task queue**: Background processing with Celery workers
+- **Docker deployment**: Multi-container architecture (web, workers, database, queue)
+- **REST API**: Comprehensive OpenAPI/Swagger documentation
+- **Monitoring & Reports**: Real-time statistics, PDF/JSON exports, complete audit trail
+- **Performance optimized**: Production-tested with millions of files
 
 ### Security & Authentication
-- Multi-user support with role-based access control
-- Secure password storage with bcrypt hashing
-- API token authentication for programmatic access
-- Session-based web authentication with CSRF protection
-- First-run setup wizard for initial configuration
-- Audit logging for security events
+- **Multi-user support**: Role-based access control with admin privileges
+- **Secure password storage**: Bcrypt hashing with minimum 8 character passwords
+- **API token authentication**: Generate and manage tokens for programmatic access
+- **Session management**: Cookie-based sessions with CSRF protection, configurable timeout
+- **First-run setup wizard**: Secure admin account creation on initial deployment
+- **Audit logging**: Complete security event tracking
 
 ## Screenshots
 
