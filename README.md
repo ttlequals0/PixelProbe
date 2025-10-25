@@ -18,50 +18,34 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Professional Grade**: Uses industry-standard tools (FFmpeg, ImageMagick) for accurate detection
 - **Set and Forget**: Schedule automated scans to continuously monitor your media health
 
-##  What's New in Version 2.4.34
+## What's New in Version 2.4.34
 
-### Critical Bug Fix
-- **Fixed SQLAlchemy concurrent session errors**: Resolved "concurrent operations are not permitted" errors during parallel file scanning
-- **Thread-safe database access**: Added threading locks to serialize database operations while maintaining parallel scanning performance
-- **Production tested**: Verified fix resolves all scan failures reported in production logs
+### Parallel Scanning
+- **Thread-safe database access**: Fixed SQLAlchemy concurrent session errors during parallel file scanning
+- **Performance improvements**: Maintains parallel scanning speed while ensuring data integrity
+- **Production tested**: Verified against real-world production workloads
 
-## Previous Version Highlights
+### Authentication & Security
+- **Multi-user support**: Role-based access control with admin privileges
+- **Secure password storage**: Bcrypt hashing with minimum 8 character passwords
+- **API token authentication**: Generate and manage tokens for programmatic access
+- **Session management**: Cookie-based sessions with CSRF protection
+- **First-run setup**: Secure admin account creation wizard
 
-###  Version 2.4.30 - Race Condition Fix
-- **Fixed Celery task race condition**: Prevented database corruption from concurrent scan initialization
-- **Distributed locking**: Added Redis-based locks to prevent worker collisions
-- **Enhanced retry logic**: Exponential backoff with jitter to prevent thundering herd
+### Scanning Features
+- **Parallel file processing**: Configurable worker threads (10-24 workers recommended)
+- **Multiple scan types**: Full scan, orphan cleanup, file changes detection
+- **Real-time progress**: Live updates with ETA calculations
+- **Scheduled scans**: Automated scanning with cron expressions or intervals
+- **Smart exclusions**: Configure paths and file extensions to skip
 
-###  Version 2.4.1 - Authentication Enhancements
-- **Universal API Protection**: ALL API endpoints now require authentication
-- **Swagger UI Compatibility**: Fixed Bearer token handling for Swagger UI testing
-- **Flexible Token Format**: Supports both `Bearer <token>` and direct token formats
-- **Security Hardening**: Enforced authentication across entire API surface
+### Reporting & Monitoring
+- **Comprehensive reports**: PDF and JSON export for scan results
+- **Scan history**: Complete audit trail of all operations
+- **System statistics**: Real-time monitoring of scan performance
+- **Detailed file info**: File hash, corruption status, scan timestamps
 
-##  Version 2.4.0 Features
-
-###  Complete Authentication System
-- **User Management**: Create and manage multiple user accounts with admin privileges
-- **Secure Login**: Session-based authentication with remember me functionality
-- **Password Security**: Bcrypt hashing with minimum 8 character passwords
-- **API Tokens**: Generate and manage API tokens for programmatic access
-- **Token Expiration**: Optional token expiration with configurable lifetime
-- **Password Changes**: Users can securely change their passwords
-- **First-Run Setup**: Automatic setup wizard for initial admin account
-
-### 🛡 Security Features
-- **Session Management**: Secure cookie-based sessions with httpOnly and sameSite protection
-- **CSRF Protection**: Cross-site request forgery protection on all forms
-- **API Authentication**: Bearer token authentication for API endpoints
-- **Access Control**: Admin-only access to user management features
-- **Automatic Logout**: Configurable session timeout for security
-
-###  Previous Updates (v2.3.3)
-- **Scheduler Reliability**: Fixed scheduled task execution and prevented duplicates
-- **Stuck Scan Prevention**: Automatic detection and recovery from stuck scans
-- **Large File Support**: Extended timeouts for 50GB+ file scanning
-
-##  Features
+## Features
 
 ### Media Support
 - Comprehensive video format support (MP4, MKV, AVI, MOV, WebM, FLV, etc.)
@@ -108,7 +92,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - First-run setup wizard for initial configuration
 - Audit logging for security events
 
-## 📸 Screenshots
+## Screenshots
 
 ### Authentication & User Management
 
@@ -309,7 +293,7 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
 For detailed migration instructions, see [MIGRATION_v2.2.0.md](MIGRATION_v2.2.0.md).
 
-## 📚 Documentation
+## Documentation
 
 ### Quick Links
 - **[Docker Setup Guide](docs/DOCKER_SETUP.md)** - Complete Docker Compose setup with container explanations
