@@ -8,8 +8,6 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.4.34** - Critical fix for SQLAlchemy concurrent session errors during parallel scanning.
-
 ### Why PixelProbe?
 
 - **Protect Your Media**: Automatically detect corrupted files before they cause playback issues
@@ -18,50 +16,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Professional Grade**: Uses industry-standard tools (FFmpeg, ImageMagick) for accurate detection
 - **Set and Forget**: Schedule automated scans to continuously monitor your media health
 
-##  What's New in Version 2.4.34
-
-### Critical Bug Fix
-- **Fixed SQLAlchemy concurrent session errors**: Resolved "concurrent operations are not permitted" errors during parallel file scanning
-- **Thread-safe database access**: Added threading locks to serialize database operations while maintaining parallel scanning performance
-- **Production tested**: Verified fix resolves all scan failures reported in production logs
-
-## Previous Version Highlights
-
-###  Version 2.4.30 - Race Condition Fix
-- **Fixed Celery task race condition**: Prevented database corruption from concurrent scan initialization
-- **Distributed locking**: Added Redis-based locks to prevent worker collisions
-- **Enhanced retry logic**: Exponential backoff with jitter to prevent thundering herd
-
-###  Version 2.4.1 - Authentication Enhancements
-- **Universal API Protection**: ALL API endpoints now require authentication
-- **Swagger UI Compatibility**: Fixed Bearer token handling for Swagger UI testing
-- **Flexible Token Format**: Supports both `Bearer <token>` and direct token formats
-- **Security Hardening**: Enforced authentication across entire API surface
-
-##  Version 2.4.0 Features
-
-###  Complete Authentication System
-- **User Management**: Create and manage multiple user accounts with admin privileges
-- **Secure Login**: Session-based authentication with remember me functionality
-- **Password Security**: Bcrypt hashing with minimum 8 character passwords
-- **API Tokens**: Generate and manage API tokens for programmatic access
-- **Token Expiration**: Optional token expiration with configurable lifetime
-- **Password Changes**: Users can securely change their passwords
-- **First-Run Setup**: Automatic setup wizard for initial admin account
-
-### 🛡 Security Features
-- **Session Management**: Secure cookie-based sessions with httpOnly and sameSite protection
-- **CSRF Protection**: Cross-site request forgery protection on all forms
-- **API Authentication**: Bearer token authentication for API endpoints
-- **Access Control**: Admin-only access to user management features
-- **Automatic Logout**: Configurable session timeout for security
-
-###  Previous Updates (v2.3.3)
-- **Scheduler Reliability**: Fixed scheduled task execution and prevented duplicates
-- **Stuck Scan Prevention**: Automatic detection and recovery from stuck scans
-- **Large File Support**: Extended timeouts for 50GB+ file scanning
-
-##  Features
+## Features
 
 ### Media Support
 - Comprehensive video format support (MP4, MKV, AVI, MOV, WebM, FLV, etc.)
@@ -77,12 +32,13 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - Automatic retry logic for transient failures
 
 ### Scanning Features
-- Parallel multi-threaded scanning with real-time progress
-- Phase-based scanning (discovery → database → validation)
-- Multiple scan types (normal, orphan cleanup, file changes)
-- Scheduled automated scans with cron or interval support
-- Configurable path and extension exclusions
-- Bulk operations for rescanning and deep analysis
+- **Parallel multi-threaded scanning**: Configurable worker threads (10-24 workers recommended) with thread-safe database access
+- **Real-time progress**: Live updates with ETA calculations and phase tracking
+- **Multiple scan types**: Full scan, orphan cleanup, file changes detection
+- **Scheduled automated scans**: Cron expressions or simple intervals for hands-free monitoring
+- **Smart exclusions**: Configure paths and file extensions to skip
+- **Phase-based scanning**: Discovery → Database → Validation workflow
+- **Bulk operations**: Rescan multiple files, deep analysis, batch actions
 
 ### Web Interface
 - Modern responsive design with dark/light theme support
@@ -93,22 +49,22 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - Detailed file corruption reports
 
 ### System Features
-- PostgreSQL database for reliable persistence
-- Redis-backed task queue for background processing
-- Celery worker pool for distributed scanning
-- Docker deployment with multi-container architecture
-- Comprehensive REST API with OpenAPI documentation
-- Detailed system statistics and monitoring
+- **PostgreSQL database**: Reliable ACID-compliant data storage
+- **Redis-backed task queue**: Background processing with Celery workers
+- **Docker deployment**: Multi-container architecture (web, workers, database, queue)
+- **REST API**: Comprehensive OpenAPI/Swagger documentation
+- **Monitoring & Reports**: Real-time statistics, PDF/JSON exports, complete audit trail
+- **Performance optimized**: Production-tested with millions of files
 
 ### Security & Authentication
-- Multi-user support with role-based access control
-- Secure password storage with bcrypt hashing
-- API token authentication for programmatic access
-- Session-based web authentication with CSRF protection
-- First-run setup wizard for initial configuration
-- Audit logging for security events
+- **Multi-user support**: Role-based access control with admin privileges
+- **Secure password storage**: Bcrypt hashing with minimum 8 character passwords
+- **API token authentication**: Generate and manage tokens for programmatic access
+- **Session management**: Cookie-based sessions with CSRF protection, configurable timeout
+- **First-run setup wizard**: Secure admin account creation on initial deployment
+- **Audit logging**: Complete security event tracking
 
-## 📸 Screenshots
+## Screenshots
 
 ### Authentication & User Management
 
@@ -256,10 +212,7 @@ Create and manage automated scan schedules:
 
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.4.34)
-- **`ttlequals0/pixelprobe:2.4.34`** - Critical bug fix for parallel scanning thread safety
-- **`ttlequals0/pixelprobe:2.4.30`** - Fixed Celery race condition with distributed locking
-- **`ttlequals0/pixelprobe:2.4.0`** - Complete authentication system with user management
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release
 
 ##  Requirements
 
@@ -309,7 +262,7 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
 For detailed migration instructions, see [MIGRATION_v2.2.0.md](MIGRATION_v2.2.0.md).
 
-## 📚 Documentation
+## Documentation
 
 ### Quick Links
 - **[Docker Setup Guide](docs/DOCKER_SETUP.md)** - Complete Docker Compose setup with container explanations
