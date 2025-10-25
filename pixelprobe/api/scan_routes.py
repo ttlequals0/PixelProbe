@@ -490,10 +490,11 @@ def scan_all():
         else:
             # Fallback to direct scan service (backward compatibility)
             logger.info("Celery not available, using direct scan service")
+            from config import Config
             result = current_app.scan_service.scan_directories(
-                validated_dirs, 
-                force_rescan=force_rescan, 
-                num_workers=1
+                validated_dirs,
+                force_rescan=force_rescan,
+                num_workers=Config.MAX_WORKERS  # Use configured MAX_WORKERS instead of hardcoded 1
             )
             result['celery_enabled'] = False
             return jsonify(result)
@@ -917,18 +918,19 @@ def scan_parallel():
                 # Use Celery task queue
                 from pixelprobe.tasks import scan_files_task
                 from uuid import uuid4
-                
+
                 # Generate scan ID
                 scan_id = str(uuid4())
-                
-                # Queue the file scan task
+
+                # Queue the file scan task with parallel workers
                 task = scan_files_task.delay(
                     scan_id=scan_id,
                     file_paths=file_paths,
-                    force_rescan=force_rescan
+                    force_rescan=force_rescan,
+                    num_workers=num_workers  # Pass num_workers for parallel scanning
                 )
-                
-                logger.info(f"Queued file scan task {task.id} for {len(file_paths)} files")
+
+                logger.info(f"Queued file scan task {task.id} for {len(file_paths)} files with {num_workers} workers")
                 
                 return jsonify({
                     'status': 'queued',
@@ -1248,10 +1250,11 @@ def force_scan_pending():
             })
         else:
             # Fallback to direct scan service
+            from config import Config
             result = current_app.scan_service.scan_directories(
                 directories=['PENDING_FILES_SCAN'],  # Special marker
                 force_rescan=False,
-                num_workers=1
+                num_workers=Config.MAX_WORKERS  # Use configured MAX_WORKERS instead of hardcoded 1
             )
             
             result['celery_enabled'] = False

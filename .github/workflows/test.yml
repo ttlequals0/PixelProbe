@@ -32,6 +32,8 @@ jobs:
         pip install -r requirements-test.txt
     
     - name: Run tests with pytest
+      env:
+        SECRET_KEY: test-secret-key-for-github-actions
       run: |
         pytest -m "not real_media" --cov=pixelprobe --cov-report=xml --cov-report=term
     

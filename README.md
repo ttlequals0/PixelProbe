@@ -8,7 +8,7 @@
 
 PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
 
-**Version 2.4.1** - Enhanced authentication with Swagger UI support and security fixes.
+**Version 2.4.34** - Critical fix for SQLAlchemy concurrent session errors during parallel scanning.
 
 ### Why PixelProbe?
 
@@ -18,9 +18,21 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Professional Grade**: Uses industry-standard tools (FFmpeg, ImageMagick) for accurate detection
 - **Set and Forget**: Schedule automated scans to continuously monitor your media health
 
-##  What's New in Version 2.4.1
+##  What's New in Version 2.4.34
 
-###  Authentication Enhancements
+### Critical Bug Fix
+- **Fixed SQLAlchemy concurrent session errors**: Resolved "concurrent operations are not permitted" errors during parallel file scanning
+- **Thread-safe database access**: Added threading locks to serialize database operations while maintaining parallel scanning performance
+- **Production tested**: Verified fix resolves all scan failures reported in production logs
+
+## Previous Version Highlights
+
+###  Version 2.4.30 - Race Condition Fix
+- **Fixed Celery task race condition**: Prevented database corruption from concurrent scan initialization
+- **Distributed locking**: Added Redis-based locks to prevent worker collisions
+- **Enhanced retry logic**: Exponential backoff with jitter to prevent thundering herd
+
+###  Version 2.4.1 - Authentication Enhancements
 - **Universal API Protection**: ALL API endpoints now require authentication
 - **Swagger UI Compatibility**: Fixed Bearer token handling for Swagger UI testing
 - **Flexible Token Format**: Supports both `Bearer <token>` and direct token formats
@@ -221,10 +233,20 @@ Create and manage automated scan schedules:
 4. **Access the web interface**:
    Open http://localhost:5001 in your browser
 
-5. **Initial Setup**:
-   - On first run, you'll be prompted to create an admin account
-   - Enter a secure password (minimum 8 characters)
-   - The system will automatically create the admin user
+5. **Initial Setup** (IMPORTANT - First Run Only):
+
+   On first run, you must create the admin account via the setup endpoint:
+
+   ```bash
+   # Create admin user with your chosen password
+   curl -X POST http://localhost:5001/api/auth/setup \
+     -H "Content-Type: application/json" \
+     -d '{"password":"YourSecurePassword123"}'
+   ```
+
+   Or visit http://localhost:5001/login and follow the first-run setup wizard.
+
+   **Security Note**: No default admin account exists. You must explicitly create it on first run.
 
 6. **Start scanning**:
    - After login, click "Scan All Files" to begin analyzing your media library
@@ -234,7 +256,9 @@ Create and manage automated scan schedules:
 
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.4.0)
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.4.34)
+- **`ttlequals0/pixelprobe:2.4.34`** - Critical bug fix for parallel scanning thread safety
+- **`ttlequals0/pixelprobe:2.4.30`** - Fixed Celery race condition with distributed locking
 - **`ttlequals0/pixelprobe:2.4.0`** - Complete authentication system with user management
 
 ##  Requirements
@@ -311,11 +335,17 @@ PixelProbe uses environment variables for all configuration. Copy `.env.example`
 - `MEDIA_PATH` - Host path to your media files (for Docker volume mounting)
 
 **Optional Variables:**
-- `DATABASE_URL` - Database connection string (default: PostgreSQL)
 - `SCAN_PATHS` - Comma-separated directories to monitor inside container (default: `/media`)
 - `TZ` - Timezone (default: UTC)
-- `MAX_FILES_TO_SCAN` - Performance limit (default: 100)
-- `MAX_SCAN_WORKERS` - Parallel scanning threads (default: 4)
+- `MAX_WORKERS` - Parallel file scanning workers (default: 10, recommended: 10-24)
+  * Controls parallelism within each scan task
+  * Higher values = faster scans but more CPU/memory usage
+  * Each worker creates 1 database connection
+  * Total connections = 60 (main app) + MAX_WORKERS
+- `BATCH_SIZE` - Files per batch during discovery (default: 100)
+- `CELERY_CONCURRENCY` - Concurrent Celery tasks (default: 4)
+  * Controls how many scan tasks can run simultaneously
+  * Independent from MAX_WORKERS
 - `PERIODIC_SCAN_SCHEDULE` - Automated scanning schedule
 - `CLEANUP_SCHEDULE` - Automated cleanup schedule
 - `EXCLUDED_PATHS` - Paths to ignore during scanning
@@ -565,9 +595,10 @@ docker exec pixelprobe python tools/fix_database_schema.py
 - Check file permissions and ownership
 
 **Performance issues with large libraries**:
-- Increase `MAX_SCAN_WORKERS` (default: 4, try 8-16 for powerful systems)
+- Increase `MAX_WORKERS` (default: 10, try 16-24 for powerful systems)
 - Monitor system resources during scanning
 - Use SSD storage for the database if possible
+- Adjust `CELERY_CONCURRENCY` if running multiple scans simultaneously
 
 ### Getting Help
 

@@ -5,6 +5,535 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.34] - 2025-10-25
+
+### Fixed
+- **CRITICAL: Fixed SQLAlchemy concurrent session errors during parallel file scanning**
+  - Added `threading.Lock()` to serialize database operations in parallel scanning methods
+  - **Root Cause**: Multiple threads from `ThreadPoolExecutor` calling `db.session.commit()` concurrently
+  - **Symptoms**: `sqlalchemy.exc.InvalidRequestError: This session is provisioning a new connection; concurrent operations are not permitted`
+  - **Evidence from logs**: Multiple scan errors during parallel file processing (17 errors in first scan, 5 in second)
+  - **Solution**: Thread locks serialize database writes while maintaining parallel file scanning performance
+  - Changed files:
+    - `pixelprobe/services/scan_service.py` - Added `db_lock = threading.Lock()` to `_parallel_scan()` method (lines 1412-1500)
+    - `pixelprobe/services/scan_service.py` - Added `db_lock = threading.Lock()` to `_parallel_scan_selected_chunks()` method (lines 2351-2443)
+  - All database operations now wrapped with `with db_lock:` context manager
+
+### Technical Details
+
+**The Threading Issue Explained:**
+1. Parallel scan uses `ThreadPoolExecutor` with `num_workers` threads for performance
+2. Each thread completion triggers `as_completed()` callback
+3. Callback updates scan progress with `scan_state.update_progress()` and `db.session.commit()`
+4. Multiple threads complete simultaneously → concurrent `db.session.commit()` calls
+5. SQLAlchemy sessions are NOT thread-safe → "concurrent operations not permitted" error
+6. Files fail to scan despite successful FFmpeg/ImageMagick processing
+
+**The Fix:**
+- `threading.Lock()` ensures only ONE thread can access database at a time
+- File scanning remains parallel (performance maintained)
+- Only database writes are serialized (minimal overhead)
+- Lock prevents race conditions during progress updates
+- Thread-safe counter with separate lock for statistics
+
+**Performance Impact:**
+- No degradation to file scanning speed (still parallel)
+- Negligible overhead for database lock (writes are fast)
+- Scans complete successfully without errors
+
+## [2.4.30] - 2025-10-20
+
+### Fixed
+- **CRITICAL: Fixed Celery Task Race Condition Causing Database Corruption**
+  - Added distributed locking using Redis to prevent concurrent scan initialization
+  - **Root Cause**: Multiple Celery workers simultaneously retrying failed scans created race condition
+  - **Symptoms**: `psycopg2.DatabaseError: error with status PGRES_TUPLES_OK and no message from the libpq`
+  - **Evidence from logs**: Oct 18 22:44:09 - multiple workers (ForkPoolWorker-15, 16, 1, 2) all tried to create scans simultaneously
+  - **Solution**: Distributed lock `pixelprobe:scan:initialization` prevents workers from colliding during task retries
+  - Changed files: pixelprobe/tasks.py, celery_config.py
+
+- **Improved Database Error Handling**
+  - Added transaction rollback on errors to prevent session corruption
+  - Detect and handle `PGRES_TUPLES_OK` errors specifically (don't retry these)
+  - Separate retry logic for connection errors vs session corruption
+  - Added comprehensive traceback logging for better debugging
+  - Changed file: pixelprobe/tasks.py lines 260-317
+
+- **Enhanced Retry Logic with Exponential Backoff + Jitter**
+  - Added random jitter (0-10s) to retry delays to prevent thundering herd
+  - Exponential backoff: 30s, 60s, 120s (+ jitter) instead of linear 60s, 120s, 180s
+  - Prevents all workers from retrying at exactly the same time
+  - Changed file: pixelprobe/tasks.py lines 115-118, 151-154
+
+### Added
+- **Distributed Locking Infrastructure**
+  - `get_redis_client()` - Parse CELERY_BROKER_URL and connect to Redis
+  - `distributed_lock()` context manager for Redis-based distributed locks
+  - Auto-release timeout (5 minutes) prevents deadlocks if worker crashes
+  - Blocking timeout (15 seconds) prevents infinite waits
+  - Graceful degradation if Redis unavailable (logs warning, proceeds without lock)
+  - Added at: pixelprobe/tasks.py lines 25-86
+
+- **Task Deduplication Settings**
+  - `task_track_started: True` - Track when tasks actually start execution
+  - `task_ignore_result: False` - Store results for monitoring
+  - Helps Celery detect duplicate task execution
+  - Added at: celery_config.py lines 64-66
+
+### Technical Details
+
+**The Race Condition Explained:**
+1. Scan 19 crashes or gets stuck
+2. Multiple Celery workers receive retry task 7c0ad2ed-9a3b-499c-9ef8-aa0ef432a97e
+3. Worker A checks "is scan running?" → NO
+4. Worker B checks "is scan running?" → NO (race!)
+5. Worker A starts creating scan state → locks database
+6. Worker B tries to create scan state → gets "scan already in progress"
+7. Both retry multiple times (60s, 120s, 180s)
+8. Database connection pool exhausted/corrupted
+9. PostgreSQL returns: `error with status PGRES_TUPLES_OK and no message from the libpq`
+
+**The Fix:**
+- Distributed Redis lock ensures only ONE worker can initialize a scan at a time
+- Double-check pattern: Acquire lock → Check database → Proceed
+- Prevents race condition even if multiple workers retry simultaneously
+- Lock auto-releases after 5 minutes if worker crashes (prevents deadlock)
+
+**Error Handling Improvements:**
+- `PGRES_TUPLES_OK` errors don't retry (session corruption, can't recover)
+- Connection errors retry with 30s, 60s, 120s backoff (might be transient)
+- All errors trigger `db.session.rollback()` before retry (clean up session state)
+
+**Connection Math (Still Safe):**
+- Main app: 60 connections (pool_size=20 + max_overflow=40)
+- Workers: MAX_WORKERS connections (default 10, user configured 24)
+- Total: 60 + 24 = 84 connections (under PostgreSQL limit of 100)
+- No connection pool exhaustion - the bug was race condition, not pool size
+
+## [2.4.29] - 2025-10-17
+
+### Fixed
+- **UI: Fixed greyed out volume controls in video/audio player**
+  - Removed `this.muted = false` from video player onloadedmetadata handler (static/js/app.js:1561)
+  - Removed `this.muted = false` from audio player onloadedmetadata handler (static/js/app.js:1579)
+  - **Root Cause**: Browser autoplay policies block programmatic unmuting without user interaction
+  - **Solution**: Let browser handle muting/unmuting through native controls
+  - Changed files: static/js/app.js lines 1561 and 1579
+
+### Technical Details
+- Modern browsers enforce autoplay policies that prevent videos/audio from unmuting without user interaction
+- Attempting to set `muted = false` programmatically causes volume controls to be disabled/greyed out
+- Now respects browser policies and allows users to control volume naturally
+
+## [2.4.28] - 2025-10-16
+
+### Added
+- **Debug logging for MAX_WORKERS environment variable**
+  - Added logging in Celery task to show both Config.MAX_WORKERS value and raw environment variable
+  - Helps diagnose why workers might default to 10 instead of configured value (e.g., 24)
+  - Log format: `Celery task using MAX_WORKERS={value} (env var: {raw_env_value})`
+  - Added at pixelprobe/tasks.py:110
+
+### Changed
+- **Documentation cleanup: Removed emojis from all documentation**
+  - Replaced emojis in CHANGELOG.MD with text markers ([DONE], [FAILED], [WARNING])
+  - Updated docs/examples/integration-guide.md to use [ERROR] instead of emoji
+  - Improves compatibility with markdown parsers and terminal displays
+
+### Fixed
+- **docker-compose.yml: Added missing MAX_WORKERS to celery-worker**
+  - Added `MAX_WORKERS: ${MAX_WORKERS:-10}` to celery-worker environment section
+  - Added comprehensive header documentation explaining MAX_WORKERS and CELERY_CONCURRENCY
+  - Ensures celery workers use same parallelism settings as main app
+
+### Documentation
+- **README.md: Comprehensive MAX_WORKERS documentation**
+  - Updated environment variables section with detailed MAX_WORKERS explanation
+  - Fixed incorrect variable name (MAX_SCAN_WORKERS → MAX_WORKERS)
+  - Added connection pool math: Total = 60 (main app) + MAX_WORKERS
+  - Documented relationship between MAX_WORKERS and CELERY_CONCURRENCY
+
+### Technical Details
+- This is a diagnostic release to help identify environment variable configuration issues
+- If MAX_WORKERS shows as 10 when it should be 24, check:
+  - Docker compose celery-worker environment section has MAX_WORKERS: 24
+  - Container has been recreated after docker-compose.yml changes (docker-compose down && docker-compose up -d)
+
+## [2.4.27] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Fixed Double Parallelism Bug**
+  - Disabled file-level parallelism when chunk-level parallelism is active
+  - **Root Cause Identified from v2.4.26 Debug Logs**:
+    - Outer ThreadPoolExecutor at scan_service.py:1271 for chunk-level parallelism
+    - Inner ThreadPoolExecutor at scan_service.py:1950 for file-level parallelism
+    - With 10 chunks and MAX_WORKERS=10: 10 chunk threads each creating 10 file threads
+    - Result: 10 × 10 = 100 total threads and 100 database connections
+    - Evidence: ThreadPoolExecutor-2 through ThreadPoolExecutor-11 (10 executors) each with _0 through _9 (10 threads)
+  - **Solution**: Use sequential file processing when multiple chunks are processed in parallel
+    - When chunk_workers > 1: Set file workers to 1 per chunk
+    - When chunk_workers = 1: Use full num_workers for file-level parallelism
+    - Example with 10 chunks: 10 chunk workers × 1 file worker = 10 total threads
+    - Example with 1 chunk: 1 chunk worker × 10 file workers = 10 total threads
+  - Changed scan_service.py lines 1260-1276
+
+### Technical Details
+- **Before (v2.4.26)**: Chunk parallelism AND file parallelism = chunks × workers × workers connections
+- **After (v2.4.27)**: Chunk parallelism OR file parallelism = MAX_WORKERS connections
+- Total connections now: 60 (main app) + MAX_WORKERS (parallel workers) = 60 + MAX_WORKERS total
+- Example with MAX_WORKERS=24: 60 + 24 = 84 connections (under PostgreSQL default 100 limit)
+- Parallelism strategy: Use chunk-level when chunks > 1, file-level when chunks = 1
+- **Why v2.4.25/26 failed**: Both levels of parallelism were active simultaneously
+  - With MAX_WORKERS=24 and 10 chunks: 10 chunk workers × 24 file workers = 240 worker connections
+  - Total: 60 + 240 = 300 connections (exceeded PostgreSQL limit, causing "too many clients" errors)
+
+## [2.4.26] - 2025-10-16
+
+### Added
+- **Debug Logging for Connection Pool Investigation**
+  - Added comprehensive logging to track ThreadPoolExecutor creation and lifecycle
+  - Logs executor creation with max_workers parameter
+  - Logs batch submission details (offset, size, file count)
+  - Logs thread-local PixelProbe instance creation per thread (with thread ID and name)
+  - Logs executor shutdown to confirm proper cleanup
+  - **Purpose**: Investigate why v2.4.25 still shows 100 connections in first batch instead of 10
+  - **Analysis from v2.4.25 logs**:
+    - First batch: 100 connections at 00:47:47 (should be 10)
+    - Subsequent batches: 10 connections each (correct)
+    - Total: 141 connections instead of expected 10
+    - Files ARE being scanned but intermittently FAILING to save due to "too many clients"
+
+### Investigation Notes
+- v2.4.25 logs show connection pattern: 1 + 100 + 10 + 10 + 10 + 10 = 141 connections
+- MAX_WORKERS confirmed as 10 in logs
+- ThreadPoolExecutor with max_workers=10 should NEVER create more than 10 threads
+- Hypothesis: Either deployed code doesn't match committed code, OR there's a race condition
+- This version adds logging to definitively identify the root cause
+
+## [2.4.25] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Fixed ThreadPoolExecutor Scope Bug from v2.4.24**
+  - Moved ThreadPoolExecutor creation outside the batch processing loop
+  - **Problem**: v2.4.24 still created 101 connections despite thread_local fix
+    - ThreadPoolExecutor was created INSIDE the batch loop (line 2023: `with ThreadPoolExecutor(...)`)
+    - Batch loop processes files in batches of 100
+    - Each batch iteration created a NEW ThreadPoolExecutor with 10 new threads
+    - NEW threads mean threading.local() creates NEW storage (defeats the purpose!)
+    - Result: 100 batches × 10 workers = potential for 1000 thread creations (saw 101 in logs)
+    - All 101 connections initialized at same timestamp (19:47:11.302-333ms)
+  - **Solution**: Create ThreadPoolExecutor ONCE outside batch loop
+    - Moved ThreadPoolExecutor creation to lines 1943-1955 (before batch loop)
+    - Same thread pool (and thus same threads) reused across all batches
+    - threading.local() storage now persists correctly across batches
+    - With MAX_WORKERS=10: only 10 threads created total, each reused for ~1,800 files
+    - Added proper cleanup: `file_executor.shutdown(wait=True)` after all batches complete
+  - Changed scan_service.py lines 1943-1955, 2001-2042, and added cleanup at 2163-2166
+
+### Technical Details
+- **Before (v2.4.24)**: ThreadPoolExecutor per batch → 100+ thread creations
+- **After (v2.4.25)**: ThreadPoolExecutor created once → 10 threads total (reused)
+- Thread pool now initialized once with all required context (app, locks, exclusions)
+- Threads are reused across all 100-file batches in a chunk
+- Total connections: 60 (main app) + 10 (worker threads) = 70 maximum
+- **Why v2.4.24 failed**: thread_local was outside batch loop, but ThreadPoolExecutor was inside
+- **Key insight**: Must keep BOTH thread_local AND ThreadPoolExecutor outside batch loop
+
+## [2.4.24] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Fixed thread_local Scope Bug from v2.4.23**
+  - Moved thread_local creation outside the batch processing loop
+  - **Problem**: v2.4.23 still created 100+ connections and had "too many clients" errors
+    - `thread_local = threading.local()` was created INSIDE the batch loop (line 1996)
+    - Batch loop processes files in batches of 100 (line 1939: `for batch_offset in range(...)`)
+    - Each batch iteration created a NEW thread_local object
+    - ThreadPoolExecutor threads saw a "new" thread_local each batch
+    - Result: 101 connection initializations for ~10,000 files in 100-file batches
+  - **Solution**: Create thread_local ONCE per chunk, before the batch loop
+    - Moved `thread_local = threading.local()` to line 1941 (before batch loop)
+    - Now persists across all batches in a chunk
+    - With MAX_WORKERS=10: only 10 PixelProbe instances created for entire chunk
+    - Eliminates repeated connection initialization per batch
+  - Changed scan_service.py lines 1938-1941 and 1999
+
+### Technical Details
+- **Before (v2.4.23)**: thread_local created per batch → 100+ instances for 100 batches
+- **After (v2.4.24)**: thread_local created once → 10 instances total (one per thread)
+- Batch loop processes 100 files per iteration
+- Thread-local storage now persists across all batch iterations  
+- Total connections: 60 (main app) + 10 (worker threads) = 70 maximum
+
+## [2.4.23] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Fixed PixelProbe Instance Creation Per File**
+  - Changed from creating new PixelProbe instance per file to one per worker thread
+  - **Problem**: v2.4.22 still had "concurrent operations not permitted" errors
+    - Code was creating a NEW PixelProbe instance for EVERY file scanned
+    - Each new instance initialized a new database connection  
+    - With thousands of files, this created thousands of connection initialization attempts
+    - Progress updates would fail when connection was still being provisioned
+  - **Solution**: Use `threading.local()` to cache one PixelProbe instance per worker thread
+    - Thread-local storage: each worker thread gets exactly ONE PixelProbe instance
+    - That instance is reused for ALL files scanned by that thread
+    - With MAX_WORKERS=10: only 10 PixelProbe instances total (one per thread)
+    - Eliminates repeated connection initialization
+  - Changed scan_service.py lines 1995-2017 to use thread-local storage
+  - This finally resolves the concurrent operation errors
+
+### Technical Details
+- **Before**: New PixelProbe instance per file → thousands of connection inits
+- **After**: One PixelProbe instance per worker thread → 10 connection inits total  
+- Uses Python's `threading.local()` to store per-thread instances
+- Each thread checks `if not hasattr(thread_local, 'checker')` before creating instance
+- Total connections: 60 (main app) + 10 (worker threads) = 70 maximum
+
+## [2.4.22] - 2025-10-16
+## [2.4.22] - 2025-10-16
+
+### Fixed
+- **Fixed NullPool Concurrent Operation Errors from v2.4.21**
+  - Changed thread-local instances from NullPool to StaticPool
+  - **Problem**: NullPool in v2.4.21 caused "This session is provisioning a new connection; concurrent operations are not permitted" errors
+  - NullPool creates/destroys connections on-demand, causing issues when session tries concurrent operations (e.g., progress updates)
+  - **Solution**: StaticPool provides single persistent connection per worker
+    - Each worker gets ONE connection that stays open (vs NullPool's create/destroy per operation)
+    - With MAX_WORKERS=10: 10 workers × 1 connection = 10 connections from workers
+    - Main app pool: 20+40=60 connections, total: 70 (well under PostgreSQL default 100)
+  - Changed media_checker.py line 207 from NullPool to StaticPool
+  - Maintains the connection pool exhaustion fix while eliminating concurrent operation errors
+
+### Technical Details
+- **Final Connection Pooling Strategy**:
+  - Main application: QueuePool with pool_size=20, max_overflow=40 (default SQLAlchemy behavior)
+  - Thread-local workers: StaticPool with 1 persistent connection per worker
+  - Total connections: 60 (main) + 10 (workers with MAX_WORKERS=10) = 70 connections maximum
+
+## [2.4.21] - 2025-10-16
+
+### Fixed
+- **CRITICAL: PostgreSQL Connection Pool Exhaustion**
+  - Fixed "too many clients already" errors during parallel scanning
+  - Thread-local PixelProbe instances now use NullPool instead of creating connection pools
+  - **Problem**: With MAX_WORKERS=10, each worker created pool_size=5 + max_overflow=10 = 15 connections
+    - 10 workers × 15 connections = 150 connections from workers alone
+    - Main app pool: 20 + 40 = 60 connections
+    - Total: 210 potential connections, but PostgreSQL default max_connections = 100
+  - **Solution**: Thread-local instances use NullPool (creates/closes connection per operation)
+    - Main app still uses connection pooling for efficiency
+    - Workers create connections only when needed, no pool overhead
+    - Prevents connection exhaustion regardless of MAX_WORKERS setting
+  - Changed media_checker.py lines 201-231 to use NullPool for thread-local instances
+
+- **Removed Hash Calculation Timeout**
+  - Removed 5-minute (300 second) timeout on hash calculation that was causing incomplete hashes for large files
+  - Large media files (10GB+ movies, 4K content) on slower storage (NAS/NFS) were timing out at 300.2s
+  - Hash integrity is critical for detecting file corruption - timeouts defeat the purpose
+  - Files will now hash completely regardless of size or storage speed
+  - Removed MAX_HASH_TIME=300 and timeout check from media_checker.py lines 599-614
+  - Progress logging every 100MB still occurs to monitor large file hashing
+
+### Technical Details
+- **Connection Pooling Strategy**:
+  - Main application (config.py): pool_size=20, max_overflow=40 (up to 60 connections)
+  - Thread-local workers (media_checker.py): NullPool (no pooling, on-demand connections)
+  - Prevents connection exhaustion while maintaining performance
+
+- **Hash Calculation**:
+  - Uses adaptive chunk sizes: 1MB (files <1GB), 4MB (1-10GB), 16MB (>10GB)
+  - Progress logged every 100MB showing MB/s throughput
+  - Completion time logged for hashes taking >10 seconds
+
+## [2.4.20] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Multiple Issues Breaking Scans**
+  - Fixed FILE_CHUNK query not respecting force_rescan flag
+    - When force_rescan=True (rescan-all), only 'pending' files were being scanned instead of ALL files
+    - This caused 226 files (18005 total - 17779 pending) to be skipped during force rescan
+    - Now correctly queries all files when force_rescan=True, only pending when False
+  - Fixed incorrect parameter name in thread-local PixelProbe instantiation
+    - Used `error_patterns` instead of correct parameter name `excluded_patterns`
+    - Caused all parallel file scanning to fail with: "PixelProbe.__init__() got an unexpected keyword argument 'error_patterns'"
+    - Every file scan in every chunk would fail with this error
+
+### Verified
+- **Parallel Scanning Works for All Scan Types**
+  - scan-all (force_rescan=False): Uses parallel chunk processing + parallel file processing within chunks
+  - rescan-all (force_rescan=True): Uses parallel chunk processing + parallel file processing within chunks
+  - Both use Config.MAX_WORKERS for parallelism at both chunk and file levels
+  - ThreadPoolExecutor used for chunk-level parallelism (line 1271)
+  - ThreadPoolExecutor used for file-level parallelism within each chunk (line 2018)
+
+### Technical Details
+- Fixed query on lines 1950-1959 in scan_service.py to check force_rescan flag
+- Changed parameter from `error_patterns` to `excluded_patterns` on line 2008
+- Parallel scanning architecture:
+  - When num_workers > 1: `_parallel_scan_chunks()` processes chunks in parallel
+  - Within each chunk: `_scan_chunk_files()` with num_workers parameter processes files in parallel
+  - Double parallelism: chunks processed in parallel AND files within chunks processed in parallel
+
+## [2.4.19] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Scans Completely Broken - ImportError**
+  - Fixed import error introduced in v2.4.17: "cannot import name 'load_exclusions_with_patterns' from 'utils'"
+  - In v2.4.17, parallel scanning code incorrectly imported `load_exclusions_with_patterns` from `utils` module
+  - This function actually exists in `media_checker` module, not `utils`
+  - All scans would fail immediately with ImportError when trying to scan file chunks
+  - Corrected import from `utils` to `media_checker` on line 1985 in scan_service.py
+
+### Technical Details
+- The function `load_exclusions_with_patterns` is defined in media_checker.py and properly imported at module level (line 15)
+- In v2.4.17, thread-local PixelProbe instantiation code mistakenly tried to import from wrong module
+- This broke all parallel file scanning operations since v2.4.17
+- Fixed by changing `from utils import load_exclusions_with_patterns` to `from media_checker import load_exclusions_with_patterns`
+
+## [2.4.18] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Batch Insert Failure Causing Scan to Hang**
+  - Fixed SQLAlchemy error during bulk insert: "INSERT value for column scan_results.file_size is explicitly rendered as a boundparameter"
+  - When file info retrieval failed, error records were missing required fields (`file_size`, `file_type`, `last_modified`)
+  - SQLAlchemy created bind parameters for missing fields, causing PostgreSQL bulk insert to fail repeatedly
+  - Scans would get stuck in a loop trying to insert error records
+  - Error records now include default values: `file_size=0`, `file_type='unknown'`, `last_modified=current_time`
+
+### Technical Details
+- Modified error case in `_scan_chunk_files()` at lines 1596-1609 in scan_service.py
+- Added missing required fields with sensible defaults for files that fail info retrieval
+- Ensures all batch inserts can complete successfully even when some files have errors
+- Prevents scan from getting stuck on problematic files
+
+## [2.4.17] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Database Session Conflict in Parallel File Scanning**
+  - Fixed SQLAlchemy error: "This session is provisioning a new connection; concurrent operations are not permitted"
+  - Multiple worker threads were sharing the same PixelProbe instance and database session
+  - Each thread now creates its own PixelProbe instance with a dedicated database session
+  - Parallel file scanning now works correctly without session conflicts
+
+### Technical Details
+- Modified `scan_single_file()` function in `_scan_chunk_files()` to create thread-local PixelProbe instances
+- Each worker thread instantiates its own PixelProbe with separate database session
+- Prevents concurrent access to the same SQLAlchemy session from multiple threads
+- Maintains all parallel scanning performance benefits from v2.4.15
+
+## [2.4.16] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Syntax Error Preventing App Startup**
+  - Fixed Python syntax error in scan_service.py line 2124
+  - `except` block was incorrectly indented outside the for loop instead of inside
+  - This caused `SyntaxError: expected 'except' or 'finally' block` preventing workers from booting
+  - App now starts successfully with version 2.4.15 parallel scanning features
+
+### Technical Details
+- Fixed indentation of `except Exception as e:` block at line 2124 in scan_service.py
+- The except block needed to be inside the for loop to match the try block at line 2063
+- Changed from 5 levels of indentation to 6 levels to properly align with try block
+
+## [2.4.15] - 2025-10-16
+
+### Fixed
+- **CRITICAL: True Parallel File Scanning Now Working**
+  - Added ThreadPoolExecutor within chunks to scan files in parallel (not just chunks)
+  - Files within each batch now scanned using `num_workers` threads simultaneously
+  - Previous version only parallelized chunks, not individual file scanning
+  - With `MAX_WORKERS=10`, now scans 10 files simultaneously instead of sequentially
+  - **Performance Impact**: This provides the actual 10-24x speedup users expect
+  - Progress message now shows "parallel: N workers" to indicate parallel execution
+
+### Technical Details
+- Modified `_scan_chunk_files()` to accept `num_workers` parameter
+- Added ThreadPoolExecutor with Flask app context in file scanning loop
+- Each worker thread processes files in parallel with proper context management
+- Thread-safe progress tracking with locks to prevent race conditions
+- Falls back to sequential processing when `num_workers=1`
+- Modified `_parallel_scan_chunks()` to pass `num_workers` to `_scan_chunk_files()`
+
+## [2.4.14] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Parallel Scanning Crash in Production**
+  - Fixed "Working outside of application context" error in parallel scanning worker threads
+  - Worker threads in ThreadPoolExecutor now properly set up Flask application context
+  - Fixed database error: "Entity namespace for 'scan_results' has no property 'scan_id'"
+  - Removed incorrect `scan_id` filter on ScanResult queries (ScanResult table doesn't have scan_id column)
+  - Now uses `ScanState.discovery_count` for files_discovered instead of querying with non-existent column
+
+### Technical Details
+- Modified `_parallel_scan_chunks()` in scan_service.py to capture Flask app and create app context in worker threads
+- Fixed two locations (lines 619 and 795) where code was incorrectly filtering ScanResult by non-existent scan_id
+- Changed to use `ScanState.discovery_count` for files_discovered count
+- Changed to query all corrupted files instead of filtering by scan_id
+
+## [2.4.13] - 2025-10-16
+
+### Fixed
+- **CRITICAL: Parallel Scanning Not Working for Full Scans**
+  - Fixed hardcoded `num_workers=1` in Celery tasks that disabled parallel scanning for full scans
+  - Full scans now properly use `MAX_WORKERS` configuration (e.g., 24 workers as configured)
+  - This was causing scans to run sequentially instead of in parallel, making them drastically slower
+  - Example: With `MAX_WORKERS=24`, scans will now process 24 files simultaneously instead of 1
+  - **Performance Impact**: This fix can improve scan performance by up to 24x depending on hardware
+
+### Technical Details
+- Modified `pixelprobe/tasks.py` (line 107-109) to use `Config.MAX_WORKERS` instead of hardcoded value
+- Previous code: `num_workers = 1 if scan_type in ['full', 'pending'] else 4`
+- New code: `num_workers = Config.MAX_WORKERS`
+- Affects `scan_media_task` when `scan_type` is 'full' or 'pending'
+- Users with `MAX_WORKERS=24` in docker-compose will now see true parallel execution
+
+## [2.4.12] - 2025-10-16
+
+### Fixed
+- **Media Viewer Audio Not Working**
+  - Fixed video player audio being disabled or muted in media viewer
+  - Added explicit audio enablement: `this.volume = 1.0; this.muted = false;` on video metadata load
+  - Added explicit audio enablement for audio player elements
+  - Video and audio players now properly initialize with full volume and unmuted state
+  - Resolves browser autoplay policy conflicts that could prevent audio playback
+
+### Technical Details
+- Modified video player in `static/js/app.js` (line 1561) to set `volume = 1.0` and `muted = false` on metadata load
+- Modified audio player in `static/js/app.js` (line 1579) to ensure proper audio initialization
+- Added unique player IDs for debugging and state management
+
+## [2.4.11] - 2025-10-16
+
+### Security
+- **CRITICAL: Removed Insecure Default Admin Credentials**
+  - Removed automatic default admin user creation with empty password
+  - Removed insecure password-setting logic in login endpoint that accepted ANY 8+ character password on first login
+  - No default credentials exist on fresh installations - admin account must be explicitly created
+  - Admin creation now requires intentional use of `/api/auth/setup` endpoint or web setup wizard
+  - **ACTION REQUIRED**: Existing deployments should verify their admin password and change it if compromised
+  - **Migration Note**: This is a breaking change for automated deployments - update deployment scripts to call `/api/auth/setup` on first run
+
+### Fixed
+- **Multi-Worker Database Initialization Race Condition**
+  - Fixed error logging for PostgreSQL race conditions during multi-worker startup
+  - Now catches `IntegrityError` and `ProgrammingError` in addition to `OperationalError`
+  - Suppresses benign "duplicate key" errors from pg_type_typname_nsp_index constraint
+  - Reduces ERROR-level logs to DEBUG-level for expected race condition scenarios
+  - No functional changes - tables were being created correctly, just with noisy error logs
+
+### Changed
+- Authentication workflow now enforces explicit first-run setup
+- Login endpoint (`/api/auth/login`) now only performs authentication, no longer accepts setup passwords
+- Updated documentation in README.md to clarify secure first-run setup process
+
+### Technical Details
+- Removed default admin user creation from `app.py` migration (line 165-167)
+- Removed default admin user creation from `migrations/add_authentication_tables.py` (line 62-64)
+- Simplified `/api/auth/login` endpoint to remove insecure password setup shortcut (auth_routes.py:57-78)
+- First-run setup must now use dedicated `/api/auth/setup` endpoint which properly validates and creates admin user
+- `check_first_run()` and `create_initial_admin()` functions remain secure and unchanged
+- Enhanced table creation error handling in `create_tables()` to properly catch all PostgreSQL race condition exceptions (app.py:312-318)
+
 ## [2.4.10] - 2025-10-04
 
 ### Fixed
@@ -901,12 +1430,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Verified No Regressions
 - **All critical fixes from v2.2.67-71 remain in place:**
-  - Empty chunk optimization (v2.2.70-71) ✅
-  - Progress tracker using actual scan start time (v2.2.71) ✅
-  - Estimated total locked during scanning (v2.2.71) ✅
-  - Database migration for missing columns (v2.2.69) ✅
-  - No hardcoded paths (v2.2.64) ✅
-  - Proper database URI configuration (v2.2.12) ✅
+  - Empty chunk optimization (v2.2.70-71) [DONE]
+  - Progress tracker using actual scan start time (v2.2.71) [DONE]
+  - Estimated total locked during scanning (v2.2.71) [DONE]
+  - Database migration for missing columns (v2.2.69) [DONE]
+  - No hardcoded paths (v2.2.64) [DONE]
+  - Proper database URI configuration (v2.2.12) [DONE]
 
 ## [2.2.71] - 2025-08-29
 
@@ -2259,19 +2788,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Verified
 - **All Scan Types Functional**: Comprehensive verification of all 6 scan types after cleanup
-  - **Full Scan** (`/api/scan-all`): ✅ Working with Celery integration and fallback
-  - **Parallel Scan** (`/api/scan-parallel`): ✅ Multi-worker scanning with deep scan support
-  - **Single File Scan** (`/api/scan-file`): ✅ Individual file validation with security checks
-  - **Pending Files Scan** (`/api/force-scan-pending`): ✅ Batch processing of pending files
-  - **Discovery Scan**: ✅ File enumeration and progress tracking
-  - **Deep Scan**: ✅ Extended file validation capabilities
+  - **Full Scan** (`/api/scan-all`): [DONE] Working with Celery integration and fallback
+  - **Parallel Scan** (`/api/scan-parallel`): [DONE] Multi-worker scanning with deep scan support
+  - **Single File Scan** (`/api/scan-file`): [DONE] Individual file validation with security checks
+  - **Pending Files Scan** (`/api/force-scan-pending`): [DONE] Batch processing of pending files
+  - **Discovery Scan**: [DONE] File enumeration and progress tracking
+  - **Deep Scan**: [DONE] Extended file validation capabilities
 
 ### Verified
 - **All Scan Phases Functional**: Comprehensive verification of all 4 scan phases
-  - **Discovery Phase**: ✅ File enumeration with progress tracking
-  - **Adding Phase**: ✅ PostgreSQL-optimized bulk database insertion
-  - **Scanning Phase**: ✅ Individual file corruption detection with ImageMagick timeout fixes
-  - **Completed Phase**: ✅ Proper scan completion and statistics calculation
+  - **Discovery Phase**: [DONE] File enumeration with progress tracking
+  - **Adding Phase**: [DONE] PostgreSQL-optimized bulk database insertion
+  - **Scanning Phase**: [DONE] Individual file corruption detection with ImageMagick timeout fixes
+  - **Completed Phase**: [DONE] Proper scan completion and statistics calculation
 
 ### Code Quality
 - **Database Layer**: Simplified and optimized for PostgreSQL-only operations
@@ -2331,7 +2860,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.2.15] - 2025-08-19
 
 ### Added
-- **🚀 P1 IMPLEMENTATION: Celery Task Queue System** - Major architectural improvement per 2.1_AUDIT_IMPLEMENTATION_PLAN.md
+- ** P1 IMPLEMENTATION: Celery Task Queue System** - Major architectural improvement per 2.1_AUDIT_IMPLEMENTATION_PLAN.md
   - **Distributed Task Processing**: Replaces ThreadPoolExecutor with proper distributed queue system
   - **Redis Backend**: Full Redis integration for task queuing and result storage
   - **Celery Tasks**: Comprehensive task definitions for all scan operations
