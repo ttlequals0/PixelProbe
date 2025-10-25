@@ -212,10 +212,7 @@ Create and manage automated scan schedules:
 
 PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
-- **`ttlequals0/pixelprobe:latest`** - Latest stable release (v2.4.34)
-- **`ttlequals0/pixelprobe:2.4.34`** - Critical bug fix for parallel scanning thread safety
-- **`ttlequals0/pixelprobe:2.4.30`** - Fixed Celery race condition with distributed locking
-- **`ttlequals0/pixelprobe:2.4.0`** - Complete authentication system with user management
+- **`ttlequals0/pixelprobe:latest`** - Latest stable release
 
 ##  Requirements
 
