@@ -44,6 +44,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: pixelprobe-redis
+    command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-2gb} --maxmemory-policy noeviction
     ports:
       - "6379:6379"
     healthcheck:

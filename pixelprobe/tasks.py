@@ -87,7 +87,8 @@ def distributed_lock(lock_name, timeout=300, blocking_timeout=10):
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60,
-                 soft_time_limit=None, time_limit=None)  # No timeout for scan tasks
+                 soft_time_limit=None, time_limit=None,  # No timeout for scan tasks
+                 priority=3)  # High priority - scans take precedence over maintenance
 def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
     """
     Main media scanning task
@@ -319,7 +320,8 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
 
 
 @celery_app.task(bind=True, max_retries=2,
-                 soft_time_limit=None, time_limit=None)  # No timeout for cleanup tasks
+                 soft_time_limit=None, time_limit=None,  # No timeout for cleanup tasks
+                 priority=7)  # Low priority - maintenance runs in background
 def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
     """
     Background task for cleaning up orphaned database records
@@ -378,7 +380,8 @@ def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
 
 
 @celery_app.task(bind=True, max_retries=2,
-                 soft_time_limit=None, time_limit=None)  # No timeout for file scan tasks
+                 soft_time_limit=None, time_limit=None,  # No timeout for file scan tasks
+                 priority=3)  # High priority - scans take precedence over maintenance
 def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=None):
     """
     Background task for scanning specific files
@@ -479,7 +482,7 @@ def health_check_task():
     }
 
 
-@celery_app.task
+@celery_app.task(priority=3)  # High priority - scans take precedence over maintenance
 def scheduled_scan_task(schedule_id, scan_type='full'):
     """
     Task for executing scheduled scans
@@ -531,3 +534,102 @@ def scheduled_scan_task(schedule_id, scan_type='full'):
     except Exception as exc:
         logger.error(f"Scheduled scan failed for schedule_id {schedule_id}: {str(exc)}")
         raise exc
+
+
+@celery_app.task(bind=True, max_retries=2,
+                 soft_time_limit=None, time_limit=None,  # No timeout - must complete hash regardless of file size
+                 priority=7)  # Low priority - maintenance runs in background
+def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modified):
+    """
+    Calculate hash for a single file and compare to stored hash
+
+    IMPORTANT: No timeouts on this task - we must always calculate hash regardless of how
+    large the file is. File integrity checking requires accurate hashes.
+
+    Args:
+        file_id (int): Database ID of the file
+        file_path (str): Path to the file
+        stored_hash (str): Expected hash from database
+        stored_modified (str): Last modified timestamp from database (ISO format)
+
+    Returns:
+        dict: Hash comparison result with change information
+    """
+    import hashlib
+    import os
+    from datetime import datetime, timezone
+
+    try:
+        # Check if file exists
+        if not os.path.exists(file_path):
+            return {
+                'file_id': file_id,
+                'file_path': file_path,
+                'changed': True,
+                'change_type': 'deleted',
+                'stored_hash': stored_hash,
+                'current_hash': None,
+                'stored_modified': stored_modified,
+                'current_modified': None
+            }
+
+        # Calculate current hash
+        sha256_hash = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        current_hash = sha256_hash.hexdigest()
+
+        # Get current modification time
+        stat = os.stat(file_path)
+        current_modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+
+        # Parse stored modified time
+        if stored_modified:
+            try:
+                stored_mod_dt = datetime.fromisoformat(stored_modified.replace('Z', '+00:00'))
+            except:
+                stored_mod_dt = None
+        else:
+            stored_mod_dt = None
+
+        # Determine if file changed
+        if not stored_hash:
+            change_type = 'no_hash'
+            changed = True
+        elif current_hash != stored_hash:
+            change_type = 'modified'
+            changed = True
+        else:
+            change_type = 'unchanged'
+            changed = False
+
+        return {
+            'file_id': file_id,
+            'file_path': file_path,
+            'changed': changed,
+            'change_type': change_type,
+            'stored_hash': stored_hash,
+            'current_hash': current_hash,
+            'stored_modified': stored_modified,
+            'current_modified': current_modified.isoformat() if current_modified else None
+        }
+
+    except Exception as exc:
+        logger.error(f"Hash calculation failed for {file_path}: {str(exc)}")
+
+        # Retry with delay for transient errors
+        if self.request.retries < self.max_retries:
+            retry_delay = 10 * (self.request.retries + 1)  # 10s, 20s
+            raise self.retry(exc=exc, countdown=retry_delay)
+        else:
+            # Max retries exceeded, return error result
+            return {
+                'file_id': file_id,
+                'file_path': file_path,
+                'changed': False,
+                'change_type': 'error',
+                'error': str(exc),
+                'stored_hash': stored_hash,
+                'current_hash': None
+            }

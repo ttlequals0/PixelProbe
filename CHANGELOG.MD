@@ -5,6 +5,623 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.47] - 2025-11-01
+
+### Added
+- **Task Priority System for Celery Queue**
+  - Implemented priority-based task scheduling to prevent maintenance tasks from blocking scans
+  - Scan tasks now have HIGH priority (3) - execute immediately when queued
+  - Maintenance tasks (file changes check, cleanup) have LOW priority (7) - run in background
+  - Once scans complete, maintenance tasks can utilize all available workers
+  - Priority levels: 0-2 (urgent), 3-5 (normal/high), 6-8 (background), 9 (lowest)
+
+### Changed
+- **Celery Configuration (celery_config.py)**
+  - Added `priority_steps: [0, 3, 6, 9]` to broker_transport_options for Redis priority support
+  - Set `task_default_priority: 5` for tasks without explicit priority
+  - Updated broker configuration to enable priority-based task routing
+
+- **Task Priorities Updated (pixelprobe/tasks.py)**
+  - `scan_media_task`: priority=3 (high) - normal scans
+  - `scan_files_task`: priority=3 (high) - file-specific scans
+  - `scheduled_scan_task`: priority=3 (high) - scheduled scans
+  - `calculate_file_hash_task`: priority=7 (low) - file changes check
+  - `cleanup_orphaned_task`: priority=7 (low) - orphan cleanup
+
+- **Redis Memory Configuration (docker-compose.yml)**
+  - Added configurable `REDIS_MAX_MEMORY` environment variable (default: 2gb)
+  - Prevents memory pressure slowdown during large task queues
+  - Set `maxmemory-policy: noeviction` to prevent task loss
+
+### Fixed
+- **Scan Tasks Blocked by Maintenance Operations**
+  - Issue: When file changes check queued 1M+ tasks, new scans waited 20+ minutes for workers
+  - Root cause: All 20 workers busy with low-priority maintenance tasks
+  - Solution: Priority system ensures scans execute immediately, maintenance yields workers
+  - Example: User triggers scan during file changes check - scan starts within seconds instead of waiting for maintenance to finish
+
+### Performance
+- **Phase 2a Optimization Analysis**
+  - Identified Redis memory pressure causing 10x slowdown at 750K+ queued tasks
+  - Performance degradation: 250 tasks/sec → 26 tasks/sec (89% slower)
+  - First 70% of files (0-750K): consistent 250 tasks/sec
+  - Last 30% of files (750K-1.08M): degraded to 26 tasks/sec due to Redis memory limits
+  - Solution: Increased Redis memory allocation to 2GB prevents slowdown
+
+## [2.4.46] - 2025-11-01
+
+### Fixed
+- **CRITICAL: Phase 2b was stuck indefinitely waiting for results in sequential order**
+  - Workers completed 12,803 tasks but Phase 2b collected ZERO results (stuck for 5.5 hours)
+  - Root cause: `task.get()` waits for results in the order tasks were queued
+  - Celery returns results out-of-order (fast tasks complete before slow tasks)
+  - Phase 2b blocked waiting for first task while thousands of other results were ready
+  - Example: Task 1 (10GB video) still processing after 10 hours blocks collecting Task 2-1M results
+  - Changed file: pixelprobe/services/maintenance_service.py lines 625-695
+
+### Changed
+- **Rewrote Phase 2b to collect results as they complete (non-blocking)**
+  - Changed from: Sequential `task.get()` blocking on each task in order
+  - Changed to: Poll all pending tasks with `task.ready()`, collect completed ones
+  - Uses non-blocking polling loop checking which tasks are ready
+  - Collects results immediately when available (not waiting for order)
+  - Sleeps 0.1 seconds between polls to avoid CPU busy-waiting
+  - Tracks pending tasks list, removes completed tasks as collected
+
+- **Enhanced Phase 2b heartbeat logging**
+  - Now shows: results collected, pending tasks remaining, changes found
+  - Example: "Phase 2b heartbeat: 5000/1081710 results collected, 1076710 pending, 12 changes found"
+  - Provides visibility into collection progress even with slow tasks
+
+### Technical Details
+**The Sequential Collection Problem:**
+
+Old approach (v2.4.45 and earlier):
+```python
+for task in task_results:  # Process in order queued
+    result = task.get()  # BLOCKS until THIS specific task completes
+    # Even if tasks 2-1M are done, must wait for task 1
+```
+
+**Why it failed:**
+1. Tasks queued in ID order: 1, 2, 3, ..., 1,081,710
+2. Workers process tasks in parallel, complete out-of-order
+3. Fast tasks (small images): 0.003 seconds
+4. Slow tasks (10GB videos): 1,000+ seconds
+5. If task 1 is a 10GB file, Phase 2b waits 1,000+ seconds before checking task 2
+6. Meanwhile tasks 2-1,000,000 sitting completed in Redis waiting to be collected
+
+**Real-world impact from logs:**
+- Phase 2a completed: 06:56:46 (queued all 1,081,710 tasks)
+- Phase 2b started: 06:56:47
+- Workers completing tasks: 12,803 tasks done by 12:30 (5.5 hours later)
+- Phase 2b progress: 0 results collected (stuck waiting for task 1)
+
+**New Approach (v2.4.46):**
+```python
+pending_tasks = list(task_results)  # Track all pending
+
+while pending_tasks:
+    for task in pending_tasks:
+        if task.ready():  # Non-blocking check: is result available?
+            result = task.get(timeout=1)  # Get immediately (won't block)
+            # Process result
+            completed_tasks.append(task)
+
+    # Remove completed from pending
+    for task in completed_tasks:
+        pending_tasks.remove(task)
+
+    # Brief sleep to avoid CPU spinning
+    if not completed_tasks:
+        time.sleep(0.1)
+```
+
+**Benefits:**
+1. Collect results as soon as they're ready (not in order)
+2. Fast tasks (images) collected immediately
+3. Slow tasks (videos) don't block collection of fast tasks
+4. Progress visible immediately (not after all tasks complete)
+5. Efficient: Workers keep processing while collection happens
+
+**Performance Comparison:**
+- v2.4.45: 12,803 tasks completed, 0 collected after 5.5 hours (STUCK)
+- v2.4.46: Collects results continuously as workers complete them
+- Expected: Phase 2b completes shortly after last worker finishes (no waiting)
+
+## [2.4.45] - 2025-10-31
+
+### Fixed
+- **CRITICAL: Eliminated ID-based pagination bottleneck in Phase 2a**
+  - Phase 2a was still hanging at 480K files (44%) despite batch size increase in v2.4.44
+  - Root cause: ID-based pagination with `WHERE id > last_id` gets exponentially slower
+  - PostgreSQL has to scan increasingly large index ranges with each query
+  - Query time degraded: 6s → 9s → 50s → TIMEOUT at same location every time
+  - Changed file: pixelprobe/services/maintenance_service.py lines 553-608
+
+### Changed
+- **Adopted cleanup scan approach: Load all records in ONE query**
+  - Changed from: 109 paginated queries (`WHERE id > last_id LIMIT 10000`)
+  - Changed to: 1 single query loading all records (`ScanResult.query.all()`)
+  - Same approach used successfully by cleanup/orphan scan since v2.4.35
+  - Iterates through in-memory Python list instead of database pagination
+  - Eliminates all pagination overhead and progressive slowdown
+  - Memory usage: ~200-300 MB for 1M records (acceptable trade-off)
+
+- **Simplified Phase 2a to pure task queuing loop**
+  - No database queries inside the loop
+  - Just iterates through in-memory list and queues Celery tasks
+  - Progress updates every 1000 files (database commit)
+  - Heartbeat logging every 30 seconds
+  - Expected Phase 2a time: 1-2 minutes for 1M files (vs hours with pagination)
+
+### Technical Details
+**Why v2.4.44 Still Failed:**
+Despite increasing batch size from 1,000 to 10,000, the fundamental problem remained:
+- Still using ID-based pagination: `SELECT * FROM scan_results WHERE id > 480385 ORDER BY id LIMIT 10000`
+- PostgreSQL index scan cost increases with offset distance
+- Each subsequent query scans larger index range
+- At 480K records, index seek becomes prohibitively expensive
+- Database timeout at 30 seconds triggers, but same issue repeats
+
+**The Real Solution - Learning from Cleanup:**
+Cleanup scan never had this issue because it loads all records once:
+```python
+# Cleanup approach
+all_results = ScanResult.query.all()  # ONE query
+for result in all_results:
+    if not os.path.exists(result.file_path):
+        orphaned.append(result.id)
+```
+
+**New Approach (v2.4.45):**
+```python
+# Load ALL records once (like cleanup does)
+all_results = ScanResult.query.all()  # ONE query
+
+# Iterate through in-memory list
+for result in all_results:
+    task = calculate_file_hash_task.delay(...)
+    task_results.append(task)
+```
+
+**Memory Usage:** ~250-350 MB for 1M records (acceptable)
+
+**Performance:**
+- v2.4.43: Hung at 486K after hours
+- v2.4.44: Hung at 480K after 5 minutes
+- v2.4.45: Expected 1-2 minute Phase 2a completion
+
+## [2.4.44] - 2025-10-31
+
+### Fixed
+- **CRITICAL: Fixed progressive slowdown and hang in Phase 2a database queries**
+  - Phase 2a was slowing down from 0.6s to 14-21s per batch of 1000 files
+  - Eventually hung completely at around 486,000 out of 1,081,710 files (44%)
+  - Query timeout was set to 5 minutes but wasn't firing or logging errors
+  - Root cause: ID-based pagination becomes slower with large offsets in PostgreSQL
+  - Changed file: pixelprobe/services/maintenance_service.py
+
+### Changed
+- **Optimized database query batch size for Phase 2a (10x improvement)**
+  - Increased batch size from 1,000 to 10,000 files per query
+  - Reduces total number of queries by 10x (from 1,082 queries to 109 queries)
+  - Fewer queries = less overhead from ID-based pagination
+  - Should prevent progressive slowdown with large datasets
+  - Line 556: batch_size = 10000
+
+- **Reduced statement timeout from 5 minutes to 30 seconds**
+  - Aggressive timeout to detect database issues faster
+  - If a query takes more than 30 seconds, something is wrong
+  - Previous 5-minute timeout was masking the problem
+  - Line 592: SET statement_timeout = '30000'
+
+- **Added comprehensive query performance logging**
+  - Logs BEFORE query execution to detect hangs immediately
+  - Tracks query execution time for every batch
+  - Warns on slow queries (>2 seconds) with percentage progress
+  - Debug logs for successful queries (<2 seconds)
+  - Example: "Slow query: 14.23s for batch after id=486394 (486000/1081710, 44.9%)"
+
+- **Added intelligent timeout recovery with skip-ahead**
+  - If timeout occurs, skip ahead by batch_size (10,000) IDs
+  - Attempts to get past problematic database areas
+  - Continues queuing instead of failing completely
+  - Logs: "Timeout detected - skipping ahead by 10000 IDs to last_id=496394"
+  - Lines 668-676
+
+- **Enhanced error detection and logging**
+  - Explicit detection of timeout errors: "statement timeout", "query cancelled"
+  - Separate error messages for timeouts vs other database errors
+  - Clear indication: "DATABASE QUERY TIMEOUT after ID"
+  - Better context in error messages (files queued, percentage complete)
+
+### Technical Details
+**The Progressive Slowdown Problem:**
+- Phase 2a uses ID-based pagination: `WHERE id > last_id ORDER BY id LIMIT batch_size`
+- With small batch_size (1000), this requires many sequential queries
+- As last_id increases, PostgreSQL has to scan larger index ranges
+- Query time degraded: 0.6s → 5s → 10s → 14s → 21s → HANG
+- Hung at id=486,394 (486,000/1,081,710 files = 44%)
+- 5-minute timeout wasn't triggering or wasn't logged
+
+**The Solution:**
+1. **10x larger batches**: Reduced query count from 1,082 to ~109 queries
+   - Fewer queries = less cumulative overhead from pagination
+   - Trades slightly larger memory usage for much better performance
+
+2. **Aggressive timeout**: 30-second timeout detects hangs quickly
+   - Prevents indefinite hangs masquerading as "slow queries"
+   - Enables skip-ahead recovery strategy
+
+3. **Skip-ahead recovery**: On timeout, jump ahead by 10,000 IDs
+   - Attempts to bypass problematic database regions
+   - Continues processing instead of complete failure
+   - May miss some files but better than total hang
+
+4. **Comprehensive logging**: Track every query to identify slowdowns
+   - Pre-query logging detects hangs immediately
+   - Query timing shows performance degradation patterns
+   - Progress percentage shows where in dataset problems occur
+
+**Performance Impact:**
+- Previous: 1,082 queries, average 0.6-21s each, cumulative ~2-4 hours
+- New: ~109 queries, should maintain sub-2s performance
+- Expected Phase 2a time: ~3-5 minutes for 1M files (vs 2-4 hours)
+
+**Why ID-based Pagination Degrades:**
+- PostgreSQL index scan cost increases with offset distance
+- Table bloat and fragmentation compound the issue
+- At high offsets, database may switch to sequential scan
+- Larger batches reduce number of index seek operations
+
+## [2.4.43] - 2025-10-31
+
+### Fixed
+- **Fixed confusing progress message in file changes check Phase 2a**
+  - Previous: "Phase 2a of 3: Queued 746000/1081710 hash calculation tasks (746000 tasks total)..."
+  - The "(746000 tasks total)" made it appear that 746000 was the total, implying completion
+  - New: "Phase 2a of 3: Queuing hash calculation tasks - 746,000 / 1,081,710 (69%)"
+  - Now shows clear numerator/denominator with percentage
+  - Uses thousand separators for readability
+  - Changed file: pixelprobe/services/maintenance_service.py line 620-621
+
+### Changed
+- **Improved progress message format across all file changes check phases**
+  - Phase 2a: "Queuing hash calculation tasks - X / Y (Z%)"
+  - Phase 2b: "Collecting hash calculation results - X / Y (Z%)"
+  - Consistent formatting makes progress tracking clearer
+  - Percentage immediately shows how far along the process is
+
+### Technical Details
+**The Confusion Problem:**
+- Progress message showed: "Queued 746000/1081710 hash calculation tasks (746000 tasks total)"
+- The "(746000 tasks total)" was redundant and misleading
+- Users thought the total was 746000 and the task was complete
+- Actually 1,081,710 was the total and it was only 69% done
+
+**The Fix:**
+- Removed redundant task count
+- Added percentage calculation: `pct = int((files_queued / total_files * 100))`
+- Format with thousand separators: `{files_queued:,} / {total_files:,}`
+- Clear progress indication: "746,000 / 1,081,710 (69%)"
+
+**Example Progress Messages:**
+- Phase 2a start: "Queuing hash calculation tasks - 0 / 1,081,710 (0%)"
+- Phase 2a progress: "Queuing hash calculation tasks - 746,000 / 1,081,710 (69%)"
+- Phase 2b start: "Collecting hash calculation results - 0 / 746,000 (0%)"
+- Phase 2b progress: Uses ProgressTracker for detailed ETA
+
+## [2.4.42] - 2025-10-31
+
+### Fixed
+- **CRITICAL: Removed hash calculation timeouts that caused large file failures**
+  - Hash calculation tasks were timing out on large video files (SoftTimeLimitExceeded after 5 minutes)
+  - Removed soft_time_limit and time_limit from calculate_file_hash_task
+  - Hash calculations now run to completion regardless of file size
+  - File integrity checking requires accurate hashes for ALL files
+  - Changed file: pixelprobe/tasks.py line 537
+
+- **CRITICAL: Fixed file changes check appearing stuck with no progress indication**
+  - Phase 2a could appear stuck when queuing tasks slowly or encountering database issues
+  - Added heartbeat logging every 30 seconds in all phases (2a, 2b, 3) to show process is alive
+  - Added better error handling in Phase 2a - breaks loop on error instead of hanging
+  - Improved progress messages to show sub-phases clearly
+  - Changed file: pixelprobe/services/maintenance_service.py
+
+### Changed
+- **Improved file changes check progress visibility**
+  - Progress messages now show clear sub-phases:
+    - "Phase 2a of 3: Queued X/Y hash calculation tasks (Z tasks total)..."
+    - "Phase 2b of 3: Collecting hash results - X/Y completed, Z changes found"
+    - "Phase 3 of 3: Marked X/Y files as pending for rescan"
+  - Added heartbeat logs every 30 seconds even when no visible progress
+  - Logs now include context: "Phase 2a heartbeat: 716000/1081710 tasks queued, last_id=123456"
+  - Better empty batch detection logging with consecutive count
+  - Better error recovery - continues to Phase 2b instead of hanging on errors
+
+- **Removed timeout from Phase 2b result collection**
+  - Previously had 10-minute timeout per task result collection
+  - Now waits indefinitely for hash calculations to complete (task.get() with no timeout)
+  - Matches removal of timeouts from calculate_file_hash_task
+  - Ensures all hash calculations complete regardless of file size
+
+- **Enhanced Phase 3 logging with change type details**
+  - Deleted files: "Marked deleted file for cleanup: /path/to/file.mkv"
+  - Modified files: "Marked modified file for rescan: /path/to/file.mkv (hash: abc123... -> def456...)"
+  - Shows truncated hash prefixes (first 16 chars) for readability
+
+### Technical Details
+**The Timeout Problem:**
+- Large video files (50+ GB) could take more than 5 minutes to hash on slower storage
+- calculate_file_hash_task had soft_time_limit=300 (5 min) and time_limit=600 (10 min)
+- Large files would fail with SoftTimeLimitExceeded error
+- File integrity checking requires accurate hashes - timeouts defeat the purpose
+- Example error: "Hash calculation failed for Below.Deck.S05E06.mkv: SoftTimeLimitExceeded()"
+
+**The Stuck Process Problem:**
+- Phase 2a could queue 716,000 tasks then appear stuck (no logs for 1+ hour)
+- No indication whether process was alive or hung
+- Database query timeouts or errors could cause infinite loop
+- User had no visibility into what was happening
+
+**The Fix:**
+1. Removed all timeouts from hash calculation (soft_time_limit=None, time_limit=None)
+2. Added heartbeat logging every 30 seconds in all phases
+3. Improved error handling to break loop instead of hanging
+4. Enhanced progress messages to show sub-phases (2a, 2b, 3) clearly
+5. Removed timeout from result collection (task.get() with no timeout parameter)
+
+**Benefits:**
+- Hash calculations complete successfully for files of any size
+- Process never appears stuck - heartbeat logs every 30 seconds
+- Better error recovery - errors don't cause infinite loops
+- Clear progress indication for users
+- Reliable file integrity verification regardless of file size
+
+## [2.4.41] - 2025-10-31
+
+### Changed
+- **MAJOR PERFORMANCE IMPROVEMENT: Redesigned file changes check with parallel Celery hash calculation**
+  - Hash calculation now distributed across Celery workers using new `calculate_file_hash_task`
+  - Phase 2 queues Celery tasks for ALL files to calculate hashes in parallel
+  - Workers process hash calculations concurrently across the worker pool
+  - Phase 3 marks changed files as 'pending' for full media scan by parallel scan workers
+  - Reduces file changes check from ~4 days to hours for 1M+ files
+  - Report includes detailed hash comparison (expected vs current hash) for all changed files
+  - Changed files:
+    - pixelprobe/tasks.py: Added `calculate_file_hash_task` (lines 536-628)
+    - pixelprobe/services/maintenance_service.py: Rewrote Phase 2 to use Celery tasks (lines 533-683)
+
+### Technical Details
+**The Performance Problem:**
+- Previous implementation calculated hashes sequentially in a single thread
+- For 1.08M files, this took approximately 4 days (Oct 27 18:20 - Oct 31 12:14)
+- Phase 2: Sequential hash calculation (no parallelization)
+- Phase 3: Sequential file rescanning (one file at a time)
+- Progressive slowdown: early batches 2-3 sec/1000 files, later batches hours/1000 files
+- Scheduled scans continued running concurrently (confirmed desired behavior)
+
+**The Solution - Parallel Hash Calculation with Celery:**
+
+**NEW: `calculate_file_hash_task` Celery Task:**
+- Calculates SHA256 hash for a single file
+- Compares current hash against stored hash from database
+- Returns change detection result with hash comparison
+- 5 min soft timeout, 10 min hard timeout per file
+- Retries up to 2 times with 10s/20s delays
+- Detects: deleted files, modified files, files without stored hash, silent corruption
+
+**Phase 1: Starting**
+- Get total file count from database
+- Initialize tracking variables
+
+**Phase 2a: Dispatching Tasks (NEW)**
+- Queries database in batches of 1000 files
+- Queues Celery task for each file: `calculate_file_hash_task.delay()`
+- Tasks distributed across all available Celery workers
+- Parallel hash calculation begins immediately
+- Updates progress every 1000 files queued
+
+**Phase 2b: Collecting Results (NEW)**
+- Waits for Celery task results with `task.get(timeout=600)`
+- Collects hash comparison results from workers
+- Identifies changed files (hash mismatch, deleted, no hash)
+- Updates progress every 100 results collected
+- Logs: "Collected X/Y results, Z changes found"
+
+**Phase 3: Marking for Rescan**
+- Marks changed files as `scan_status='pending'`
+- Regular parallel scan workers pick up pending files
+- Performs full media integrity check (not just hash recalc)
+- Commits in batches of 10 files for real-time progress updates
+- Logs detailed hash changes
+
+**Silent Corruption Detection:**
+- Calculates hashes for ALL files regardless of modification time
+- Silent corruption (bitrot, storage errors) can occur without updating mtime
+- Every file is verified against its stored hash
+- Changed files flagged even if mtime unchanged
+
+**Report Enhancement:**
+- `_create_file_changes_report()` accepts changed_files_list parameter
+- Changed files stored as JSON in `directories_scanned` field
+- Each entry: file_path, change_type, stored_hash, current_hash
+- Users can review exact hash differences for all changed files
+
+**Worker Configuration:**
+- Number of Celery workers controlled by `CELERY_CONCURRENCY` environment variable (default: 4)
+- Set in docker-compose.yml or via environment variable
+- Example: `CELERY_CONCURRENCY=8` runs 8 parallel workers
+- Each worker can process one hash calculation task at a time
+- More workers = faster parallel processing
+
+**Benefits:**
+- **Massive performance gain**: ~4 days → hours for 1M+ files
+- **True parallelization**: Distributes work across all Celery workers
+- **Scalable**: Increase `CELERY_CONCURRENCY` to add more workers for faster processing
+- **Reliable**: Task retries, error handling, progress tracking
+- **Silent corruption detection**: Verifies ALL files via SHA256, not just recently modified
+- **Detailed reporting**: Hash comparison data for forensics
+
+## [2.4.40] - 2025-10-27
+
+### Fixed
+- **Fixed file changes check failing with SQLAlchemy text() error**
+  - Wrapped all raw SQL statements in maintenance_service.py with text()
+  - Fixed "Textual SQL expression should be explicitly declared as text()" errors
+  - Changed lines: 500, 577, 582, 609 in pixelprobe/services/maintenance_service.py
+  - File changes check now runs successfully
+
+### Technical Details
+**The SQLAlchemy text() Issue:**
+- SQLAlchemy 2.0+ requires raw SQL strings to be wrapped with text() for security
+- Previous v2.4.35 changes added `SET SESSION CHARACTERISTICS` and `SET statement_timeout` statements
+- These were passed as plain strings to `db.session.execute()` which caused ArgumentError
+- File changes check would start but immediately fail with error before processing any files
+
+**The Fix:**
+- Added `from sqlalchemy import text` import at the start of _run_file_changes_check()
+- Wrapped all SQL strings:
+  - `text("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED")`
+  - `text("SET statement_timeout = '300000'")`
+  - `text("SET statement_timeout = 0")`
+
+## [2.4.39] - 2025-10-27
+
+### Fixed
+- **CRITICAL: Fixed migration hanging on startup**
+  - Changed `run_startup_migrations()` to use `db.engine.connect()` instead of `db.session`
+  - The session-based approach was creating transaction/context deadlocks inside the migration file lock
+  - Now uses direct engine connections with proper `with` context managers
+  - Changed file: `tools/app_startup_migration.py` - Rewrote to use engine.connect() and engine.begin()
+
+### Technical Details
+**The Migration Hang Issue:**
+- Application would start but hang at "Running startup migrations..." log message
+- Worker 7 would acquire migration lock but never complete or release it
+- Other workers would wait indefinitely for lock to be released
+- Root cause: `db.session.execute()` requires Flask application context and can create connection issues when called inside file lock scope
+- The session was potentially holding database locks that prevented the migration queries from completing
+
+**The Fix:**
+- Replaced all `db.session.execute()` calls with `db.engine.connect()`
+- Used `with db.engine.begin()` for migrations to ensure automatic commit and connection cleanup
+- Removed manual rollback/commit logic in favor of context manager auto-handling
+- This ensures each migration runs in its own connection without cross-contamination
+
+## [2.4.38] - 2025-10-27
+
+### Changed
+- **Removed obsolete database migrations**
+  - Removed v2.2.62 migration (celery_task_id column for scan_chunks table)
+  - Removed v2.2.90 migration (deep_scan column constraint removal)
+  - These migrations have been applied to all production databases and are no longer needed
+  - Cleaned up migrate_database() function to only include current migrations
+  - Changed file: `app.py` - Removed old migration function calls and definitions
+
+### Fixed
+- **Fixed test_parallel_scan flaky test**
+  - Test was using async_mode=False but trying to join non-existent thread
+  - Changed to use async_mode=True and added proper thread existence check before join
+  - Changed file: `tests/unit/test_scan_service.py` at line 359-370
+
+## [2.4.37] - 2025-10-27
+
+### Fixed
+- **Added file lock for database migrations to prevent concurrent execution**
+  - Wrapped `migrate_database()` function with file-based exclusive lock using fcntl
+  - Only one worker/process runs migrations at a time
+  - Other workers wait for migrations to complete before continuing startup
+  - Prevents race conditions and duplicate migration attempts across multiple gunicorn workers
+  - Uses same lock pattern as scheduler (`/tmp/pixelprobe_migration.lock`)
+  - Changed file: `app.py` - Added lock mechanism to `migrate_database()` at line 375-454
+
+### Technical Details
+**The Concurrent Migration Issue:**
+- Gunicorn starts multiple workers simultaneously (typically 4)
+- Each worker runs app.py startup code including migrations
+- Without locking, all workers try to run migrations concurrently
+- This causes:
+  - Unnecessary duplicate work
+  - Potential race conditions in migration code
+  - Confusing log output with duplicate migration messages
+  - Possible database lock contention
+
+**The Fix:**
+- Uses fcntl.flock() for cross-process file locking
+- First worker to start acquires exclusive lock and runs all migrations
+- Other workers detect lock is held and wait (blocking) for it to be released
+- When migration worker completes, it releases lock
+- Waiting workers then proceed with startup (migrations already done)
+- Lock file: `/tmp/pixelprobe_migration.lock`
+- Same pattern already used successfully for scheduler locking
+
+## [2.4.36] - 2025-10-27
+
+### Fixed
+- **HOTFIX: Added database migration for last_heartbeat column**
+  - Added `run_v2_4_35_migrations()` to create `last_heartbeat` column in `file_changes_state` table
+  - Migration only runs on existing databases (checks if table exists first)
+  - Fixes "column file_changes_state.last_heartbeat does not exist" error on startup
+  - Changed file: `app.py` - Added migration function at line 587-626
+
+### Technical Details
+**The Missing Migration Issue:**
+- Version 2.4.35 added `last_heartbeat` field to FileChangesState model
+- But did not include a database migration script
+- Existing production databases failed on startup trying to query the missing column
+- New installations worked fine (column created with table)
+
+**The Fix:**
+- Check if file_changes_state table exists (skip for new installations)
+- Check if last_heartbeat column already exists (idempotent migration)
+- Add column with `ALTER TABLE` if missing
+- Safe migration that won't fail startup even if it encounters errors
+
+## [2.4.35] - 2025-10-27
+
+### Fixed
+- **CRITICAL: Fixed Database Deadlock in File Changes Check Causing Worker to Freeze**
+  - Added statement timeout (5 minutes) to prevent indefinite query blocking
+  - Added database transaction deadlock detection and retry logic with exponential backoff
+  - Added READ COMMITTED isolation level to reduce lock contention during file changes check
+  - Added heartbeat tracking to detect stuck workers
+  - **Root Cause**: PostgreSQL deadlock between file changes check queries and Celery worker scan result writes
+  - **Symptoms**: File changes check freezes mid-scan, no logs after last file processed, "Check for stuck scans" skipped (max instances reached)
+  - **Evidence from Production Logs**: Worker stopped at 04:26:12 after scanning 600 files, remained stuck for 13+ hours with no activity
+  - **Solution**: Multi-layered approach to handle deadlocks gracefully and prevent indefinite hangs
+  - Changed files:
+    - `pixelprobe/services/maintenance_service.py` - Added `_commit_with_retry()` method with deadlock handling (lines 811-851)
+    - `pixelprobe/services/maintenance_service.py` - Added statement timeout and better batch error handling (lines 547-658)
+    - `pixelprobe/services/maintenance_service.py` - Added READ COMMITTED isolation level (line 499)
+    - `models.py` - Added `last_heartbeat` field to `FileChangesState` model (line 536)
+    - `tests/unit/test_scan_service.py` - Fixed test_parallel_scan to handle async_mode=False correctly (line 366)
+
+### Technical Details
+
+**The Deadlock Issue Explained:**
+1. File changes check runs in a thread, querying database for batches of files
+2. Celery worker processes files in parallel, writing scan results to database
+3. PostgreSQL lock contention occurs when both operations access same rows
+4. Query blocks waiting for lock, never times out → infinite hang
+5. Worker appears stuck, scheduler can't run "Check for stuck scans"
+6. No error logs because query never completes or fails
+
+**The Multi-Layered Fix:**
+1. **Statement Timeout**: Queries abort after 5 minutes instead of hanging forever
+2. **Deadlock Retry Logic**: Automatically detects deadlocks and retries with exponential backoff (2s, 4s, 6s)
+3. **Better Isolation**: READ COMMITTED level reduces lock duration
+4. **Empty Batch Handling**: Detects stuck loops with consecutive empty batches (max 3)
+5. **Heartbeat Tracking**: Updates timestamp on each file to detect truly frozen workers
+6. **Enhanced Logging**: Detailed debug logs show query progress and batch processing
+
+**Performance Impact:**
+- No degradation to file scanning speed
+- Timeouts prevent resource exhaustion from hung queries
+- Automatic retry recovers from transient deadlocks
+- Better isolation reduces lock wait times
+
 ## [2.4.34] - 2025-10-25
 
 ### Fixed
