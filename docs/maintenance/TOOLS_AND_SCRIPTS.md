@@ -199,16 +199,6 @@ These tools fix common false positives in media file corruption detection:
 ./scripts/docker-run-modern.sh
 ```
 
-### Monitoring
-
-#### `scripts/flower_monitor.py`
-**Purpose:** Run Flower monitoring dashboard for Celery  
-**Usage:**
-```bash
-python3 scripts/flower_monitor.py
-```
-**Access:** http://localhost:5555
-
 ---
 
 ## Testing Tools

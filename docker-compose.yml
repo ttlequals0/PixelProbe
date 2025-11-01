@@ -40,11 +40,16 @@ services:
     networks:
       - pixelprobe-network
 
-  # Redis for P1 Celery implementation (currently unused but scaffolded)
+  # Redis for P1 Celery implementation
+  # Performance settings for large task queues (file changes check with 1M+ files):
+  # - REDIS_MAX_MEMORY: Total memory for task queue (default: 2gb, recommended: 1-4gb)
   redis:
     image: redis:7-alpine
     container_name: pixelprobe-redis
-    command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-2gb} --maxmemory-policy noeviction
+    command: >
+      redis-server
+      --maxmemory ${REDIS_MAX_MEMORY:-2gb}
+      --maxmemory-policy noeviction
     ports:
       - "6379:6379"
     healthcheck:
@@ -154,25 +159,6 @@ services:
       - pixelprobe-network
     
     restart: unless-stopped
-
-  # P1 Flower monitoring dashboard (optional)
-  flower:
-    image: ttlequals0/pixelprobe:latest
-    container_name: pixelprobe-flower
-    command: python flower_monitor.py
-    environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
-      FLOWER_PORT: 5555
-    ports:
-      - "${FLOWER_PORT:-5555}:5555"
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - pixelprobe-network
-    restart: unless-stopped
-    profiles:
-      - monitoring
 
 
 networks:

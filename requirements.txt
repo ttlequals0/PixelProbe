@@ -23,7 +23,6 @@ psycopg2-binary==2.9.9
 # P1 Celery Task Queue Implementation
 celery==5.3.4
 redis==5.0.1
-flower==2.0.1
 
 # Authentication support
 Flask-Login==0.6.3

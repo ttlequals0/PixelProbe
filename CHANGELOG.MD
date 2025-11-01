@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.48] - 2025-11-01
+
+### Removed
+- **Flower Monitoring Dashboard**
+  - Removed Flower service from docker-compose.yml
+  - Removed flower==2.0.1 dependency from requirements.txt
+  - Removed scripts/flower_monitor.py
+  - Removed Flower documentation from TOOLS_AND_SCRIPTS.md
+  - Reason: Flower caused catastrophic performance degradation at scale (1M+ tasks)
+    - At 860K tasks, Flower subscribed to 860K+ pub/sub channels
+    - Redis continuously disconnected Flower for exceeding 64MB output buffer limits
+    - Disconnection/reconnection loops consumed massive Redis CPU and network bandwidth
+    - Task queueing rate collapsed from 411 tasks/sec to 4.5 tasks/sec (99% drop)
+    - PixelProbe has built-in monitoring via web UI and API endpoints
+  - Performance impact: File changes check now maintains consistent 400+ tasks/sec throughput
+
+### Changed
+- **Redis Configuration (docker-compose.yml)**
+  - Removed `client-output-buffer-limit` pub/sub settings (only needed for Flower)
+  - Simplified Redis configuration to only maxmemory settings
+  - Removed REDIS_PUBSUB_BUFFER_HARD and REDIS_PUBSUB_BUFFER_SOFT environment variables
+
 ## [2.4.47] - 2025-11-01
 
 ### Added
@@ -28,10 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `calculate_file_hash_task`: priority=7 (low) - file changes check
   - `cleanup_orphaned_task`: priority=7 (low) - orphan cleanup
 
-- **Redis Memory Configuration (docker-compose.yml)**
-  - Added configurable `REDIS_MAX_MEMORY` environment variable (default: 2gb)
-  - Prevents memory pressure slowdown during large task queues
-  - Set `maxmemory-policy: noeviction` to prevent task loss
+- **Redis Performance Configuration (docker-compose.yml)**
+  - Added configurable `REDIS_MAX_MEMORY` environment variable (default: 2gb, range: 1-4gb)
+    - Controls total memory available for task queue storage
+    - Prevents memory pressure slowdown during large task queues (1M+ tasks)
+    - Set `maxmemory-policy: noeviction` to prevent task loss
+  - Added configurable `REDIS_PUBSUB_BUFFER_HARD` (default: 64mb in bytes)
+    - Hard limit for Flower monitoring pub/sub connections
+    - Prevents disconnections when monitoring large task queues
+  - Added configurable `REDIS_PUBSUB_BUFFER_SOFT` (default: 32mb in bytes)
+    - Soft limit for Flower monitoring pub/sub connections
+    - Triggers warning before hitting hard limit
+  - All settings are user-configurable via environment variables with sensible defaults
 
 ### Fixed
 - **Scan Tasks Blocked by Maintenance Operations**
