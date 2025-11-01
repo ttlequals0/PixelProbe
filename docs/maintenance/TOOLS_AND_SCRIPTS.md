@@ -1,6 +1,6 @@
 # PixelProbe Tools and Scripts Documentation
 
-This document provides a comprehensive guide to all tools, scripts, and utilities available in PixelProbe v2.2.47.
+This document provides a comprehensive guide to all tools, scripts, and utilities available in PixelProbe v2.4.48.
 
 ## Table of Contents
 1. [Migration Scripts](#migration-scripts)
