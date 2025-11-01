@@ -356,12 +356,16 @@ class TestScanService:
             ]
             mock_probe.scan_file.return_value = Mock()
             
-            # Start parallel scan with async_mode=False to avoid threading issues in mocked test
-            result = scan_service.scan_directories(['/test/dir'], num_workers=2, async_mode=False)
+            # Start parallel scan with async_mode=True to test threading
+            result = scan_service.scan_directories(['/test/dir'], num_workers=2, async_mode=True)
 
             assert result['num_workers'] == 2
 
-            # Since async_mode=False, the scan runs synchronously and no thread is created
+            # Since async_mode=True, the scan runs in a thread
+            # Wait for thread to complete
+            if scan_service.current_scan_thread:
+                scan_service.current_scan_thread.join(timeout=3)
+
             # Verify the scan completed successfully
             mock_scan_state.start_scan.assert_called_once()
     
