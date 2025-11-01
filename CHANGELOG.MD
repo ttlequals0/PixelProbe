@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.49] - 2025-11-01
+
+### Fixed
+- **CRITICAL: Phase 2b O(n^2) Complexity Causing 16+ Hour Wait Times**
+  - Issue: Phase 2b took 16+ hours to collect results from 1.08M tasks (18.5 results/sec)
+  - Root cause: Code checked ALL 1.08M pending tasks in nested loop EVERY iteration
+  - Result: ~500 billion task.ready() calls for 1M tasks (O(n^2) complexity)
+  - Changed file: pixelprobe/services/maintenance_service.py lines 620-721
+
+### Changed
+- **Optimized Phase 2b Result Collection Using Batch Checking**
+  - Implemented batch checking with 10,000 task batch size and rotation
+  - Check only a batch of pending tasks per iteration, rotate through list
+  - Reduces complexity from O(n^2) to O(n)
+  - Changed progress updates from every 100 to every 1000 results (reduces DB writes)
+  - Added 0.5 second sleep when cycling through all pending tasks
+  - Expected improvement: 16+ hours → 1-2 hours (8-16x speedup)
+  - Maintains all existing functionality: heartbeat, cancellation, progress tracking
+
+### Performance
+- **Phase 2b Batch Checking Strategy**
+  - For 1.08M tasks: Check 10K batch, rotate through 108 batches
+  - Old approach: 1M tasks * 1M checks = 1 trillion operations
+  - New approach: 1M tasks * 108 batch rotations = 108M operations
+  - 10,000x reduction in task.ready() calls
+  - Workers complete tasks while Phase 2b efficiently collects results
+
 ## [2.4.48] - 2025-11-01
 
 ### Removed
