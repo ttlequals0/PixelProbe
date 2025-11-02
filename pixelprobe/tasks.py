@@ -582,17 +582,26 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
 
         if file_size > 100 * 1024 * 1024:  # 100MB threshold
             # Use memory-mapped I/O for large files (5-10x faster)
+            logger.info(f"File changes check: Hashing large file ({file_size/1024/1024/1024:.1f}GB) with mmap: {file_path}")
             try:
+                import time
+                start_time = time.time()
                 with open(file_path, "rb") as f:
                     # Map entire file into memory (OS handles paging)
                     with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
                         sha256_hash.update(mm)
+                elapsed = time.time() - start_time
+                logger.info(f"mmap hash completed in {elapsed:.1f}s for {file_size/1024/1024/1024:.1f}GB file ({file_size/elapsed/1024/1024:.1f} MB/s)")
             except (OSError, ValueError) as e:
-                # Fallback to buffered read if mmap fails (e.g., empty file, special file)
+                # Fallback to buffered read if mmap fails (e.g., empty file, special file, network mount)
                 logger.warning(f"mmap failed for {file_path}, falling back to buffered read: {e}")
+                import time
+                start_time = time.time()
                 with open(file_path, "rb") as f:
                     for byte_block in iter(lambda: f.read(1048576), b""):  # 1MB chunks
                         sha256_hash.update(byte_block)
+                elapsed = time.time() - start_time
+                logger.info(f"Buffered hash completed in {elapsed:.1f}s for {file_size/1024/1024/1024:.1f}GB file ({file_size/elapsed/1024/1024:.1f} MB/s)")
         else:
             # Use 1MB buffered reads for smaller files (was 4KB, now 262x faster)
             with open(file_path, "rb") as f:

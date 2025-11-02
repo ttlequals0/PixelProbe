@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.52] - 2025-11-02
+
+### Added
+- **Comprehensive mmap Diagnostic Logging in File Changes Check**
+  - Added logging to pixelprobe/tasks.py hash calculation (was only in media_checker.py)
+  - Logs when mmap is used: "File changes check: Hashing large file (X.XGB) with mmap"
+  - Logs performance metrics: timing and throughput (MB/s) for both mmap and buffered reads
+  - Logs mmap failures with fallback to buffered read
+  - Critical for diagnosing why mmap optimization not showing expected performance
+
+### Why This Matters
+- **Production Diagnosis**: Container was restarted with v2.4.50 but still showing 90min hash times
+- **Expected**: 30GB file should take 5-10 minutes with mmap (300-600 MB/s)
+- **Current Issue**: No logging in tasks.py to confirm if mmap is executing or falling back
+- **This Version**: Will definitively show if mmap is working or why it's failing (network mount, permissions, etc)
+
 ## [2.4.51] - 2025-11-02
 
 ### Fixed
