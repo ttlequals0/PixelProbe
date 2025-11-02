@@ -631,10 +631,18 @@ class MaintenanceService:
             logger.info(f"Phase 2b: Optimized collection using batch size {check_batch_size}")
 
             while pending_tasks:
-                # Heartbeat every 30 seconds
+                # Heartbeat every 30 seconds - update UI and database
                 current_time = time.time()
                 if current_time - last_heartbeat_time >= 30:
                     file_changes_record.last_heartbeat = datetime.now(timezone.utc)
+                    # Update progress for UI even if we haven't hit 100 result milestone
+                    file_changes_record.phase_current = results_collected
+                    file_changes_record.progress_message = progress_tracker.get_progress_message(
+                        f'Phase 2b of 3: Collecting hash results',
+                        results_collected,
+                        len(task_results),
+                        f'{len(changed_files)} changes found'
+                    )
                     logger.info(f"Phase 2b heartbeat: {results_collected}/{len(task_results)} results collected, {len(pending_tasks)} pending, {len(changed_files)} changes found")
                     db.session.commit()
                     last_heartbeat_time = current_time
@@ -673,8 +681,8 @@ class MaintenanceService:
                             completed_tasks.append(task)
                             completed_indices.append(batch_offset + i)
 
-                            # Update progress every 1000 results (more frequent for large datasets)
-                            if results_collected % 1000 == 0:
+                            # Update progress every 100 results for more frequent UI updates
+                            if results_collected % 100 == 0:
                                 file_changes_record.phase_current = results_collected
                                 file_changes_record.last_heartbeat = datetime.now(timezone.utc)
                                 file_changes_record.progress_message = progress_tracker.get_progress_message(

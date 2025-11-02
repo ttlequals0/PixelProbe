@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.51] - 2025-11-02
+
+### Fixed
+- **Phase 2b UI Progress Updates Too Infrequent**
+  - Issue: UI showed stuck at 13,000 results for 2.5+ hours with no updates
+  - Root cause: Progress only updated every 1000 results AND heartbeat didn't update UI database
+  - Users had no feedback that process was still running
+
+### Changed
+- **More Frequent UI Updates in Phase 2b**
+  - Progress updates now every 100 results (was 1000) - 10x more frequent
+  - Heartbeat every 30 seconds now updates UI database with current progress
+  - Both heartbeat and milestones update `progress_message` and `phase_current` fields
+  - Users see progress even when results collection is slow (18 results/minute)
+  - Changed file: pixelprobe/services/maintenance_service.py
+
+### Performance Impact
+- **User Experience**
+  - Worst case: Update every 30 seconds (heartbeat) even if stuck on huge files
+  - Typical case: Update every 100 results (~5 minutes at 18 results/minute)
+  - Best case: Update as fast as results come in (when workers are faster)
+  - Eliminates 2+ hour UI freeze issues
+
 ## [2.4.50] - 2025-11-02
 
 ### Performance
