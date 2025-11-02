@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.50] - 2025-11-02
+
+### Performance
+- **CRITICAL: 5-10x Hash Calculation Speedup for File Changes Check**
+  - Issue: 34GB file took 74 minutes to hash (4,454 seconds)
+  - Root cause: Used 4KB read buffer = 8.9 million I/O operations per 34GB file
+  - Workers spent 99% of time waiting for disk I/O, not CPU
+  - Only 13 of 20 workers completed tasks (7 stuck on huge files for hours)
+
+### Changed
+- **Hybrid Hash Calculation Strategy (mmap + Large Buffers)**
+  - Files > 100MB: Use memory-mapped I/O (mmap) for 5-10x speedup
+    - Eliminates millions of syscalls
+    - OS handles page caching efficiently
+    - Single memory region shared between kernel and Python
+  - Files < 100MB: Use 1MB buffered reads (was 4KB)
+    - 262x fewer I/O operations
+    - Optimized for smaller files
+  - Fallback to buffered read if mmap fails (empty files, special files)
+  - Changed files: pixelprobe/tasks.py, media_checker.py
+
+### Expected Impact
+- **File Changes Check Performance**
+  - 34GB file: 74 minutes → 7-15 minutes (5-10x faster)
+  - 1GB file: ~2 minutes → 15-30 seconds (4-8x faster)
+  - Small files (<100MB): 2-3x faster with 1MB buffers
+  - Overall: File changes check should complete in 2-4 hours instead of 12+ hours
+
+### Technical Details
+- **Memory-Mapped I/O (mmap)**
+  - Maps entire file into virtual memory address space
+  - OS loads pages on-demand (lazy loading)
+  - Intelligent prefetching by kernel
+  - Avoids double-buffering (kernel + Python buffers)
+- **Buffer Size Optimization**
+  - Old: 4KB reads = 8.9M operations per 34GB file
+  - New: 1MB reads = 34K operations per 34GB file (262x reduction)
+
 ## [2.4.49] - 2025-11-01
 
 ### Fixed
