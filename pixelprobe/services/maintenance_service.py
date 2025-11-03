@@ -738,8 +738,12 @@ class MaintenanceService:
                                 f"{len(pending_tasks)} remaining")
 
                 # Rotate batch start offset for next iteration
-                # This ensures all batches get checked even if early batches are slow
-                batch_start_offset = (batch_start_offset + batches_per_iteration * check_batch_size) % max(len(pending_tasks), 1)
+                # IMPORTANT: Reset offset if it exceeds current list size (list shrinks as tasks complete)
+                if pending_tasks:
+                    batch_start_offset += batches_per_iteration * check_batch_size
+                    # If offset exceeds current list size, wrap to beginning
+                    if batch_start_offset >= len(pending_tasks):
+                        batch_start_offset = 0
 
                 # Only sleep if we found NO completed tasks after checking multiple batches
                 if not iteration_completed_tasks and pending_tasks:

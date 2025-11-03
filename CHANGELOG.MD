@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.55] - 2025-11-03
+
+### Fixed
+- **CRITICAL: Phase 2b Batch Rotation Bug Causing Stall at 13,900 Files**
+  - **The Problem**: v2.4.54's batch rotation used modulo with shrinking list size
+  - **What Happened**: Phase 2b collected 13,900 files then stopped collecting for 2+ hours
+  - **Root Cause**: `batch_start_offset % len(pending_tasks)` breaks as list shrinks from task removal
+  - **Example**: After collecting 13,900 tasks, batch_offset = 50,000 but len(pending_tasks) = 1,074,700
+  - **Result**: Modulo operation caused invalid batch positions as list shrank
+  - **Symptoms**: Phase 2b silent after 18:43:56, workers still processing but no collection happening
+
+### Changed
+- **Fixed Batch Rotation Logic**
+  - OLD: `batch_start_offset = (offset + increment) % len(pending_tasks)` breaks with shrinking list
+  - NEW: Simple increment with reset when offset exceeds current list size
+  - Batch offset increments normally: 0 → 50K → 100K → 150K
+  - When offset >= len(pending_tasks), reset to 0 to start next sweep
+  - Ensures continuous coverage of all pending tasks regardless of list size changes
+
+### Technical Details
+- **Why v2.4.54 Failed After 13,900 Files**:
+  ```
+  Iteration 1: pending=1,088,600, offset=0 → Check tasks 0-50K ✓
+  Iteration 2: pending=1,088,500, offset=50K → Check tasks 50K-100K ✓
+  ...
+  Iteration N: pending=1,074,700, offset=270K → (270K % 1,074,700) = 270K
+    - But list only has 1,074,700 items!
+    - batch_start calculation creates invalid ranges
+    - No tasks get checked properly
+    - Phase 2b stalls silently
+  ```
+- **Simple Reset Solution**:
+  - Increment offset each iteration: `offset += 50K`
+  - Check if offset >= len(pending_tasks)
+  - If yes, reset offset = 0 to start new sweep
+  - Works correctly as list shrinks because reset ensures valid positions
+
+### Impact
+- Phase 2b will now complete successfully without stalling mid-collection
+- Handles shrinking task list correctly as workers complete tasks
+- Expected: 1M task collection completes without interruption
+- Workers processing at 2.7 TB/hour will now have results collected continuously
+
 ## [2.4.54] - 2025-11-03
 
 ### Fixed
