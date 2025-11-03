@@ -710,21 +710,16 @@ class MaintenanceService:
                 for idx in reversed(completed_indices):
                     del pending_tasks[idx]
 
-                # Move to next batch (with rotation)
-                if completed_tasks:
-                    # If we found completed tasks, continue from current position
-                    # Adjust offset since we removed items
-                    batch_offset = max(0, batch_offset - len(completed_tasks))
-                else:
-                    # No completed tasks in this batch, move to next batch
-                    batch_offset += check_batch_size
+                # CRITICAL FIX: Always check from beginning since tasks complete in order
+                # The old rotation logic caused 108 batch cycles before rechecking batch 0
+                # Result: 190K tasks completed but only 200 collected!
+                # New approach: Always start from beginning, completed tasks get removed
+                batch_offset = 0
 
-                # Reset to beginning if we've checked all tasks
-                if batch_offset >= len(pending_tasks):
-                    batch_offset = 0
-                    # Sleep briefly when we've cycled through all pending tasks
-                    if pending_tasks:
-                        time.sleep(0.5)
+                # Only sleep if we found NO completed tasks at all
+                if not completed_tasks and pending_tasks:
+                    # No tasks ready in this batch, wait briefly for workers to complete more
+                    time.sleep(0.1)  # 100ms wait when no results ready
 
             logger.info(f"Phase 2b complete: Collected {results_collected} results, found {len(changed_files)} changed files")
             

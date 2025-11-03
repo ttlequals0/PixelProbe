@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.53] - 2025-11-02
+
+### Fixed
+- **CRITICAL: Phase 2b Batch Rotation Bug Causing Result Collection to Stall**
+  - **The Problem**: v2.4.49 batch optimization had fatal flaw in rotation logic
+  - **What Happened**: Workers completed 190,510 tasks but Phase 2b only collected 200 results
+  - **Root Cause**: Batch rotation moved forward through 108 batches (10K each) before rechecking batch 0
+  - **Result**: By the time it cycled back to beginning, hours passed with no progress updates
+  - **Symptoms**: UI stuck at "200 of 1,083,923 files" for hours, no heartbeat logs, ETA 21h 59m
+
+### Changed
+- **Simplified Phase 2b Collection Strategy**
+  - OLD: Rotate through batches (0-10K, then 10K-20K, then 20K-30K...)
+  - NEW: Always check from beginning, remove completed tasks from list
+  - Tasks complete in FIFO order, so beginning of list always has most completed tasks
+  - Removed tasks shrink the list naturally, keeping batch checks fast
+  - Added 100ms sleep only when NO tasks ready (was 500ms after full cycle)
+
+### Technical Details
+- **Why Rotation Failed**:
+  ```
+  Iteration 1: Check tasks 0-10,000    → Found 200 completed
+  Iteration 2: Check tasks 10,000-20,000 → 0 completed (still processing)
+  Iteration 3: Check tasks 20,000-30,000 → 0 completed
+  ...
+  Iteration 108: Check tasks 1,070,000-1,083,923 → 0 completed
+  [Now cycle back to beginning - HOURS LATER]
+  ```
+- **Why Always-From-Start Works**:
+  - Celery returns results in completion order
+  - First queued tasks finish first
+  - Checking tasks 0-10K repeatedly catches results as they complete
+  - Completed tasks removed from list, so next iteration checks tasks 0-10K again (new tasks)
+  - No wasted cycles checking tasks that aren't ready yet
+
+### Impact
+- Phase 2b will now collect results continuously as workers complete them
+- UI updates every 100 results + 30s heartbeat will actually show progress
+- Expected: 1M tasks collected in 2-4 hours instead of 21+ hours
+
 ## [2.4.52] - 2025-11-02
 
 ### Added
