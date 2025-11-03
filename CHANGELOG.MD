@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.54] - 2025-11-03
+
+### Fixed
+- **CRITICAL: Phase 2b Multi-Batch Collection Fix for Out-of-Order Task Completion**
+  - **The Problem**: v2.4.53's "fix" created infinite loop checking only batch 0 (first 10K tasks)
+  - **What Happened**: Workers completed 6,909 tasks but Phase 2b collected 0 results for 15 hours
+  - **Root Cause**: Tasks complete OUT OF ORDER based on file size, NOT FIFO order
+  - **Example**: 1KB file at position 500,000 completes in 0.001s before 34GB file at position 1
+  - **Symptoms**: Phase 2b stuck at "0 of 1,083,923 files" despite workers completing tasks
+
+### Changed
+- **Multi-Batch Checking Strategy**
+  - OLD: Check only batch 0 (tasks 0-10K) repeatedly, missing completions in other batches
+  - NEW: Check 5 batches (50K tasks) per iteration with rotating start offset
+  - Ensures all 1M tasks get checked within ~20 iterations regardless of completion order
+  - Set-based task removal for O(n) efficiency instead of O(n²) index deletion
+  - Added progress rate calculation and ETA estimation
+
+### Technical Details
+- **Why v2.4.53 Failed**:
+  ```
+  Reality: Tasks complete based on file size, not queue order
+  - Small files (1KB-1MB): Complete in 0.001-0.1 seconds
+  - Medium files (100MB-1GB): Complete in 1-10 seconds
+  - Large files (1GB-34GB): Complete in 30 seconds to 90 minutes
+
+  v2.4.53 behavior:
+  - Always checked tasks 0-10,000 only
+  - If those were all large files still processing, collected 0 results
+  - Meanwhile tasks 10,001-1,083,923 completing but never checked
+  ```
+- **Multi-Batch Solution**:
+  - Check 5 batches × 10K tasks = 50K tasks per iteration
+  - Rotate batch start offset to ensure full coverage
+  - Example: Iter 1 checks 0-50K, Iter 2 checks 50K-100K, etc.
+  - Completes full sweep of 1M tasks in ~20 iterations
+  - Catches out-of-order completions from any position
+
+### Impact
+- Phase 2b now collects results from ALL batches, not just first 10K tasks
+- Handles mixed file sizes properly (small files completing before large ones)
+- Expected: 1M task collection completes successfully regardless of file size distribution
+- Added diagnostic logging shows which batches being checked and coverage percentage
+
 ## [2.4.53] - 2025-11-02
 
 ### Fixed

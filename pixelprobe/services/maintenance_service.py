@@ -622,13 +622,17 @@ class MaintenanceService:
             results_collected = 0
             last_heartbeat_time = time.time()
 
-            # OPTIMIZATION: Use batch checking with rotation to avoid O(n²) complexity
-            # Instead of checking all 1M+ tasks every iteration, check batches and rotate
+            # OPTIMIZATION: Multi-batch checking to handle out-of-order task completion
+            # Tasks complete based on file size, NOT queue order! Small files anywhere
+            # in the queue complete before large files at the start of the queue.
+            # We must check multiple batches to catch these out-of-order completions.
             pending_tasks = list(task_results)
-            check_batch_size = 10000  # Check 10K tasks per iteration
-            batch_offset = 0
+            check_batch_size = 10000  # Size of each batch
+            batches_per_iteration = 5  # Check 5 batches (50K tasks) per iteration
+            batch_start_offset = 0  # Rotating start position for fairness
+            phase_2b_start_time = time.time()
 
-            logger.info(f"Phase 2b: Optimized collection using batch size {check_batch_size}")
+            logger.info(f"Phase 2b: Multi-batch collection using {batches_per_iteration} batches of {check_batch_size} tasks each")
 
             while pending_tasks:
                 # Heartbeat every 30 seconds - update UI and database
@@ -637,13 +641,23 @@ class MaintenanceService:
                     file_changes_record.last_heartbeat = datetime.now(timezone.utc)
                     # Update progress for UI even if we haven't hit 100 result milestone
                     file_changes_record.phase_current = results_collected
+
+                    # Calculate rate and ETA
+                    elapsed = current_time - phase_2b_start_time
+                    rate = results_collected / elapsed if elapsed > 0 else 0
+                    remaining = len(pending_tasks)
+                    eta_seconds = remaining / rate if rate > 0 else 0
+                    eta_str = f" | Rate: {rate:.1f}/s | ETA: {int(eta_seconds)}s" if rate > 0 else ""
+
                     file_changes_record.progress_message = progress_tracker.get_progress_message(
                         f'Phase 2b of 3: Collecting hash results',
                         results_collected,
                         len(task_results),
-                        f'{len(changed_files)} changes found'
+                        f'{len(changed_files)} changes found{eta_str}'
                     )
-                    logger.info(f"Phase 2b heartbeat: {results_collected}/{len(task_results)} results collected, {len(pending_tasks)} pending, {len(changed_files)} changes found")
+                    logger.info(f"Phase 2b heartbeat: {results_collected}/{len(task_results)} results collected, "
+                              f"{len(pending_tasks)} pending, {len(changed_files)} changes found, "
+                              f"batch_start_offset={batch_start_offset}")
                     db.session.commit()
                     last_heartbeat_time = current_time
 
@@ -651,74 +665,86 @@ class MaintenanceService:
                     logger.info("File changes check cancelled while collecting results")
                     break
 
-                # Get batch of tasks to check (rotating window)
-                batch_end = min(batch_offset + check_batch_size, len(pending_tasks))
-                batch_to_check = pending_tasks[batch_offset:batch_end]
+                # Collect completed tasks from multiple batches in this iteration
+                iteration_completed_tasks = []
+                tasks_checked_count = 0
 
-                # Check batch for completed tasks
-                completed_tasks = []
-                completed_indices = []
+                # Check multiple batches per iteration for better coverage
+                for batch_num in range(batches_per_iteration):
+                    # Calculate batch boundaries with rotation
+                    batch_start = (batch_start_offset + batch_num * check_batch_size) % len(pending_tasks)
+                    batch_end = min(batch_start + check_batch_size, len(pending_tasks))
 
-                for i, task in enumerate(batch_to_check):
-                    if task.ready():
-                        try:
-                            # Task is complete, get result immediately (no blocking)
-                            result = task.get(timeout=1)
-                            results_collected += 1
+                    # Handle wrap-around at end of list
+                    if batch_start >= len(pending_tasks):
+                        break
 
-                            # Check if file changed
-                            if result.get('changed'):
-                                change_info = {
-                                    'file_path': result['file_path'],
-                                    'change_type': result['change_type'],
-                                    'stored_hash': result['stored_hash'],
-                                    'current_hash': result['current_hash']
-                                }
-                                changed_files.append(change_info)
-                                self.changed_files_list.append(change_info)
-                                file_changes_record.changes_found = len(changed_files)
+                    batch_to_check = pending_tasks[batch_start:batch_end]
+                    tasks_checked_count += len(batch_to_check)
 
-                            completed_tasks.append(task)
-                            completed_indices.append(batch_offset + i)
+                    # Check this batch for completed tasks
+                    for i, task in enumerate(batch_to_check):
+                        if task.ready():
+                            try:
+                                # Task is complete, get result immediately (no blocking)
+                                result = task.get(timeout=1)
+                                results_collected += 1
 
-                            # Update progress every 100 results for more frequent UI updates
-                            if results_collected % 100 == 0:
-                                file_changes_record.phase_current = results_collected
-                                file_changes_record.last_heartbeat = datetime.now(timezone.utc)
-                                file_changes_record.progress_message = progress_tracker.get_progress_message(
-                                    f'Phase 2b of 3: Collecting hash results',
-                                    results_collected,
-                                    len(task_results),
-                                    f'{len(changed_files)} changes found'
-                                )
-                                self._commit_with_retry(file_changes_record, results_collected)
-                                logger.info(f"Phase 2b: Collected {results_collected}/{len(task_results)} results, {len(changed_files)} changes found")
+                                # Check if file changed
+                                if result.get('changed'):
+                                    change_info = {
+                                        'file_path': result['file_path'],
+                                        'change_type': result['change_type'],
+                                        'stored_hash': result['stored_hash'],
+                                        'current_hash': result['current_hash']
+                                    }
+                                    changed_files.append(change_info)
+                                    self.changed_files_list.append(change_info)
+                                    file_changes_record.changes_found = len(changed_files)
 
-                            # Update in-memory state
-                            with self.file_changes_lock:
-                                self.file_changes_state['files_processed'] = results_collected
-                                self.file_changes_state['changes_found'] = len(changed_files)
+                                # Store task reference for removal (not index)
+                                iteration_completed_tasks.append(task)
 
-                        except Exception as e:
-                            logger.error(f"Error getting task result: {e}")
-                            results_collected += 1
-                            completed_tasks.append(task)
-                            completed_indices.append(batch_offset + i)
-                            # Continue collecting other results
+                                # Update progress every 100 results for more frequent UI updates
+                                if results_collected % 100 == 0:
+                                    file_changes_record.phase_current = results_collected
+                                    file_changes_record.last_heartbeat = datetime.now(timezone.utc)
+                                    file_changes_record.progress_message = progress_tracker.get_progress_message(
+                                        f'Phase 2b of 3: Collecting hash results',
+                                        results_collected,
+                                        len(task_results),
+                                        f'{len(changed_files)} changes found'
+                                    )
+                                    self._commit_with_retry(file_changes_record, results_collected)
+                                    logger.info(f"Phase 2b: Collected {results_collected}/{len(task_results)} results, "
+                                              f"{len(changed_files)} changes found, batch_start={batch_start}")
 
-                # Remove completed tasks from pending list (in reverse order to maintain indices)
-                for idx in reversed(completed_indices):
-                    del pending_tasks[idx]
+                                # Update in-memory state
+                                with self.file_changes_lock:
+                                    self.file_changes_state['files_processed'] = results_collected
+                                    self.file_changes_state['changes_found'] = len(changed_files)
 
-                # CRITICAL FIX: Always check from beginning since tasks complete in order
-                # The old rotation logic caused 108 batch cycles before rechecking batch 0
-                # Result: 190K tasks completed but only 200 collected!
-                # New approach: Always start from beginning, completed tasks get removed
-                batch_offset = 0
+                            except Exception as e:
+                                logger.error(f"Error getting task result: {e}")
+                                results_collected += 1
+                                iteration_completed_tasks.append(task)
+                                # Continue collecting other results
 
-                # Only sleep if we found NO completed tasks at all
-                if not completed_tasks and pending_tasks:
-                    # No tasks ready in this batch, wait briefly for workers to complete more
+                # Remove completed tasks efficiently using set-based filtering
+                if iteration_completed_tasks:
+                    completed_set = set(iteration_completed_tasks)
+                    pending_tasks = [t for t in pending_tasks if t not in completed_set]
+                    logger.debug(f"Removed {len(iteration_completed_tasks)} completed tasks, "
+                                f"{len(pending_tasks)} remaining")
+
+                # Rotate batch start offset for next iteration
+                # This ensures all batches get checked even if early batches are slow
+                batch_start_offset = (batch_start_offset + batches_per_iteration * check_batch_size) % max(len(pending_tasks), 1)
+
+                # Only sleep if we found NO completed tasks after checking multiple batches
+                if not iteration_completed_tasks and pending_tasks:
+                    # No tasks ready in any of the batches checked, wait briefly
+                    logger.debug(f"No ready tasks found after checking {tasks_checked_count} tasks, sleeping 100ms")
                     time.sleep(0.1)  # 100ms wait when no results ready
 
             logger.info(f"Phase 2b complete: Collected {results_collected} results, found {len(changed_files)} changed files")
