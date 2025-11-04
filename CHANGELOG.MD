@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.57] - 2025-11-04
+
+### Fixed
+- **Phase 2a Memory Exhaustion and Infrastructure Crash**
+  - **The Problem**: Batch size of 1000 caused SIGBUS errors and PostgreSQL/Redis failures
+  - **What Happened**: System ran out of memory at ~850,000 files when processing 1M+ tasks
+  - **Root Cause**: Large batch submissions overwhelmed memory and caused worker crashes
+  - **Evidence**: Workers dying with signal 7 (SIGBUS), PostgreSQL connection lost, Redis reloading
+  - **Result**: Phase 2a stalled at 850,000 files with infrastructure failures
+
+### Changed
+- **Reduced Batch Size and Added Resilience**
+  - Reduced batch size from 1000 to 100 to prevent memory exhaustion
+  - Added 100ms delay between batch submissions to avoid system overload
+  - Implemented error handling with automatic retry at half batch size
+  - Added fallback to individual task submission for failed batches
+  - Better error logging for debugging batch submission issues
+
+### Technical Details
+- **Infrastructure Failures at 850K Files**:
+  - Workers crashed with SIGBUS (out of memory/disk)
+  - PostgreSQL connection failed: "server closed the connection unexpectedly"
+  - Redis had to reload dataset: "Redis is loading the dataset in memory"
+  - All services failed around 12:15-12:17 due to resource exhaustion
+- **Prevention Strategy**:
+  - Smaller batches = less memory per submission
+  - Delays between batches = time for system to process
+  - Error recovery = continue processing even if some batches fail
+
+### Impact
+- Phase 2a can now handle 1M+ files without causing infrastructure collapse
+- More resilient to temporary resource constraints
+- Better error recovery ensures processing continues
+- Trade-off: Slightly slower submission but much more stable
+
 ## [2.4.56] - 2025-11-04
 
 ### Fixed
