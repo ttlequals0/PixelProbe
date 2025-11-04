@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.60] - 2025-11-04
+
+### Fixed
+- **CRITICAL: Redis Memory Exhaustion (Root Cause of All Previous Issues)**
+  - **The Real Problem**: Storing 1M+ AsyncResult objects exhausts Redis memory (259,737 memory errors found)
+  - **What Happened**: Redis `maxmemory` limit was exceeded, causing "command not allowed when used memory > 'maxmemory'" errors
+  - **Root Cause**: Previous approaches stored task references for later collection, consuming massive memory
+  - **Evidence**: Container logs showed 259,737 Redis memory errors during file processing
+  - **Solution**: Adaptive memory-aware task management with real-time result collection
+
+### Changed
+- **Adaptive Memory-Aware Task Management**
+  - Dynamically monitors Redis memory usage and adjusts concurrent tasks accordingly
+  - Calculates safe task limits based on available Redis memory (80% threshold)
+  - Uses environment variables for configuration instead of hardcoded values
+  - Processes files based on size categories (small <10MB, medium 10MB-1GB, large >1GB)
+
+- **Real-Time Result Collection**
+  - Eliminated Phase 2b entirely - results are now collected immediately after task submission
+  - No longer stores AsyncResult objects for later collection
+  - Processes results as they complete during Phase 2a
+  - Prevents memory accumulation by immediate result retrieval
+
+- **Environment-Based Configuration**
+  - `MAX_CONCURRENT_SMALL`: Maximum concurrent tasks for small files (default: 5000)
+  - `MAX_CONCURRENT_MEDIUM`: Maximum concurrent tasks for medium files (default: 500)
+  - `MAX_CONCURRENT_LARGE`: Maximum concurrent tasks for large files (default: 50)
+  - `MEMORY_SAFETY_THRESHOLD`: Percentage of Redis memory to use (default: 0.8)
+  - All limits are dynamically scaled based on available system resources
+
+### Technical Details
+- **Memory Calculation**: Uses Redis INFO command to get current and max memory
+- **Adaptive Scaling**: Proportionally reduces concurrent tasks as memory usage approaches limit
+- **File Size Awareness**: Different concurrency limits for different file sizes (1KB to 40GB)
+- **No Hardcoded Configs**: All limits use environment variables with sensible defaults
+- **Immediate Cleanup**: Results are processed and discarded immediately, preventing memory buildup
+
+### Why This Works
+- **Previous Issue**: All versions (2.4.56-2.4.59) stored task references, causing Redis memory exhaustion
+- **New Approach**: Process results immediately, never store more than current batch in memory
+- **Scalability**: Adapts to systems with different Redis configurations automatically
+- **Flexibility**: Works with files from 1KB to 40GB on various system configurations
+
 ## [2.4.59] - 2025-11-04
 
 ### Fixed

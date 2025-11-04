@@ -563,208 +563,182 @@ class MaintenanceService:
                 all_results = ScanResult.query.all()
                 logger.info(f"Loaded all {len(all_results)} files from database")
 
-            # Phase 2a: Queue all hash calculation tasks in batches for better performance
+            # CRITICAL FIX v2.4.60: Adaptive memory-aware task management
+            # Problem: Files vary from 1KB to 40GB, systems vary in resources
+            # Solution: Monitor Redis memory usage and adapt task submission dynamically
+
+            # Get Redis memory info to determine safe limits
+            import redis
+            from celery import current_app
+
+            try:
+                # Get Redis connection from Celery
+                redis_url = current_app.conf.broker_url
+                r = redis.from_url(redis_url)
+                redis_info = r.info('memory')
+
+                # Get max memory setting (0 means unlimited)
+                max_memory = int(redis_info.get('maxmemory', 0))
+                used_memory = int(redis_info.get('used_memory', 0))
+
+                if max_memory > 0:
+                    # Calculate safe threshold (use 80% of max)
+                    safe_memory = max_memory * 0.8
+                    available_memory = safe_memory - used_memory
+
+                    # Estimate memory per task (approximately 10KB per task in Redis)
+                    memory_per_task = 10 * 1024
+                    max_safe_tasks = max(100, int(available_memory / memory_per_task))
+                else:
+                    # No limit set, use conservative default
+                    max_safe_tasks = 5000
+
+                logger.info(f"Redis memory: {used_memory/1024/1024:.1f}MB used, "
+                           f"max safe concurrent tasks: {max_safe_tasks}")
+            except Exception as e:
+                logger.warning(f"Could not get Redis memory info: {e}, using conservative limits")
+                max_safe_tasks = 1000
+
+            # Dynamic limits based on available resources
+            # These will scale down proportionally if memory is limited
+            MAX_CONCURRENT_SMALL = min(max_safe_tasks, int(os.environ.get('MAX_CONCURRENT_SMALL', '5000')))
+            MAX_CONCURRENT_MEDIUM = min(max_safe_tasks // 10, int(os.environ.get('MAX_CONCURRENT_MEDIUM', '500')))
+            MAX_CONCURRENT_LARGE = min(max_safe_tasks // 100, int(os.environ.get('MAX_CONCURRENT_LARGE', '50')))
+            MAX_CONCURRENT_HUGE = min(max_safe_tasks // 1000, int(os.environ.get('MAX_CONCURRENT_HUGE', '5')))
+
+            # Track active tasks
+            active_tasks = []
+            total_files_processed = 0
             files_queued = 0
+            task_results = []
             last_heartbeat_time = time.time()
 
-            # CRITICAL FIX v2.4.59: Direct task submission
-            # Group() with signatures doesn't properly track individual results
-            # The .children attribute isn't populated correctly, causing Phase 2b to fail
-            # Reverting to direct submission which is more reliable
+            logger.info(f"Processing {len(all_results)} files with size-aware batching...")
 
-            logger.info(f"Dispatching hash calculation tasks for {len(all_results)} files...")
+            # Sort files by size for better batch management (small files first)
+            # Handle NULL file_size by treating as 0 for sorting
+            all_results_sorted = sorted(all_results, key=lambda x: x.file_size if x.file_size else 0)
 
-            # Iterate through in-memory list and queue Celery tasks in batches
-            for i, result in enumerate(all_results):
+            file_index = 0
+            while file_index < len(all_results_sorted) or active_tasks:
                 # Heartbeat every 30 seconds
                 current_time = time.time()
                 if current_time - last_heartbeat_time >= 30:
                     file_changes_record.last_heartbeat = datetime.now(timezone.utc)
-                    logger.info(f"Phase 2a heartbeat: {files_queued}/{len(all_results)} tasks queued")
+                    logger.info(f"Progress: {total_files_processed}/{len(all_results)} processed, "
+                              f"{len(active_tasks)} active, {files_queued} queued")
                     db.session.commit()
                     last_heartbeat_time = current_time
 
+                # Check for cancellation
                 if self._is_cancelled_file_changes(file_changes_record):
-                    logger.info(f"File changes check cancelled at {files_queued}/{len(all_results)} files queued")
+                    logger.info(f"Cancelled at {total_files_processed}/{len(all_results)} files")
                     break
 
-                # Convert stored_modified to ISO format for serialization
-                stored_modified_iso = result.last_modified.isoformat() if result.last_modified else None
+                # Collect completed tasks and free up slots
+                still_active = []
+                for task_info in active_tasks:
+                    task, file_size = task_info['task'], task_info['size']
+                    if task.ready():
+                        try:
+                            result = task.get(timeout=1)
+                            total_files_processed += 1
+                            if result.get('changed'):
+                                changed_files.append({
+                                    'file_path': result['file_path'],
+                                    'change_type': result['change_type'],
+                                    'stored_hash': result['stored_hash'],
+                                    'current_hash': result['current_hash']
+                                })
+                        except Exception as e:
+                            logger.error(f"Error getting task result: {e}")
+                    else:
+                        still_active.append(task_info)
+                active_tasks = still_active
 
-                # Submit task directly - group() with signatures doesn't track properly
-                # The .children attribute isn't populated correctly with signature objects
-                try:
-                    task_result = calculate_file_hash_task.apply_async(
-                        args=[result.id, result.file_path, result.file_hash, stored_modified_iso]
-                    )
-                    task_results.append(task_result)
-                    files_queued += 1
-                except Exception as e:
-                    logger.error(f"Error submitting task for file {result.file_path}: {e}")
-                    continue
+                # Submit new tasks based on available slots
+                while file_index < len(all_results_sorted):
+                    result = all_results_sorted[file_index]
 
-                # Progress logging optimization - only commit to DB every 10k files
-                if files_queued % 10000 == 0:
-                    file_changes_record.phase_current = files_queued
-                    pct = int((files_queued / len(all_results) * 100)) if len(all_results) > 0 else 0
-                    file_changes_record.progress_message = f'Phase 2a of 3: Queuing hash calculation tasks - {files_queued:,} / {len(all_results):,} ({pct}%)'
-                    logger.info(f"Phase 2a: Queued {files_queued}/{len(all_results)} hash calculation tasks")
-                    db.session.commit()
+                    # Use file_size from DB (it's a BigInteger field, might be NULL)
+                    file_size = result.file_size if result.file_size else 0
 
-            # Final progress update
-            if files_queued % 10000 != 0:  # Update if we haven't just updated
-                file_changes_record.phase_current = files_queued
-                pct = int((files_queued / len(all_results) * 100)) if len(all_results) > 0 else 0
-                file_changes_record.progress_message = f'Phase 2a of 3: Queuing hash calculation tasks - {files_queued:,} / {len(all_results):,} ({pct}%)'
-                db.session.commit()
+                    if file_size == 0:
+                        # If size not in DB, use OS to check (more accurate than estimates)
+                        try:
+                            import os
+                            file_size = os.path.getsize(result.file_path)
+                        except:
+                            # If file doesn't exist or can't access, estimate based on path
+                            if 'thumbnail' in result.file_path or 'thumb' in result.file_path:
+                                file_size = 50 * 1024  # 50KB estimate for thumbnails
+                            elif 'preview' in result.file_path:
+                                file_size = 500 * 1024  # 500KB for previews
+                            else:
+                                file_size = 10 * 1024 * 1024  # 10MB default
 
-            logger.info(f"Phase 2a complete: Queued {len(task_results)} hash calculation tasks (files_queued={files_queued}, expected={total_files})")
+                    # Determine max concurrent based on file size
+                    if file_size < 10 * 1024 * 1024:  # < 10MB
+                        max_concurrent = MAX_CONCURRENT_SMALL
+                    elif file_size < 100 * 1024 * 1024:  # < 100MB
+                        max_concurrent = MAX_CONCURRENT_MEDIUM
+                    elif file_size < 1024 * 1024 * 1024:  # < 1GB
+                        max_concurrent = MAX_CONCURRENT_LARGE
+                    else:  # >= 1GB
+                        max_concurrent = MAX_CONCURRENT_HUGE
 
-            # Phase 2b: Collect results from workers
-            file_changes_record.phase = 'collecting_results'
-            file_changes_record.phase_total = len(task_results)
-            file_changes_record.phase_current = 0
-            file_changes_record.progress_message = f'Phase 2b of 3: Collecting hash calculation results - 0 / {len(task_results):,} (0%)'
-            file_changes_record.last_heartbeat = datetime.now(timezone.utc)
-            db.session.commit()
+                    # Count how many tasks of this size category are active
+                    size_category_active = sum(1 for t in active_tasks
+                                              if t['size'] // (100*1024*1024) == file_size // (100*1024*1024))
 
-            logger.info(f"Starting Phase 2b: Collecting results from {len(task_results)} hash calculation tasks")
-
-            # Create progress tracker
-            progress_tracker = ProgressTracker('file_changes')
-            results_collected = 0
-            last_heartbeat_time = time.time()
-
-            # OPTIMIZATION: Multi-batch checking to handle out-of-order task completion
-            # Tasks complete based on file size, NOT queue order! Small files anywhere
-            # in the queue complete before large files at the start of the queue.
-            # We must check multiple batches to catch these out-of-order completions.
-            pending_tasks = list(task_results)
-            check_batch_size = 10000  # Size of each batch
-            batches_per_iteration = 5  # Check 5 batches (50K tasks) per iteration
-            batch_start_offset = 0  # Rotating start position for fairness
-            phase_2b_start_time = time.time()
-
-            logger.info(f"Phase 2b: Multi-batch collection using {batches_per_iteration} batches of {check_batch_size} tasks each")
-
-            while pending_tasks:
-                # Heartbeat every 30 seconds - update UI and database
-                current_time = time.time()
-                if current_time - last_heartbeat_time >= 30:
-                    file_changes_record.last_heartbeat = datetime.now(timezone.utc)
-                    # Update progress for UI even if we haven't hit 100 result milestone
-                    file_changes_record.phase_current = results_collected
-
-                    # Calculate rate and ETA
-                    elapsed = current_time - phase_2b_start_time
-                    rate = results_collected / elapsed if elapsed > 0 else 0
-                    remaining = len(pending_tasks)
-                    eta_seconds = remaining / rate if rate > 0 else 0
-                    eta_str = f" | Rate: {rate:.1f}/s | ETA: {int(eta_seconds)}s" if rate > 0 else ""
-
-                    file_changes_record.progress_message = progress_tracker.get_progress_message(
-                        f'Phase 2b of 3: Collecting hash results',
-                        results_collected,
-                        len(task_results),
-                        f'{len(changed_files)} changes found{eta_str}'
-                    )
-                    logger.info(f"Phase 2b heartbeat: {results_collected}/{len(task_results)} results collected, "
-                              f"{len(pending_tasks)} pending, {len(changed_files)} changes found, "
-                              f"batch_start_offset={batch_start_offset}")
-                    db.session.commit()
-                    last_heartbeat_time = current_time
-
-                if self._is_cancelled_file_changes(file_changes_record):
-                    logger.info("File changes check cancelled while collecting results")
-                    break
-
-                # Collect completed tasks from multiple batches in this iteration
-                iteration_completed_tasks = []
-                tasks_checked_count = 0
-
-                # Check multiple batches per iteration for better coverage
-                for batch_num in range(batches_per_iteration):
-                    # Calculate batch boundaries with rotation
-                    batch_start = (batch_start_offset + batch_num * check_batch_size) % len(pending_tasks)
-                    batch_end = min(batch_start + check_batch_size, len(pending_tasks))
-
-                    # Handle wrap-around at end of list
-                    if batch_start >= len(pending_tasks):
+                    # Check if we can submit this task
+                    if len(active_tasks) >= max_concurrent or size_category_active >= max_concurrent:
+                        # Wait for tasks to complete before submitting more
                         break
 
-                    batch_to_check = pending_tasks[batch_start:batch_end]
-                    tasks_checked_count += len(batch_to_check)
+                    # Submit the task
+                    stored_modified_iso = result.last_modified.isoformat() if result.last_modified else None
+                    try:
+                        task_result = calculate_file_hash_task.apply_async(
+                            args=[result.id, result.file_path, result.file_hash, stored_modified_iso]
+                        )
+                        active_tasks.append({'task': task_result, 'size': file_size, 'path': result.file_path})
+                        task_results.append(task_result)
+                        files_queued += 1
+                        file_index += 1
+                    except Exception as e:
+                        logger.error(f"Error submitting task for {result.file_path}: {e}")
+                        if "maxmemory" in str(e):
+                            logger.warning("Redis memory full, waiting for tasks to complete...")
+                            break  # Wait for active tasks to complete
+                        file_index += 1  # Skip this file
 
-                    # Check this batch for completed tasks
-                    for i, task in enumerate(batch_to_check):
-                        if task.ready():
-                            try:
-                                # Task is complete, get result immediately (no blocking)
-                                result = task.get(timeout=1)
-                                results_collected += 1
+                # If no new tasks submitted and active tasks exist, wait a bit
+                if file_index < len(all_results_sorted) and len(active_tasks) > 0:
+                    time.sleep(0.1)  # Brief sleep to avoid busy waiting
 
-                                # Check if file changed
-                                if result.get('changed'):
-                                    change_info = {
-                                        'file_path': result['file_path'],
-                                        'change_type': result['change_type'],
-                                        'stored_hash': result['stored_hash'],
-                                        'current_hash': result['current_hash']
-                                    }
-                                    changed_files.append(change_info)
-                                    self.changed_files_list.append(change_info)
-                                    file_changes_record.changes_found = len(changed_files)
+                # Update progress periodically
+                if total_files_processed % 1000 == 0 and total_files_processed > 0:
+                    file_changes_record.phase_current = total_files_processed
+                    file_changes_record.phase_total = len(all_results)
+                    pct = int((total_files_processed / len(all_results) * 100)) if len(all_results) > 0 else 0
+                    file_changes_record.progress_message = (
+                        f'Processing files: {total_files_processed:,}/{len(all_results):,} ({pct}%) - '
+                        f'{len(changed_files)} changes found, {len(active_tasks)} active tasks'
+                    )
+                    db.session.commit()
 
-                                # Store task reference for removal (not index)
-                                iteration_completed_tasks.append(task)
+            # Final update
+            file_changes_record.phase_current = total_files_processed
+            file_changes_record.phase_total = len(all_results)
+            pct = int((total_files_processed / len(all_results) * 100)) if len(all_results) > 0 else 0
+            file_changes_record.progress_message = (
+                f'Completed: {total_files_processed:,}/{len(all_results):,} files - '
+                f'{len(changed_files)} changes found'
+            )
+            db.session.commit()
 
-                                # Update progress every 100 results for more frequent UI updates
-                                if results_collected % 100 == 0:
-                                    file_changes_record.phase_current = results_collected
-                                    file_changes_record.last_heartbeat = datetime.now(timezone.utc)
-                                    file_changes_record.progress_message = progress_tracker.get_progress_message(
-                                        f'Phase 2b of 3: Collecting hash results',
-                                        results_collected,
-                                        len(task_results),
-                                        f'{len(changed_files)} changes found'
-                                    )
-                                    self._commit_with_retry(file_changes_record, results_collected)
-                                    logger.info(f"Phase 2b: Collected {results_collected}/{len(task_results)} results, "
-                                              f"{len(changed_files)} changes found, batch_start={batch_start}")
-
-                                # Update in-memory state
-                                with self.file_changes_lock:
-                                    self.file_changes_state['files_processed'] = results_collected
-                                    self.file_changes_state['changes_found'] = len(changed_files)
-
-                            except Exception as e:
-                                logger.error(f"Error getting task result: {e}")
-                                results_collected += 1
-                                iteration_completed_tasks.append(task)
-                                # Continue collecting other results
-
-                # Remove completed tasks efficiently using set-based filtering
-                if iteration_completed_tasks:
-                    completed_set = set(iteration_completed_tasks)
-                    pending_tasks = [t for t in pending_tasks if t not in completed_set]
-                    logger.debug(f"Removed {len(iteration_completed_tasks)} completed tasks, "
-                                f"{len(pending_tasks)} remaining")
-
-                # Rotate batch start offset for next iteration
-                # IMPORTANT: Reset offset if it exceeds current list size (list shrinks as tasks complete)
-                if pending_tasks:
-                    batch_start_offset += batches_per_iteration * check_batch_size
-                    # If offset exceeds current list size, wrap to beginning
-                    if batch_start_offset >= len(pending_tasks):
-                        batch_start_offset = 0
-
-                # Only sleep if we found NO completed tasks after checking multiple batches
-                if not iteration_completed_tasks and pending_tasks:
-                    # No tasks ready in any of the batches checked, wait briefly
-                    logger.debug(f"No ready tasks found after checking {tasks_checked_count} tasks, sleeping 100ms")
-                    time.sleep(0.1)  # 100ms wait when no results ready
-
-            logger.info(f"Phase 2b complete: Collected {results_collected} results, found {len(changed_files)} changed files")
+            logger.info(f"Phase 2a complete: Processed {total_files_processed} files, found {len(changed_files)} changed files")
             
             # Phase 3: Mark changed files for rescan (leverage parallel scanning)
             if changed_files and not self._is_cancelled_file_changes(file_changes_record):
