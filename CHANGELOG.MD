@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.58] - 2025-11-04
+
+### Fixed
+- **CRITICAL: Phase 2a Batch Result Tracking Bug (True Root Cause of Stalls)**
+  - **The Real Problem**: GroupResult was being iterated directly instead of accessing .children property
+  - **What Happened**: Task results were not being properly tracked in task_results list
+  - **Root Cause**: `for task in batch_result:` doesn't iterate over individual tasks
+  - **Evidence**: Phase 2b showed 0 results because task_results contained invalid objects
+  - **Result**: Phase 2a would stop at various points (770K, 850K files) when result tracking failed
+
+### Changed
+- **Proper GroupResult Handling**
+  - Now correctly uses `batch_result.children` to access individual AsyncResult objects
+  - Added fallback handling if .children property is not available
+  - Improved logging to track successful batch submissions
+  - Fixed all three batch submission locations (main, retry, final)
+
+### Technical Details
+- **Before**: `for task in batch_result:` - doesn't work, GroupResult is not iterable this way
+- **After**: `for task in batch_result.children:` - correctly gets individual AsyncResult objects
+- **Impact**: Phase 2b can now properly track and collect results from all queued tasks
+
 ## [2.4.57] - 2025-11-04
 
 ### Fixed

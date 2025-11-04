@@ -617,8 +617,16 @@ class MaintenanceService:
                         batch_group = group(*task_batch)
                         batch_result = batch_group.apply_async()
                         # Add individual task results to our tracking list
-                        for task in batch_result:
-                            task_results.append(task)
+                        # Use .children to get the individual AsyncResult objects from GroupResult
+                        if hasattr(batch_result, 'children') and batch_result.children:
+                            batch_tasks_count = len(batch_result.children)
+                            logger.debug(f"Batch submitted successfully, tracking {batch_tasks_count} individual tasks")
+                            for task in batch_result.children:
+                                task_results.append(task)
+                        else:
+                            # Fallback if children is not available
+                            logger.warning(f"GroupResult.children not available, tracking as single group")
+                            task_results.append(batch_result)
                         task_batch = []  # Reset batch
 
                         # Small delay between batches to avoid overwhelming system
@@ -632,8 +640,12 @@ class MaintenanceService:
                             try:
                                 batch_group = group(*half_batch)
                                 batch_result = batch_group.apply_async()
-                                for task in batch_result:
-                                    task_results.append(task)
+                                # Use .children to get individual AsyncResult objects
+                                if hasattr(batch_result, 'children') and batch_result.children:
+                                    for task in batch_result.children:
+                                        task_results.append(task)
+                                else:
+                                    task_results.append(batch_result)
                                 # Keep second half for next iteration
                                 task_batch = task_batch[len(task_batch)//2:]
                             except:
@@ -654,8 +666,12 @@ class MaintenanceService:
                     logger.info(f"Submitting final batch of {len(task_batch)} tasks")
                     batch_group = group(*task_batch)
                     batch_result = batch_group.apply_async()
-                    for task in batch_result:
-                        task_results.append(task)
+                    # Use .children to get individual AsyncResult objects
+                    if hasattr(batch_result, 'children') and batch_result.children:
+                        for task in batch_result.children:
+                            task_results.append(task)
+                    else:
+                        task_results.append(batch_result)
                 except Exception as e:
                     logger.error(f"Error submitting final batch: {e}")
                     # Try to submit tasks individually as last resort
