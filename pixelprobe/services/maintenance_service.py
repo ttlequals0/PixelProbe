@@ -563,13 +563,18 @@ class MaintenanceService:
                 all_results = ScanResult.query.all()
                 logger.info(f"Loaded all {len(all_results)} files from database")
 
-            # Phase 2a: Queue all hash calculation tasks by iterating through in-memory list
+            # Phase 2a: Queue all hash calculation tasks in batches for better performance
             files_queued = 0
             last_heartbeat_time = time.time()
 
-            logger.info(f"Dispatching hash calculation tasks for {len(all_results)} files...")
+            # CRITICAL FIX: Batch task submission for performance with 1M+ files
+            # Submitting tasks one-by-one is extremely slow and causes task starvation
+            batch_size = 1000  # Submit tasks in batches of 1000
+            task_batch = []
 
-            # Iterate through in-memory list and queue Celery tasks (no database pagination)
+            logger.info(f"Dispatching hash calculation tasks for {len(all_results)} files in batches of {batch_size}...")
+
+            # Iterate through in-memory list and queue Celery tasks in batches
             for i, result in enumerate(all_results):
                 # Heartbeat every 30 seconds
                 current_time = time.time()
@@ -580,22 +585,38 @@ class MaintenanceService:
                     last_heartbeat_time = current_time
 
                 if self._is_cancelled_file_changes(file_changes_record):
+                    # Submit any remaining tasks in batch before cancelling
+                    if task_batch:
+                        logger.info(f"Submitting final batch of {len(task_batch)} tasks before cancellation")
+                        batch_group = group(*task_batch)
+                        batch_result = batch_group.apply_async()
+                        for task in batch_result:
+                            task_results.append(task)
                     logger.info(f"File changes check cancelled at {files_queued}/{len(all_results)} files queued")
                     break
-
-                files_queued += 1
 
                 # Convert stored_modified to ISO format for serialization
                 stored_modified_iso = result.last_modified.isoformat() if result.last_modified else None
 
-                # Queue hash calculation task
-                task = calculate_file_hash_task.delay(
+                # Add task to batch instead of submitting immediately
+                task = calculate_file_hash_task.s(
                     file_id=result.id,
                     file_path=result.file_path,
                     stored_hash=result.file_hash,
                     stored_modified=stored_modified_iso
                 )
-                task_results.append(task)
+                task_batch.append(task)
+                files_queued += 1
+
+                # Submit batch when it reaches batch_size
+                if len(task_batch) >= batch_size:
+                    logger.debug(f"Submitting batch of {len(task_batch)} tasks")
+                    batch_group = group(*task_batch)
+                    batch_result = batch_group.apply_async()
+                    # Add individual task results to our tracking list
+                    for task in batch_result:
+                        task_results.append(task)
+                    task_batch = []  # Reset batch
 
                 # Update progress every 10000 files (reduce DB commit overhead)
                 if files_queued % 10000 == 0:
@@ -604,6 +625,14 @@ class MaintenanceService:
                     file_changes_record.progress_message = f'Phase 2a of 3: Queuing hash calculation tasks - {files_queued:,} / {len(all_results):,} ({pct}%)'
                     logger.info(f"Phase 2a: Queued {files_queued}/{len(all_results)} hash calculation tasks")
                     db.session.commit()
+
+            # Submit any remaining tasks in the final batch
+            if task_batch:
+                logger.info(f"Submitting final batch of {len(task_batch)} tasks")
+                batch_group = group(*task_batch)
+                batch_result = batch_group.apply_async()
+                for task in batch_result:
+                    task_results.append(task)
 
             logger.info(f"Phase 2a complete: Queued {len(task_results)} hash calculation tasks (files_queued={files_queued}, expected={total_files})")
 

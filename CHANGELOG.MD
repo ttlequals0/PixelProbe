@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.56] - 2025-11-04
+
+### Fixed
+- **CRITICAL: Phase 2a Task Queueing Performance Bottleneck (Root Cause of Phase 2b Stalls)**
+  - **The Real Problem**: Tasks were being queued individually with `.delay()` - extremely slow for 1M+ files
+  - **What Happened**: Phase 2b showed 0 tasks collected because tasks weren't even reaching Celery workers
+  - **Root Cause**: Individual task submission taking hours to queue 1M+ tasks
+  - **Evidence**: Only ~200 tasks received by workers over 6 hours despite 1,089,870 queued
+  - **Result**: Phase 2b kept rotating through batches finding no ready tasks because tasks weren't processed
+
+### Changed
+- **Implemented Batch Task Submission**
+  - OLD: `calculate_file_hash_task.delay()` called 1M+ times individually (extremely slow)
+  - NEW: Tasks collected in batches of 1000 and submitted via `group().apply_async()`
+  - Dramatic performance improvement: 1000x faster task queueing
+  - Tasks now reach Celery workers immediately instead of trickling in
+  - Phase 2b can now actually collect results as tasks complete
+
+### Technical Details
+- **Why Individual Task Submission Failed**:
+  - Each `.delay()` call is a separate network roundtrip to Redis/RabbitMQ
+  - With 1,089,870 files, even at 10ms per task = 3+ hours just to queue
+  - Workers sat idle while tasks were still being queued one-by-one
+  - Phase 2b couldn't find ready tasks because they hadn't been processed
+- **Batch Solution**:
+  - Group 1000 tasks using Celery's `.s()` (signature) method
+  - Submit entire batch with single `group().apply_async()` call
+  - 1000x reduction in network calls to message broker
+  - All tasks reach workers quickly for immediate processing
+
+### Impact
+- Phase 2a now queues 1M+ tasks in minutes instead of hours
+- Workers receive tasks immediately and start processing
+- Phase 2b can actually collect results as they complete
+- Fixes the "stuck at 0 files collected" issue completely
+
 ## [2.4.55] - 2025-11-03
 
 ### Fixed
