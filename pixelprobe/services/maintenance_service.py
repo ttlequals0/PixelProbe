@@ -567,14 +567,12 @@ class MaintenanceService:
             files_queued = 0
             last_heartbeat_time = time.time()
 
-            # CRITICAL FIX: Batch task submission for performance with 1M+ files
-            # Submitting tasks one-by-one is extremely slow and causes task starvation
-            # v2.4.57: Reduced batch size from 1000 to 100 to prevent memory exhaustion
-            batch_size = 100  # Smaller batches to avoid SIGBUS/memory issues
-            task_batch = []
-            batch_submit_delay = 0.1  # 100ms delay between batches to avoid overwhelming system
+            # CRITICAL FIX v2.4.59: Direct task submission
+            # Group() with signatures doesn't properly track individual results
+            # The .children attribute isn't populated correctly, causing Phase 2b to fail
+            # Reverting to direct submission which is more reliable
 
-            logger.info(f"Dispatching hash calculation tasks for {len(all_results)} files in batches of {batch_size}...")
+            logger.info(f"Dispatching hash calculation tasks for {len(all_results)} files...")
 
             # Iterate through in-memory list and queue Celery tasks in batches
             for i, result in enumerate(all_results):
@@ -587,72 +585,25 @@ class MaintenanceService:
                     last_heartbeat_time = current_time
 
                 if self._is_cancelled_file_changes(file_changes_record):
-                    # Submit any remaining tasks in batch before cancelling
-                    if task_batch:
-                        logger.info(f"Submitting final batch of {len(task_batch)} tasks before cancellation")
-                        batch_group = group(*task_batch)
-                        batch_result = batch_group.apply_async()
-                        for task in batch_result:
-                            task_results.append(task)
                     logger.info(f"File changes check cancelled at {files_queued}/{len(all_results)} files queued")
                     break
 
                 # Convert stored_modified to ISO format for serialization
                 stored_modified_iso = result.last_modified.isoformat() if result.last_modified else None
 
-                # Add task to batch instead of submitting immediately
-                task = calculate_file_hash_task.s(
-                    file_id=result.id,
-                    file_path=result.file_path,
-                    stored_hash=result.file_hash,
-                    stored_modified=stored_modified_iso
-                )
-                task_batch.append(task)
-                files_queued += 1
+                # Submit task directly - group() with signatures doesn't track properly
+                # The .children attribute isn't populated correctly with signature objects
+                try:
+                    task_result = calculate_file_hash_task.apply_async(
+                        args=[result.id, result.file_path, result.file_hash, stored_modified_iso]
+                    )
+                    task_results.append(task_result)
+                    files_queued += 1
+                except Exception as e:
+                    logger.error(f"Error submitting task for file {result.file_path}: {e}")
+                    continue
 
-                # Submit batch when it reaches batch_size
-                if len(task_batch) >= batch_size:
-                    try:
-                        logger.debug(f"Submitting batch of {len(task_batch)} tasks")
-                        batch_group = group(*task_batch)
-                        batch_result = batch_group.apply_async()
-                        # Add individual task results to our tracking list
-                        # Use .children to get the individual AsyncResult objects from GroupResult
-                        if hasattr(batch_result, 'children') and batch_result.children:
-                            batch_tasks_count = len(batch_result.children)
-                            logger.debug(f"Batch submitted successfully, tracking {batch_tasks_count} individual tasks")
-                            for task in batch_result.children:
-                                task_results.append(task)
-                        else:
-                            # Fallback if children is not available
-                            logger.warning(f"GroupResult.children not available, tracking as single group")
-                            task_results.append(batch_result)
-                        task_batch = []  # Reset batch
-
-                        # Small delay between batches to avoid overwhelming system
-                        time.sleep(batch_submit_delay)
-                    except Exception as e:
-                        logger.error(f"Error submitting batch at file {files_queued}: {e}")
-                        # Try to recover by splitting batch in half and retrying
-                        if len(task_batch) > 10:
-                            logger.info("Retrying with smaller batch size")
-                            half_batch = task_batch[:len(task_batch)//2]
-                            try:
-                                batch_group = group(*half_batch)
-                                batch_result = batch_group.apply_async()
-                                # Use .children to get individual AsyncResult objects
-                                if hasattr(batch_result, 'children') and batch_result.children:
-                                    for task in batch_result.children:
-                                        task_results.append(task)
-                                else:
-                                    task_results.append(batch_result)
-                                # Keep second half for next iteration
-                                task_batch = task_batch[len(task_batch)//2:]
-                            except:
-                                logger.error("Failed to submit even half batch, skipping")
-                                task_batch = []
-
-                # Update progress every 10000 files (reduce DB commit overhead)
+                # Progress logging optimization - only commit to DB every 10k files
                 if files_queued % 10000 == 0:
                     file_changes_record.phase_current = files_queued
                     pct = int((files_queued / len(all_results) * 100)) if len(all_results) > 0 else 0
@@ -660,28 +611,12 @@ class MaintenanceService:
                     logger.info(f"Phase 2a: Queued {files_queued}/{len(all_results)} hash calculation tasks")
                     db.session.commit()
 
-            # Submit any remaining tasks in the final batch
-            if task_batch:
-                try:
-                    logger.info(f"Submitting final batch of {len(task_batch)} tasks")
-                    batch_group = group(*task_batch)
-                    batch_result = batch_group.apply_async()
-                    # Use .children to get individual AsyncResult objects
-                    if hasattr(batch_result, 'children') and batch_result.children:
-                        for task in batch_result.children:
-                            task_results.append(task)
-                    else:
-                        task_results.append(batch_result)
-                except Exception as e:
-                    logger.error(f"Error submitting final batch: {e}")
-                    # Try to submit tasks individually as last resort
-                    logger.info("Attempting to submit final batch tasks individually")
-                    for single_task in task_batch:
-                        try:
-                            result = single_task.apply_async()
-                            task_results.append(result)
-                        except Exception as task_error:
-                            logger.error(f"Failed to submit individual task: {task_error}")
+            # Final progress update
+            if files_queued % 10000 != 0:  # Update if we haven't just updated
+                file_changes_record.phase_current = files_queued
+                pct = int((files_queued / len(all_results) * 100)) if len(all_results) > 0 else 0
+                file_changes_record.progress_message = f'Phase 2a of 3: Queuing hash calculation tasks - {files_queued:,} / {len(all_results):,} ({pct}%)'
+                db.session.commit()
 
             logger.info(f"Phase 2a complete: Queued {len(task_results)} hash calculation tasks (files_queued={files_queued}, expected={total_files})")
 

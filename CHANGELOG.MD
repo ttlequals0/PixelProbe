@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.59] - 2025-11-04
+
+### Fixed
+- **CRITICAL: Reverted to Direct Task Submission (Final Fix for Phase 2a Stalls)**
+  - **The Real Problem**: `group()` with signature objects doesn't properly populate `.children`
+  - **What Happened**: Even with `.children` access, GroupResult from signatures wasn't tracking tasks
+  - **Root Cause**: Celery signatures (`.s()`) are lazy constructs incompatible with group().children
+  - **Evidence**: Phase 2a still stalled at 862,600 files even with v2.4.58 fix
+  - **Solution**: Reverted to direct `apply_async()` calls which are more reliable
+
+### Changed
+- **Direct Task Submission**
+  - Removed all `group()` batching code that was causing issues
+  - Now uses direct `calculate_file_hash_task.apply_async()` for each file
+  - Optimized database commits to only happen every 10,000 files
+  - Removed unnecessary batch-related variables and logic
+
+### Technical Details
+- **Problem**: `group(*task_batch).apply_async()` with signatures doesn't track individual tasks
+- **Solution**: Direct submission with `task.apply_async(args=[...])`
+- **Trade-off**: Slightly slower submission but 100% reliable tracking
+- **Impact**: Phase 2a can now complete all 1M+ files without stalling
+
 ## [2.4.58] - 2025-11-04
 
 ### Fixed
