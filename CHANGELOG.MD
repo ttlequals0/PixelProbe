@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.64] - 2025-11-05
+
+### Fixed
+- **Swagger cancel-file-changes endpoint 500 error**
+  - Fixed TypeError: Object of type Response is not JSON serializable
+  - Reimplemented logic directly in Swagger endpoint instead of calling route function
+  - Now properly returns dict instead of Flask Response object
+
 ## [2.4.63] - 2025-11-05
 
 ### Changed

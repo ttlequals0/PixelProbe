@@ -449,9 +449,28 @@ class CancelFileChanges(Resource):
         if not check_auth():
             return {'error': 'Authentication required'}, 401
 
-        # Call the actual route function
-        from pixelprobe.api.maintenance_routes import cancel_file_changes
-        return cancel_file_changes()
+        try:
+            from models import FileChangesState, db
+            from pixelprobe.api.maintenance_routes import file_changes_state_lock, file_changes_state
+            import logging
+            logger = logging.getLogger(__name__)
+
+            file_changes_record = FileChangesState.query.order_by(FileChangesState.id.desc()).first()
+
+            if file_changes_record and file_changes_record.is_active:
+                file_changes_record.cancel_requested = True
+                file_changes_record.progress_message = 'Cancellation requested...'
+                db.session.commit()
+
+                with file_changes_state_lock:
+                    file_changes_state['cancel_requested'] = True
+
+                logger.info("File changes check cancellation requested")
+                return {'message': 'File changes check cancellation requested'}
+            else:
+                return {'error': 'No active file changes check to cancel'}, 400
+        except Exception as e:
+            return {'error': str(e)}, 500
 
 @maintenance_ns.route('/reset-file-changes-state')
 class ResetFileChangesState(Resource):
