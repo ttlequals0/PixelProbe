@@ -113,9 +113,9 @@ class CancelScan(Resource):
         except RuntimeError as e:
             return {'error': str(e)}, 400
 
-@scan_ns.route('/parallel-v2')
-class ParallelScanV2(Resource):
-    @scan_ns.doc('parallel_scan_v2')
+@scan_ns.route('/parallel')
+class ParallelScan(Resource):
+    @scan_ns.doc('parallel_scan')
     @scan_ns.expect(parallel_scan_model)
     @scan_ns.response(200, 'Parallel scan started', parallel_scan_response_model)
     @scan_ns.response(400, 'Invalid request', error_model)
@@ -126,16 +126,16 @@ class ParallelScanV2(Resource):
         if not check_auth():
             return {'error': 'Authentication required'}, 401
 
-        from pixelprobe.api.scan_routes_parallel import scan_parallel_v2
+        from pixelprobe.api.scan_routes_parallel import scan_parallel
         from flask import current_app
         with current_app.test_request_context(
             path=request.path,
             method='POST',
             json=request.get_json()
         ):
-            return scan_parallel_v2()
+            return scan_parallel()
 
-@scan_ns.route('/parallel-v2/status/<scan_id>')
+@scan_ns.route('/parallel/status/<scan_id>')
 class ParallelScanStatus(Resource):
     @scan_ns.doc('get_parallel_scan_status')
     @scan_ns.response(200, 'Scan status retrieved')
@@ -154,7 +154,7 @@ class ParallelScanStatus(Resource):
         ):
             return get_parallel_scan_status(scan_id)
 
-@scan_ns.route('/parallel-v2/workers')
+@scan_ns.route('/parallel/workers')
 class WorkerStatus(Resource):
     @scan_ns.doc('get_worker_status')
     @scan_ns.response(200, 'Worker status retrieved')
