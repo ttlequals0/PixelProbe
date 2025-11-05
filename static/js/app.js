@@ -193,7 +193,7 @@ class APIClient {
     }
 
     async startScan() {
-        return this.request('/scan-all', {
+        return this.request('/scan', {
             method: 'POST',
             body: JSON.stringify({})
         });
@@ -275,9 +275,12 @@ class APIClient {
 
     // Export
     async exportCSV(fileIds = null) {
-        return this.request('/export-csv', {
+        return this.request('/export', {
             method: 'POST',
-            body: JSON.stringify({ file_ids: fileIds })
+            body: JSON.stringify({
+                format: 'csv',
+                file_ids: fileIds
+            })
         });
     }
 

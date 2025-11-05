@@ -95,24 +95,6 @@ class ScanStatus(Resource):
             )
         }
 
-@scan_ns.route('/cancel')
-class CancelScan(Resource):
-    @scan_ns.doc('cancel_scan')
-    @scan_ns.response(200, 'Scan cancelled', success_model)
-    @scan_ns.response(400, 'No active scan', error_model)
-    def post(self):
-        """Cancel the current scan"""
-        # Check authentication
-        if not check_auth():
-            return {'error': 'Authentication required'}, 401
-
-        try:
-            scan_service = current_app.scan_service
-            result = scan_service.cancel_scan()
-            return result
-        except RuntimeError as e:
-            return {'error': str(e)}, 400
-
 @scan_ns.route('/parallel')
 class ParallelScan(Resource):
     @scan_ns.doc('parallel_scan')
@@ -340,8 +322,8 @@ class GetScanStatus(Resource):
             return {'error': str(e)}, 500
 
 @scan_ns.route('/cancel-scan')
-class CancelScan(Resource):
-    @scan_ns.doc('cancel_scan')
+class CancelCurrentScan(Resource):
+    @scan_ns.doc('cancel_current_scan')
     @scan_ns.response(200, 'Scan cancelled successfully')
     @scan_ns.response(400, 'No active scan to cancel', error_model)
     @scan_ns.response(500, 'Internal error', error_model)
@@ -430,6 +412,69 @@ class GetScanResult(Resource):
         except Exception as e:
             logger.error(f"Error getting scan result: {e}")
             return {'error': str(e)}, 500
+
+@scan_ns.route('/scan-file')
+class ScanSingleFile(Resource):
+    @scan_ns.doc('scan_file')
+    @scan_ns.response(200, 'File scan initiated')
+    @scan_ns.response(400, 'Invalid request', error_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Scan a single file by ID"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.scan_routes import scan_file
+        from flask import current_app
+        with current_app.test_request_context(
+            path='/api/scan-file',
+            headers=request.headers,
+            method='POST',
+            json=request.get_json()
+        ):
+            return scan_file()
+
+@scan_ns.route('/mark-as-good')
+class MarkAsGood(Resource):
+    @scan_ns.doc('mark_as_good')
+    @scan_ns.response(200, 'File marked as good')
+    @scan_ns.response(400, 'Invalid request', error_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Mark a file as good (not corrupted)"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.admin_routes import mark_as_good
+        from flask import current_app
+        with current_app.test_request_context(
+            path='/api/mark-as-good',
+            headers=request.headers,
+            method='POST',
+            json=request.get_json()
+        ):
+            return mark_as_good()
+
+@scan_ns.route('/reset-for-rescan')
+class ResetForRescan(Resource):
+    @scan_ns.doc('reset_for_rescan')
+    @scan_ns.response(200, 'Files reset for rescan', reset_for_rescan_model)
+    @scan_ns.response(400, 'Invalid request', error_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Reset files to pending status for rescanning"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.scan_routes import reset_for_rescan
+        from flask import current_app
+        with current_app.test_request_context(
+            path='/api/reset-for-rescan',
+            headers=request.headers,
+            method='POST',
+            json=request.get_json()
+        ):
+            return reset_for_rescan()
 
 @scan_ns.route('/reset-incomplete-scans')
 class ResetIncompleteScans(Resource):
@@ -661,6 +706,42 @@ class CorruptedFiles(Resource):
             sort_by=sort_by,
             sort_order=sort_order
         )
+
+@stats_ns.route('/stats')
+class GetStats(Resource):
+    @stats_ns.doc('get_stats')
+    @stats_ns.response(200, 'Statistics retrieved')
+    def get(self):
+        """Get system statistics"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.stats_routes import get_stats
+        from flask import current_app
+        with current_app.test_request_context(
+            path='/api/stats',
+            headers=request.headers,
+            method='GET'
+        ):
+            return get_stats()
+
+@stats_ns.route('/system-info')
+class GetSystemInfo(Resource):
+    @stats_ns.doc('get_system_info')
+    @stats_ns.response(200, 'System info retrieved')
+    def get(self):
+        """Get system information"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.stats_routes import get_system_info
+        from flask import current_app
+        with current_app.test_request_context(
+            path='/api/system-info',
+            headers=request.headers,
+            method='GET'
+        ):
+            return get_system_info()
 
 # Maintenance endpoints
 @maintenance_ns.route('/file-changes')
