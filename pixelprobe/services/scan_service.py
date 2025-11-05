@@ -1908,9 +1908,30 @@ class ScanService:
             return db.session.query(ScanResult).filter(
                 ScanResult.scan_status == 'pending'
             ).count()
-        
+
+        # Check if this is a FILE_CHUNK format (FILE_CHUNK:offset:limit)
+        if chunk.directory_path.startswith('FILE_CHUNK:'):
+            # Parse the offset and limit from the chunk directory_path
+            parts = chunk.directory_path.split(':')
+            if len(parts) == 3:
+                offset = int(parts[1])
+                limit = int(parts[2])
+
+                # Query for pending files with offset and limit
+                if force_rescan:
+                    count = db.session.query(ScanResult).offset(offset).limit(limit).count()
+                else:
+                    count = db.session.query(ScanResult).filter(
+                        ScanResult.scan_status == 'pending'
+                    ).offset(offset).limit(limit).count()
+
+                return count
+            else:
+                logger.warning(f"Invalid FILE_CHUNK format: {chunk.directory_path}")
+                return 0
+
         chunk_dir = chunk.directory_path.rstrip(os.sep)
-        
+
         if force_rescan:
             # Count all files that start with this directory path
             count = db.session.query(ScanResult).filter(
@@ -1924,7 +1945,7 @@ class ScanService:
                     ScanResult.scan_status == 'pending'
                 )
             ).count()
-        
+
         return count
     
     def _scan_chunk_files(self, chunk: ScanChunk, checker: PixelProbe, force_rescan: bool = False,
