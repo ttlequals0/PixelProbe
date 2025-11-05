@@ -2158,23 +2158,31 @@ class ScanService:
 
                             if scan_state and (scanned - last_commit_count) >= update_threshold:
                                 try:
-                                    scan_state.files_processed = current_total
-                                    scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+                                    # Use a fresh session for progress updates to avoid conflicts with worker threads
+                                    from sqlalchemy.orm import Session
+                                    progress_session = Session(bind=db.engine)
+                                    try:
+                                        # Merge the scan_state into the new session
+                                        progress_scan_state = progress_session.merge(scan_state)
+                                        progress_scan_state.files_processed = current_total
+                                        progress_scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
 
-                                    from utils import ProgressTracker
-                                    progress_tracker = ProgressTracker('scan')
-                                    scan_state.progress_message = progress_tracker.get_progress_message(
-                                        f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
-                                        current_total,
-                                        total_to_scan,
-                                        os.path.basename(file_result.file_path)
-                                    )
-                                    db.session.commit()
-                                    last_commit_count = scanned
+                                        from utils import ProgressTracker
+                                        progress_tracker = ProgressTracker('scan')
+                                        progress_scan_state.progress_message = progress_tracker.get_progress_message(
+                                            f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
+                                            current_total,
+                                            total_to_scan,
+                                            os.path.basename(file_result.file_path)
+                                        )
+                                        progress_session.commit()
+                                        last_commit_count = scanned
 
-                                    if scanned % 1000 == 0:
-                                        import gc
-                                        gc.collect()
+                                        if scanned % 1000 == 0:
+                                            import gc
+                                            gc.collect()
+                                    finally:
+                                        progress_session.close()
                                 except Exception as e:
                                     logger.error(f"Failed to update progress: {e}")
                 else:
