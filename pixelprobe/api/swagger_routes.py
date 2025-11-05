@@ -192,16 +192,17 @@ class ResetStuckScans(Resource):
         logger = logging.getLogger(__name__)
 
         try:
-            # Find scans that haven't been updated in 5 minutes
-            cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+            # Find scans that are active but started more than 30 minutes ago
+            # This indicates they're likely stuck
+            cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=30)
             stuck_scans = ScanState.query.filter(
                 ScanState.is_active == True,
-                ScanState.last_heartbeat < cutoff_time
+                ScanState.start_time < cutoff_time
             ).all()
 
             reset_count = 0
             for scan in stuck_scans:
-                logger.warning(f"Resetting stuck scan {scan.scan_id}, last heartbeat: {scan.last_heartbeat}")
+                logger.warning(f"Resetting stuck scan {scan.scan_id}, started at: {scan.start_time}")
                 scan.is_active = False
                 scan.phase = 'crashed'
                 scan.progress_message = 'Scan stuck - automatically reset'
@@ -275,6 +276,161 @@ class ForceCleanupScan(Resource):
             logger.error(f"Error during force cleanup: {e}")
             return {'error': str(e)}, 500
 
+@scan_ns.route('/scan', methods=['POST'])
+class ScanMain(Resource):
+    @scan_ns.doc('start_scan')
+    @scan_ns.response(200, 'Scan started successfully')
+    @scan_ns.response(409, 'Scan already in progress', error_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Start scanning all media files in configured directories"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.scan_routes import scan_bp
+        from flask import current_app
+        with current_app.test_request_context(
+            path='/api/scan',
+            headers=request.headers,
+            method='POST',
+            json=request.get_json()
+        ):
+            from pixelprobe.api.scan_routes import scan
+            return scan()
+
+@scan_ns.route('/scan-status')
+class GetScanStatus(Resource):
+    @scan_ns.doc('get_scan_status')
+    @scan_ns.response(200, 'Scan status retrieved', scan_status_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def get(self):
+        """Get current scan status and progress"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from models import ScanState
+        try:
+            scan_state = ScanState.query.order_by(ScanState.id.desc()).first()
+
+            if not scan_state:
+                return {
+                    'is_active': False,
+                    'phase': 'idle',
+                    'message': 'No scans have been run yet'
+                }
+
+            return {
+                'scan_id': scan_state.scan_id,
+                'is_active': scan_state.is_active,
+                'phase': scan_state.phase,
+                'phase_number': scan_state.phase_number,
+                'phase_current': scan_state.phase_current,
+                'phase_total': scan_state.phase_total,
+                'files_processed': scan_state.files_processed,
+                'estimated_total': scan_state.estimated_total,
+                'discovery_count': scan_state.discovery_count,
+                'start_time': scan_state.start_time.isoformat() if scan_state.start_time else None,
+                'end_time': scan_state.end_time.isoformat() if scan_state.end_time else None,
+                'current_file': scan_state.current_file,
+                'progress_message': scan_state.progress_message,
+                'error_message': scan_state.error_message
+            }
+        except Exception as e:
+            logger.error(f"Error getting scan status: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/cancel-scan')
+class CancelScan(Resource):
+    @scan_ns.doc('cancel_scan')
+    @scan_ns.response(200, 'Scan cancelled successfully')
+    @scan_ns.response(400, 'No active scan to cancel', error_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Cancel the currently running scan"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from models import db, ScanState
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            scan_state = ScanState.query.filter_by(is_active=True).first()
+
+            if not scan_state:
+                return {'error': 'No active scan to cancel'}, 400
+
+            logger.info(f"Cancelling scan {scan_state.scan_id}")
+            scan_state.is_active = False
+            scan_state.phase = 'cancelled'
+            scan_state.progress_message = 'Scan cancelled by user'
+            db.session.commit()
+
+            # Signal the scan service to stop
+            if hasattr(current_app, 'scan_service'):
+                current_app.scan_service.is_running = False
+
+            return {'message': f'Scan {scan_state.scan_id} cancelled successfully'}
+
+        except Exception as e:
+            logger.error(f"Error cancelling scan: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/scan-results')
+class GetScanResults(Resource):
+    @scan_ns.doc('get_scan_results')
+    @scan_ns.response(200, 'Scan results retrieved')
+    @scan_ns.response(500, 'Internal error', error_model)
+    def get(self):
+        """Get all scan results with optional filtering"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.scan_routes import get_scan_results
+        from flask import current_app
+        with current_app.test_request_context(
+            path='/api/scan-results',
+            query_string=request.query_string,
+            headers=request.headers,
+            method='GET'
+        ):
+            return get_scan_results()
+
+@scan_ns.route('/scan-results/<int:result_id>')
+class GetScanResult(Resource):
+    @scan_ns.doc('get_scan_result')
+    @scan_ns.response(200, 'Scan result retrieved')
+    @scan_ns.response(404, 'Result not found', error_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def get(self, result_id):
+        """Get a specific scan result by ID"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from models import ScanResult
+        try:
+            result = ScanResult.query.get(result_id)
+            if not result:
+                return {'error': 'Result not found'}, 404
+
+            return {
+                'id': result.id,
+                'file_path': result.file_path,
+                'file_name': result.file_name,
+                'file_size': result.file_size,
+                'scan_status': result.scan_status,
+                'is_corrupted': result.is_corrupted,
+                'marked_as_good': result.marked_as_good,
+                'scan_date': result.scan_date.isoformat() if result.scan_date else None,
+                'discovered_date': result.discovered_date.isoformat() if result.discovered_date else None,
+                'tool_output': result.tool_output,
+                'scan_output': result.scan_output,
+                'error_message': result.error_message
+            }
+        except Exception as e:
+            logger.error(f"Error getting scan result: {e}")
+            return {'error': str(e)}, 500
+
 @scan_ns.route('/reset-incomplete-scans')
 class ResetIncompleteScans(Resource):
     @scan_ns.doc('reset_incomplete_scans')
@@ -282,9 +438,8 @@ class ResetIncompleteScans(Resource):
     @scan_ns.response(500, 'Internal error', error_model)
     def post(self):
         """Reset files marked as completed but with incomplete scan data
-        
-        Finds and resets files that show 'N/A' for Tool Details and Scan Date
-        due to the v2.2.59 chunk query bug that prevented actual scanning.
+
+        Finds and resets files that show 'N/A' for Tool Details and Scan Date.
         """
         # Check authentication
         if not check_auth():
@@ -333,7 +488,7 @@ class ResetIncompleteScans(Resource):
                 result.scan_status = 'pending'
                 result.is_corrupted = None  # Reset to unknown
                 result.marked_as_good = False
-                result.error_message = 'Reset due to incomplete scan data (v2.2.59 fix)'
+                result.error_message = 'Reset due to incomplete scan data'
                 result.scan_output = None
                 # Keep discovered_date as is
             
