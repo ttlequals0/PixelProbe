@@ -666,7 +666,6 @@ class MaintenanceService:
                     if file_size == 0:
                         # If size not in DB, use OS to check (more accurate than estimates)
                         try:
-                            import os
                             file_size = os.path.getsize(result.file_path)
                         except:
                             # If file doesn't exist or can't access, estimate based on path

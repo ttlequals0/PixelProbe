@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.61] - 2025-11-05
+
+### Fixed
+- **CRITICAL: File changes check crash (UnboundLocalError)**
+  - **The Problem**: v2.4.60 introduced UnboundLocalError: cannot access local variable 'os' where it is not associated with a value
+  - **Root Cause**: Duplicate `import os` statement at line 669 inside function created local variable scope conflict
+  - **Impact**: File changes check crashed immediately on start, normal scans also affected
+  - **Solution**: Removed duplicate import statement (os already imported at module level)
+  - **Result**: File changes check and normal scans now work properly
+
+### Changed
+- Cleaned up reset-incomplete-scans API message (removed version reference)
+
 ## [2.4.60] - 2025-11-04
 
 ### Fixed
