@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.62] - 2025-11-05
+
+### Added
+- **Swagger Documentation for Missing Endpoints**
+  - Added `/cancel-file-changes` - Cancel file changes check operation
+  - Added `/reset-file-changes-state` - Force reset file changes state
+  - Added `/cancel-cleanup` - Cancel cleanup operation
+  - Added `/reset-cleanup-state` - Force reset cleanup state
+  - Added `/vacuum` - Run database VACUUM
+  - Added `/test-cleanup` - Test cleanup without executing
+
+### Changed
+- All maintenance endpoints now properly documented in Swagger UI
+
 ## [2.4.61] - 2025-11-05
 
 ### Fixed

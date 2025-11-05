@@ -437,6 +437,37 @@ class FileChangesStatus(Resource):
         maintenance_service = current_app.maintenance_service
         return maintenance_service.get_file_changes_status()
 
+@maintenance_ns.route('/cancel-file-changes')
+class CancelFileChanges(Resource):
+    @maintenance_ns.doc('cancel_file_changes')
+    @maintenance_ns.response(200, 'File changes check cancelled', success_model)
+    @maintenance_ns.response(400, 'No active file changes check', error_model)
+    @maintenance_ns.response(401, 'Authentication required', error_model)
+    def post(self):
+        """Cancel the current file changes check operation"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        # Call the actual route function
+        from pixelprobe.api.maintenance_routes import cancel_file_changes
+        return cancel_file_changes()
+
+@maintenance_ns.route('/reset-file-changes-state')
+class ResetFileChangesState(Resource):
+    @maintenance_ns.doc('reset_file_changes_state')
+    @maintenance_ns.response(200, 'File changes state reset', success_model)
+    @maintenance_ns.response(401, 'Authentication required', error_model)
+    def post(self):
+        """Force reset file changes state in case of stuck operation"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        # Call the actual route function
+        from pixelprobe.api.maintenance_routes import reset_file_changes_state
+        return reset_file_changes_state()
+
 @maintenance_ns.route('/cleanup-orphaned')
 class CleanupOrphaned(Resource):
     @maintenance_ns.doc('cleanup_orphaned')
@@ -467,6 +498,67 @@ class CleanupStatus(Resource):
 
         maintenance_service = current_app.maintenance_service
         return maintenance_service.get_cleanup_status()
+
+@maintenance_ns.route('/cancel-cleanup')
+class CancelCleanup(Resource):
+    @maintenance_ns.doc('cancel_cleanup')
+    @maintenance_ns.response(200, 'Cleanup cancelled', success_model)
+    @maintenance_ns.response(400, 'No active cleanup', error_model)
+    @maintenance_ns.response(401, 'Authentication required', error_model)
+    def post(self):
+        """Cancel the current cleanup operation"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        # Call the actual route function
+        from pixelprobe.api.maintenance_routes import cancel_cleanup
+        return cancel_cleanup()
+
+@maintenance_ns.route('/reset-cleanup-state')
+class ResetCleanupState(Resource):
+    @maintenance_ns.doc('reset_cleanup_state')
+    @maintenance_ns.response(200, 'Cleanup state reset', success_model)
+    @maintenance_ns.response(401, 'Authentication required', error_model)
+    def post(self):
+        """Force reset cleanup state in case of stuck operation"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        # Call the actual route function
+        from pixelprobe.api.maintenance_routes import reset_cleanup_state
+        return reset_cleanup_state()
+
+@maintenance_ns.route('/vacuum')
+class Vacuum(Resource):
+    @maintenance_ns.doc('vacuum_database')
+    @maintenance_ns.response(200, 'Vacuum completed', success_model)
+    @maintenance_ns.response(401, 'Authentication required', error_model)
+    def post(self):
+        """Run VACUUM on the PostgreSQL database to reclaim space"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        # Call the actual route function
+        from pixelprobe.api.maintenance_routes import vacuum_database
+        return vacuum_database()
+
+@maintenance_ns.route('/test-cleanup')
+class TestCleanup(Resource):
+    @maintenance_ns.doc('test_cleanup')
+    @maintenance_ns.response(200, 'Test cleanup results')
+    @maintenance_ns.response(401, 'Authentication required', error_model)
+    def get(self):
+        """Test cleanup to see what would be cleaned without actually doing it"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        # Call the actual route function
+        from pixelprobe.api.maintenance_routes import test_cleanup
+        return test_cleanup()
 
 # Admin endpoints
 @admin_ns.route('/configuration')
