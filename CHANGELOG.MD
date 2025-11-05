@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.65] - 2025-11-05
+
+### Added
+- **Added missing endpoints to Swagger documentation**
+  - `/reset-stuck-scans` - Reset scans that haven't updated in 5 minutes
+  - `/diagnose-incomplete-scans` - Diagnose files with incomplete scan data
+  - `/worker-status` - Get Celery worker status and queue information
+
+### Removed
+- **Deprecated `/scan-all` endpoint** - Use `/scan` instead
+
+### Changed
+- Renamed `scan_all()` function to `scan()` for clarity
+
 ## [2.4.64] - 2025-11-05
 
 ### Fixed

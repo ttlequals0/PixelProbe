@@ -175,11 +175,47 @@ class WorkerStatus(Resource):
 # Removed /reset-for-rescan endpoint - rarely needed functionality
 # Users can achieve the same result by running a scan with force_rescan=true
 
-# Removed duplicate endpoints - use /force-cleanup-scan instead
-# The following endpoints were removed as they duplicate functionality:
-# - /reset-stuck-scans (duplicate of /force-cleanup-scan)
-# - /reset-files-by-path (rarely needed, overly specific)
-# - /recover-stuck-scan (duplicate of /force-cleanup-scan)
+@scan_ns.route('/reset-stuck-scans')
+class ResetStuckScans(Resource):
+    @scan_ns.doc('reset_stuck_scans')
+    @scan_ns.response(200, 'Stuck scans reset', success_model)
+    @scan_ns.response(500, 'Internal error', error_model)
+    def post(self):
+        """Reset scans that haven't been updated recently (stuck scans)"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from models import db, ScanState
+        from datetime import datetime, timezone, timedelta
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            # Find scans that haven't been updated in 5 minutes
+            cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+            stuck_scans = ScanState.query.filter(
+                ScanState.is_active == True,
+                ScanState.last_heartbeat < cutoff_time
+            ).all()
+
+            reset_count = 0
+            for scan in stuck_scans:
+                logger.warning(f"Resetting stuck scan {scan.scan_id}, last heartbeat: {scan.last_heartbeat}")
+                scan.is_active = False
+                scan.phase = 'crashed'
+                scan.progress_message = 'Scan stuck - automatically reset'
+                reset_count += 1
+
+            db.session.commit()
+
+            return {
+                'message': f'Reset {reset_count} stuck scans',
+                'scans_reset': reset_count
+            }
+        except Exception as e:
+            logger.error(f"Error resetting stuck scans: {str(e)}")
+            return {'error': str(e)}, 500
 
 @scan_ns.route('/force-cleanup-scan')
 class ForceCleanupScan(Resource):
@@ -313,6 +349,72 @@ class ResetIncompleteScans(Resource):
             
         except Exception as e:
             logger.error(f"Error resetting incomplete scans: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/diagnose-incomplete-scans')
+class DiagnoseIncompleteScans(Resource):
+    @scan_ns.doc('diagnose_incomplete_scans')
+    @scan_ns.response(200, 'Diagnosis results')
+    @scan_ns.response(500, 'Internal error', error_model)
+    def get(self):
+        """Diagnose files with incomplete scan data without resetting them"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from models import db, ScanResult
+        from sqlalchemy import or_
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            incomplete_files = ScanResult.query.filter(
+                ScanResult.scan_status == 'completed',
+                or_(
+                    ScanResult.scan_date == None,
+                    ScanResult.tool_output == None
+                )
+            ).all()
+
+            return {
+                'incomplete_count': len(incomplete_files),
+                'sample_files': [f.file_path for f in incomplete_files[:10]],
+                'message': f'Found {len(incomplete_files)} files with incomplete scan data'
+            }
+        except Exception as e:
+            logger.error(f"Error diagnosing incomplete scans: {e}")
+            return {'error': str(e)}, 500
+
+@scan_ns.route('/worker-status')
+class WorkerStatus(Resource):
+    @scan_ns.doc('get_worker_status_global')
+    @scan_ns.response(200, 'Worker status retrieved')
+    @scan_ns.response(500, 'Internal error', error_model)
+    def get(self):
+        """Get Celery worker status and queue information"""
+        # Check authentication
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        try:
+            from celery import current_app as celery_app
+
+            # Get worker stats
+            stats = celery_app.control.inspect().stats()
+            active = celery_app.control.inspect().active()
+            reserved = celery_app.control.inspect().reserved()
+
+            worker_count = len(stats) if stats else 0
+            active_tasks = sum(len(tasks) for tasks in (active or {}).values())
+            reserved_tasks = sum(len(tasks) for tasks in (reserved or {}).values())
+
+            return {
+                'workers': worker_count,
+                'active_tasks': active_tasks,
+                'reserved_tasks': reserved_tasks,
+                'worker_details': stats or {}
+            }
+        except Exception as e:
             return {'error': str(e)}, 500
 
 @scan_ns.route('/reset-files-by-path')

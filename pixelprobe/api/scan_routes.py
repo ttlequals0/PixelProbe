@@ -381,14 +381,13 @@ def scan_file():
         return jsonify({'error': str(e)}), 404
 
 @scan_bp.route('/scan', methods=['POST', 'OPTIONS'])  # Main scan endpoint
-@scan_bp.route('/scan-all', methods=['POST', 'OPTIONS'])  # Deprecated - kept for backward compatibility
 @rate_limit("2 per minute")
 @auth_required
 @validate_json_input({
     'force_rescan': {'required': False, 'type': bool},
     'directories': {'required': False, 'type': list}
 })
-def scan_all():
+def scan():
     """Start scanning all media files in configured directories"""
     if request.method == 'OPTIONS':
         return '', 200
