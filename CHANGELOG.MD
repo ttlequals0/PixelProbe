@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.75] - 2025-11-06
+
+### Fixed
+- **Fixed duplicate orphan count display in UI progress messages**
+  - Removed duplicate orphan count appending in frontend JavaScript
+  - Backend progress_message already includes orphan count, frontend was appending it again
+  - Eliminated messages like "121 orphaned found - Found 121 orphaned files"
+  - Now displays clean progress: "121 orphaned found, 4473 active tasks, ETA: 39m"
+  - Location: static/js/app.js:670-671
+
 ## [2.4.74] - 2025-11-06
 
 ### Improved

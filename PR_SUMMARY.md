@@ -1,7 +1,7 @@
-# Pull Request Summary: v2.4.35 to v2.4.74
+# Pull Request Summary: v2.4.35 to v2.4.75
 
 ## Overview
-This PR contains critical performance improvements, bug fixes, and UX enhancements for PixelProbe's maintenance operations, spanning versions 2.4.35 through 2.4.74.
+This PR contains critical performance improvements, bug fixes, and UX enhancements for PixelProbe's maintenance operations, spanning versions 2.4.35 through 2.4.75.
 
 ## High-Level Summary of Changes
 
@@ -24,7 +24,7 @@ This PR contains critical performance improvements, bug fixes, and UX enhancemen
 
 ## Versions Included
 
-**Major Versions**: 2.4.35 → 2.4.74 (40 versions)
+**Major Versions**: 2.4.35 → 2.4.75 (41 versions)
 
 ### Version Breakdown by Category
 
@@ -44,11 +44,12 @@ This PR contains critical performance improvements, bug fixes, and UX enhancemen
 - v2.4.59: Reverted to Phase 2a stall fixes
 - v2.4.60: Redis memory-aware adaptive task management
 
-#### Maintenance Operations Overhaul (v2.4.71 - v2.4.74)
+#### Maintenance Operations Overhaul (v2.4.71 - v2.4.75)
 - v2.4.71: Parallelized orphan cleanup + file changes report fixes
 - v2.4.72: Enhanced progress display with ETA
 - v2.4.73: Immediate progress visibility fix
-- v2.4.74: Real-time progress updates (every 100 files) + UI duplication fix
+- v2.4.74: Real-time progress updates (every 100 files)
+- v2.4.75: UI duplication fix (removed duplicate orphan count display)
 
 ## Key Technical Improvements
 
@@ -104,7 +105,7 @@ No database migrations required. Changes are runtime improvements only.
 
 ## Deployment
 Docker images available:
-- `ttlequals0/pixelprobe:2.4.74`
+- `ttlequals0/pixelprobe:2.4.75`
 - `ttlequals0/pixelprobe:latest`
 
 Built and tested on platform: `linux/amd64`
