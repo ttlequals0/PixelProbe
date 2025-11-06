@@ -667,13 +667,8 @@ class ProgressManager {
                 }
             }
             
-            if (status.orphaned_found > 0) {
-                if (status.phase === 'deleting_entries') {
-                    parts.push(`Deleting ${status.orphaned_found} orphaned entries`);
-                } else {
-                    parts.push(`Found ${status.orphaned_found} orphaned files`);
-                }
-            }
+            // Don't append orphan count here - it's already in the progress_message from backend
+            // This prevents duplicate display like "121 orphaned found - Found 121 orphaned files"
             
             // Add ETA or stuck warning
             if (eta) {

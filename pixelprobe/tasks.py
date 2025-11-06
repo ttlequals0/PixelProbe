@@ -536,6 +536,57 @@ def scheduled_scan_task(schedule_id, scan_type='full'):
         raise exc
 
 
+@celery_app.task(bind=True, max_retries=1,
+                 soft_time_limit=5, time_limit=10,  # Fast operation - just check existence
+                 priority=6)  # Higher priority than hash calc - cleanup tasks are quick
+def check_file_exists_task(self, file_id, file_path):
+    """
+    Check if a file exists on disk (for orphan cleanup)
+
+    This is a lightweight task that only checks file existence without reading the file.
+    Much faster than hash calculation for orphan cleanup operations.
+
+    Args:
+        file_id (int): Database ID of the file
+        file_path (str): Path to the file to check
+
+    Returns:
+        dict: {file_id, file_path, exists: bool}
+    """
+    import os
+
+    try:
+        # Check if file exists - use multiple methods for robust detection
+        file_exists = False
+
+        # Method 1: os.path.exists() - fast but may have issues with symlinks
+        if os.path.exists(file_path):
+            file_exists = True
+        # Method 2: Try to stat the file directly - more reliable
+        elif os.path.isfile(file_path):
+            file_exists = True
+        # Method 3: Check if path exists at all (directory or file)
+        elif os.path.lexists(file_path):
+            # lexists returns True even for broken symlinks
+            # If lexists is True but exists is False, it's a broken symlink - treat as not existing
+            file_exists = False
+
+        return {
+            'file_id': file_id,
+            'file_path': file_path,
+            'exists': file_exists
+        }
+
+    except (OSError, IOError) as e:
+        # If we get an error accessing the file, treat it as not existing
+        logger.warning(f"Error checking file existence {file_path}: {e}")
+        return {
+            'file_id': file_id,
+            'file_path': file_path,
+            'exists': False
+        }
+
+
 @celery_app.task(bind=True, max_retries=2,
                  soft_time_limit=None, time_limit=None,  # No timeout - must complete hash regardless of file size
                  priority=7)  # Low priority - maintenance runs in background

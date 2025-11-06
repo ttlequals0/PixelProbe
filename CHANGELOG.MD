@@ -5,6 +5,134 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.74] - 2025-11-06
+
+### Improved
+- **Enhanced orphan cleanup progress update frequency for better real-time UX**
+  - Progress updates now occur every 100 files instead of every 1,000 files
+  - Provides 10x more frequent updates for smoother, more responsive progress display
+  - Users see progress increment more naturally (e.g., 100, 200, 300... instead of 1000, 2000, 3000...)
+  - Improves perceived responsiveness without significant performance overhead
+  - Location: pixelprobe/services/maintenance_service.py:350-351
+
+## [2.4.73] - 2025-11-05
+
+### Fixed
+- **Fixed orphan cleanup progress not showing until 52% completion**
+  - Progress updates now display immediately when first tasks complete (not just at 0% multiples of 1000)
+  - Added last_progress_update tracking to ensure first progress update shows as soon as tasks start completing
+  - Users will now see progress starting from 0% instead of appearing suddenly at a high percentage
+  - Location: pixelprobe/services/maintenance_service.py:304, 351, 384
+
+## [2.4.72] - 2025-11-05
+
+### Improved
+- **Enhanced orphan cleanup progress display with detailed progress and ETA**
+  - Phase 2 progress now shows "X / Y files (Z%)" format instead of just total count
+  - Added ETA calculation based on average processing rate
+  - ETA displayed as "Xh Ym" for hours/minutes or "Ym" for under 1 hour
+  - Example: "Phase 2 of 3: Checking 50,000 / 1,090,169 files (4%) - 1,234 orphaned found, 4,987 active tasks, ETA: 45m"
+  - Makes long-running operations more transparent and predictable for users
+  - Location: pixelprobe/services/maintenance_service.py:287, 347-379
+
+## [2.4.71] - 2025-11-05
+
+### Fixed
+- **CRITICAL: Fixed file changes check report not showing modified and deleted file counts**
+  - File changes check was detecting modified and deleted files correctly but report showed 0
+  - Root cause: Phase 3 wasn't tracking modified vs deleted counts separately
+  - Report generation didn't receive or use the orphaned files count
+  - Fix: Track modified_count and deleted_count separately during Phase 3
+  - Fix: Pass deleted_count to report generation and populate orphaned_records_found field
+  - Report now correctly shows files_changed (modified) and orphaned_records_found (deleted)
+  - Updated progress messages to show breakdown: "X modified, Y deleted"
+  - Location: pixelprobe/services/maintenance_service.py:755-827, 949-991
+
+### Performance
+- **MAJOR: Parallelized orphan cleanup Phase 2 (file existence checking)**
+  - Orphan cleanup was sequential, taking ~12 hours for 1M files
+  - Phase 2 now uses parallel Celery tasks to check file existence
+  - Created new `check_file_exists_task` - lightweight task for existence checking
+  - Uses same throttling approach as file changes check (5000 concurrent tasks max)
+  - Expected reduction: 12 hours → 30-60 minutes for 1M files
+  - File existence checking is I/O bound - perfect for massive parallelization
+  - Location: pixelprobe/tasks.py:539-588, pixelprobe/services/maintenance_service.py:284-375
+
+## [2.4.70] - 2025-11-05
+
+### Fixed
+- **CRITICAL: Fixed UI not showing file changes check and cleanup progress**
+  - File changes check and cleanup run in background threads with their own database sessions
+  - Web endpoints querying status used cached session data and couldn't see background updates
+  - Root cause: Database session isolation between Flask request context and background threads
+  - Fix: Added `db.session.expire_all()` to force fresh queries from database
+  - UI now properly displays real-time progress for file changes check and cleanup operations
+  - Location: pixelprobe/api/maintenance_routes.py:190-193, 117-120
+
+## [2.4.69] - 2025-11-05
+
+### Fixed
+- **CRITICAL: Fixed database session concurrency causing scan to stop early**
+  - Scan was only processing 10-12 files then completing with remaining files pending
+  - Root cause: Progress updates used shared db.session while worker threads were scanning
+  - Error: "Method 'close()' can't be called here; concurrent operations not permitted"
+  - Fix: Progress updates now use separate isolated session to avoid conflicts
+  - Worker threads can now complete full scan without session interference
+  - Location: pixelprobe/services/scan_service.py:2159-2187
+
+## [2.4.68] - 2025-11-05
+
+### Fixed
+- **CRITICAL: Fixed pending files not being scanned**
+  - Fixed `_get_chunk_file_count()` to handle `FILE_CHUNK:offset:limit` format
+  - Bug caused scan to report "Total files to scan: 0" even when pending files existed
+  - Scan would complete without actually scanning pending files
+  - Now properly counts and scans all pending files in FILE_CHUNK format chunks
+  - Location: pixelprobe/services/scan_service.py:1903-1949
+
+## [2.4.67] - 2025-11-05
+
+### Fixed
+- **Fixed frontend to use correct endpoints**
+  - Changed `/scan-all` to `/scan` in app.js
+  - Changed `/export-csv` to `/export` with proper format parameter
+  - UI now correctly calls backend endpoints
+
+### Changed
+- **Removed duplicate `/cancel` Swagger endpoint**
+  - Consolidated to single `/cancel-scan` endpoint matching backend
+  - Fixed duplicate class name conflict (CancelScan → CancelCurrentScan)
+
+### Added
+- **Added all missing UI-critical endpoints to Swagger**
+  - `/scan-file` - Scan single file by ID
+  - `/mark-as-good` - Mark file as not corrupted
+  - `/reset-for-rescan` - Reset files to pending status
+  - `/stats` - Get system statistics
+  - `/system-info` - Get system information
+  - All endpoints used by UI are now documented in Swagger
+
+## [2.4.66] - 2025-11-05
+
+### Fixed
+- **Fixed `/reset-stuck-scans` endpoint error**
+  - Replaced non-existent `last_heartbeat` field with `start_time` check
+  - Now finds scans that are active but started more than 30 minutes ago
+  - Error: "type object 'ScanState' has no attribute 'last_heartbeat'"
+
+### Changed
+- **Cleaned up version references in reset-incomplete-scans**
+  - Removed "(v2.2.59 fix)" reference from error message
+  - Removed version reference from docstring
+
+### Added
+- **Added critical missing endpoints to Swagger**
+  - `/scan` - Main scan endpoint (POST)
+  - `/scan-status` - Get current scan status and progress (GET)
+  - `/cancel-scan` - Cancel currently running scan (POST)
+  - `/scan-results` - Get all scan results with filtering (GET)
+  - `/scan-results/<int:result_id>` - Get specific scan result by ID (GET)
+
 ## [2.4.65] - 2025-11-05
 
 ### Added

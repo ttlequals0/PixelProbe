@@ -281,73 +281,122 @@ class MaintenanceService:
                 self.cleanup_state['total_files'] = total_files
                 self.cleanup_state['phase'] = 'scanning_database'
             
-            # Phase 2: Checking and collecting orphaned files
+            # Phase 2: Checking files in parallel using Celery tasks
             cleanup_record.phase = 'checking_files'
             cleanup_record.phase_number = 2
-            cleanup_record.progress_message = f'Phase 2 of 3: Checking {total_files} files on filesystem...'
+            cleanup_record.progress_message = f'Phase 2 of 3: Checking 0 / {total_files:,} files on filesystem (0%)...'
             db.session.commit()
-            
-            # Create progress tracker for cleanup
-            progress_tracker = ProgressTracker('cleanup')
-            
-            orphaned_ids = []  # Store IDs instead of objects
-            orphaned_paths = []  # Store paths for logging
-            orphaned_count = 0
 
-            for i, result in enumerate(all_results):
+            logger.info(f"Starting Phase 2: Parallel file existence checking for {total_files} files")
+
+            # Import task
+            from pixelprobe.tasks import check_file_exists_task
+
+            # Parallel checking with throttling (similar to file changes check)
+            max_active_tasks = 5000  # Limit concurrent tasks
+            active_tasks = []
+            file_index = 0
+            total_files_processed = 0
+            orphaned_files = []  # Collect orphaned file info
+            phase2_start_time = time.time()  # Track start time for ETA calculation
+
+            # Track when we last updated progress
+            last_progress_update = 0
+
+            while file_index < len(all_results) or len(active_tasks) > 0:
                 if self._is_cancelled(cleanup_record):
+                    logger.info("Cleanup cancelled during file checking")
                     break
 
-                # Update progress
-                cleanup_record.files_processed = i + 1
-                cleanup_record.phase_current = i + 1
-                cleanup_record.current_file = result.file_path
+                # Submit new tasks while under the limit
+                while len(active_tasks) < max_active_tasks and file_index < len(all_results):
+                    result = all_results[file_index]
 
-                # Update progress message with current file and ETA
-                cleanup_record.progress_message = progress_tracker.get_progress_message(
-                    f'Phase 2 of 3: Checking {total_files} files on filesystem',
-                    i + 1,
-                    total_files,
-                    os.path.basename(result.file_path)
-                )
+                    # Submit file existence check task
+                    task = check_file_exists_task.apply_async(
+                        args=[result.id, result.file_path],
+                        priority=6
+                    )
+                    active_tasks.append(task)
+                    file_index += 1
 
-                # Check if file exists - use multiple methods for robust detection
-                file_exists = False
-                try:
-                    # Method 1: os.path.exists() - fast but may have issues with symlinks
-                    if os.path.exists(result.file_path):
-                        file_exists = True
-                    # Method 2: Try to stat the file directly - more reliable
-                    elif os.path.isfile(result.file_path):
-                        file_exists = True
-                    # Method 3: Check if path exists at all (directory or file)
-                    elif os.path.lexists(result.file_path):
-                        # lexists returns True even for broken symlinks
-                        # If lexists is True but exists is False, it's a broken symlink - treat as orphan
-                        file_exists = False
-                        logger.info(f"Found broken symlink or inaccessible file: {result.file_path}")
-                except (OSError, IOError) as e:
-                    # If we get an error accessing the file, treat it as orphaned
-                    logger.warning(f"Error accessing file {result.file_path}: {e} - treating as orphan")
-                    file_exists = False
+                # Collect completed tasks and free up slots
+                still_active = []
+                for task in active_tasks:
+                    if task.ready():
+                        try:
+                            check_result = task.get(timeout=1)
+                            total_files_processed += 1
 
-                if not file_exists:
-                    orphaned_ids.append(result.id)  # Store ID instead of object
-                    orphaned_paths.append(result.file_path)  # Store path for logging
-                    orphaned_count += 1
-                    cleanup_record.orphaned_found = orphaned_count
-                    logger.info(f"Found orphaned entry: {result.file_path}")
-                    # Store for report
-                    self.orphaned_files_list.append(result.file_path)
-                
-                # Update progress periodically
-                if i % 100 == 0:
-                    cleanup_record.files_processed = i + 1
+                            if not check_result.get('exists'):
+                                # File doesn't exist - add to orphaned list
+                                orphaned_files.append({
+                                    'file_id': check_result['file_id'],
+                                    'file_path': check_result['file_path']
+                                })
+                                logger.info(f"Found orphaned entry: {check_result['file_path']}")
+                        except Exception as e:
+                            logger.error(f"Error processing existence check result: {e}")
+                            total_files_processed += 1
+                    else:
+                        still_active.append(task)
+
+                active_tasks = still_active
+
+                # If no new tasks submitted and active tasks exist, wait a bit
+                if file_index < len(all_results) and len(active_tasks) > 0:
+                    time.sleep(0.1)  # Brief sleep to avoid busy waiting
+
+                # Update progress periodically (every 100 files OR if this is the first update)
+                if (total_files_processed % 100 == 0 and total_files_processed > last_progress_update) or (total_files_processed > 0 and last_progress_update == 0):
+                    cleanup_record.files_processed = total_files_processed
+                    cleanup_record.phase_current = total_files_processed
+                    cleanup_record.orphaned_found = len(orphaned_files)
+                    pct = int((total_files_processed / total_files * 100)) if total_files > 0 else 0
+
+                    # Calculate ETA
+                    elapsed_seconds = time.time() - phase2_start_time
+                    if total_files_processed > 0:
+                        avg_time_per_file = elapsed_seconds / total_files_processed
+                        files_remaining = total_files - total_files_processed
+                        eta_seconds = avg_time_per_file * files_remaining
+
+                        # Format ETA as hours:minutes
+                        eta_hours = int(eta_seconds // 3600)
+                        eta_minutes = int((eta_seconds % 3600) // 60)
+                        if eta_hours > 0:
+                            eta_str = f"{eta_hours}h {eta_minutes}m"
+                        else:
+                            eta_str = f"{eta_minutes}m"
+                    else:
+                        eta_str = "calculating..."
+
+                    cleanup_record.progress_message = (
+                        f'Phase 2 of 3: Checking {total_files_processed:,} / {total_files:,} files ({pct}%) - '
+                        f'{len(orphaned_files)} orphaned found, {len(active_tasks)} active tasks, ETA: {eta_str}'
+                    )
                     db.session.commit()
-                    
-                with self.cleanup_lock:
-                    self.cleanup_state['files_processed'] = i + 1
-                    self.cleanup_state['orphaned_found'] = orphaned_count
+
+                    with self.cleanup_lock:
+                        self.cleanup_state['files_processed'] = total_files_processed
+                        self.cleanup_state['orphaned_found'] = len(orphaned_files)
+
+                    last_progress_update = total_files_processed
+
+            # Final update
+            cleanup_record.files_processed = total_files_processed
+            cleanup_record.orphaned_found = len(orphaned_files)
+            db.session.commit()
+
+            logger.info(f"Phase 2 complete: Checked {total_files_processed} files, found {len(orphaned_files)} orphaned entries")
+
+            # Extract IDs and paths for Phase 3
+            orphaned_ids = [f['file_id'] for f in orphaned_files]
+            orphaned_paths = [f['file_path'] for f in orphaned_files]
+            orphaned_count = len(orphaned_files)
+
+            # Store for report
+            self.orphaned_files_list = orphaned_paths
             
             # Check if cancelled before proceeding to deletion phase
             if self._is_cancelled(cleanup_record):
@@ -752,6 +801,8 @@ class MaintenanceService:
                 logger.info(f"Starting Phase 3: Marking {len(changed_files)} changed files as pending for rescan")
 
                 files_marked = 0
+                modified_count = 0
+                deleted_count = 0
                 last_heartbeat_time = time.time()
 
                 for i, change_info in enumerate(changed_files):
@@ -775,10 +826,12 @@ class MaintenanceService:
                             file_record.scan_status = 'pending'
                             files_marked += 1
 
-                            # Log with change type details
+                            # Count by type
                             if change_info['change_type'] == 'deleted':
+                                deleted_count += 1
                                 logger.info(f"Marked deleted file for cleanup: {change_info['file_path']}")
                             elif change_info['change_type'] == 'modified':
+                                modified_count += 1
                                 logger.info(f"Marked modified file for rescan: {change_info['file_path']} (hash: {change_info['stored_hash'][:16]}... -> {change_info['current_hash'][:16]}...)")
                             else:
                                 logger.info(f"Marked file for rescan: {change_info['file_path']} (type: {change_info['change_type']})")
@@ -791,11 +844,16 @@ class MaintenanceService:
                         db.session.commit()
                         logger.info(f"Phase 3: Marked {files_marked}/{len(changed_files)} files for rescan")
 
-                # Final commit for remaining files
+                # Final commit for remaining files and update counts
                 file_changes_record.progress_message = f'Phase 3 of 3: Marked {files_marked}/{len(changed_files)} files as pending for rescan'
+                file_changes_record.changes_found = modified_count
                 db.session.commit()
-                logger.info(f"Phase 3 complete: Marked {files_marked} files for rescan. They will be processed by parallel scan workers.")
-            
+                logger.info(f"Phase 3 complete: Marked {files_marked} files for rescan ({modified_count} modified, {deleted_count} deleted). They will be processed by parallel scan workers.")
+            else:
+                # No changes found - set counts to 0
+                modified_count = 0
+                deleted_count = 0
+
             # Complete check
             if self._is_cancelled_file_changes(file_changes_record):
                 file_changes_record.phase = 'cancelled'
@@ -803,18 +861,19 @@ class MaintenanceService:
             else:
                 file_changes_record.phase = 'complete'
                 file_changes_record.progress_message = (
-                    f'Check complete. Found {len(changed_files)} changed files, '
+                    f'Check complete. Found {len(changed_files)} changed files '
+                    f'({modified_count} modified, {deleted_count} deleted), '
                     f'{file_changes_record.corrupted_found} newly corrupted.'
                 )
-            
+
             file_changes_record.is_active = False
             file_changes_record.end_time = datetime.now(timezone.utc)
             db.session.commit()
-            
+
             # Create scan report for file changes operation
             # Always try to create a report even if there was an error, as long as we have some data
             if file_changes_record.phase in ('complete', 'error'):
-                self._create_file_changes_report(file_changes_record, getattr(self, 'changed_files_list', []))
+                self._create_file_changes_report(file_changes_record, getattr(self, 'changed_files_list', []), deleted_count if changed_files else 0)
             
             with self.file_changes_lock:
                 self.file_changes_state['is_running'] = False
@@ -936,12 +995,13 @@ class MaintenanceService:
             self.file_changes_state['is_running'] = False
             self.file_changes_state['phase'] = 'error'
 
-    def _create_file_changes_report(self, file_changes_record: FileChangesState, changed_files_list=None):
+    def _create_file_changes_report(self, file_changes_record: FileChangesState, changed_files_list=None, deleted_files_count=0):
         """Create a scan report for file changes operation
 
         Args:
             file_changes_record: The FileChangesState record
             changed_files_list: List of changed files with hash comparison details
+            deleted_files_count: Number of deleted/orphaned files found
         """
         try:
             # Calculate duration
@@ -959,6 +1019,7 @@ class MaintenanceService:
                 files_scanned=file_changes_record.files_processed,
                 files_changed=file_changes_record.changes_found,
                 files_corrupted_new=file_changes_record.corrupted_found,
+                orphaned_records_found=deleted_files_count,
                 status='completed' if file_changes_record.phase == 'complete' else file_changes_record.phase,
                 error_message=file_changes_record.error_message
             )
@@ -972,7 +1033,11 @@ class MaintenanceService:
             db.session.add(report)
             db.session.commit()
 
-            logger.info(f"Created file changes report {report.report_id} with {len(changed_files_list) if changed_files_list else 0} changed files")
+            logger.info(
+                f"Created file changes report {report.report_id}: "
+                f"{report.files_changed} modified files, "
+                f"{report.orphaned_records_found} deleted files"
+            )
 
         except Exception as e:
             logger.error(f"Failed to create file changes report: {e}")
