@@ -1,7 +1,7 @@
-# Pull Request Summary: v2.4.35 to v2.4.75
+# Pull Request Summary: v2.4.35 to v2.4.76
 
 ## Overview
-This PR contains critical performance improvements, bug fixes, and UX enhancements for PixelProbe's maintenance operations, spanning versions 2.4.35 through 2.4.75.
+This PR contains critical performance improvements, bug fixes, and UX enhancements for PixelProbe's maintenance operations, spanning versions 2.4.35 through 2.4.76.
 
 ## High-Level Summary of Changes
 
@@ -12,19 +12,21 @@ This PR contains critical performance improvements, bug fixes, and UX enhancemen
 
 ### Critical Bug Fixes
 - **Database Deadlock Resolution (v2.4.35-v2.4.69)**: Fixed multiple database session concurrency issues causing scans to freeze or stop prematurely
+- **Phase 3 Progress Display (v2.4.76)**: Fixed Phase 3 scan showing "X of 0 files" due to database session staleness
 - **File Changes Report Accuracy (v2.4.71)**: Fixed reports showing 0 files changed despite detecting thousands of modifications
 - **UI Progress Display (v2.4.70)**: Fixed real-time progress not showing in UI due to database session isolation
 - **Pending File Scans (v2.4.68)**: Fixed pending files not being scanned due to chunk format parsing bug
+- **Integration Tests (v2.4.76)**: Fixed 3 failing tests using incorrect/non-existent API endpoints
 
 ### User Experience Enhancements
 - **Enhanced Progress Display (v2.4.72-v2.4.74)**: Added detailed progress tracking with ETA for orphan cleanup and file changes check
 - **Immediate Progress Visibility (v2.4.73)**: Progress now displays from 0% instead of appearing suddenly at 52%
 - **Real-time Progress Updates (v2.4.74)**: Increased update frequency to every 100 files for smoother, more responsive progress tracking
-- **UI Duplication Fix (v2.4.74)**: Removed duplicate orphan count display in progress messages
+- **UI Duplication Fix (v2.4.75)**: Removed duplicate orphan count display in progress messages
 
 ## Versions Included
 
-**Major Versions**: 2.4.35 → 2.4.75 (41 versions)
+**Major Versions**: 2.4.35 → 2.4.76 (42 versions)
 
 ### Version Breakdown by Category
 
@@ -44,12 +46,13 @@ This PR contains critical performance improvements, bug fixes, and UX enhancemen
 - v2.4.59: Reverted to Phase 2a stall fixes
 - v2.4.60: Redis memory-aware adaptive task management
 
-#### Maintenance Operations Overhaul (v2.4.71 - v2.4.75)
+#### Maintenance Operations Overhaul (v2.4.71 - v2.4.76)
 - v2.4.71: Parallelized orphan cleanup + file changes report fixes
 - v2.4.72: Enhanced progress display with ETA
 - v2.4.73: Immediate progress visibility fix
 - v2.4.74: Real-time progress updates (every 100 files)
 - v2.4.75: UI duplication fix (removed duplicate orphan count display)
+- v2.4.76: Phase 3 progress bug fix + integration test corrections
 
 ## Key Technical Improvements
 
@@ -105,7 +108,7 @@ No database migrations required. Changes are runtime improvements only.
 
 ## Deployment
 Docker images available:
-- `ttlequals0/pixelprobe:2.4.75`
+- `ttlequals0/pixelprobe:2.4.76`
 - `ttlequals0/pixelprobe:latest`
 
 Built and tested on platform: `linux/amd64`
