@@ -542,9 +542,9 @@ class ScanService:
                                f"with {total_scan_files} files")
                     
                     if num_workers > 1:
-                        self._parallel_scan_chunks(checker, scan_chunks, force_rescan, num_workers, scan_state, scan_state_id)
+                        self._parallel_scan_chunks(checker, scan_chunks, force_rescan, num_workers, scan_state, scan_state_id, total_scan_files)
                     else:
-                        self._sequential_scan_chunks(checker, scan_chunks, force_rescan, scan_state, scan_state_id)
+                        self._sequential_scan_chunks(checker, scan_chunks, force_rescan, scan_state, scan_state_id, total_scan_files)
                         
                 except Exception as e:
                     logger.error(f"=== SCAN ERROR ===")
@@ -1090,12 +1090,12 @@ class ScanService:
         
         return {'message': f'Reset {count} stuck files', 'count': count}
     
-    def _sequential_scan_chunks(self, checker: PixelProbe, chunks: List[ScanChunk], 
-                               force_rescan: bool, scan_state: ScanState, scan_state_id: int):
+    def _sequential_scan_chunks(self, checker: PixelProbe, chunks: List[ScanChunk],
+                               force_rescan: bool, scan_state: ScanState, scan_state_id: int, total_files_to_scan: int):
         """Perform sequential scan of chunks"""
         total_chunks = len(chunks)
         total_files_scanned = 0
-        total_files_to_scan = scan_state.phase_total  # Initial estimate from scanning phase
+        # Use passed parameter instead of reading from scan_state.phase_total to avoid stale session data
         actual_total_discovered = 0  # Track actual total as we discover files in chunks
         chunks_processed = 0
         
@@ -1275,15 +1275,15 @@ class ScanService:
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
     
     def _parallel_scan_chunks(self, checker: PixelProbe, chunks: List[ScanChunk],
-                             force_rescan: bool, num_workers: int, scan_state: ScanState, scan_state_id: int):
+                             force_rescan: bool, num_workers: int, scan_state: ScanState, scan_state_id: int, total_files_to_scan: int):
         """Perform parallel scan of chunks"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
-        
+
         total_chunks = len(chunks)
         completed_chunks = 0
         total_files_scanned = 0
-        total_files_to_scan = scan_state.phase_total  # Initial estimate from scanning phase
+        # Use passed parameter instead of reading from scan_state.phase_total to avoid stale session data
         actual_total_discovered = 0  # Track actual total as we discover files in chunks
         files_scanned_lock = threading.Lock()
         discovery_lock = threading.Lock()

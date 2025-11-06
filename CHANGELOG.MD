@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.76] - 2025-11-06
+
+### Fixed
+- **Fixed Phase 3 progress showing 0 total files in UI**
+  - Bug: UI displayed "304 of 0 files" during Phase 3 scan progress
+  - Root cause: Database session staleness caused scan_state.phase_total to read as 0
+  - Solution: Pass total_files_to_scan directly as parameter instead of reading from stale session
+  - Updated _sequential_scan_chunks() and _parallel_scan_chunks() function signatures
+  - Location: pixelprobe/services/scan_service.py:1094, 1278, 545-547
+
+### Tests
+- **Fixed 3 failing integration tests using incorrect API endpoints**
+  - Updated test_cleanup_and_scan_mutual_exclusion to use /api/scan-parallel
+  - Updated test_scan_prevents_concurrent_execution to use /api/scan-parallel
+  - Updated test_scan_parallel_v2_endpoint_execution to use /api/scan-parallel
+  - All tests now pass: 172 passed, 4 skipped, 0 failed
+  - Locations: tests/test_concurrency.py:218, tests/integration/test_scan_execution.py:57, 232
+
 ## [2.4.75] - 2025-11-06
 
 ### Fixed
