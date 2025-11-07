@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.77] - 2025-11-06
+
+### Fixed
+- **Fixed Phase 3 progress STILL showing "X of 0 files" (complete fix)**
+  - Bug: v2.4.76 only partially fixed the issue - still showed "169 of 0 files" in production
+  - Root cause: In _sequential_scan_chunks, when chunks_processed==0 (first chunk), the code was reading stale scan_state.phase_total instead of using the passed parameter
+  - Solution: Use passed total_files_to_scan parameter throughout, create current_total_estimate variable to track dynamic total
+  - Changed lines 1127-1129 to use passed parameter instead of reading scan_state.phase_total
+  - Updated all references to use current_total_estimate for consistency
+  - Location: pixelprobe/services/scan_service.py:1127-1129, 1132, 1141, 1149, 1155, 1176, 1182, 1201
+
 ## [2.4.76] - 2025-11-06
 
 ### Fixed

@@ -1122,13 +1122,14 @@ class ScanService:
             if chunks_processed > 0 and remaining_chunks > 0:
                 avg_files_per_chunk = actual_total_discovered / (chunks_processed + 1)
                 estimated_remaining = int(avg_files_per_chunk * remaining_chunks)
-                total_files_to_scan = actual_total_discovered + estimated_remaining
+                current_total_estimate = actual_total_discovered + estimated_remaining
             else:
-                phase_total = getattr(scan_state, 'phase_total', 0) or 0
-                total_files_to_scan = max(actual_total_discovered, phase_total)
+                # Use the passed-in total_files_to_scan parameter (set at scan start)
+                # Don't read from scan_state.phase_total as it may be stale due to session isolation
+                current_total_estimate = max(actual_total_discovered, total_files_to_scan)
             
             # Now scan the chunk with updated total
-            self._scan_chunk_files(chunk, checker, force_rescan, total_files_scanned, total_files_to_scan, scan_state)
+            self._scan_chunk_files(chunk, checker, force_rescan, total_files_scanned, current_total_estimate, scan_state)
             
             chunks_processed += 1
             
@@ -1137,21 +1138,21 @@ class ScanService:
                 total_files_scanned += chunk.files_scanned
             
             # Update progress with actual file counts
-            self.update_progress(total_files_scanned, total_files_to_scan, chunk.directory_path, 'scanning')
-            
+            self.update_progress(total_files_scanned, current_total_estimate, chunk.directory_path, 'scanning')
+
             # Update scan state progress with files, not chunks (with error recovery)
             try:
                 scan_state.current_chunk_index = i + 1
                 scan_state.files_processed = total_files_scanned  # Ensure files_processed is set
                 # Don't update estimated_total during scanning - it should be locked after discovery
-                # scan_state.estimated_total = total_files_to_scan  # REMOVED - causes confusing UI
-                scan_state.update_progress(total_files_scanned, total_files_to_scan, current_file='')
-                
+                # scan_state.estimated_total = current_total_estimate  # REMOVED - causes confusing UI
+                scan_state.update_progress(total_files_scanned, current_total_estimate, current_file='')
+
                 # Update progress message
                 scan_state.progress_message = progress_tracker.get_progress_message(
                     f'Phase 3 of 3: Scanning files across {total_chunks} directories',
                     total_files_scanned,
-                    total_files_to_scan,
+                    current_total_estimate,
                     os.path.basename(chunk.directory_path)
                 )
                 # Force commit and flush to ensure visibility
@@ -1172,13 +1173,13 @@ class ScanService:
                 except Exception as e2:
                     logger.error(f"Failed to recover progress update: {e2}")
             
-            logger.info(f"Chunk {i+1}/{total_chunks} completed: {chunk.files_scanned} files scanned (total: {total_files_scanned}/{total_files_to_scan})")
-        
+            logger.info(f"Chunk {i+1}/{total_chunks} completed: {chunk.files_scanned} files scanned (total: {total_files_scanned}/{current_total_estimate})")
+
         # Complete scan
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
         else:
-            self.update_progress(total_files_scanned, total_files_to_scan, '', 'completed')
+            self.update_progress(total_files_scanned, current_total_estimate, '', 'completed')
             
             # Thread-safe completion using direct SQL update
             from sqlalchemy import text
@@ -1197,7 +1198,7 @@ class ScanService:
                 logger.info(f"=== SCAN COMPLETED (SEQUENTIAL) ===")
                 logger.info(f"Scan ID: {scan_state_id}")
                 logger.info(f"Total chunks processed: {total_chunks}")
-                logger.info(f"Files scanned: {total_files_scanned}/{total_files_to_scan}")
+                logger.info(f"Files scanned: {total_files_scanned}/{current_total_estimate}")
                 logger.info(f"=== END SCAN ===")
     
     def _sequential_scan(self, checker: PixelProbe, files: List[str], 
