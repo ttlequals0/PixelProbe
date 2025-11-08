@@ -181,7 +181,7 @@ class ScanService:
             self.update_scan_progress_redis = update_scan_progress_redis
             self.scan_id = scan_id
             logger.info(f"Redis progress updates enabled for scan {scan_id}")
-        except ImportError as e:
+        except (ImportError, Exception) as e:
             logger.warning(f"UI progress worker not available - using direct database updates: {e}")
             ui_worker = None
             self.update_scan_progress_redis = None

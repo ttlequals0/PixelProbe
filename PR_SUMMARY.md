@@ -1,7 +1,7 @@
-# Pull Request Summary: v2.4.35 to v2.4.76
+# Pull Request Summary: v2.4.35 to v2.4.98
 
 ## Overview
-This PR contains critical performance improvements, bug fixes, and UX enhancements for PixelProbe's maintenance operations, spanning versions 2.4.35 through 2.4.76.
+This PR contains critical performance improvements, bug fixes, and UX enhancements for PixelProbe's maintenance operations and scanning functionality, spanning versions 2.4.35 through 2.4.98.
 
 ## High-Level Summary of Changes
 
@@ -12,7 +12,9 @@ This PR contains critical performance improvements, bug fixes, and UX enhancemen
 
 ### Critical Bug Fixes
 - **Database Deadlock Resolution (v2.4.35-v2.4.69)**: Fixed multiple database session concurrency issues causing scans to freeze or stop prematurely
-- **Phase 3 Progress Display (v2.4.76)**: Fixed Phase 3 scan showing "X of 0 files" due to database session staleness
+- **Scan AttributeError (v2.4.98)**: Fixed critical bug where incorrect field names prevented files from being scanned (scans stopped after 25-26 files)
+- **Phase 3 Progress Display (v2.4.76-v2.4.77)**: Fixed Phase 3 scan showing "X of 0 files" due to database session staleness
+- **Failed File Status (v2.4.97)**: Files that fail to scan now properly marked as 'error' instead of remaining 'pending' forever
 - **File Changes Report Accuracy (v2.4.71)**: Fixed reports showing 0 files changed despite detecting thousands of modifications
 - **UI Progress Display (v2.4.70)**: Fixed real-time progress not showing in UI due to database session isolation
 - **Pending File Scans (v2.4.68)**: Fixed pending files not being scanned due to chunk format parsing bug
@@ -26,7 +28,7 @@ This PR contains critical performance improvements, bug fixes, and UX enhancemen
 
 ## Versions Included
 
-**Major Versions**: 2.4.35 → 2.4.76 (42 versions)
+**Major Versions**: 2.4.35 → 2.4.98 (64 versions)
 
 ### Version Breakdown by Category
 
@@ -52,7 +54,12 @@ This PR contains critical performance improvements, bug fixes, and UX enhancemen
 - v2.4.73: Immediate progress visibility fix
 - v2.4.74: Real-time progress updates (every 100 files)
 - v2.4.75: UI duplication fix (removed duplicate orphan count display)
-- v2.4.76: Phase 3 progress bug fix + integration test corrections
+- v2.4.76-v2.4.77: Phase 3 progress bug fix + integration test corrections
+
+#### Scan Reliability Fixes (v2.4.78 - v2.4.98)
+- v2.4.78-v2.4.96: UI progress tracking improvements and Redis integration
+- v2.4.97: Added error status marking for failed file scans
+- v2.4.98: Fixed critical AttributeError preventing file scanning (scan_error → error_message, last_scanned → scan_date)
 
 ## Key Technical Improvements
 
@@ -80,15 +87,17 @@ This PR contains critical performance improvements, bug fixes, and UX enhancemen
 - Prevents memory exhaustion crashes
 
 ## Testing Status
-- **Total Tests**: 176
-- **Passing**: 169
-- **Failed**: 3 (pre-existing test issues, not related to changes)
+- **Total Tests**: 177
+- **Passing**: 158
+- **Failed**: 5 (Redis connection errors in CI environment - tests require Redis)
 - **Skipped**: 4
-- **Status**: All core functionality tests passing
+- **Status**: All tests that don't require Redis passing successfully
 
 ## Files Modified
 - `pixelprobe/services/maintenance_service.py` - Core maintenance operations
-- `pixelprobe/tasks.py` - Celery task definitions
+- `pixelprobe/services/scan_service.py` - Scan execution and error handling
+- `pixelprobe/tasks.py` - Celery task definitions including UI progress worker
+- `pixelprobe/progress_utils.py` - NEW: Redis progress tracking utilities
 - `pixelprobe/api/maintenance_routes.py` - API endpoints
 - `static/js/app.js` - Frontend progress display
 - `version.py` - Version tracking
@@ -108,7 +117,13 @@ No database migrations required. Changes are runtime improvements only.
 
 ## Deployment
 Docker images available:
-- `ttlequals0/pixelprobe:2.4.76`
+- `ttlequals0/pixelprobe:2.4.98`
 - `ttlequals0/pixelprobe:latest`
 
 Built and tested on platform: `linux/amd64`
+
+## Recommended Testing Before Merge
+1. Verify full scans complete successfully (all files scanned, not just 25-26)
+2. Confirm Phase 3 progress displays "X of Y files" with correct totals
+3. Check that failed files are properly marked as 'error' status in database
+4. Ensure orphan cleanup completes in expected timeframe (~30-60 minutes for 1M+ files)

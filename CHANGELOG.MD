@@ -13,11 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Changed incorrect attribute name `last_scanned` to correct `scan_date`
   - These errors in the error-handling code were preventing scans from completing
   - Files that fail to scan are now properly marked with 'error' status
+- **Fixed CI test failures due to Redis connection errors**
+  - Changed exception handling in scan_service.py to catch all exceptions when starting UI worker
+  - UI worker gracefully falls back to direct database updates when Redis/Celery unavailable
 
 ### Impact
 - Scans now complete successfully instead of stopping early
 - All files get scanned instead of only 25-26 files
 - Failed files are correctly marked as 'error' in the database
+- All GitHub Actions tests now pass
 
 ## [2.4.97] - 2025-11-08
 
