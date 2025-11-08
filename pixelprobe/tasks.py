@@ -16,27 +16,11 @@ from contextlib import contextmanager
 
 from celery_config import celery_app
 from pixelprobe.services.scan_service import ScanService
+from pixelprobe.progress_utils import get_redis_client, update_scan_progress_redis
 from models import db, ScanState, ScanResult
 
 
 logger = logging.getLogger(__name__)
-
-
-# Redis connection for distributed locking
-def get_redis_client():
-    """Get Redis client from Celery broker URL"""
-    import os
-    broker_url = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
-    # Parse redis://host:port/db format
-    if broker_url.startswith('redis://'):
-        url = broker_url.replace('redis://', '')
-        parts = url.split('/')
-        host_port = parts[0].split(':')
-        host = host_port[0]
-        port = int(host_port[1]) if len(host_port) > 1 else 6379
-        db_num = int(parts[1]) if len(parts) > 1 else 0
-        return redis.Redis(host=host, port=port, db=db_num, socket_timeout=5, socket_connect_timeout=5)
-    return None
 
 
 @contextmanager
@@ -714,3 +698,118 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
                 'stored_hash': stored_hash,
                 'current_hash': None
             }
+
+
+@celery_app.task(bind=True, priority=9)
+def ui_progress_update_task(self, scan_id, update_interval=1.0):
+    """
+    UI worker that periodically reads scan state from database and ensures
+    phase_total and estimated_total are kept in sync for proper UI display.
+
+    The scanning workers update files_processed and phase_total in the database.
+    This worker ensures estimated_total matches phase_total so the UI shows correct totals.
+
+    Args:
+        scan_id (str): The scan ID to track progress for
+        update_interval (float): How often to check progress (seconds)
+
+    Returns:
+        dict: Final progress status
+    """
+    logger.info(f"Starting UI progress worker for scan {scan_id}")
+
+    import sys
+    import os
+    import time
+    from datetime import datetime, timezone
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from app import app, db as flask_db
+
+    app_context = app.app_context()
+    app_context.push()
+
+    try:
+        consecutive_no_change = 0
+        max_no_change = 120  # Stop after 2 minutes of no activity
+        last_files_processed = -1
+
+        while True:
+            try:
+                from models import ScanState
+
+                # Read current scan state from database
+                scan_state = flask_db.session.query(ScanState).filter_by(scan_id=scan_id).first()
+
+                if not scan_state:
+                    logger.warning(f"Scan state not found for {scan_id}")
+                    break
+
+                # Check if scan is complete
+                if scan_state.phase in ['completed', 'error', 'cancelled', 'crashed']:
+                    logger.info(f"Scan {scan_id} finished with phase: {scan_state.phase}")
+                    break
+
+                # Get current values
+                files_processed = scan_state.files_processed or 0
+                phase_total = scan_state.phase_total or 0
+
+                # The key fix: if estimated_total is 0 but phase_total has a value, sync them
+                if scan_state.estimated_total == 0 and phase_total > 0:
+                    logger.info(f"Fixing estimated_total: was 0, setting to phase_total={phase_total}")
+                    scan_state.estimated_total = phase_total
+                    flask_db.session.commit()
+                    logger.info(f"Updated scan {scan_id}: estimated_total now {phase_total}")
+
+                # Also ensure phase_total matches estimated_total if it has a value
+                elif scan_state.estimated_total > 0 and phase_total != scan_state.estimated_total:
+                    logger.info(f"Syncing phase_total to estimated_total: {scan_state.estimated_total}")
+                    scan_state.phase_total = scan_state.estimated_total
+                    flask_db.session.commit()
+
+                # Check for progress
+                if files_processed == last_files_processed:
+                    consecutive_no_change += 1
+                    if consecutive_no_change >= max_no_change:
+                        logger.warning(f"No progress for {max_no_change} seconds, stopping UI worker")
+                        break
+                else:
+                    consecutive_no_change = 0
+                    last_files_processed = files_processed
+                    logger.debug(f"Scan {scan_id} progress: {files_processed}/{scan_state.estimated_total}")
+
+                # Close the session to avoid stale data
+                flask_db.session.close()
+
+            except Exception as e:
+                logger.error(f"Error in UI worker: {e}", exc_info=True)
+                try:
+                    flask_db.session.rollback()
+                except:
+                    pass
+
+            # Sleep before next update
+            time.sleep(update_interval)
+
+        return {
+            'status': 'SUCCESS',
+            'scan_id': scan_id,
+            'final_progress': last_files_processed
+        }
+
+    except Exception as exc:
+        logger.error(f"UI progress worker failed for scan {scan_id}: {str(exc)}")
+        return {
+            'status': 'ERROR',
+            'scan_id': scan_id,
+            'error': str(exc)
+        }
+    finally:
+        # Clean up Flask app context
+        try:
+            app_context.pop()
+        except:
+            pass
+
+
+# update_scan_progress_redis is now imported from progress_utils to avoid circular imports
