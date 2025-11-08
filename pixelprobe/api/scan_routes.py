@@ -381,14 +381,13 @@ def scan_file():
         return jsonify({'error': str(e)}), 404
 
 @scan_bp.route('/scan', methods=['POST', 'OPTIONS'])  # Main scan endpoint
-@scan_bp.route('/scan-all', methods=['POST', 'OPTIONS'])  # Deprecated - kept for backward compatibility
 @rate_limit("2 per minute")
 @auth_required
 @validate_json_input({
     'force_rescan': {'required': False, 'type': bool},
     'directories': {'required': False, 'type': list}
 })
-def scan_all():
+def scan():
     """Start scanning all media files in configured directories"""
     if request.method == 'OPTIONS':
         return '', 200
@@ -1354,7 +1353,7 @@ def reset_incomplete_scans():
             result.scan_status = 'pending'
             result.is_corrupted = None  # Reset to unknown
             result.marked_as_good = False
-            result.error_message = 'Reset due to incomplete scan data (v2.2.59 fix)'
+            result.error_message = 'Reset due to incomplete scan data'
             result.scan_output = None
             # Keep discovered_date as is
         

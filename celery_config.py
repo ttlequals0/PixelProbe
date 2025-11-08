@@ -77,8 +77,15 @@ def create_celery(app=None):
         'broker_transport_options': {
             'visibility_timeout': 86400,  # 24 hours for large scans
             'fanout_prefix': True,
-            'fanout_patterns': True
+            'fanout_patterns': True,
+            'priority_steps': [0, 3, 6, 9],  # Enable priority support (0=highest, 9=lowest)
         },
+
+        # Task priority settings
+        # Priority levels: 0-2 (urgent), 3-5 (normal/high), 6-8 (background), 9 (lowest)
+        # Scan tasks use priority 3 (high)
+        # Maintenance tasks (file changes, cleanup) use priority 7 (background)
+        'task_default_priority': 5,  # Default for tasks without explicit priority
         
         # Connection retry settings (Celery 6.0 compatibility)
         'broker_connection_retry_on_startup': True,  # Fix deprecation warning

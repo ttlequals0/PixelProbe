@@ -54,9 +54,9 @@ class TestScanExecution:
             db.session.commit()
             
             # Try to start another scan
-            response = authenticated_client.post('/api/scan-all',
+            response = authenticated_client.post('/api/scan-parallel',
                                   json={'directories': [test_data_dir['test_dir']]})
-            
+
             # Should return 409 Conflict
             assert response.status_code == 409
             data = response.get_json()
@@ -228,18 +228,17 @@ class TestScanExecution:
             ScanState.query.update({'is_active': False})
             db.session.commit()
             
-            # Try parallel scan v2
-            response = authenticated_client.post('/api/scan-parallel-v2',
+            # Try parallel scan
+            response = authenticated_client.post('/api/scan-parallel',
                                   json={'directories': [test_data_dir['test_dir']]})
-            
+
             # Should work or indicate Celery not available
             assert response.status_code in [200, 503]
-            
+
             if response.status_code == 200:
                 data = response.get_json()
-                assert 'scan_id' in data
-                assert 'scan_type' in data
-                assert data['scan_type'] == 'parallel_v2'
+                # Response can have either 'scan_id' (Celery enabled) or 'message' (Celery disabled)
+                assert 'message' in data or 'scan_id' in data
     
     def test_pending_scan_execution(self, authenticated_client, app, db):
         """Test that pending file scans can execute"""

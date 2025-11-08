@@ -39,14 +39,14 @@ def check_celery_available():
         return False
 
 
-@parallel_scan_bp.route('/scan-parallel-v2', methods=['POST'])
+@parallel_scan_bp.route('/scan-parallel', methods=['POST'])
 @rate_limit("2 per minute")
 @auth_required
 @validate_json_input({
     'directories': {'required': True, 'type': list},
     'force_rescan': {'required': False, 'type': bool}
 })
-def scan_parallel_v2():
+def scan_parallel():
     """
     Enhanced parallel scan endpoint that distributes chunks across all workers
     
@@ -130,7 +130,7 @@ def scan_parallel_v2():
         }), 500
 
 
-@parallel_scan_bp.route('/scan-parallel-v2/status/<scan_id>', methods=['GET'])
+@parallel_scan_bp.route('/scan-parallel/status/<scan_id>', methods=['GET'])
 @auth_required
 def get_parallel_scan_status(scan_id):
     """
@@ -204,7 +204,7 @@ def get_parallel_scan_status(scan_id):
         }), 500
 
 
-@parallel_scan_bp.route('/scan-parallel-v2/workers', methods=['GET'])
+@parallel_scan_bp.route('/scan-parallel/workers', methods=['GET'])
 @auth_required
 def get_worker_status():
     """

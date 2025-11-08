@@ -373,44 +373,74 @@ def create_tables():
             # The tables might already exist and be functional
 
 def migrate_database():
-    """Run database migrations"""
-    # Run startup migrations
-    logger.info("Running startup migrations...")
-    from tools.app_startup_migration import run_startup_migrations
-    try:
-        run_startup_migrations(db)
-        logger.info("Startup migrations completed successfully")
-    except Exception as e:
-        logger.error(f"Startup migration failed: {e}")
+    """Run database migrations - uses file lock to ensure only one worker runs migrations"""
+    import fcntl
 
-    # Run authentication tables migration for v2.4.0
-    logger.info("Checking authentication tables...")
-    try:
-        run_auth_migration()
-        logger.info("Authentication tables verified")
-    except Exception as e:
-        logger.error(f"Authentication migration failed: {e}")
+    migration_lock_file = '/tmp/pixelprobe_migration.lock'
 
-    # Test v2.2.62 migration
-    logger.info("Running v2.2.62 migration...")
     try:
-        run_v2_2_62_migrations()
-        logger.info("v2.2.62 migration completed successfully")
-    except Exception as e:
-        logger.error(f"v2.2.62 migration failed: {e}")
-    
-    # Skip v2.2.90 migration - it was causing startup hang
-    # run_v2_2_90_migrations()  # DISABLED - causing startup hang
-    
-    # Create performance indexes
-    logger.info("Creating performance indexes...")
-    try:
-        create_performance_indexes()
-        logger.info("Performance indexes created successfully")
-    except Exception as e:
-        logger.error(f"Failed to create performance indexes: {e}")
-    
-    logger.info("Database initialization completed")
+        # Try to acquire exclusive lock (non-blocking)
+        lock_file = open(migration_lock_file, 'w')
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # We got the lock, so we're the migration process
+        logger.info(f"Acquired migration lock in process {os.getpid()}, running migrations")
+
+        try:
+            # Run startup migrations
+            logger.info("Running startup migrations...")
+            from tools.app_startup_migration import run_startup_migrations
+            try:
+                run_startup_migrations(db)
+                logger.info("Startup migrations completed successfully")
+            except Exception as e:
+                logger.error(f"Startup migration failed: {e}")
+
+            # Run authentication tables migration for v2.4.0
+            logger.info("Checking authentication tables...")
+            try:
+                run_auth_migration()
+                logger.info("Authentication tables verified")
+            except Exception as e:
+                logger.error(f"Authentication migration failed: {e}")
+
+            # Run v2.4.35 migration
+            logger.info("Running v2.4.35 migration...")
+            try:
+                run_v2_4_35_migrations()
+                logger.info("v2.4.35 migration completed successfully")
+            except Exception as e:
+                logger.error(f"v2.4.35 migration failed: {e}")
+
+            # Create performance indexes
+            logger.info("Creating performance indexes...")
+            try:
+                create_performance_indexes()
+                logger.info("Performance indexes created successfully")
+            except Exception as e:
+                logger.error(f"Failed to create performance indexes: {e}")
+
+            logger.info("Database initialization completed")
+
+        finally:
+            # Release the lock
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+
+    except (IOError, OSError) as e:
+        # Another process has the lock - wait for it to complete
+        logger.info(f"Migrations already running in another process {os.getpid()}, waiting for completion...")
+
+        # Wait for the lock to be available (blocking)
+        try:
+            lock_file = open(migration_lock_file, 'w')
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)  # This blocks until lock is available
+            # Lock acquired means migrations are done
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+            logger.info(f"Migrations completed by another process, continuing startup in process {os.getpid()}")
+        except Exception as wait_error:
+            logger.warning(f"Could not wait for migration lock: {wait_error}")
 
 def run_auth_migration():
     """Run authentication tables migration for v2.4.0"""
@@ -469,111 +499,45 @@ def run_auth_migration():
         # Don't fail startup if migration issues
         logger.warning(f"Authentication migration encountered issues: {e}")
 
-def run_v2_2_90_migrations():
-    """Run migrations for v2.2.90 - fix deep_scan column constraint"""
+def run_v2_4_35_migrations():
+    """Run migrations for v2.4.35 - add last_heartbeat column to file_changes_state"""
     from sqlalchemy import text
-    import os
-    
-    # Only run migration on first worker to avoid conflicts
-    worker_id = os.environ.get('SERVER_SOFTWARE', '').split('/')[-1] if 'SERVER_SOFTWARE' in os.environ else '0'
-    if worker_id not in ['0', '7', '1', '']:  # Only first worker or main process
-        logger.debug(f"Skipping v2.2.90 migration on worker {worker_id}")
-        return
-    
-    try:
-        with db.engine.connect() as conn:
-            # Check if deep_scan column exists
-            result = conn.execute(text("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'scan_results' 
-                AND column_name = 'deep_scan'
-                LIMIT 1
-            """))
-            
-            if result.fetchone():
-                logger.info("Applying migration: Removing deep_scan column constraint")
-                
-                # Use separate transactions for DDL commands
-                try:
-                    # First transaction: Drop NOT NULL constraint
-                    with db.engine.begin() as txn:
-                        txn.execute(text("""
-                            ALTER TABLE scan_results 
-                            ALTER COLUMN deep_scan DROP NOT NULL
-                        """))
-                    logger.debug("Dropped NOT NULL constraint on deep_scan")
-                except Exception as e:
-                    if 'already nullable' not in str(e).lower() and 'not null' not in str(e).lower():
-                        logger.debug(f"Could not drop NOT NULL: {e}")
-                
-                try:
-                    # Second transaction: Set default
-                    with db.engine.begin() as txn:
-                        txn.execute(text("""
-                            ALTER TABLE scan_results 
-                            ALTER COLUMN deep_scan SET DEFAULT FALSE
-                        """))
-                    logger.debug("Set default FALSE on deep_scan")
-                except Exception as e:
-                    logger.debug(f"Could not set default: {e}")
-                
-                try:
-                    # Third transaction: Update NULL values
-                    with db.engine.begin() as txn:
-                        result = txn.execute(text("""
-                            UPDATE scan_results 
-                            SET deep_scan = FALSE 
-                            WHERE deep_scan IS NULL
-                        """))
-                        if result.rowcount > 0:
-                            logger.info(f"Updated {result.rowcount} NULL deep_scan values to FALSE")
-                except Exception as e:
-                    logger.debug(f"Could not update NULL values: {e}")
-                
-                logger.info("Migration v2.2.90 completed")
-            else:
-                logger.debug("No deep_scan column found - expected for new installations")
-                
-    except Exception as e:
-        logger.warning(f"Migration v2.2.90 encountered issues: {e}")
-        # Don't fail startup - the temporary model fix will handle it
 
-def run_v2_2_62_migrations():
-    """Run migrations for v2.2.62 - add celery_task_id column"""
-    from sqlalchemy import text
-    
     try:
         with db.engine.connect() as conn:
-            # Check if celery_task_id column exists in scan_chunks
-            result = conn.execute(text("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'scan_chunks' 
-                AND column_name = 'celery_task_id'
+            # Check if file_changes_state table exists first
+            table_check = conn.execute(text("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = 'file_changes_state'
             """))
-            
+
+            if not table_check.fetchone():
+                logger.debug("file_changes_state table does not exist - skipping migration (new installation)")
+                return
+
+            # Check if last_heartbeat column exists in file_changes_state
+            result = conn.execute(text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'file_changes_state'
+                AND column_name = 'last_heartbeat'
+            """))
+
             if not result.fetchone():
-                logger.info("Applying migration: Adding celery_task_id column to scan_chunks table")
+                logger.info("Applying migration: Adding last_heartbeat column to file_changes_state table")
                 conn.execute(text("""
-                    ALTER TABLE scan_chunks 
-                    ADD COLUMN celery_task_id VARCHAR(36)
+                    ALTER TABLE file_changes_state
+                    ADD COLUMN last_heartbeat TIMESTAMP WITH TIME ZONE
                 """))
-                
-                # Create index for performance
-                conn.execute(text("""
-                    CREATE INDEX IF NOT EXISTS idx_scan_chunks_celery_task_id 
-                    ON scan_chunks (celery_task_id) 
-                    WHERE celery_task_id IS NOT NULL
-                """))
-                
+
                 conn.commit()
-                logger.info("Migration completed: celery_task_id column added successfully")
+                logger.info("Migration completed: last_heartbeat column added successfully")
             else:
-                logger.debug("Migration already applied: celery_task_id column exists")
-                
+                logger.debug("Migration already applied: last_heartbeat column exists")
+
     except Exception as e:
-        logger.error(f"Migration v2.2.62 failed: {e}")
+        logger.error(f"Migration v2.4.35 failed: {e}")
         # Don't fail startup - app might still work without this column
 
 def create_performance_indexes():

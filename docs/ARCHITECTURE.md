@@ -4,7 +4,7 @@
 
 ## Overview
 
-PixelProbe v2.2.45 is a distributed media file corruption detection system built with a modular, layered architecture. The system leverages Celery for distributed processing, Redis for message queuing, and PostgreSQL for persistent storage.
+PixelProbe v2.4.48 is a distributed media file corruption detection system built with a modular, layered architecture. The system leverages Celery for distributed processing, Redis for message queuing, and PostgreSQL for persistent storage.
 
 ## System Components
 
@@ -215,7 +215,7 @@ class MediaScheduler:
 
 ## Data Flow
 
-### Scan Request Flow (v2.2.45 Distributed)
+### Scan Request Flow (v2.4.48 Distributed)
 
 ```
 Client Request → API Endpoint → Validation → Service Layer

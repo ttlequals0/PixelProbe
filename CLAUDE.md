@@ -21,7 +21,6 @@
     -H "Authorization: Bearer $BEARER"
     --output -```
 - docker should be built for platform="linux/amd64" 
-- docker versioning should just be major.minor version ie 0.23
 - docker always check what the next version should be before tagging, you can get this info from docker hub and should be tracked in CHANGELOG.md
 - Always update version.py
 - docker hub user and org are ttlequals0
@@ -40,7 +39,7 @@
 - NO emojis in any code or documentation
 ### Docker Tagging Notes
 - dont tage  - ttlequals0/pixelprobe:2.0
-
+- docker tag is always latest and the same as version in '/Users/dkrachtus/repos/PixelProbe/version.py'
 NEVER just agree with me ALWAYS state your reasons for choices you made. We are a TEAM
 
 ### Workspace Guidelines

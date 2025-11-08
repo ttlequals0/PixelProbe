@@ -66,7 +66,7 @@ class ScanService:
             return self.scan_progress.copy()
     
     def update_progress(self, current: int, total: int, file_path: str, status: str):
-        """Update scan progress"""
+        """Update scan progress in memory and Redis if available"""
         with self.progress_lock:
             self.scan_progress.update({
                 'current': current,
@@ -74,6 +74,22 @@ class ScanService:
                 'file': file_path,
                 'status': status
             })
+
+            # Update Redis if available
+            if (hasattr(self, 'update_scan_progress_redis') and self.update_scan_progress_redis and
+                (hasattr(self, 'current_scan_id') and self.current_scan_id or
+                 hasattr(self, 'scan_id') and self.scan_id)):
+                try:
+                    scan_id = self.current_scan_id if hasattr(self, 'current_scan_id') and self.current_scan_id else self.scan_id
+                    self.update_scan_progress_redis(
+                        scan_id,
+                        files_processed=current,
+                        estimated_total=total,
+                        phase=status,
+                        current_file=os.path.basename(file_path) if file_path else ''
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to update Redis progress: {e}")
     
     def scan_single_file(self, file_path: str, force_rescan: bool = False) -> Dict:
         """Scan a single file"""
@@ -149,9 +165,27 @@ class ScanService:
         if hasattr(scan_state, 'num_workers'):
             scan_state.num_workers = num_workers  # Track the number of workers used
         db.session.commit()
-        
+
         # Capture scan ID while the object is still bound to the session
         scan_state_id = scan_state.id
+        scan_id = scan_state.scan_id
+
+        # Start UI progress worker task if using Celery
+        try:
+            from pixelprobe.tasks import ui_progress_update_task
+            from pixelprobe.progress_utils import update_scan_progress_redis
+            # Start the UI progress worker in the background
+            ui_worker = ui_progress_update_task.delay(scan_id, update_interval=0.5)
+            logger.info(f"Started UI progress worker task: {ui_worker.id} for scan {scan_id}")
+            # Make update_scan_progress_redis available globally for this scan
+            self.update_scan_progress_redis = update_scan_progress_redis
+            self.scan_id = scan_id
+            logger.info(f"Redis progress updates enabled for scan {scan_id}")
+        except (ImportError, Exception) as e:
+            logger.warning(f"UI progress worker not available - using direct database updates: {e}")
+            ui_worker = None
+            self.update_scan_progress_redis = None
+            self.scan_id = None
         
         # Capture Flask app context for the thread
         app = current_app._get_current_object()
@@ -1279,6 +1313,10 @@ class ScanService:
         """Perform parallel scan of chunks"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
+
+        # Use Redis progress update if available (set during scan initialization)
+        update_scan_progress_redis = getattr(self, 'update_scan_progress_redis', None)
+        scan_id = getattr(self, 'scan_id', scan_state.scan_id)
         
         total_chunks = len(chunks)
         completed_chunks = 0
@@ -1300,13 +1338,18 @@ class ScanService:
             with app.app_context():
                 if self.scan_cancelled:
                     return None
+                # Get a fresh scan_state from database for this thread to avoid session conflicts
+                thread_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                if not thread_scan_state:
+                    logger.error(f"Could not find scan_state with id {scan_state_id}")
+                    return None
                 # For parallel scan, we can't pass cumulative counts, so pass 0
                 # The main thread will handle updating the cumulative progress
                 # CRITICAL: When processing chunks in parallel, disable file-level parallelism
                 # to avoid double parallelism (chunks × files = too many threads/connections)
                 # Use sequential file processing (num_workers=1) when chunk_workers > 1
                 chunk_file_workers = 1 if chunk_workers > 1 else num_workers
-                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, scan_state, num_workers=chunk_file_workers)
+                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, thread_scan_state, num_workers=chunk_file_workers)
                 return chunk, chunk.files_scanned or 0
 
         chunk_workers = min(num_workers, len(chunks))
@@ -1325,8 +1368,25 @@ class ScanService:
             total_files_to_scan = actual_total_discovered
             scan_state.estimated_total = total_files_to_scan
             scan_state.update_progress(0, total_files_to_scan, phase='scanning')
+
+            # Update Redis with initial progress
+            if update_scan_progress_redis and scan_id:
+                logger.info(f"Updating Redis with initial progress: 0/{total_files_to_scan}")
+                update_scan_progress_redis(
+                    scan_id,
+                    files_processed=0,
+                    estimated_total=total_files_to_scan,
+                    phase='scanning',
+                    current_file=''
+                )
+            else:
+                logger.warning(f"Redis updates not available - update_scan_progress_redis={update_scan_progress_redis}, scan_id={scan_id}")
+
+            # Commit to persist estimated_total so API/UI can see it
+            # Safe now because worker threads fetch their own scan_state from DB
+            db.session.commit()
             logger.info(f"Total files to scan: {total_files_to_scan} across {total_chunks} chunks")
-            
+
             # Submit all chunks for scanning
             future_to_chunk = {executor.submit(scan_chunk, chunk): chunk for chunk in chunks}
             
@@ -1347,46 +1407,48 @@ class ScanService:
                     
                     self.update_progress(current_files_scanned, total_files_to_scan, chunk.directory_path, 'scanning')
                     
-                    # Update scan state progress with file counts (with error recovery)
+                    # Update progress using Redis for the UI worker to read
                     try:
+                        # Update Redis progress (non-blocking, no database commits)
+                        if 'update_scan_progress_redis' in locals():
+                            update_scan_progress_redis(
+                                scan_id,
+                                files_processed=current_files_scanned,
+                                estimated_total=total_files_to_scan,
+                                phase='scanning',
+                                current_file=os.path.basename(chunk.directory_path)
+                            )
+
+                        # Only update non-critical fields in memory (no commit)
                         scan_state.current_chunk_index = completed_chunks
-                        scan_state.files_processed = current_files_scanned  # Ensure files_processed is set
-                        scan_state.update_progress(current_files_scanned, total_files_to_scan, current_file='')
-                        
-                        # Update progress message
+                        scan_state.files_processed = current_files_scanned
+
+                        # Update progress message in memory
                         scan_state.progress_message = progress_tracker.get_progress_message(
                             f'Phase 3 of 3: Scanning files across {total_chunks} directories (parallel)',
                             current_files_scanned,
                             total_files_to_scan,
                             os.path.basename(chunk.directory_path)
                         )
-                        # Force commit and flush to ensure visibility
-                        db.session.commit()
-                        db.session.flush()
-                        # For Celery, also expire the object to force re-read
-                        db.session.expire(scan_state)
+                        # NO COMMIT HERE - UI worker handles database updates
                     except Exception as e:
                         logger.error(f"Failed to update progress for chunk {chunk.directory_path}: {e}")
-                        # Try to recover the database session
-                        try:
-                            db.session.rollback()
-                            # Re-get scan state and try again
-                            scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
-                            if scan_state:
-                                scan_state.update_progress(current_files_scanned, total_files_to_scan, current_file='')
-                                db.session.commit()
-                        except Exception as e2:
-                            logger.error(f"Failed to recover progress update: {e2}")
                     
                     logger.info(f"Parallel scan progress: {completed_chunks}/{total_chunks} chunks processed, {current_files_scanned}/{total_files_to_scan} files scanned")
                 except Exception as e:
                     logger.error(f"Error processing chunk result: {e}")
-        
+
         # Complete scan
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
+            # Update Redis to signal completion
+            if update_scan_progress_redis and scan_id:
+                update_scan_progress_redis(scan_id, total_files_scanned, total_files_to_scan, 'cancelled', '')
         else:
             self.update_progress(total_files_scanned, total_files_to_scan, '', 'completed')
+            # Update Redis to signal completion
+            if update_scan_progress_redis and scan_id:
+                update_scan_progress_redis(scan_id, total_files_scanned, total_files_to_scan, 'completed', '')
             
             # Thread-safe completion using direct SQL update
             from sqlalchemy import text
@@ -1908,9 +1970,30 @@ class ScanService:
             return db.session.query(ScanResult).filter(
                 ScanResult.scan_status == 'pending'
             ).count()
-        
+
+        # Check if this is a FILE_CHUNK format (FILE_CHUNK:offset:limit)
+        if chunk.directory_path.startswith('FILE_CHUNK:'):
+            # Parse the offset and limit from the chunk directory_path
+            parts = chunk.directory_path.split(':')
+            if len(parts) == 3:
+                offset = int(parts[1])
+                limit = int(parts[2])
+
+                # Query for pending files with offset and limit
+                if force_rescan:
+                    count = db.session.query(ScanResult).offset(offset).limit(limit).count()
+                else:
+                    count = db.session.query(ScanResult).filter(
+                        ScanResult.scan_status == 'pending'
+                    ).offset(offset).limit(limit).count()
+
+                return count
+            else:
+                logger.warning(f"Invalid FILE_CHUNK format: {chunk.directory_path}")
+                return 0
+
         chunk_dir = chunk.directory_path.rstrip(os.sep)
-        
+
         if force_rescan:
             # Count all files that start with this directory path
             count = db.session.query(ScanResult).filter(
@@ -1924,7 +2007,7 @@ class ScanService:
                     ScanResult.scan_status == 'pending'
                 )
             ).count()
-        
+
         return count
     
     def _scan_chunk_files(self, chunk: ScanChunk, checker: PixelProbe, force_rescan: bool = False,
@@ -2118,6 +2201,16 @@ class ScanService:
                                 errors += 1
                                 logger.error(f"Error scanning {file_result.file_path}: {error}")
 
+                                # Mark the file as error so it doesn't stay pending
+                                try:
+                                    file_result.scan_status = 'error'
+                                    file_result.error_message = str(error)[:500]  # Store error message (truncated)
+                                    file_result.scan_date = datetime.now(timezone.utc)
+                                    db.session.commit()
+                                    logger.debug(f"Marked {file_result.file_path} as error status")
+                                except Exception as e:
+                                    logger.error(f"Failed to update error status for {file_result.file_path}: {e}")
+
                             # Update progress (less frequently for parallel to reduce contention)
                             current_total = total_scanned_so_far + scanned
 
@@ -2137,23 +2230,31 @@ class ScanService:
 
                             if scan_state and (scanned - last_commit_count) >= update_threshold:
                                 try:
-                                    scan_state.files_processed = current_total
-                                    scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+                                    # Use a fresh session for progress updates to avoid conflicts with worker threads
+                                    from sqlalchemy.orm import Session
+                                    progress_session = Session(bind=db.engine)
+                                    try:
+                                        # Merge the scan_state into the new session
+                                        progress_scan_state = progress_session.merge(scan_state)
+                                        progress_scan_state.files_processed = current_total
+                                        progress_scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
 
-                                    from utils import ProgressTracker
-                                    progress_tracker = ProgressTracker('scan')
-                                    scan_state.progress_message = progress_tracker.get_progress_message(
-                                        f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
-                                        current_total,
-                                        total_to_scan,
-                                        os.path.basename(file_result.file_path)
-                                    )
-                                    db.session.commit()
-                                    last_commit_count = scanned
+                                        from utils import ProgressTracker
+                                        progress_tracker = ProgressTracker('scan')
+                                        progress_scan_state.progress_message = progress_tracker.get_progress_message(
+                                            f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
+                                            current_total,
+                                            total_to_scan,
+                                            os.path.basename(file_result.file_path)
+                                        )
+                                        progress_session.commit()
+                                        last_commit_count = scanned
 
-                                    if scanned % 1000 == 0:
-                                        import gc
-                                        gc.collect()
+                                        if scanned % 1000 == 0:
+                                            import gc
+                                            gc.collect()
+                                    finally:
+                                        progress_session.close()
                                 except Exception as e:
                                     logger.error(f"Failed to update progress: {e}")
                 else:
@@ -2229,6 +2330,16 @@ class ScanService:
                         except Exception as e:
                             logger.error(f"Error scanning {file_result.file_path}: {e}")
                             errors += 1
+
+                            # Mark the file as error so it doesn't stay pending
+                            try:
+                                file_result.scan_status = 'error'
+                                file_result.error_message = str(e)[:500]  # Store error message (truncated)
+                                file_result.scan_date = datetime.now(timezone.utc)
+                                db.session.commit()
+                                logger.debug(f"Marked {file_result.file_path} as error status")
+                            except Exception as e2:
+                                logger.error(f"Failed to update error status for {file_result.file_path}: {e2}")
 
             # Clean up ThreadPoolExecutor after all batches are processed
             if file_executor:

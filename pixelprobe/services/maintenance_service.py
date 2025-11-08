@@ -281,73 +281,122 @@ class MaintenanceService:
                 self.cleanup_state['total_files'] = total_files
                 self.cleanup_state['phase'] = 'scanning_database'
             
-            # Phase 2: Checking and collecting orphaned files
+            # Phase 2: Checking files in parallel using Celery tasks
             cleanup_record.phase = 'checking_files'
             cleanup_record.phase_number = 2
-            cleanup_record.progress_message = f'Phase 2 of 3: Checking {total_files} files on filesystem...'
+            cleanup_record.progress_message = f'Phase 2 of 3: Checking 0 / {total_files:,} files on filesystem (0%)...'
             db.session.commit()
-            
-            # Create progress tracker for cleanup
-            progress_tracker = ProgressTracker('cleanup')
-            
-            orphaned_ids = []  # Store IDs instead of objects
-            orphaned_paths = []  # Store paths for logging
-            orphaned_count = 0
 
-            for i, result in enumerate(all_results):
+            logger.info(f"Starting Phase 2: Parallel file existence checking for {total_files} files")
+
+            # Import task
+            from pixelprobe.tasks import check_file_exists_task
+
+            # Parallel checking with throttling (similar to file changes check)
+            max_active_tasks = 5000  # Limit concurrent tasks
+            active_tasks = []
+            file_index = 0
+            total_files_processed = 0
+            orphaned_files = []  # Collect orphaned file info
+            phase2_start_time = time.time()  # Track start time for ETA calculation
+
+            # Track when we last updated progress
+            last_progress_update = 0
+
+            while file_index < len(all_results) or len(active_tasks) > 0:
                 if self._is_cancelled(cleanup_record):
+                    logger.info("Cleanup cancelled during file checking")
                     break
 
-                # Update progress
-                cleanup_record.files_processed = i + 1
-                cleanup_record.phase_current = i + 1
-                cleanup_record.current_file = result.file_path
+                # Submit new tasks while under the limit
+                while len(active_tasks) < max_active_tasks and file_index < len(all_results):
+                    result = all_results[file_index]
 
-                # Update progress message with current file and ETA
-                cleanup_record.progress_message = progress_tracker.get_progress_message(
-                    f'Phase 2 of 3: Checking {total_files} files on filesystem',
-                    i + 1,
-                    total_files,
-                    os.path.basename(result.file_path)
-                )
+                    # Submit file existence check task
+                    task = check_file_exists_task.apply_async(
+                        args=[result.id, result.file_path],
+                        priority=6
+                    )
+                    active_tasks.append(task)
+                    file_index += 1
 
-                # Check if file exists - use multiple methods for robust detection
-                file_exists = False
-                try:
-                    # Method 1: os.path.exists() - fast but may have issues with symlinks
-                    if os.path.exists(result.file_path):
-                        file_exists = True
-                    # Method 2: Try to stat the file directly - more reliable
-                    elif os.path.isfile(result.file_path):
-                        file_exists = True
-                    # Method 3: Check if path exists at all (directory or file)
-                    elif os.path.lexists(result.file_path):
-                        # lexists returns True even for broken symlinks
-                        # If lexists is True but exists is False, it's a broken symlink - treat as orphan
-                        file_exists = False
-                        logger.info(f"Found broken symlink or inaccessible file: {result.file_path}")
-                except (OSError, IOError) as e:
-                    # If we get an error accessing the file, treat it as orphaned
-                    logger.warning(f"Error accessing file {result.file_path}: {e} - treating as orphan")
-                    file_exists = False
+                # Collect completed tasks and free up slots
+                still_active = []
+                for task in active_tasks:
+                    if task.ready():
+                        try:
+                            check_result = task.get(timeout=1)
+                            total_files_processed += 1
 
-                if not file_exists:
-                    orphaned_ids.append(result.id)  # Store ID instead of object
-                    orphaned_paths.append(result.file_path)  # Store path for logging
-                    orphaned_count += 1
-                    cleanup_record.orphaned_found = orphaned_count
-                    logger.info(f"Found orphaned entry: {result.file_path}")
-                    # Store for report
-                    self.orphaned_files_list.append(result.file_path)
-                
-                # Update progress periodically
-                if i % 100 == 0:
-                    cleanup_record.files_processed = i + 1
+                            if not check_result.get('exists'):
+                                # File doesn't exist - add to orphaned list
+                                orphaned_files.append({
+                                    'file_id': check_result['file_id'],
+                                    'file_path': check_result['file_path']
+                                })
+                                logger.info(f"Found orphaned entry: {check_result['file_path']}")
+                        except Exception as e:
+                            logger.error(f"Error processing existence check result: {e}")
+                            total_files_processed += 1
+                    else:
+                        still_active.append(task)
+
+                active_tasks = still_active
+
+                # If no new tasks submitted and active tasks exist, wait a bit
+                if file_index < len(all_results) and len(active_tasks) > 0:
+                    time.sleep(0.1)  # Brief sleep to avoid busy waiting
+
+                # Update progress periodically (every 100 files OR if this is the first update)
+                if (total_files_processed % 100 == 0 and total_files_processed > last_progress_update) or (total_files_processed > 0 and last_progress_update == 0):
+                    cleanup_record.files_processed = total_files_processed
+                    cleanup_record.phase_current = total_files_processed
+                    cleanup_record.orphaned_found = len(orphaned_files)
+                    pct = int((total_files_processed / total_files * 100)) if total_files > 0 else 0
+
+                    # Calculate ETA
+                    elapsed_seconds = time.time() - phase2_start_time
+                    if total_files_processed > 0:
+                        avg_time_per_file = elapsed_seconds / total_files_processed
+                        files_remaining = total_files - total_files_processed
+                        eta_seconds = avg_time_per_file * files_remaining
+
+                        # Format ETA as hours:minutes
+                        eta_hours = int(eta_seconds // 3600)
+                        eta_minutes = int((eta_seconds % 3600) // 60)
+                        if eta_hours > 0:
+                            eta_str = f"{eta_hours}h {eta_minutes}m"
+                        else:
+                            eta_str = f"{eta_minutes}m"
+                    else:
+                        eta_str = "calculating..."
+
+                    cleanup_record.progress_message = (
+                        f'Phase 2 of 3: Checking {total_files_processed:,} / {total_files:,} files ({pct}%) - '
+                        f'{len(orphaned_files)} orphaned found, {len(active_tasks)} active tasks, ETA: {eta_str}'
+                    )
                     db.session.commit()
-                    
-                with self.cleanup_lock:
-                    self.cleanup_state['files_processed'] = i + 1
-                    self.cleanup_state['orphaned_found'] = orphaned_count
+
+                    with self.cleanup_lock:
+                        self.cleanup_state['files_processed'] = total_files_processed
+                        self.cleanup_state['orphaned_found'] = len(orphaned_files)
+
+                    last_progress_update = total_files_processed
+
+            # Final update
+            cleanup_record.files_processed = total_files_processed
+            cleanup_record.orphaned_found = len(orphaned_files)
+            db.session.commit()
+
+            logger.info(f"Phase 2 complete: Checked {total_files_processed} files, found {len(orphaned_files)} orphaned entries")
+
+            # Extract IDs and paths for Phase 3
+            orphaned_ids = [f['file_id'] for f in orphaned_files]
+            orphaned_paths = [f['file_path'] for f in orphaned_files]
+            orphaned_count = len(orphaned_files)
+
+            # Store for report
+            self.orphaned_files_list = orphaned_paths
             
             # Check if cancelled before proceeding to deletion phase
             if self._is_cancelled(cleanup_record):
@@ -494,10 +543,19 @@ class MaintenanceService:
             file_paths: Optional list of specific file paths to check (if None, checks all files)
         """
         try:
+            # Use READ COMMITTED isolation level to reduce lock contention
+            # This allows reads to see committed data without holding locks
+            from sqlalchemy import text
+            db.session.execute(text("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED"))
+            logger.info("Set transaction isolation level to READ COMMITTED for file changes check")
+
             file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
             if not file_changes_record:
                 logger.error(f"File changes record not found: {check_id}")
                 return
+
+            # Keep track of changed files for the report
+            self.changed_files_list = []
 
             # Phase 1: Starting
             file_changes_record.phase = 'starting'
@@ -521,138 +579,281 @@ class MaintenanceService:
             file_changes_record.phase_current = 1
             db.session.commit()
             
-            # Phase 2: Checking hashes
-            file_changes_record.phase = 'checking_hashes'
+            # Phase 2a: Dispatching parallel hash calculation tasks
+            file_changes_record.phase = 'dispatching_tasks'
             file_changes_record.phase_number = 2
             file_changes_record.phase_total = total_files
             file_changes_record.phase_current = 0
             file_changes_record.files_processed = 0
-            file_changes_record.progress_message = f'Phase 2 of 3: Checking {total_files} files for hash changes...'
+            file_changes_record.progress_message = f'Phase 2a of 3: Queuing hash calculation tasks - 0 / {total_files:,} (0%)'
+            file_changes_record.last_heartbeat = datetime.now(timezone.utc)
             db.session.commit()
-            
-            logger.info(f"Starting file changes check for {total_files} files")
-            
-            # Create progress tracker for file changes
-            progress_tracker = ProgressTracker('file_changes')
-            
-            excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
-            checker = PixelProbe(
-                database_path=self.database_uri,
-                excluded_paths=excluded_paths,
-                excluded_extensions=excluded_extensions,
-                excluded_patterns=excluded_patterns
-            )
-            changed_files = []
-            
-            # Process files in smaller batches for better performance
-            batch_size = 100  # Reduced from 1000 for better responsiveness
-            last_id = 0
-            files_processed = 0
 
-            while files_processed < total_files:
+            logger.info(f"Starting Phase 2a: parallel hash calculation for {total_files} files using Celery workers")
+
+            # Import Celery task
+            from pixelprobe.tasks import calculate_file_hash_task
+            from celery import group
+
+            # Track dispatched tasks and changed files
+            task_results = []
+            changed_files = []
+
+            # OPTIMIZATION: Load all files at once (like cleanup does) to avoid pagination issues
+            # This is more memory-intensive but eliminates the progressive slowdown problem
+            # with ID-based pagination on large datasets
+            logger.info(f"Loading all {total_files} files from database in a single query...")
+
+            # Get database entries - either all or filtered by file_paths (same as cleanup)
+            if file_paths:
+                all_results = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+                logger.info(f"Loaded {len(all_results)} specific files from database")
+            else:
+                all_results = ScanResult.query.all()
+                logger.info(f"Loaded all {len(all_results)} files from database")
+
+            # CRITICAL FIX v2.4.60: Adaptive memory-aware task management
+            # Problem: Files vary from 1KB to 40GB, systems vary in resources
+            # Solution: Monitor Redis memory usage and adapt task submission dynamically
+
+            # Get Redis memory info to determine safe limits
+            import redis
+            from celery import current_app
+
+            try:
+                # Get Redis connection from Celery
+                redis_url = current_app.conf.broker_url
+                r = redis.from_url(redis_url)
+                redis_info = r.info('memory')
+
+                # Get max memory setting (0 means unlimited)
+                max_memory = int(redis_info.get('maxmemory', 0))
+                used_memory = int(redis_info.get('used_memory', 0))
+
+                if max_memory > 0:
+                    # Calculate safe threshold (use 80% of max)
+                    safe_memory = max_memory * 0.8
+                    available_memory = safe_memory - used_memory
+
+                    # Estimate memory per task (approximately 10KB per task in Redis)
+                    memory_per_task = 10 * 1024
+                    max_safe_tasks = max(100, int(available_memory / memory_per_task))
+                else:
+                    # No limit set, use conservative default
+                    max_safe_tasks = 5000
+
+                logger.info(f"Redis memory: {used_memory/1024/1024:.1f}MB used, "
+                           f"max safe concurrent tasks: {max_safe_tasks}")
+            except Exception as e:
+                logger.warning(f"Could not get Redis memory info: {e}, using conservative limits")
+                max_safe_tasks = 1000
+
+            # Dynamic limits based on available resources
+            # These will scale down proportionally if memory is limited
+            MAX_CONCURRENT_SMALL = min(max_safe_tasks, int(os.environ.get('MAX_CONCURRENT_SMALL', '5000')))
+            MAX_CONCURRENT_MEDIUM = min(max_safe_tasks // 10, int(os.environ.get('MAX_CONCURRENT_MEDIUM', '500')))
+            MAX_CONCURRENT_LARGE = min(max_safe_tasks // 100, int(os.environ.get('MAX_CONCURRENT_LARGE', '50')))
+            MAX_CONCURRENT_HUGE = min(max_safe_tasks // 1000, int(os.environ.get('MAX_CONCURRENT_HUGE', '5')))
+
+            # Track active tasks
+            active_tasks = []
+            total_files_processed = 0
+            files_queued = 0
+            task_results = []
+            last_heartbeat_time = time.time()
+
+            logger.info(f"Processing {len(all_results)} files with size-aware batching...")
+
+            # Sort files by size for better batch management (small files first)
+            # Handle NULL file_size by treating as 0 for sorting
+            all_results_sorted = sorted(all_results, key=lambda x: x.file_size if x.file_size else 0)
+
+            file_index = 0
+            while file_index < len(all_results_sorted) or active_tasks:
+                # Heartbeat every 30 seconds
+                current_time = time.time()
+                if current_time - last_heartbeat_time >= 30:
+                    file_changes_record.last_heartbeat = datetime.now(timezone.utc)
+                    logger.info(f"Progress: {total_files_processed}/{len(all_results)} processed, "
+                              f"{len(active_tasks)} active, {files_queued} queued")
+                    db.session.commit()
+                    last_heartbeat_time = current_time
+
+                # Check for cancellation
                 if self._is_cancelled_file_changes(file_changes_record):
+                    logger.info(f"Cancelled at {total_files_processed}/{len(all_results)} files")
                     break
 
-                # Use ID-based pagination instead of offset for better performance
-                try:
-                    # Build query with optional file_paths filter
-                    query = ScanResult.query.filter(ScanResult.id > last_id)
-                    if file_paths:
-                        query = query.filter(ScanResult.file_path.in_(file_paths))
-                    batch = query.order_by(ScanResult.id).limit(batch_size).all()
-                    
-                    if not batch:
-                        logger.info(f"No more files to process after ID {last_id}")
-                        break
-                        
-                    if files_processed % 1000 == 0:
-                        logger.info(f"Progress: {files_processed}/{total_files} files processed")
-                except Exception as e:
-                    logger.error(f"Error querying batch after ID {last_id}: {e}")
-                    file_changes_record.progress_message = f"Error querying database: {str(e)}"
-                    db.session.commit()
-                    raise
-                
-                for result in batch:
-                    if self._is_cancelled_file_changes(file_changes_record):
-                        break
-                    
-                    files_processed += 1
-                    last_id = result.id
-                    
-                    # Update progress in database immediately for each file
-                    file_changes_record.files_processed = files_processed
-                    file_changes_record.phase_current = files_processed
-                    file_changes_record.current_file = result.file_path
-                    
-                    # Update progress message with current file and ETA
-                    file_changes_record.progress_message = progress_tracker.get_progress_message(
-                        f'Phase 2 of 3: Checking {total_files} files for hash changes',
-                        files_processed,
-                        total_files,
-                        os.path.basename(result.file_path)
-                    )
-                    
-                    # Check for changes
-                    try:
-                        change_info = self._check_file_changes(result, checker)
-                        if change_info:
-                            changed_files.append(change_info)
-                            file_changes_record.changes_found = len(changed_files)
-                    except Exception as e:
-                        logger.error(f"Error checking file {result.file_path}: {e}")
-                        # Continue processing other files even if one fails
-                    
-                    # Commit every few files to balance performance and reliability
-                    if files_processed % 5 == 0:
+                # Collect completed tasks and free up slots
+                still_active = []
+                for task_info in active_tasks:
+                    task, file_size = task_info['task'], task_info['size']
+                    if task.ready():
                         try:
-                            db.session.commit()
+                            result = task.get(timeout=1)
+                            total_files_processed += 1
+                            if result.get('changed'):
+                                changed_files.append({
+                                    'file_path': result['file_path'],
+                                    'change_type': result['change_type'],
+                                    'stored_hash': result['stored_hash'],
+                                    'current_hash': result['current_hash']
+                                })
                         except Exception as e:
-                            logger.error(f"Error committing progress at file {files_processed}: {e}")
-                            # Try to refresh the session and continue
-                            db.session.rollback()
-                            file_changes_record = db.session.merge(file_changes_record)
-                    
-                    # Update in-memory state
-                    with self.file_changes_lock:
-                        self.file_changes_state['files_processed'] = files_processed
-                        self.file_changes_state['changes_found'] = len(changed_files)
-                
-                # Ensure we commit at the end of each batch
-                try:
+                            logger.error(f"Error getting task result: {e}")
+                    else:
+                        still_active.append(task_info)
+                active_tasks = still_active
+
+                # Submit new tasks based on available slots
+                while file_index < len(all_results_sorted):
+                    result = all_results_sorted[file_index]
+
+                    # Use file_size from DB (it's a BigInteger field, might be NULL)
+                    file_size = result.file_size if result.file_size else 0
+
+                    if file_size == 0:
+                        # If size not in DB, use OS to check (more accurate than estimates)
+                        try:
+                            file_size = os.path.getsize(result.file_path)
+                        except:
+                            # If file doesn't exist or can't access, estimate based on path
+                            if 'thumbnail' in result.file_path or 'thumb' in result.file_path:
+                                file_size = 50 * 1024  # 50KB estimate for thumbnails
+                            elif 'preview' in result.file_path:
+                                file_size = 500 * 1024  # 500KB for previews
+                            else:
+                                file_size = 10 * 1024 * 1024  # 10MB default
+
+                    # Determine max concurrent based on file size
+                    if file_size < 10 * 1024 * 1024:  # < 10MB
+                        max_concurrent = MAX_CONCURRENT_SMALL
+                    elif file_size < 100 * 1024 * 1024:  # < 100MB
+                        max_concurrent = MAX_CONCURRENT_MEDIUM
+                    elif file_size < 1024 * 1024 * 1024:  # < 1GB
+                        max_concurrent = MAX_CONCURRENT_LARGE
+                    else:  # >= 1GB
+                        max_concurrent = MAX_CONCURRENT_HUGE
+
+                    # Count how many tasks of this size category are active
+                    size_category_active = sum(1 for t in active_tasks
+                                              if t['size'] // (100*1024*1024) == file_size // (100*1024*1024))
+
+                    # Check if we can submit this task
+                    if len(active_tasks) >= max_concurrent or size_category_active >= max_concurrent:
+                        # Wait for tasks to complete before submitting more
+                        break
+
+                    # Submit the task
+                    stored_modified_iso = result.last_modified.isoformat() if result.last_modified else None
+                    try:
+                        task_result = calculate_file_hash_task.apply_async(
+                            args=[result.id, result.file_path, result.file_hash, stored_modified_iso]
+                        )
+                        active_tasks.append({'task': task_result, 'size': file_size, 'path': result.file_path})
+                        task_results.append(task_result)
+                        files_queued += 1
+                        file_index += 1
+                    except Exception as e:
+                        logger.error(f"Error submitting task for {result.file_path}: {e}")
+                        if "maxmemory" in str(e):
+                            logger.warning("Redis memory full, waiting for tasks to complete...")
+                            break  # Wait for active tasks to complete
+                        file_index += 1  # Skip this file
+
+                # If no new tasks submitted and active tasks exist, wait a bit
+                if file_index < len(all_results_sorted) and len(active_tasks) > 0:
+                    time.sleep(0.1)  # Brief sleep to avoid busy waiting
+
+                # Update progress periodically
+                if total_files_processed % 1000 == 0 and total_files_processed > 0:
+                    file_changes_record.phase_current = total_files_processed
+                    file_changes_record.phase_total = len(all_results)
+                    pct = int((total_files_processed / len(all_results) * 100)) if len(all_results) > 0 else 0
+                    file_changes_record.progress_message = (
+                        f'Processing files: {total_files_processed:,}/{len(all_results):,} ({pct}%) - '
+                        f'{len(changed_files)} changes found, {len(active_tasks)} active tasks'
+                    )
                     db.session.commit()
-                except Exception as e:
-                    logger.error(f"Error committing batch progress: {e}")
-                    db.session.rollback()
+
+            # Final update
+            file_changes_record.phase_current = total_files_processed
+            file_changes_record.phase_total = len(all_results)
+            pct = int((total_files_processed / len(all_results) * 100)) if len(all_results) > 0 else 0
+            file_changes_record.progress_message = (
+                f'Completed: {total_files_processed:,}/{len(all_results):,} files - '
+                f'{len(changed_files)} changes found'
+            )
+            db.session.commit()
+
+            logger.info(f"Phase 2a complete: Processed {total_files_processed} files, found {len(changed_files)} changed files")
             
-            # Phase 3: Rescanning changed files
+            # Phase 3: Mark changed files for rescan (leverage parallel scanning)
             if changed_files and not self._is_cancelled_file_changes(file_changes_record):
-                file_changes_record.phase = 'rescanning'
+                file_changes_record.phase = 'marking_for_rescan'
                 file_changes_record.phase_number = 3
                 file_changes_record.phase_total = len(changed_files)
                 file_changes_record.phase_current = 0
-                file_changes_record.progress_message = f'Phase 3 of 3: Rescanning {len(changed_files)} changed files...'
+                file_changes_record.progress_message = f'Phase 3 of 3: Marking {len(changed_files)} changed files as pending for rescan...'
+                file_changes_record.last_heartbeat = datetime.now(timezone.utc)
                 db.session.commit()
-                
-                corrupted_found = 0
+
+                logger.info(f"Starting Phase 3: Marking {len(changed_files)} changed files as pending for rescan")
+
+                files_marked = 0
+                modified_count = 0
+                deleted_count = 0
+                last_heartbeat_time = time.time()
+
                 for i, change_info in enumerate(changed_files):
+                    # Heartbeat every 30 seconds
+                    current_time = time.time()
+                    if current_time - last_heartbeat_time >= 30:
+                        file_changes_record.last_heartbeat = datetime.now(timezone.utc)
+                        logger.info(f"Phase 3 heartbeat: {files_marked}/{len(changed_files)} files marked")
+                        db.session.commit()
+                        last_heartbeat_time = current_time
+
                     if self._is_cancelled_file_changes(file_changes_record):
                         break
-                    
+
                     file_changes_record.phase_current = i + 1
-                    
-                    # Rescan the file
+
+                    # Mark the file as pending for rescan by the regular scan workers
                     try:
-                        result = checker.scan_file(change_info['file_path'], force_rescan=True)
-                        if result and result.is_corrupted:
-                            corrupted_found += 1
-                            file_changes_record.corrupted_found = corrupted_found
+                        file_record = ScanResult.query.filter_by(file_path=change_info['file_path']).first()
+                        if file_record:
+                            file_record.scan_status = 'pending'
+                            files_marked += 1
+
+                            # Count by type
+                            if change_info['change_type'] == 'deleted':
+                                deleted_count += 1
+                                logger.info(f"Marked deleted file for cleanup: {change_info['file_path']}")
+                            elif change_info['change_type'] == 'modified':
+                                modified_count += 1
+                                logger.info(f"Marked modified file for rescan: {change_info['file_path']} (hash: {change_info['stored_hash'][:16]}... -> {change_info['current_hash'][:16]}...)")
+                            else:
+                                logger.info(f"Marked file for rescan: {change_info['file_path']} (type: {change_info['change_type']})")
                     except Exception as e:
-                        logger.error(f"Error rescanning {change_info['file_path']}: {e}")
-                    
+                        logger.error(f"Error marking file for rescan {change_info['file_path']}: {e}")
+
+                    # Commit every 10 files for real-time progress updates
                     if (i + 1) % 10 == 0:
+                        file_changes_record.progress_message = f'Phase 3 of 3: Marked {files_marked}/{len(changed_files)} files as pending...'
                         db.session.commit()
-            
+                        logger.info(f"Phase 3: Marked {files_marked}/{len(changed_files)} files for rescan")
+
+                # Final commit for remaining files and update counts
+                file_changes_record.progress_message = f'Phase 3 of 3: Marked {files_marked}/{len(changed_files)} files as pending for rescan'
+                file_changes_record.changes_found = modified_count
+                db.session.commit()
+                logger.info(f"Phase 3 complete: Marked {files_marked} files for rescan ({modified_count} modified, {deleted_count} deleted). They will be processed by parallel scan workers.")
+            else:
+                # No changes found - set counts to 0
+                modified_count = 0
+                deleted_count = 0
+
             # Complete check
             if self._is_cancelled_file_changes(file_changes_record):
                 file_changes_record.phase = 'cancelled'
@@ -660,18 +861,19 @@ class MaintenanceService:
             else:
                 file_changes_record.phase = 'complete'
                 file_changes_record.progress_message = (
-                    f'Check complete. Found {len(changed_files)} changed files, '
+                    f'Check complete. Found {len(changed_files)} changed files '
+                    f'({modified_count} modified, {deleted_count} deleted), '
                     f'{file_changes_record.corrupted_found} newly corrupted.'
                 )
-            
+
             file_changes_record.is_active = False
             file_changes_record.end_time = datetime.now(timezone.utc)
             db.session.commit()
-            
+
             # Create scan report for file changes operation
             # Always try to create a report even if there was an error, as long as we have some data
             if file_changes_record.phase in ('complete', 'error'):
-                self._create_file_changes_report(file_changes_record)
+                self._create_file_changes_report(file_changes_record, getattr(self, 'changed_files_list', []), deleted_count if changed_files else 0)
             
             with self.file_changes_lock:
                 self.file_changes_state['is_running'] = False
@@ -685,69 +887,9 @@ class MaintenanceService:
             try:
                 file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
                 if file_changes_record:
-                    self._create_file_changes_report(file_changes_record)
+                    self._create_file_changes_report(file_changes_record, getattr(self, 'changed_files_list', []))
             except Exception as report_error:
                 logger.error(f"Failed to create error report: {report_error}")
-    
-    def _check_file_changes(self, result: ScanResult, checker: PixelProbe) -> Optional[Dict]:
-        """Check if a file has changed since last scan"""
-        if not os.path.exists(result.file_path):
-            return {
-                'file_path': result.file_path,
-                'change_type': 'deleted',
-                'stored_hash': result.file_hash,
-                'current_hash': None
-            }
-        
-        try:
-            # If file has no hash, treat it as a change and calculate one
-            if not result.file_hash:
-                current_hash = self._calculate_file_hash(result.file_path)
-                return {
-                    'file_path': result.file_path,
-                    'change_type': 'no_hash',
-                    'stored_hash': None,
-                    'current_hash': current_hash,
-                    'stored_modified': result.last_modified,
-                    'current_modified': datetime.fromtimestamp(os.stat(result.file_path).st_mtime, timezone.utc)
-                }
-            
-            # Get current file stats
-            stat = os.stat(result.file_path)
-            current_modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
-            
-            # Check modification time
-            # Ensure timezone-aware comparison
-            stored_modified = result.last_modified
-            if stored_modified and stored_modified.tzinfo is None:
-                # If stored datetime is naive, assume UTC
-                stored_modified = stored_modified.replace(tzinfo=timezone.utc)
-            
-            if stored_modified and current_modified > stored_modified:
-                # File has been modified, calculate new hash
-                current_hash = self._calculate_file_hash(result.file_path)
-                
-                if current_hash != result.file_hash:
-                    return {
-                        'file_path': result.file_path,
-                        'change_type': 'modified',
-                        'stored_hash': result.file_hash,
-                        'current_hash': current_hash,
-                        'stored_modified': stored_modified,
-                        'current_modified': current_modified
-                    }
-        except Exception as e:
-            logger.error(f"Error checking file {result.file_path}: {e}")
-        
-        return None
-    
-    def _calculate_file_hash(self, file_path: str) -> str:
-        """Calculate SHA256 hash of a file"""
-        sha256_hash = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
     
     def _is_cancelled(self, cleanup_record: CleanupState) -> bool:
         """Check if cleanup has been cancelled"""
@@ -776,6 +918,48 @@ class MaintenanceService:
         except Exception as e:
             logger.warning(f"Error checking cancel status from DB: {e}")
             return self.file_changes_state.get('cancel_requested', False)
+
+    def _commit_with_retry(self, record, context_info, max_retries=3, is_batch=False):
+        """Commit database changes with retry logic for deadlock handling"""
+        for attempt in range(max_retries):
+            try:
+                db.session.commit()
+                if attempt > 0:
+                    logger.info(f"Commit succeeded on attempt {attempt + 1} (context: {context_info})")
+                return
+            except Exception as e:
+                error_msg = str(e).lower()
+                is_deadlock = 'deadlock' in error_msg or 'lock timeout' in error_msg or 'could not obtain lock' in error_msg
+
+                if is_deadlock and attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
+                    logger.warning(f"Deadlock detected on attempt {attempt + 1}, retrying in {wait_time}s (context: {context_info}): {e}")
+
+                    # Rollback and wait before retry
+                    try:
+                        db.session.rollback()
+                        time.sleep(wait_time)
+                        # Refresh the record to get latest state
+                        db.session.expire(record)
+                        db.session.refresh(record)
+                    except Exception as refresh_error:
+                        logger.error(f"Error during rollback/refresh: {refresh_error}")
+                        if attempt == max_retries - 1:
+                            raise
+                else:
+                    # Not a deadlock or final attempt failed
+                    logger.error(f"Error committing {'batch' if is_batch else 'progress'} at {context_info} (attempt {attempt + 1}/{max_retries}): {e}")
+                    try:
+                        db.session.rollback()
+                        # Refresh to avoid working with stale data
+                        if record:
+                            db.session.expire(record)
+                            record = db.session.merge(record)
+                    except Exception as rollback_error:
+                        logger.error(f"Failed to rollback after commit error: {rollback_error}")
+
+                    if attempt == max_retries - 1:
+                        raise
     
     def _handle_cleanup_error(self, cleanup_id: int, error_msg: str):
         """Handle cleanup error"""
@@ -811,14 +995,20 @@ class MaintenanceService:
             self.file_changes_state['is_running'] = False
             self.file_changes_state['phase'] = 'error'
 
-    def _create_file_changes_report(self, file_changes_record: FileChangesState):
-        """Create a scan report for file changes operation"""
+    def _create_file_changes_report(self, file_changes_record: FileChangesState, changed_files_list=None, deleted_files_count=0):
+        """Create a scan report for file changes operation
+
+        Args:
+            file_changes_record: The FileChangesState record
+            changed_files_list: List of changed files with hash comparison details
+            deleted_files_count: Number of deleted/orphaned files found
+        """
         try:
             # Calculate duration
             duration = None
             if file_changes_record.start_time and file_changes_record.end_time:
                 duration = (file_changes_record.end_time - file_changes_record.start_time).total_seconds()
-            
+
             # Create scan report
             report = ScanReport(
                 scan_type='file_changes',
@@ -829,14 +1019,25 @@ class MaintenanceService:
                 files_scanned=file_changes_record.files_processed,
                 files_changed=file_changes_record.changes_found,
                 files_corrupted_new=file_changes_record.corrupted_found,
+                orphaned_records_found=deleted_files_count,
                 status='completed' if file_changes_record.phase == 'complete' else file_changes_record.phase,
                 error_message=file_changes_record.error_message
             )
-            
+
+            # Store the list of changed files with hash comparison details in directories_scanned field as JSON
+            # This field is repurposed for file changes reports to store the changed files list with hash info
+            if changed_files_list:
+                import json
+                report.directories_scanned = json.dumps(changed_files_list)
+
             db.session.add(report)
             db.session.commit()
-            
-            logger.info(f"Created file changes report {report.report_id}")
-            
+
+            logger.info(
+                f"Created file changes report {report.report_id}: "
+                f"{report.files_changed} modified files, "
+                f"{report.orphaned_records_found} deleted files"
+            )
+
         except Exception as e:
             logger.error(f"Failed to create file changes report: {e}")

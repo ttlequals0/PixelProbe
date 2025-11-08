@@ -114,6 +114,11 @@ def test_cleanup():
 def get_cleanup_status():
     """Get current cleanup orphans operation status"""
     try:
+        # Expire all cached objects to ensure we get fresh data from the database
+        # This is critical because cleanup runs in a background thread
+        # with its own session, and we need to see its committed updates
+        db.session.expire_all()
+
         # Get the most recent cleanup state from database
         cleanup_record = CleanupState.query.order_by(CleanupState.id.desc()).first()
         
@@ -187,6 +192,11 @@ def get_cleanup_status():
 def get_file_changes_status():
     """Get current file changes check operation status"""
     try:
+        # Expire all cached objects to ensure we get fresh data from the database
+        # This is critical because file changes check runs in a background thread
+        # with its own session, and we need to see its committed updates
+        db.session.expire_all()
+
         # Get the most recent file changes state from database
         file_changes_record = FileChangesState.query.order_by(FileChangesState.id.desc()).first()
         

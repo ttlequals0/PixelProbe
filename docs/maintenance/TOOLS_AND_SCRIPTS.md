@@ -1,6 +1,6 @@
 # PixelProbe Tools and Scripts Documentation
 
-This document provides a comprehensive guide to all tools, scripts, and utilities available in PixelProbe v2.2.47.
+This document provides a comprehensive guide to all tools, scripts, and utilities available in PixelProbe v2.4.48.
 
 ## Table of Contents
 1. [Migration Scripts](#migration-scripts)
@@ -198,16 +198,6 @@ These tools fix common false positives in media file corruption detection:
 ```bash
 ./scripts/docker-run-modern.sh
 ```
-
-### Monitoring
-
-#### `scripts/flower_monitor.py`
-**Purpose:** Run Flower monitoring dashboard for Celery  
-**Usage:**
-```bash
-python3 scripts/flower_monitor.py
-```
-**Access:** http://localhost:5555
 
 ---
 

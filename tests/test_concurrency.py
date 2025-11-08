@@ -215,7 +215,7 @@ class TestConcurrency:
         
         def start_scan():
             with app.test_client() as client:
-                response = client.post('/api/scan-all', json={
+                response = client.post('/api/scan-parallel', json={
                     'directories': ['/tmp/test']
                 })
                 results['scan'] = response.status_code

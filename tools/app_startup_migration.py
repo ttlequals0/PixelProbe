@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 def run_startup_migrations(db):
     """Run database migrations on startup to add any missing columns"""
-    
+
     migrations = [
         # Add cancel_requested to cleanup_state
         {
@@ -48,29 +48,28 @@ def run_startup_migrations(db):
             'description': 'Adding last_crash_time to scan_state'
         }
     ]
-    
+
+    # Use engine.connect() instead of db.session to avoid transaction/context issues
     for migration in migrations:
         try:
             # Try to select the column - if it fails, the column doesn't exist
-            db.session.execute(text(migration['check_sql']))
+            with db.engine.connect() as conn:
+                conn.execute(text(migration['check_sql']))
         except (OperationalError, ProgrammingError):
             # Column doesn't exist, add it
             try:
-                # Rollback any pending transaction first
-                db.session.rollback()
                 logger.info(f"Running migration: {migration['description']}")
-                db.session.execute(text(migration['migration_sql']))
-                db.session.commit()
+                with db.engine.begin() as conn:
+                    conn.execute(text(migration['migration_sql']))
                 logger.info(f"Migration successful: {migration['description']}")
             except (OperationalError, ProgrammingError) as e:
-                if "duplicate column name" in str(e).lower():
+                err_str = str(e).lower()
+                if "duplicate column name" in err_str or "already exists" in err_str:
                     logger.info(f"Column already exists, skipping: {migration['description']}")
                 else:
                     logger.error(f"Failed to run migration {migration['description']}: {e}")
-                db.session.rollback()
             except Exception as e:
                 logger.error(f"Failed to run migration {migration['description']}: {e}")
-                db.session.rollback()
         except Exception as e:
             # Some other error - log it but continue
             logger.warning(f"Error checking {migration['table']}: {e}")

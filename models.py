@@ -533,6 +533,7 @@ class FileChangesState(db.Model):
     corrupted_found = db.Column(db.Integer, nullable=False, default=0)
     start_time = db.Column(db.DateTime(timezone=True), nullable=True)
     end_time = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_heartbeat = db.Column(db.DateTime(timezone=True), nullable=True)  # Track liveness to detect stuck workers
     current_file = db.Column(db.String(500), nullable=True)
     progress_message = db.Column(db.String(1000), nullable=True)  # Increased from 200
     error_message = db.Column(db.String(1000), nullable=True)  # Increased from 500

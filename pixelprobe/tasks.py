@@ -16,27 +16,11 @@ from contextlib import contextmanager
 
 from celery_config import celery_app
 from pixelprobe.services.scan_service import ScanService
+from pixelprobe.progress_utils import get_redis_client, update_scan_progress_redis
 from models import db, ScanState, ScanResult
 
 
 logger = logging.getLogger(__name__)
-
-
-# Redis connection for distributed locking
-def get_redis_client():
-    """Get Redis client from Celery broker URL"""
-    import os
-    broker_url = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
-    # Parse redis://host:port/db format
-    if broker_url.startswith('redis://'):
-        url = broker_url.replace('redis://', '')
-        parts = url.split('/')
-        host_port = parts[0].split(':')
-        host = host_port[0]
-        port = int(host_port[1]) if len(host_port) > 1 else 6379
-        db_num = int(parts[1]) if len(parts) > 1 else 0
-        return redis.Redis(host=host, port=port, db=db_num, socket_timeout=5, socket_connect_timeout=5)
-    return None
 
 
 @contextmanager
@@ -87,7 +71,8 @@ def distributed_lock(lock_name, timeout=300, blocking_timeout=10):
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60,
-                 soft_time_limit=None, time_limit=None)  # No timeout for scan tasks
+                 soft_time_limit=None, time_limit=None,  # No timeout for scan tasks
+                 priority=3)  # High priority - scans take precedence over maintenance
 def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
     """
     Main media scanning task
@@ -319,7 +304,8 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
 
 
 @celery_app.task(bind=True, max_retries=2,
-                 soft_time_limit=None, time_limit=None)  # No timeout for cleanup tasks
+                 soft_time_limit=None, time_limit=None,  # No timeout for cleanup tasks
+                 priority=7)  # Low priority - maintenance runs in background
 def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
     """
     Background task for cleaning up orphaned database records
@@ -378,7 +364,8 @@ def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
 
 
 @celery_app.task(bind=True, max_retries=2,
-                 soft_time_limit=None, time_limit=None)  # No timeout for file scan tasks
+                 soft_time_limit=None, time_limit=None,  # No timeout for file scan tasks
+                 priority=3)  # High priority - scans take precedence over maintenance
 def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=None):
     """
     Background task for scanning specific files
@@ -479,7 +466,7 @@ def health_check_task():
     }
 
 
-@celery_app.task
+@celery_app.task(priority=3)  # High priority - scans take precedence over maintenance
 def scheduled_scan_task(schedule_id, scan_type='full'):
     """
     Task for executing scheduled scans
@@ -531,3 +518,298 @@ def scheduled_scan_task(schedule_id, scan_type='full'):
     except Exception as exc:
         logger.error(f"Scheduled scan failed for schedule_id {schedule_id}: {str(exc)}")
         raise exc
+
+
+@celery_app.task(bind=True, max_retries=1,
+                 soft_time_limit=5, time_limit=10,  # Fast operation - just check existence
+                 priority=6)  # Higher priority than hash calc - cleanup tasks are quick
+def check_file_exists_task(self, file_id, file_path):
+    """
+    Check if a file exists on disk (for orphan cleanup)
+
+    This is a lightweight task that only checks file existence without reading the file.
+    Much faster than hash calculation for orphan cleanup operations.
+
+    Args:
+        file_id (int): Database ID of the file
+        file_path (str): Path to the file to check
+
+    Returns:
+        dict: {file_id, file_path, exists: bool}
+    """
+    import os
+
+    try:
+        # Check if file exists - use multiple methods for robust detection
+        file_exists = False
+
+        # Method 1: os.path.exists() - fast but may have issues with symlinks
+        if os.path.exists(file_path):
+            file_exists = True
+        # Method 2: Try to stat the file directly - more reliable
+        elif os.path.isfile(file_path):
+            file_exists = True
+        # Method 3: Check if path exists at all (directory or file)
+        elif os.path.lexists(file_path):
+            # lexists returns True even for broken symlinks
+            # If lexists is True but exists is False, it's a broken symlink - treat as not existing
+            file_exists = False
+
+        return {
+            'file_id': file_id,
+            'file_path': file_path,
+            'exists': file_exists
+        }
+
+    except (OSError, IOError) as e:
+        # If we get an error accessing the file, treat it as not existing
+        logger.warning(f"Error checking file existence {file_path}: {e}")
+        return {
+            'file_id': file_id,
+            'file_path': file_path,
+            'exists': False
+        }
+
+
+@celery_app.task(bind=True, max_retries=2,
+                 soft_time_limit=None, time_limit=None,  # No timeout - must complete hash regardless of file size
+                 priority=7)  # Low priority - maintenance runs in background
+def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modified):
+    """
+    Calculate hash for a single file and compare to stored hash
+
+    IMPORTANT: No timeouts on this task - we must always calculate hash regardless of how
+    large the file is. File integrity checking requires accurate hashes.
+
+    Args:
+        file_id (int): Database ID of the file
+        file_path (str): Path to the file
+        stored_hash (str): Expected hash from database
+        stored_modified (str): Last modified timestamp from database (ISO format)
+
+    Returns:
+        dict: Hash comparison result with change information
+    """
+    import hashlib
+    import os
+    from datetime import datetime, timezone
+
+    try:
+        # Check if file exists
+        if not os.path.exists(file_path):
+            return {
+                'file_id': file_id,
+                'file_path': file_path,
+                'changed': True,
+                'change_type': 'deleted',
+                'stored_hash': stored_hash,
+                'current_hash': None,
+                'stored_modified': stored_modified,
+                'current_modified': None
+            }
+
+        # Calculate current hash
+        # Use mmap for large files (>100MB), buffered read for smaller files
+        import mmap
+
+        file_size = os.path.getsize(file_path)
+        sha256_hash = hashlib.sha256()
+
+        if file_size > 100 * 1024 * 1024:  # 100MB threshold
+            # Use memory-mapped I/O for large files (5-10x faster)
+            logger.info(f"File changes check: Hashing large file ({file_size/1024/1024/1024:.1f}GB) with mmap: {file_path}")
+            try:
+                import time
+                start_time = time.time()
+                with open(file_path, "rb") as f:
+                    # Map entire file into memory (OS handles paging)
+                    with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                        sha256_hash.update(mm)
+                elapsed = time.time() - start_time
+                logger.info(f"mmap hash completed in {elapsed:.1f}s for {file_size/1024/1024/1024:.1f}GB file ({file_size/elapsed/1024/1024:.1f} MB/s)")
+            except (OSError, ValueError) as e:
+                # Fallback to buffered read if mmap fails (e.g., empty file, special file, network mount)
+                logger.warning(f"mmap failed for {file_path}, falling back to buffered read: {e}")
+                import time
+                start_time = time.time()
+                with open(file_path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(1048576), b""):  # 1MB chunks
+                        sha256_hash.update(byte_block)
+                elapsed = time.time() - start_time
+                logger.info(f"Buffered hash completed in {elapsed:.1f}s for {file_size/1024/1024/1024:.1f}GB file ({file_size/elapsed/1024/1024:.1f} MB/s)")
+        else:
+            # Use 1MB buffered reads for smaller files (was 4KB, now 262x faster)
+            with open(file_path, "rb") as f:
+                for byte_block in iter(lambda: f.read(1048576), b""):  # 1MB chunks
+                    sha256_hash.update(byte_block)
+
+        current_hash = sha256_hash.hexdigest()
+
+        # Get current modification time
+        stat = os.stat(file_path)
+        current_modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+
+        # Parse stored modified time
+        if stored_modified:
+            try:
+                stored_mod_dt = datetime.fromisoformat(stored_modified.replace('Z', '+00:00'))
+            except:
+                stored_mod_dt = None
+        else:
+            stored_mod_dt = None
+
+        # Determine if file changed
+        if not stored_hash:
+            change_type = 'no_hash'
+            changed = True
+        elif current_hash != stored_hash:
+            change_type = 'modified'
+            changed = True
+        else:
+            change_type = 'unchanged'
+            changed = False
+
+        return {
+            'file_id': file_id,
+            'file_path': file_path,
+            'changed': changed,
+            'change_type': change_type,
+            'stored_hash': stored_hash,
+            'current_hash': current_hash,
+            'stored_modified': stored_modified,
+            'current_modified': current_modified.isoformat() if current_modified else None
+        }
+
+    except Exception as exc:
+        logger.error(f"Hash calculation failed for {file_path}: {str(exc)}")
+
+        # Retry with delay for transient errors
+        if self.request.retries < self.max_retries:
+            retry_delay = 10 * (self.request.retries + 1)  # 10s, 20s
+            raise self.retry(exc=exc, countdown=retry_delay)
+        else:
+            # Max retries exceeded, return error result
+            return {
+                'file_id': file_id,
+                'file_path': file_path,
+                'changed': False,
+                'change_type': 'error',
+                'error': str(exc),
+                'stored_hash': stored_hash,
+                'current_hash': None
+            }
+
+
+@celery_app.task(bind=True, priority=9)
+def ui_progress_update_task(self, scan_id, update_interval=1.0):
+    """
+    UI worker that periodically reads scan state from database and ensures
+    phase_total and estimated_total are kept in sync for proper UI display.
+
+    The scanning workers update files_processed and phase_total in the database.
+    This worker ensures estimated_total matches phase_total so the UI shows correct totals.
+
+    Args:
+        scan_id (str): The scan ID to track progress for
+        update_interval (float): How often to check progress (seconds)
+
+    Returns:
+        dict: Final progress status
+    """
+    logger.info(f"Starting UI progress worker for scan {scan_id}")
+
+    import sys
+    import os
+    import time
+    from datetime import datetime, timezone
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from app import app, db as flask_db
+
+    app_context = app.app_context()
+    app_context.push()
+
+    try:
+        consecutive_no_change = 0
+        max_no_change = 120  # Stop after 2 minutes of no activity
+        last_files_processed = -1
+
+        while True:
+            try:
+                from models import ScanState
+
+                # Read current scan state from database
+                scan_state = flask_db.session.query(ScanState).filter_by(scan_id=scan_id).first()
+
+                if not scan_state:
+                    logger.warning(f"Scan state not found for {scan_id}")
+                    break
+
+                # Check if scan is complete
+                if scan_state.phase in ['completed', 'error', 'cancelled', 'crashed']:
+                    logger.info(f"Scan {scan_id} finished with phase: {scan_state.phase}")
+                    break
+
+                # Get current values
+                files_processed = scan_state.files_processed or 0
+                phase_total = scan_state.phase_total or 0
+
+                # The key fix: if estimated_total is 0 but phase_total has a value, sync them
+                if scan_state.estimated_total == 0 and phase_total > 0:
+                    logger.info(f"Fixing estimated_total: was 0, setting to phase_total={phase_total}")
+                    scan_state.estimated_total = phase_total
+                    flask_db.session.commit()
+                    logger.info(f"Updated scan {scan_id}: estimated_total now {phase_total}")
+
+                # Also ensure phase_total matches estimated_total if it has a value
+                elif scan_state.estimated_total > 0 and phase_total != scan_state.estimated_total:
+                    logger.info(f"Syncing phase_total to estimated_total: {scan_state.estimated_total}")
+                    scan_state.phase_total = scan_state.estimated_total
+                    flask_db.session.commit()
+
+                # Check for progress
+                if files_processed == last_files_processed:
+                    consecutive_no_change += 1
+                    if consecutive_no_change >= max_no_change:
+                        logger.warning(f"No progress for {max_no_change} seconds, stopping UI worker")
+                        break
+                else:
+                    consecutive_no_change = 0
+                    last_files_processed = files_processed
+                    logger.debug(f"Scan {scan_id} progress: {files_processed}/{scan_state.estimated_total}")
+
+                # Close the session to avoid stale data
+                flask_db.session.close()
+
+            except Exception as e:
+                logger.error(f"Error in UI worker: {e}", exc_info=True)
+                try:
+                    flask_db.session.rollback()
+                except:
+                    pass
+
+            # Sleep before next update
+            time.sleep(update_interval)
+
+        return {
+            'status': 'SUCCESS',
+            'scan_id': scan_id,
+            'final_progress': last_files_processed
+        }
+
+    except Exception as exc:
+        logger.error(f"UI progress worker failed for scan {scan_id}: {str(exc)}")
+        return {
+            'status': 'ERROR',
+            'scan_id': scan_id,
+            'error': str(exc)
+        }
+    finally:
+        # Clean up Flask app context
+        try:
+            app_context.pop()
+        except:
+            pass
+
+
+# update_scan_progress_redis is now imported from progress_utils to avoid circular imports

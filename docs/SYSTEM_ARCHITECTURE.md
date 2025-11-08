@@ -10,7 +10,7 @@
 
 ## Overview
 
-PixelProbe v2.2.47 is a distributed media corruption detection system built on a microservices architecture using Docker containers. The system leverages Celery for distributed task processing, Redis for message queuing, and PostgreSQL for persistent storage.
+PixelProbe v2.4.48 is a distributed media corruption detection system built on a microservices architecture using Docker containers. The system leverages Celery for distributed task processing, Redis for message queuing, and PostgreSQL for persistent storage.
 
 ## Container Architecture
 
@@ -45,7 +45,7 @@ PixelProbe v2.2.47 is a distributed media corruption detection system built on a
 ### Container Descriptions
 
 #### 1. Web Application Container (`mediachecker`)
-- **Image**: `ttlequals0/pixelprobe:2.2.47`
+- **Image**: `ttlequals0/pixelprobe:2.4.48`
 - **Purpose**: Serves the web UI and REST API
 - **Responsibilities**:
   - Handle HTTP requests from users
@@ -59,7 +59,7 @@ PixelProbe v2.2.47 is a distributed media corruption detection system built on a
   - APScheduler for scheduled tasks
 
 #### 2. Celery Worker Container (`celery-worker`)
-- **Image**: `ttlequals0/pixelprobe:2.2.47` (same image, different entry point)
+- **Image**: `ttlequals0/pixelprobe:2.4.48` (same image, different entry point)
 - **Purpose**: Process background tasks in parallel
 - **Responsibilities**:
   - Execute media scanning tasks
