@@ -550,7 +550,7 @@ class ProgressManager {
             fileChangesButton.disabled = isRunning;
             fileChangesButton.innerHTML = isRunning ?
                 '<i class="fas fa-spinner fa-spin"></i> Checking...' :
-                '<i class="fas fa-exchange-alt"></i> Integrity Check';
+                '<i class="fas fa-shield-alt"></i> Integrity Check';
         }
     }
     
@@ -1086,10 +1086,10 @@ class TableManager {
                                 <i class="fas fa-sync"></i> Rescan
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
-                                <i class="fas fa-search"></i> Cleanup Check
+                                <i class="fas fa-search"></i> Cleanup
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
-                                <i class="fas fa-exchange-alt"></i> Integrity Check
+                                <i class="fas fa-shield-alt"></i> Integrity Check
                             </a></li>
                         </ul>
                     </div>
@@ -1139,10 +1139,10 @@ class TableManager {
                                 <i class="fas fa-sync"></i> Rescan
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
-                                <i class="fas fa-search"></i> Cleanup Check
+                                <i class="fas fa-search"></i> Cleanup
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
-                                <i class="fas fa-exchange-alt"></i> Integrity Check
+                                <i class="fas fa-shield-alt"></i> Integrity Check
                             </a></li>
                         </ul>
                     </div>
@@ -1646,7 +1646,7 @@ class PixelProbeApp {
             const response = await fetch(`/api/scan-results/${fileId}`);
             if (response.ok) {
                 const file = await response.json();
-                // Start cleanup check for this file
+                // Start cleanup for this file
                 const orphanResponse = await fetch('/api/cleanup-orphaned', {
                     method: 'POST',
                     headers: {
@@ -1658,16 +1658,16 @@ class PixelProbeApp {
                 });
 
                 if (orphanResponse.ok) {
-                    this.showNotification('Cleanup check started for file', 'success');
+                    this.showNotification('Cleanup started for file', 'success');
                     this.progress.startMonitoring('cleanup');
                 } else {
-                    throw new Error('Failed to start cleanup check');
+                    throw new Error('Failed to start cleanup');
                 }
             } else {
                 throw new Error('Failed to get file info');
             }
         } catch (error) {
-            this.showNotification(error.message || 'Failed to start cleanup check', 'error');
+            this.showNotification(error.message || 'Failed to start cleanup', 'error');
         }
     }
 
@@ -2594,7 +2594,7 @@ class PixelProbeApp {
                 }
             }
 
-            // Start cleanup check for selected files
+            // Start cleanup for selected files
             const response = await fetch('/api/cleanup-orphaned', {
                 method: 'POST',
                 headers: {
@@ -2606,13 +2606,13 @@ class PixelProbeApp {
             });
 
             if (response.ok) {
-                this.showNotification(`Cleanup check started for ${fileIds.length} files`, 'success');
+                this.showNotification(`Cleanup started for ${fileIds.length} files`, 'success');
                 this.progress.startMonitoring('cleanup');
             } else {
-                throw new Error('Cleanup check failed');
+                throw new Error('Cleanup failed');
             }
         } catch (error) {
-            this.showNotification('Failed to start cleanup check', 'error');
+            this.showNotification('Failed to start cleanup', 'error');
         }
     }
 

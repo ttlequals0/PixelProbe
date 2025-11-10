@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Now only logs once and only for unexpected phases (not during discovery/idle/pending)
   - Reduces log spam from 70+ warnings to maximum 1 warning per scan
 
+- **Corrected UI terminology**
+  - Changed "Cleanup Check" to just "Cleanup" in dropdown menus
+  - Updated all notification messages to use consistent terminology
+  - Affects both bulk actions dropdown and individual file actions
+
+- **Improved UI icons**
+  - Changed Integrity Check icon from fa-exchange-alt to fa-shield-alt
+  - Shield icon better represents integrity/validation checking
+  - Updated in sidebar navigation, dropdown menus, and buttons
+
 ### Technical Details
 - Added phase checking to skip warnings during expected zero-total phases
 - Added flag to ensure warning is only logged once per scan state
