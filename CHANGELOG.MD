@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.106] - 2025-11-10
+
+### Fixed
+- **Corrected version numbering**
+  - Version.py was incorrectly set to 2.4.105 instead of 2.4.106
+  - Docker image now properly reflects version 2.4.106
+  - All UI improvements from previous commit included
+
 ## [2.4.105] - 2025-11-10
 
 ### Fixed
