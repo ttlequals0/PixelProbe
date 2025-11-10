@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.99] - 2025-11-09
+
+### Fixed
+- **CRITICAL: Fixed scans being incorrectly marked as crashed after 30 minutes**
+  - UI worker now updates `last_update` timestamp every iteration
+  - Prevents stuck scan detection from incorrectly flagging active scans as crashed
+  - Scans were being marked crashed after 30 minutes despite actively processing files
+  - This regression was introduced in recent UI worker changes (v2.4.88-v2.4.98)
+
+### Impact
+- Scans now complete successfully without being interrupted by stuck scan detection
+- Long-running scans (>30 minutes) no longer get incorrectly terminated
+- Fixes issue where scans would be marked crashed while still actively scanning files
+- Restores functionality from v2.4.75 which successfully handled 1M+ file scans
+
 ## [2.4.98] - 2025-11-08
 
 ### Fixed

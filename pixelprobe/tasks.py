@@ -754,6 +754,9 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                 files_processed = scan_state.files_processed or 0
                 phase_total = scan_state.phase_total or 0
 
+                # Update last_update timestamp to prevent stuck scan detection
+                scan_state.last_update = datetime.now(timezone.utc)
+
                 # The key fix: if estimated_total is 0 but phase_total has a value, sync them
                 if scan_state.estimated_total == 0 and phase_total > 0:
                     logger.info(f"Fixing estimated_total: was 0, setting to phase_total={phase_total}")
@@ -765,6 +768,9 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                 elif scan_state.estimated_total > 0 and phase_total != scan_state.estimated_total:
                     logger.info(f"Syncing phase_total to estimated_total: {scan_state.estimated_total}")
                     scan_state.phase_total = scan_state.estimated_total
+                    flask_db.session.commit()
+                else:
+                    # Even if no sync needed, commit to update last_update timestamp
                     flask_db.session.commit()
 
                 # Check for progress
