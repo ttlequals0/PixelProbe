@@ -112,7 +112,7 @@ def test_cleanup():
 @exempt_from_rate_limit
 @auth_required
 def get_cleanup_status():
-    """Get current cleanup orphans operation status"""
+    """Get current cleanup operation status"""
     try:
         # Expire all cached objects to ensure we get fresh data from the database
         # This is critical because cleanup runs in a background thread

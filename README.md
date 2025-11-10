@@ -34,7 +34,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 ### Scanning Features
 - **Parallel multi-threaded scanning**: Configurable worker threads (10-24 workers recommended) with thread-safe database access
 - **Real-time progress**: Live updates with ETA calculations and phase tracking
-- **Multiple scan types**: Full scan, orphan cleanup, file changes detection
+- **Multiple scan types**: Full scan, cleanup, integrity check
 - **Scheduled automated scans**: Cron expressions or simple intervals for hands-free monitoring
 - **Smart exclusions**: Configure paths and file extensions to skip
 - **Phase-based scanning**: Discovery → Database → Validation workflow
@@ -111,7 +111,7 @@ Secure password changes:
 
 Features visible in the interface:
 - **Statistics Dashboard**: Real-time display of 1M+ scanned files with health status
-- **Sidebar Navigation**: Quick access to Dashboard, API Documentation, Tools (Start Scan, Cleanup, Check Changes, Schedules, Exclusions), System (Stats, Reports, Build Info), and Account (User Management, API Tokens, Change Password)
+- **Sidebar Navigation**: Quick access to Dashboard, API Documentation, Tools (Start Scan, Cleanup, Integrity Check, Schedules, Exclusions), System (Stats, Reports, Build Info), and Account (User Management, API Tokens, Change Password)
 - **File Results Table**: Sortable columns for status, file path, size, type, scan date with bulk actions
 - **Filtering Options**: All Files, Corrupted Only, Warnings Only, Healthy Only
 - **Action Buttons**: Mark as Good, Rescan, Download, Export functionality
@@ -153,7 +153,7 @@ Comprehensive scan reporting with history and analytics:
 
 Create and manage automated scan schedules:
 - Support for both cron expressions and simple intervals
-- Multiple scan types: Normal Scan, Orphan Cleanup, File Changes
+- Multiple scan types: Normal Scan, Cleanup, Integrity Check
 - View next run times and last execution status
 
 ##  Quick Start

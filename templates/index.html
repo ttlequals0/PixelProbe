@@ -53,13 +53,13 @@
                         <i class="fas fa-play"></i>
                         <span>Start Scan</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.cleanupOrphaned()" title="Cleanup Orphaned">
+                    <a href="#" class="nav-item" onclick="app.cleanupOrphaned()" title="Cleanup">
                         <i class="fas fa-broom"></i>
-                        <span>Cleanup Orphaned</span>
+                        <span>Cleanup</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.checkFileChanges()" title="Check File Changes">
+                    <a href="#" class="nav-item" onclick="app.checkFileChanges()" title="Integrity Check">
                         <i class="fas fa-sync"></i>
-                        <span>Check File Changes</span>
+                        <span>Integrity Check</span>
                     </a>
                     <a href="#" class="nav-item" onclick="app.showSchedules()" title="Manage Schedules">
                         <i class="fas fa-clock"></i>
@@ -239,10 +239,10 @@
                                             <i class="fas fa-sync"></i> Rescan
                                         </a></li>
                                         <li><a class="dropdown-item" href="#" onclick="app.orphanScanSelected(); return false;">
-                                            <i class="fas fa-search"></i> Orphan Check
+                                            <i class="fas fa-search"></i> Cleanup Check
                                         </a></li>
                                         <li><a class="dropdown-item" href="#" onclick="app.changeCheckSelected(); return false;">
-                                            <i class="fas fa-exchange-alt"></i> Change Check
+                                            <i class="fas fa-exchange-alt"></i> Integrity Check
                                         </a></li>
                                     </ul>
                                 </div>
@@ -517,8 +517,8 @@
                         <label for="scan-type">Scan Type</label>
                         <select id="scan-type" class="form-control">
                             <option value="normal">Normal Scan (Scan All Files)</option>
-                            <option value="orphan">Orphan Cleanup</option>
-                            <option value="file_changes">File Changes Scan</option>
+                            <option value="orphan">Cleanup</option>
+                            <option value="file_changes">Integrity Check</option>
                         </select>
                         <small class="form-text text-muted">Choose what type of operation to perform</small>
                     </div>

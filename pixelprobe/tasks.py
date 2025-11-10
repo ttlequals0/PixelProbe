@@ -746,6 +746,10 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                 # Use separate UI session to avoid concurrent access issues
                 ui_session = UiSession()
 
+                # Ensure we're reading fresh data by committing any pending transaction
+                # This forces the session to start a new transaction and see latest data
+                ui_session.commit()
+
                 # Read current scan state from database
                 scan_state = ui_session.query(ScanState).filter_by(scan_id=scan_id).first()
 
@@ -770,6 +774,10 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
 
                 # Update last_update timestamp to prevent stuck scan detection
                 scan_state.last_update = datetime.now(timezone.utc)
+
+                # Debug logging for the "x of 0 files" issue
+                if scan_state.estimated_total == 0 or phase_total == 0:
+                    logger.warning(f"Zero total detected - estimated_total={scan_state.estimated_total}, phase_total={phase_total}, files_processed={files_processed}")
 
                 # The key fix: if estimated_total is 0 but phase_total has a value, sync them
                 if scan_state.estimated_total == 0 and phase_total > 0:

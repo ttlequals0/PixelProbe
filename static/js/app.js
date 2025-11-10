@@ -538,9 +538,9 @@ class ProgressManager {
         const cleanupButton = document.querySelector('[onclick*="cleanupOrphaned"]');
         if (cleanupButton) {
             cleanupButton.disabled = isRunning;
-            cleanupButton.innerHTML = isRunning ? 
-                '<i class="fas fa-spinner fa-spin"></i> Cleaning up...' : 
-                '<i class="fas fa-broom"></i> Cleanup Orphaned';
+            cleanupButton.innerHTML = isRunning ?
+                '<i class="fas fa-spinner fa-spin"></i> Cleaning up...' :
+                '<i class="fas fa-broom"></i> Cleanup';
         }
     }
     
@@ -548,9 +548,9 @@ class ProgressManager {
         const fileChangesButton = document.querySelector('[onclick*="checkFileChanges"]');
         if (fileChangesButton) {
             fileChangesButton.disabled = isRunning;
-            fileChangesButton.innerHTML = isRunning ? 
-                '<i class="fas fa-spinner fa-spin"></i> Checking...' : 
-                '<i class="fas fa-exchange-alt"></i> Check File Changes';
+            fileChangesButton.innerHTML = isRunning ?
+                '<i class="fas fa-spinner fa-spin"></i> Checking...' :
+                '<i class="fas fa-exchange-alt"></i> Integrity Check';
         }
     }
     
@@ -1086,10 +1086,10 @@ class TableManager {
                                 <i class="fas fa-sync"></i> Rescan
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
-                                <i class="fas fa-search"></i> Orphan Check
+                                <i class="fas fa-search"></i> Cleanup Check
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
-                                <i class="fas fa-exchange-alt"></i> Change Check
+                                <i class="fas fa-exchange-alt"></i> Integrity Check
                             </a></li>
                         </ul>
                     </div>
@@ -1139,10 +1139,10 @@ class TableManager {
                                 <i class="fas fa-sync"></i> Rescan
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
-                                <i class="fas fa-search"></i> Orphan Check
+                                <i class="fas fa-search"></i> Cleanup Check
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
-                                <i class="fas fa-exchange-alt"></i> Change Check
+                                <i class="fas fa-exchange-alt"></i> Integrity Check
                             </a></li>
                         </ul>
                     </div>
@@ -1340,8 +1340,8 @@ class PixelProbeApp {
     formatScanType(type) {
         const types = {
             'normal': 'Normal Scan',
-            'orphan': 'Orphan Cleanup',
-            'file_changes': 'File Changes Scan'
+            'orphan': 'Cleanup',
+            'file_changes': 'Integrity Check'
         };
         return types[type] || type;
     }
@@ -1513,7 +1513,7 @@ class PixelProbeApp {
             }
         } catch (error) {
             console.error('File changes error:', error);
-            this.showNotification('Failed to check file changes', 'error');
+            this.showNotification('Failed to perform integrity check', 'error');
         }
     }
 
@@ -1646,7 +1646,7 @@ class PixelProbeApp {
             const response = await fetch(`/api/scan-results/${fileId}`);
             if (response.ok) {
                 const file = await response.json();
-                // Start orphan check for this file
+                // Start cleanup check for this file
                 const orphanResponse = await fetch('/api/cleanup-orphaned', {
                     method: 'POST',
                     headers: {
@@ -1658,16 +1658,16 @@ class PixelProbeApp {
                 });
 
                 if (orphanResponse.ok) {
-                    this.showNotification('Orphan check started for file', 'success');
+                    this.showNotification('Cleanup check started for file', 'success');
                     this.progress.startMonitoring('cleanup');
                 } else {
-                    throw new Error('Failed to start orphan check');
+                    throw new Error('Failed to start cleanup check');
                 }
             } else {
                 throw new Error('Failed to get file info');
             }
         } catch (error) {
-            this.showNotification(error.message || 'Failed to start orphan check', 'error');
+            this.showNotification(error.message || 'Failed to start cleanup check', 'error');
         }
     }
 
@@ -1689,16 +1689,16 @@ class PixelProbeApp {
                 });
 
                 if (changeResponse.ok) {
-                    this.showNotification('Change check started for file', 'success');
+                    this.showNotification('Integrity check started for file', 'success');
                     this.progress.startMonitoring('file_changes');
                 } else {
-                    throw new Error('Failed to start change check');
+                    throw new Error('Failed to start integrity check');
                 }
             } else {
                 throw new Error('Failed to get file info');
             }
         } catch (error) {
-            this.showNotification(error.message || 'Failed to start change check', 'error');
+            this.showNotification(error.message || 'Failed to start integrity check', 'error');
         }
     }
 
@@ -2594,7 +2594,7 @@ class PixelProbeApp {
                 }
             }
 
-            // Start orphan check for selected files
+            // Start cleanup check for selected files
             const response = await fetch('/api/cleanup-orphaned', {
                 method: 'POST',
                 headers: {
@@ -2606,13 +2606,13 @@ class PixelProbeApp {
             });
 
             if (response.ok) {
-                this.showNotification(`Orphan check started for ${fileIds.length} files`, 'success');
+                this.showNotification(`Cleanup check started for ${fileIds.length} files`, 'success');
                 this.progress.startMonitoring('cleanup');
             } else {
-                throw new Error('Orphan check failed');
+                throw new Error('Cleanup check failed');
             }
         } catch (error) {
-            this.showNotification('Failed to start orphan check', 'error');
+            this.showNotification('Failed to start cleanup check', 'error');
         }
     }
 
@@ -2647,13 +2647,13 @@ class PixelProbeApp {
             });
 
             if (response.ok) {
-                this.showNotification(`Change check started for ${fileIds.length} files`, 'success');
+                this.showNotification(`Integrity check started for ${fileIds.length} files`, 'success');
                 this.progress.startMonitoring('file_changes');
             } else {
-                throw new Error('Change check failed');
+                throw new Error('Integrity check failed');
             }
         } catch (error) {
-            this.showNotification('Failed to start change check', 'error');
+            this.showNotification('Failed to start integrity check', 'error');
         }
     }
 

@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.104] - 2025-11-10
+
+### Changed
+- **UI Terminology Updates (NO LOGIC CHANGES)**
+  - Renamed "Check Changes" to "Integrity Check" throughout UI
+  - Renamed "Orphan Cleanup" to "Cleanup" throughout UI
+  - Updated button labels, menu items, and documentation
+  - No functional changes - only display text updated
+
+### Fixed
+- **CRITICAL: Fixed "x of 0 files" regression in UI progress display**
+  - UI worker was not seeing updated estimated_total and phase_total values from database
+  - Added session.commit() before reading scan_state to ensure fresh data
+  - Forces new transaction to see latest updates from other workers
+  - Added debug logging to track when zero totals are detected
+
+- **CRITICAL: Added database connection recovery for scan workers**
+  - Added retry logic for "server closed the connection unexpectedly" errors
+  - Scan workers now retry up to 3 times with exponential backoff
+  - Properly rollback and remove sessions on connection errors
+  - Prevents scan failures due to temporary database connectivity issues
+
+### Technical Details
+- UI worker issue: SQLAlchemy session was reading from stale transaction
+- Solution: Call ui_session.commit() before query to start fresh transaction
+- Database errors: psycopg2.OperationalError during large file processing
+- Solution: Wrap database queries in retry loop with proper error handling
+
 ## [2.4.103] - 2025-11-09
 
 ### Fixed

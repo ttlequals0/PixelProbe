@@ -1338,11 +1338,31 @@ class ScanService:
             with app.app_context():
                 if self.scan_cancelled:
                     return None
-                # Get a fresh scan_state from database for this thread to avoid session conflicts
-                thread_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
-                if not thread_scan_state:
-                    logger.error(f"Could not find scan_state with id {scan_state_id}")
-                    return None
+
+                # Handle database connection errors with retry
+                from sqlalchemy.exc import OperationalError
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        # Get a fresh scan_state from database for this thread to avoid session conflicts
+                        thread_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                        if not thread_scan_state:
+                            logger.error(f"Could not find scan_state with id {scan_state_id}")
+                            return None
+                        break
+                    except OperationalError as e:
+                        if "server closed the connection" in str(e) or "SSL connection has been closed" in str(e):
+                            logger.warning(f"Database connection lost, attempt {attempt + 1}/{max_retries}: {e}")
+                            if attempt < max_retries - 1:
+                                # Rollback and retry
+                                db.session.rollback()
+                                db.session.remove()
+                                time.sleep(1 * (attempt + 1))  # Exponential backoff
+                            else:
+                                logger.error(f"Failed to reconnect to database after {max_retries} attempts")
+                                raise
+                        else:
+                            raise
                 # For parallel scan, we can't pass cumulative counts, so pass 0
                 # The main thread will handle updating the cumulative progress
                 # CRITICAL: When processing chunks in parallel, disable file-level parallelism
