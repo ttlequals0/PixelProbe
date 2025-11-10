@@ -1626,7 +1626,8 @@ class PixelProbeApp {
                 const scanResponse = await this.api.request('/scan-parallel', {
                     method: 'POST',
                     body: JSON.stringify({
-                        file_paths: [file.file_path]
+                        file_paths: [file.file_path],
+                        force_rescan: true  // Force rescan to actually re-scan the file
                     })
                 });
                 this.showNotification(scanResponse.message || 'File rescan started', 'success');

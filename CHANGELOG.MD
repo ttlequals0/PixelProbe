@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.102] - 2025-11-09
+
+### Fixed
+- **CRITICAL: Fixed SQLAlchemy session concurrency error preventing file scanning**
+  - UI worker database session was interfering with ForkPool scan workers
+  - Error: "This session is provisioning a new connection; concurrent operations are not permitted"
+  - Created separate session for UI worker using `scoped_session` and `sessionmaker`
+  - UI worker now uses isolated session that doesn't block concurrent scan workers
+  - Added proper session cleanup with `session.close()` and `UiSession.remove()`
+
+- **CRITICAL: Fixed rescan not actually rescanning files**
+  - Individual file rescan was not sending `force_rescan: true` flag
+  - Files were being returned from cache instead of being rescanned
+  - Updated `rescanFile()` function in app.js to include `force_rescan: true`
+  - Now properly forces MediaChecker to rescan the file instead of using cached results
+
+### Technical Details
+- UI worker creates its own session: `ui_session_factory = sessionmaker(bind=flask_db.engine)`
+- Uses `scoped_session` to ensure thread-local session management
+- Properly closes and removes sessions after each iteration
+- Frontend was missing `force_rescan` flag in rescanFile() function (line 1630 in app.js)
+
+### Impact
+- Files can now be scanned successfully without "concurrent operations" errors
+- UI worker no longer blocks parallel scan workers from saving results
+- Individual file rescan now works correctly and actually rescans the file
+- Fixes regression introduced in v2.4.101 where database activity checking caused session conflicts
+- All workers can now access database concurrently without errors
+
 ## [2.4.101] - 2025-11-09
 
 ### Fixed

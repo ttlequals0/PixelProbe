@@ -725,9 +725,15 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from app import app, db as flask_db
+    from sqlalchemy.orm import scoped_session, sessionmaker
+    from models import ScanState
 
     app_context = app.app_context()
     app_context.push()
+
+    # Create a separate session for the UI worker to avoid conflicts with scan workers
+    ui_session_factory = sessionmaker(bind=flask_db.engine)
+    UiSession = scoped_session(ui_session_factory)
 
     try:
         consecutive_no_change = 0
@@ -737,10 +743,11 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
 
         while True:
             try:
-                from models import ScanState
+                # Use separate UI session to avoid concurrent access issues
+                ui_session = UiSession()
 
                 # Read current scan state from database
-                scan_state = flask_db.session.query(ScanState).filter_by(scan_id=scan_id).first()
+                scan_state = ui_session.query(ScanState).filter_by(scan_id=scan_id).first()
 
                 if not scan_state:
                     logger.warning(f"Scan state not found for {scan_id}")
@@ -768,17 +775,20 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                 if scan_state.estimated_total == 0 and phase_total > 0:
                     logger.info(f"Fixing estimated_total: was 0, setting to phase_total={phase_total}")
                     scan_state.estimated_total = phase_total
-                    flask_db.session.commit()
+                    ui_session.commit()
                     logger.info(f"Updated scan {scan_id}: estimated_total now {phase_total}")
 
                 # Also ensure phase_total matches estimated_total if it has a value
                 elif scan_state.estimated_total > 0 and phase_total != scan_state.estimated_total:
                     logger.info(f"Syncing phase_total to estimated_total: {scan_state.estimated_total}")
                     scan_state.phase_total = scan_state.estimated_total
-                    flask_db.session.commit()
+                    ui_session.commit()
                 else:
                     # Even if no sync needed, commit to update last_update timestamp
-                    flask_db.session.commit()
+                    ui_session.commit()
+
+                # Expire the scan_state object to release locks and allow concurrent access
+                ui_session.expire(scan_state)
 
                 # Check for activity: either file count changed OR database was updated by scan workers
                 # This handles large files where file count doesn't change but workers are still active
@@ -801,13 +811,16 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                         logger.warning(f"No database activity for {max_no_change} seconds, stopping UI worker")
                         break
 
-                # Close the session to avoid stale data
-                flask_db.session.close()
+                # Close and remove the UI session to release connections
+                ui_session.close()
+                UiSession.remove()
 
             except Exception as e:
                 logger.error(f"Error in UI worker: {e}", exc_info=True)
                 try:
-                    flask_db.session.rollback()
+                    ui_session.rollback()
+                    ui_session.close()
+                    UiSession.remove()
                 except:
                     pass
 
@@ -828,7 +841,11 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
             'error': str(exc)
         }
     finally:
-        # Clean up Flask app context
+        # Clean up UI session and Flask app context
+        try:
+            UiSession.remove()
+        except:
+            pass
         try:
             app_context.pop()
         except:
