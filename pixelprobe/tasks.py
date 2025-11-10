@@ -731,8 +731,9 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
 
     try:
         consecutive_no_change = 0
-        max_no_change = 120  # Stop after 2 minutes of no activity
+        max_no_change = 1800  # Stop after 30 minutes of no activity (matches stuck scan detection timeout)
         last_files_processed = -1
+        last_db_update = None
 
         while True:
             try:
@@ -750,9 +751,15 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                     logger.info(f"Scan {scan_id} finished with phase: {scan_state.phase}")
                     break
 
+                # Check if scan is still active
+                if not scan_state.is_active:
+                    logger.info(f"Scan {scan_id} is no longer active, stopping UI worker")
+                    break
+
                 # Get current values
                 files_processed = scan_state.files_processed or 0
                 phase_total = scan_state.phase_total or 0
+                current_db_update = scan_state.last_update
 
                 # Update last_update timestamp to prevent stuck scan detection
                 scan_state.last_update = datetime.now(timezone.utc)
@@ -773,16 +780,26 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                     # Even if no sync needed, commit to update last_update timestamp
                     flask_db.session.commit()
 
-                # Check for progress
-                if files_processed == last_files_processed:
-                    consecutive_no_change += 1
-                    if consecutive_no_change >= max_no_change:
-                        logger.warning(f"No progress for {max_no_change} seconds, stopping UI worker")
-                        break
-                else:
+                # Check for activity: either file count changed OR database was updated by scan workers
+                # This handles large files where file count doesn't change but workers are still active
+                db_was_updated = (last_db_update is not None and
+                                 current_db_update is not None and
+                                 current_db_update > last_db_update)
+
+                files_changed = files_processed != last_files_processed
+
+                if files_changed or db_was_updated:
+                    # There's activity - reset the no-change counter
                     consecutive_no_change = 0
                     last_files_processed = files_processed
+                    last_db_update = current_db_update
                     logger.debug(f"Scan {scan_id} progress: {files_processed}/{scan_state.estimated_total}")
+                else:
+                    # No activity detected
+                    consecutive_no_change += 1
+                    if consecutive_no_change >= max_no_change:
+                        logger.warning(f"No database activity for {max_no_change} seconds, stopping UI worker")
+                        break
 
                 # Close the session to avoid stale data
                 flask_db.session.close()

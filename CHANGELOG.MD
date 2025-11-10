@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.101] - 2025-11-09
+
+### Fixed
+- **CRITICAL: Improved UI worker activity detection to handle large file scanning**
+  - UI worker now checks for database updates in addition to file count changes
+  - Detects when scan workers are actively updating the database during large file processing
+  - Added check for `is_active` flag to properly detect when scan is no longer running
+  - Prevents false "no activity" detection when large files are being hashed
+  - Large files (20-48GB) can take 10+ minutes to hash, during which file count doesn't change
+  - UI worker now correctly identifies scan activity even when file count is static
+
+### Changed
+- **Enhanced activity detection logic in UI worker**
+  - Tracks `last_update` timestamp changes from scan workers
+  - Considers scan active if either file count changes OR database is being updated
+  - More accurate detection of stuck/inactive scans vs. scans processing large files
+
+### Impact
+- UI worker stays alive during large file processing and correctly detects activity
+- Scans with very large files (20GB+) no longer trigger false "no activity" warnings
+- Better differentiation between truly stuck scans and scans actively processing large files
+- Complements v2.4.100 timeout fix with smarter activity detection
+
+## [2.4.100] - 2025-11-09
+
+### Fixed
+- **CRITICAL: Fixed UI worker exiting too early during large file scans**
+  - Increased UI worker timeout from 120 seconds (2 minutes) to 1800 seconds (30 minutes)
+  - UI worker was exiting after 2 minutes of no file count progress
+  - Large files (20-48GB) take longer than 2 minutes to hash/scan
+  - When UI worker exited, it stopped updating `last_update` timestamp
+  - This caused stuck scan detection to incorrectly mark scans as crashed after 30 minutes
+  - UI worker timeout now matches stuck scan detection timeout (30 minutes)
+
+### Impact
+- UI worker now stays alive during processing of large files
+- Scans with large files (20GB+) no longer get marked as crashed
+- `last_update` timestamp continues to be updated throughout entire scan
+- Fixes regression where v2.4.99 still crashed despite timestamp fix
+- Restores ability to scan very large files that was working in v2.4.75
+
 ## [2.4.99] - 2025-11-09
 
 ### Fixed
