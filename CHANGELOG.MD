@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.105] - 2025-11-10
+
+### Fixed
+- **Reduced excessive warning logging in UI worker**
+  - "Zero total detected" warning was being logged every 0.5 seconds during discovery phase
+  - Now only logs once and only for unexpected phases (not during discovery/idle/pending)
+  - Reduces log spam from 70+ warnings to maximum 1 warning per scan
+
+### Technical Details
+- Added phase checking to skip warnings during expected zero-total phases
+- Added flag to ensure warning is only logged once per scan state
+- Improves log readability and reduces Celery worker log size
+
 ## [2.4.104] - 2025-11-10
 
 ### Changed

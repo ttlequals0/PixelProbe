@@ -775,9 +775,12 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                 # Update last_update timestamp to prevent stuck scan detection
                 scan_state.last_update = datetime.now(timezone.utc)
 
-                # Debug logging for the "x of 0 files" issue
-                if scan_state.estimated_total == 0 or phase_total == 0:
-                    logger.warning(f"Zero total detected - estimated_total={scan_state.estimated_total}, phase_total={phase_total}, files_processed={files_processed}")
+                # Debug logging for the "x of 0 files" issue - only log once and only after discovery phase
+                if (scan_state.estimated_total == 0 or phase_total == 0) and scan_state.phase not in ['discovering', 'idle', 'pending']:
+                    # Only log warning once to avoid spam
+                    if not getattr(scan_state, '_zero_total_logged', False):
+                        logger.warning(f"Zero total detected in phase '{scan_state.phase}' - estimated_total={scan_state.estimated_total}, phase_total={phase_total}, files_processed={files_processed}")
+                        scan_state._zero_total_logged = True
 
                 # The key fix: if estimated_total is 0 but phase_total has a value, sync them
                 if scan_state.estimated_total == 0 and phase_total > 0:
