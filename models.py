@@ -357,6 +357,20 @@ class ScanState(db.Model):
     @staticmethod
     def create_new_scan():
         """Create a new scan state record for starting a new scan"""
+        # First, ensure no other scans are active (clean up any stale active states)
+        try:
+            # Deactivate any existing active scans
+            active_scans = ScanState.query.filter_by(is_active=True).all()
+            for scan in active_scans:
+                logger.warning(f"Deactivating stale active scan {scan.id} before creating new scan")
+                scan.is_active = False
+                scan.phase = 'interrupted' if scan.phase != 'completed' else 'completed'
+            if active_scans:
+                db.session.commit()
+        except Exception as e:
+            logger.error(f"Error cleaning up active scans: {e}")
+            db.session.rollback()
+
         # Always create a fresh scan state when starting a new scan
         scan_state = ScanState()
         scan_state.scan_id = str(uuid.uuid4())

@@ -522,20 +522,27 @@ def get_scan_status():
         # to ensure we see committed changes from other processes
         db.session.close()
         db.session.remove()  # Remove session completely to force new connection
-        
+
         # First try to get active scan with fresh session
         scan_state = db.session.query(ScanState).filter_by(is_active=True).first()
         if scan_state:
             # Force refresh from database to get latest state
             db.session.refresh(scan_state)
         else:
-            # No active scan, get the most recent one for status display
-            scan_state = db.session.query(ScanState).order_by(ScanState.id.desc()).first()
+            # No active scan, get the most recent COMPLETED scan for status display
+            # IMPORTANT: Only show completed scans to avoid showing partial/interrupted scans
+            scan_state = db.session.query(ScanState).filter_by(phase='completed').order_by(ScanState.id.desc()).first()
+            if not scan_state:
+                # If no completed scan, get the most recent one regardless of phase
+                scan_state = db.session.query(ScanState).order_by(ScanState.id.desc()).first()
+
             if scan_state:
                 db.session.refresh(scan_state)
             else:
-                # No scan states at all, create initial one
+                # No scan states at all, create initial one in idle state
                 scan_state = ScanState()
+                scan_state.phase = 'idle'
+                scan_state.is_active = False
                 db.session.add(scan_state)
                 db.session.commit()
     except Exception as e:

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.110] - 2025-11-11
+
+### Fixed
+- **Fixed inconsistent UI updates during scanning**
+  - Scan progress was jumping around erratically (e.g., from 63 to 3, showing 4/0)
+  - Improved scan state management to prevent multiple active scan states
+  - Fixed scan-status API to return consistent scan state when no active scan exists
+  - Added cleanup of stale active scans when creating new scan
+  - Prioritizes completed scans over partial/interrupted ones in status display
+  - Ensures UI shows consistent progress values throughout scan lifecycle
+
 ## [2.4.109] - 2025-11-11
 
 ### Fixed
