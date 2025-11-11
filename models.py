@@ -422,14 +422,22 @@ class ScanState(db.Model):
         """Update scan progress with safer transaction handling"""
         try:
             self.files_processed = files_processed
-            self.estimated_total = total_files
-            # CRITICAL: Also update phase_total and phase_current to keep UI display consistent
-            # But NEVER set phase_total to 0 during scanning phase - that causes "x of 0" display
-            if self.phase == 'scanning' and total_files == 0 and self.phase_total > 0:
-                # Keep existing phase_total during scanning if new value is 0
-                logger.debug(f"Keeping phase_total={self.phase_total} during scanning (not overwriting with 0)")
+
+            # CRITICAL: Prevent "x of 0" display issue
+            # Never allow estimated_total to be set to 0 if we already have a positive value
+            # This can happen due to race conditions between workers
+            if total_files == 0 and self.estimated_total > 0 and self.phase not in ['idle', 'discovering']:
+                logger.debug(f"Keeping estimated_total={self.estimated_total} (not overwriting with 0)")
+            else:
+                self.estimated_total = total_files
+
+            # Also protect phase_total from being reset to 0
+            # This applies to all phases except idle and discovering
+            if total_files == 0 and self.phase_total > 0 and self.phase not in ['idle', 'discovering']:
+                logger.debug(f"Keeping phase_total={self.phase_total} in phase '{self.phase}' (not overwriting with 0)")
             else:
                 self.phase_total = total_files
+
             self.phase_current = files_processed
             
             # Update last_update timestamp for stuck scan detection

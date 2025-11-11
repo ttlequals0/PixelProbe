@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.111] - 2025-11-11
+
+### Fixed
+- **Eliminated "X of 0" flashing in UI during scanning**
+  - Removed UI worker's attempt to sync estimated_total and phase_total (caused race conditions)
+  - UI worker now only updates timestamps, not progress values
+  - Added distributed lock to prevent multiple UI workers for same scan
+  - Improved protection against setting totals to 0 in all phases (not just scanning)
+  - Progress values are now only set by scan worker to avoid conflicts
+
 ## [2.4.110] - 2025-11-11
 
 ### Fixed
