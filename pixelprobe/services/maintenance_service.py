@@ -664,6 +664,12 @@ class MaintenanceService:
 
             logger.info(f"Processing {len(all_results)} files with size-aware batching...")
 
+            # Set initial progress to show we're starting
+            file_changes_record.phase_current = 0
+            file_changes_record.phase_total = len(all_results)
+            file_changes_record.progress_message = f'Phase 2 of 3: Starting to process {len(all_results):,} files...'
+            db.session.commit()
+
             # Sort files by size for better batch management (small files first)
             # Handle NULL file_size by treating as 0 for sorting
             all_results_sorted = sorted(all_results, key=lambda x: x.file_size if x.file_size else 0)
@@ -765,8 +771,18 @@ class MaintenanceService:
                 if file_index < len(all_results_sorted) and len(active_tasks) > 0:
                     time.sleep(0.1)  # Brief sleep to avoid busy waiting
 
-                # Update progress periodically
-                if total_files_processed % 1000 == 0 and total_files_processed > 0:
+                # Update progress periodically - every file for tiny sets, every 10 for small, every 100 for larger
+                if len(all_results) <= 10:
+                    update_interval = 1  # Update after every file for 10 or fewer files
+                elif len(all_results) < 1000:
+                    update_interval = 10
+                else:
+                    update_interval = 100
+
+                # Update progress when we hit the interval OR if we've processed all files
+                if (total_files_processed > 0 and
+                    (total_files_processed % update_interval == 0 or
+                     total_files_processed == len(all_results))):
                     file_changes_record.phase_current = total_files_processed
                     file_changes_record.phase_total = len(all_results)
                     pct = int((total_files_processed / len(all_results) * 100)) if len(all_results) > 0 else 0

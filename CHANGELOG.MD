@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.108] - 2025-11-11
+
+### Fixed
+- **Fixed integrity check (file changes) progress staying at 0%**
+  - Progress was only updating every 1000 files, causing no updates for small file sets
+  - Changed update intervals: every file for ≤10 files, every 10 for <1000 files, every 100 for larger sets
+  - Added initial progress message when starting Phase 2
+  - Ensures progress updates even when checking single files
+  - Fixed progress to update on completion even if interval not reached
+
 ## [2.4.107] - 2025-11-11
 
 ### Fixed
