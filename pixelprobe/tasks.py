@@ -753,88 +753,88 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                     # Use separate UI session to avoid concurrent access issues
                     ui_session = UiSession()
 
-                # Ensure we're reading fresh data by committing any pending transaction
-                # This forces the session to start a new transaction and see latest data
-                ui_session.commit()
+                    # Ensure we're reading fresh data by committing any pending transaction
+                    # This forces the session to start a new transaction and see latest data
+                    ui_session.commit()
 
-                # Read current scan state from database
-                scan_state = ui_session.query(ScanState).filter_by(scan_id=scan_id).first()
+                    # Read current scan state from database
+                    scan_state = ui_session.query(ScanState).filter_by(scan_id=scan_id).first()
 
-                if not scan_state:
-                    logger.warning(f"Scan state not found for {scan_id}")
-                    break
+                    if not scan_state:
+                        logger.warning(f"Scan state not found for {scan_id}")
+                        break
 
-                # Check if scan is complete
-                if scan_state.phase in ['completed', 'error', 'cancelled', 'crashed']:
-                    logger.info(f"Scan {scan_id} finished with phase: {scan_state.phase}")
-                    break
+                    # Check if scan is complete
+                    if scan_state.phase in ['completed', 'error', 'cancelled', 'crashed']:
+                        logger.info(f"Scan {scan_id} finished with phase: {scan_state.phase}")
+                        break
 
-                # Check if scan is still active
-                if not scan_state.is_active:
-                    logger.info(f"Scan {scan_id} is no longer active, stopping UI worker")
-                    break
+                    # Check if scan is still active
+                    if not scan_state.is_active:
+                        logger.info(f"Scan {scan_id} is no longer active, stopping UI worker")
+                        break
 
-                # Get current values
-                files_processed = scan_state.files_processed or 0
-                phase_total = scan_state.phase_total or 0
-                current_db_update = scan_state.last_update
+                    # Get current values
+                    files_processed = scan_state.files_processed or 0
+                    phase_total = scan_state.phase_total or 0
+                    current_db_update = scan_state.last_update
 
-                # Update last_update timestamp to prevent stuck scan detection
-                scan_state.last_update = datetime.now(timezone.utc)
+                    # Update last_update timestamp to prevent stuck scan detection
+                    scan_state.last_update = datetime.now(timezone.utc)
 
-                # Debug logging for the "x of 0 files" issue - only log once and only after discovery phase
-                if (scan_state.estimated_total == 0 or phase_total == 0) and scan_state.phase not in ['discovering', 'idle', 'pending']:
-                    # Only log warning once to avoid spam
-                    if not getattr(scan_state, '_zero_total_logged', False):
-                        logger.warning(f"Zero total detected in phase '{scan_state.phase}' - estimated_total={scan_state.estimated_total}, phase_total={phase_total}, files_processed={files_processed}")
-                        scan_state._zero_total_logged = True
+                    # Debug logging for the "x of 0 files" issue - only log once and only after discovery phase
+                    if (scan_state.estimated_total == 0 or phase_total == 0) and scan_state.phase not in ['discovering', 'idle', 'pending']:
+                        # Only log warning once to avoid spam
+                        if not getattr(scan_state, '_zero_total_logged', False):
+                            logger.warning(f"Zero total detected in phase '{scan_state.phase}' - estimated_total={scan_state.estimated_total}, phase_total={phase_total}, files_processed={files_processed}")
+                            scan_state._zero_total_logged = True
 
-                # IMPORTANT: Do NOT sync estimated_total and phase_total in the UI worker!
-                # This causes race conditions where we might overwrite valid values with 0
-                # The scan worker is responsible for setting these values correctly
-                # The UI worker should ONLY update the last_update timestamp
+                    # IMPORTANT: Do NOT sync estimated_total and phase_total in the UI worker!
+                    # This causes race conditions where we might overwrite valid values with 0
+                    # The scan worker is responsible for setting these values correctly
+                    # The UI worker should ONLY update the last_update timestamp
 
-                # Just commit to update last_update timestamp
-                ui_session.commit()
+                    # Just commit to update last_update timestamp
+                    ui_session.commit()
 
-                # Expire the scan_state object to release locks and allow concurrent access
-                ui_session.expire(scan_state)
+                    # Expire the scan_state object to release locks and allow concurrent access
+                    ui_session.expire(scan_state)
 
-                # Check for activity: either file count changed OR database was updated by scan workers
-                # This handles large files where file count doesn't change but workers are still active
-                db_was_updated = (last_db_update is not None and
+                    # Check for activity: either file count changed OR database was updated by scan workers
+                    # This handles large files where file count doesn't change but workers are still active
+                    db_was_updated = (last_db_update is not None and
                                  current_db_update is not None and
                                  current_db_update > last_db_update)
 
-                files_changed = files_processed != last_files_processed
+                    files_changed = files_processed != last_files_processed
 
-                if files_changed or db_was_updated:
-                    # There's activity - reset the no-change counter
-                    consecutive_no_change = 0
-                    last_files_processed = files_processed
-                    last_db_update = current_db_update
-                    logger.debug(f"Scan {scan_id} progress: {files_processed}/{scan_state.estimated_total}")
-                else:
-                    # No activity detected
-                    consecutive_no_change += 1
-                    if consecutive_no_change >= max_no_change:
-                        logger.warning(f"No database activity for {max_no_change} seconds, stopping UI worker")
-                        break
+                    if files_changed or db_was_updated:
+                        # There's activity - reset the no-change counter
+                        consecutive_no_change = 0
+                        last_files_processed = files_processed
+                        last_db_update = current_db_update
+                        logger.debug(f"Scan {scan_id} progress: {files_processed}/{scan_state.estimated_total}")
+                    else:
+                        # No activity detected
+                        consecutive_no_change += 1
+                        if consecutive_no_change >= max_no_change:
+                            logger.warning(f"No database activity for {max_no_change} seconds, stopping UI worker")
+                            break
 
-                # Close and remove the UI session to release connections
-                ui_session.close()
-                UiSession.remove()
-
-                except Exception as e:
-                logger.error(f"Error in UI worker: {e}", exc_info=True)
-                try:
-                    ui_session.rollback()
+                    # Close and remove the UI session to release connections
                     ui_session.close()
                     UiSession.remove()
-                except:
-                    pass
 
-            # Sleep before next update
+                except Exception as e:
+                    logger.error(f"Error in UI worker: {e}", exc_info=True)
+                    try:
+                        ui_session.rollback()
+                        ui_session.close()
+                        UiSession.remove()
+                    except:
+                        pass
+
+                # Sleep before next update
                 time.sleep(update_interval)
 
             return {

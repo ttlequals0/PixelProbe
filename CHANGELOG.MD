@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.112] - 2025-11-11
+
+### Fixed
+- **Fixed syntax error in UI worker that prevented scans from starting**
+  - Corrected indentation issues in tasks.py ui_progress_update_task
+  - Fixed try/except block structure that was causing SyntaxError
+  - All code within try block is now properly indented
+
 ## [2.4.111] - 2025-11-11
 
 ### Fixed
