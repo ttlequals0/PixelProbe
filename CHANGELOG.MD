@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.107] - 2025-11-11
+
+### Fixed
+- **CRITICAL: Fixed "x of 0 files" still occurring during Phase 3 scanning**
+  - The update_progress method was resetting phase_total to 0 during chunk processing
+  - Added protection to preserve phase_total during scanning phase when total_files is 0
+  - This ensures the UI always shows the correct "x of N files" progress during scanning
+  - Root cause: When processing chunks with no files, total_files_to_scan became 0, which overwrote the correct phase_total
+
 ## [2.4.106] - 2025-11-10
 
 ### Fixed
