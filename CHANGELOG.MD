@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.109] - 2025-11-11
+
+### Fixed
+- **Enhanced integrity check UI progress visibility**
+  - Added 0.1s delay after initial progress update to ensure UI can poll and see it
+  - Added immediate progress update when processing single files
+  - Added progress updates while waiting for tasks to complete
+  - Frontend now properly uses phase_current/phase_total for progress calculation
+  - Ensures progress is visible even for operations that complete in <1 second
+
 ## [2.4.108] - 2025-11-11
 
 ### Fixed

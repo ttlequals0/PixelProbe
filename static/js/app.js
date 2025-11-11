@@ -681,16 +681,30 @@ class ProgressManager {
             details = parts.join(' - ');
             
         } else if (operationType === 'file-changes') {
-            // Use the progress percentage directly from the backend
-            percentage = Math.round(status.progress_percentage || 0);
-            
+            // Calculate percentage from phase information if backend doesn't provide it
+            if (status.progress_percentage !== undefined) {
+                percentage = Math.round(status.progress_percentage);
+            } else if (status.phase_total > 0) {
+                // Calculate from phase progress
+                const phaseNumber = status.phase_number || 1;
+                const totalPhases = status.total_phases || 3;
+                const phasePercentage = 100 / totalPhases;
+                const phaseStart = (phaseNumber - 1) * phasePercentage;
+                const phaseProgress = (status.phase_current / status.phase_total) * phasePercentage;
+                percentage = Math.round(phaseStart + phaseProgress);
+            } else {
+                percentage = 0;
+            }
+
             text = status.progress_message || 'Checking for file changes...';
-            
+
             const parts = [];
-            
-            // Add file count
-            if (status.current > 0 && status.total > 0) {
-                parts.push(`${status.current.toLocaleString()} of ${status.total.toLocaleString()} files`);
+
+            // Add file count - use phase_current/phase_total or files_processed/total_files
+            const current = status.phase_current || status.files_processed || status.current || 0;
+            const total = status.phase_total || status.total_files || status.total || 0;
+            if (current > 0 || total > 0) {
+                parts.push(`${current.toLocaleString()} of ${total.toLocaleString()} files`);
             }
             
             if (status.current_file) {

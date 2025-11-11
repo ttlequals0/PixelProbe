@@ -667,8 +667,12 @@ class MaintenanceService:
             # Set initial progress to show we're starting
             file_changes_record.phase_current = 0
             file_changes_record.phase_total = len(all_results)
+            file_changes_record.files_processed = 0
             file_changes_record.progress_message = f'Phase 2 of 3: Starting to process {len(all_results):,} files...'
             db.session.commit()
+            # Force a small delay to allow UI to see initial progress
+            import time
+            time.sleep(0.1)
 
             # Sort files by size for better batch management (small files first)
             # Handle NULL file_size by treating as 0 for sorting
@@ -760,6 +764,11 @@ class MaintenanceService:
                         task_results.append(task_result)
                         files_queued += 1
                         file_index += 1
+
+                        # Update progress immediately when processing single files
+                        if len(all_results) == 1:
+                            file_changes_record.progress_message = f'Phase 2 of 3: Processing {result.file_path.split("/")[-1]}...'
+                            db.session.commit()
                     except Exception as e:
                         logger.error(f"Error submitting task for {result.file_path}: {e}")
                         if "maxmemory" in str(e):
@@ -770,6 +779,13 @@ class MaintenanceService:
                 # If no new tasks submitted and active tasks exist, wait a bit
                 if file_index < len(all_results_sorted) and len(active_tasks) > 0:
                     time.sleep(0.1)  # Brief sleep to avoid busy waiting
+
+                    # Update progress while waiting for single file
+                    if len(all_results) == 1 and len(active_tasks) > 0:
+                        file_changes_record.progress_message = f'Phase 2 of 3: Checking file for changes...'
+                        file_changes_record.phase_current = 0
+                        file_changes_record.phase_total = 1
+                        db.session.commit()
 
                 # Update progress periodically - every file for tiny sets, every 10 for small, every 100 for larger
                 if len(all_results) <= 10:
