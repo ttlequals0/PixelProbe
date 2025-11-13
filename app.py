@@ -412,6 +412,14 @@ def migrate_database():
             except Exception as e:
                 logger.error(f"v2.4.35 migration failed: {e}")
 
+            # Run v2.4.113 migration
+            logger.info("Running v2.4.113 migration...")
+            try:
+                run_v2_4_113_migrations()
+                logger.info("v2.4.113 migration completed successfully")
+            except Exception as e:
+                logger.error(f"v2.4.113 migration failed: {e}")
+
             # Create performance indexes
             logger.info("Creating performance indexes...")
             try:
@@ -538,6 +546,53 @@ def run_v2_4_35_migrations():
 
     except Exception as e:
         logger.error(f"Migration v2.4.35 failed: {e}")
+        # Don't fail startup - app might still work without this column
+
+def run_v2_4_113_migrations():
+    """Run migrations for v2.4.113 - add last_integrity_check_date column to scan_results"""
+    from sqlalchemy import text
+
+    try:
+        with db.engine.connect() as conn:
+            # Check if scan_results table exists first
+            table_check = conn.execute(text("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_name = 'scan_results'
+            """))
+
+            if not table_check.fetchone():
+                logger.debug("scan_results table does not exist - skipping migration (new installation)")
+                return
+
+            # Check if last_integrity_check_date column exists in scan_results
+            result = conn.execute(text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'scan_results'
+                AND column_name = 'last_integrity_check_date'
+            """))
+
+            if not result.fetchone():
+                logger.info("Applying migration: Adding last_integrity_check_date column to scan_results table")
+                conn.execute(text("""
+                    ALTER TABLE scan_results
+                    ADD COLUMN last_integrity_check_date TIMESTAMP
+                """))
+
+                # Create index for better query performance
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_scan_results_last_integrity_check
+                    ON scan_results(last_integrity_check_date)
+                """))
+
+                conn.commit()
+                logger.info("Migration completed: last_integrity_check_date column and index added successfully")
+            else:
+                logger.debug("Migration already applied: last_integrity_check_date column exists")
+
+    except Exception as e:
+        logger.error(f"Migration v2.4.113 failed: {e}")
         # Don't fail startup - app might still work without this column
 
 def create_performance_indexes():

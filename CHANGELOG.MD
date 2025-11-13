@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.114] - 2025-11-13
+
+### Fixed
+- **Added database migration for last_integrity_check_date column**
+  - Migration runs automatically on app startup
+  - Creates index for better query performance
+  - Fixes "column does not exist" error when loading scan results
+
 ## [2.4.113] - 2025-11-13
 
 ### Fixed
