@@ -936,12 +936,7 @@ class MaintenanceService:
                 from models import ScanState
                 scan_state = ScanState.query.filter_by(scan_id=check_id).first()
                 if scan_state:
-                    scan_state.complete_scan(
-                        files_scanned=file_changes_record.phase_current or 0,
-                        corrupted_count=file_changes_record.corrupted_found or 0,
-                        healthy_count=1 if file_changes_record.phase_current and not file_changes_record.corrupted_found else 0,
-                        skipped_count=0
-                    )
+                    scan_state.complete_scan()
                     logger.info(f"Completed ScanState for single file integrity check")
             except Exception as e:
                 logger.warning(f"Failed to complete ScanState for single file integrity check: {e}")

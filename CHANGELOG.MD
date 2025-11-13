@@ -5,18 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.4.117] - 2025-11-13
+## [2.4.118] - 2025-11-13
+
+### Fixed
+- **Fixed complete_scan() method call with incorrect arguments**
+  - ScanState.complete_scan() takes no arguments but was being called with keyword arguments
+  - Fixes "ScanState.complete_scan() got an unexpected keyword argument 'files_scanned'" error
+  - Scan now properly completes and marks is_active=False
+
+### Note
+- v2.4.117 fixed imports but broke on complete_scan() call signature
+- This version completes the fix chain
+
+## [2.4.117] - 2025-11-13 [BROKEN - Wrong method signature]
 
 ### Fixed
 - **Fixed incorrect ScanState import causing integrity check progress tracking to fail**
   - Changed import from `from pixelprobe.models import ScanState` to `from models import ScanState`
   - ScanState is located in root-level models.py, not in pixelprobe.models package
   - Fixes "cannot import name 'ScanState' from 'pixelprobe.models'" error
-  - Single file integrity check UI progress now works correctly
 
 ### Note
 - v2.4.116 had the right logic but wrong import path
-- This version fixes the import issue and enables the progress tracking feature
+- Still broken due to complete_scan() signature issue
 
 ## [2.4.116] - 2025-11-13 [BROKEN - Import Error]
 
