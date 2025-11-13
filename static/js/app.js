@@ -1628,6 +1628,9 @@ class PixelProbeApp {
     }
 
     async rescanFile(fileId) {
+        // Close all dropdowns first
+        this.closeAllDropdowns();
+
         try {
             // Check if scan is already running
             const status = await this.api.getScanStatus();
@@ -1659,6 +1662,9 @@ class PixelProbeApp {
     }
 
     async orphanCheckFile(fileId) {
+        // Close all dropdowns first
+        this.closeAllDropdowns();
+
         try {
             // Get file path first
             const response = await fetch(`/api/scan-results/${fileId}`);
@@ -1690,6 +1696,9 @@ class PixelProbeApp {
     }
 
     async changeCheckFile(fileId) {
+        // Close all dropdowns first
+        this.closeAllDropdowns();
+
         try {
             // Get file path first
             const response = await fetch(`/api/scan-results/${fileId}`);
@@ -2673,6 +2682,13 @@ class PixelProbeApp {
         } catch (error) {
             this.showNotification('Failed to start integrity check', 'error');
         }
+    }
+
+    closeAllDropdowns() {
+        // Close all dropdown menus
+        document.querySelectorAll('.dropdown-menu').forEach(menu => {
+            menu.style.display = 'none';
+        });
     }
 
     toggleActionDropdown(event, dropdownId) {

@@ -715,6 +715,20 @@ class MaintenanceService:
                                 file_changes_record.phase_current = total_files_processed
                                 file_changes_record.phase_total = 1
                                 file_changes_record.progress_message = f'Phase 2 of 3: Completed checking file'
+
+                                # Also update ScanState for UI progress bar
+                                try:
+                                    from pixelprobe.models import ScanState
+                                    scan_state = ScanState.query.filter_by(scan_id=check_id).first()
+                                    if scan_state:
+                                        scan_state.phase_current = 1
+                                        scan_state.phase_total = 1
+                                        scan_state.progress_message = 'Integrity check complete'
+                                        scan_state.phase = 'complete'
+                                        logger.info(f"Updated ScanState for single file integrity check")
+                                except Exception as e:
+                                    logger.warning(f"Failed to update ScanState for single file integrity check: {e}")
+
                                 db.session.commit()
                                 logger.info(f"Single file integrity check complete: {result['file_path']}")
 
@@ -916,13 +930,29 @@ class MaintenanceService:
 
             file_changes_record.is_active = False
             file_changes_record.end_time = datetime.now(timezone.utc)
+
+            # Complete ScanState if this was a single file integrity check
+            try:
+                from pixelprobe.models import ScanState
+                scan_state = ScanState.query.filter_by(scan_id=check_id).first()
+                if scan_state:
+                    scan_state.complete_scan(
+                        files_scanned=file_changes_record.phase_current or 0,
+                        corrupted_count=file_changes_record.corrupted_found or 0,
+                        healthy_count=1 if file_changes_record.phase_current and not file_changes_record.corrupted_found else 0,
+                        skipped_count=0
+                    )
+                    logger.info(f"Completed ScanState for single file integrity check")
+            except Exception as e:
+                logger.warning(f"Failed to complete ScanState for single file integrity check: {e}")
+
             db.session.commit()
 
             # Create scan report for file changes operation
             # Always try to create a report even if there was an error, as long as we have some data
             if file_changes_record.phase in ('complete', 'error'):
                 self._create_file_changes_report(file_changes_record, getattr(self, 'changed_files_list', []), deleted_count if changed_files else 0)
-            
+
             with self.file_changes_lock:
                 self.file_changes_state['is_running'] = False
                 self.file_changes_state['phase'] = file_changes_record.phase

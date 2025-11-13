@@ -493,6 +493,23 @@ def check_file_changes():
     db.session.add(file_changes_record)
     db.session.commit()
 
+    # Create ScanState for UI progress tracking (single file integrity checks)
+    scan_state = None
+    if file_paths and len(file_paths) == 1:
+        try:
+            from pixelprobe.models import ScanState
+            scan_state = ScanState.create_new_scan()
+            scan_state.scan_id = check_id
+            scan_state.start_scan(file_paths, force_rescan=False)
+            scan_state.phase = 'integrity_check'
+            scan_state.progress_message = 'Starting integrity check'
+            scan_state.estimated_total = 1
+            scan_state.phase_total = 1
+            db.session.commit()
+            logger.info(f"Created ScanState {scan_state.id} for single file integrity check")
+        except Exception as e:
+            logger.warning(f"Failed to create ScanState for single file integrity check: {e}")
+
     # Start file changes check in background thread - capture app instance for thread context
     app = current_app._get_current_object()
     current_file_changes_thread = threading.Thread(
