@@ -497,7 +497,7 @@ def check_file_changes():
     scan_state = None
     if file_paths and len(file_paths) == 1:
         try:
-            from pixelprobe.models import ScanState
+            from models import ScanState
             scan_state = ScanState.create_new_scan()
             scan_state.scan_id = check_id
             scan_state.start_scan(file_paths, force_rescan=False)

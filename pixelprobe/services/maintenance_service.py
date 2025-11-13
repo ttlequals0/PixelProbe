@@ -718,7 +718,7 @@ class MaintenanceService:
 
                                 # Also update ScanState for UI progress bar
                                 try:
-                                    from pixelprobe.models import ScanState
+                                    from models import ScanState
                                     scan_state = ScanState.query.filter_by(scan_id=check_id).first()
                                     if scan_state:
                                         scan_state.phase_current = 1
@@ -933,7 +933,7 @@ class MaintenanceService:
 
             # Complete ScanState if this was a single file integrity check
             try:
-                from pixelprobe.models import ScanState
+                from models import ScanState
                 scan_state = ScanState.query.filter_by(scan_id=check_id).first()
                 if scan_state:
                     scan_state.complete_scan(
