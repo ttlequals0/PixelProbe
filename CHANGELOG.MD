@@ -5,7 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.4.118] - 2025-11-13
+## [2.4.119] - 2025-11-13
+
+### Fixed
+- **Fixed single file integrity check UI progress tracking** (complete fix for regression from v2.4.75)
+  - Changed frontend to monitor 'scan' type instead of 'file_changes' for single file integrity checks
+  - Update ScanState.files_processed and estimated_total fields for UI display
+  - Set phase to 'scanning' and current_file for proper progress display
+  - UI now correctly polls /api/scan-status for ScanState progress
+  - Progress bar shows "1 of 1 files" during single file integrity checks
+
+### Technical Details
+- Frontend: Changed startMonitoring('file_changes') to startMonitoring('scan') in changeCheckFile()
+- Backend: Update files_processed, estimated_total, current_file, and phase='scanning' in ScanState
+- This matches how the scan-status endpoint reports progress to the frontend
+
+## [2.4.118] - 2025-11-13 [BROKEN - Wrong fields updated]
 
 ### Fixed
 - **Fixed complete_scan() method call with incorrect arguments**

@@ -721,10 +721,11 @@ class MaintenanceService:
                                     from models import ScanState
                                     scan_state = ScanState.query.filter_by(scan_id=check_id).first()
                                     if scan_state:
-                                        scan_state.phase_current = 1
-                                        scan_state.phase_total = 1
+                                        scan_state.files_processed = 1
+                                        scan_state.estimated_total = 1
                                         scan_state.progress_message = 'Integrity check complete'
-                                        scan_state.phase = 'complete'
+                                        scan_state.phase = 'scanning'  # Use 'scanning' phase for proper UI display
+                                        scan_state.current_file = result['file_path']
                                         logger.info(f"Updated ScanState for single file integrity check")
                                 except Exception as e:
                                     logger.warning(f"Failed to update ScanState for single file integrity check: {e}")

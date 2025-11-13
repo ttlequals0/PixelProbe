@@ -1717,7 +1717,8 @@ class PixelProbeApp {
 
                 if (changeResponse.ok) {
                     this.showNotification('Integrity check started for file', 'success');
-                    this.progress.startMonitoring('file_changes');
+                    // Monitor as 'scan' type since we create ScanState for single file integrity checks
+                    this.progress.startMonitoring('scan');
                 } else {
                     throw new Error('Failed to start integrity check');
                 }
