@@ -40,6 +40,7 @@ class ScanResult(db.Model):
     # New fields for enhanced features
     file_hash = db.Column(db.String(64), nullable=True, index=True)  # SHA-256 hash for change detection
     last_modified = db.Column(db.DateTime, nullable=True, index=True)  # File system modification time
+    last_integrity_check_date = db.Column(db.DateTime, nullable=True, index=True)  # Last time integrity check was run on this file
     scan_tool = db.Column(db.String(50), nullable=True)  # Tool used for detection (ffmpeg, imagemagick, pil)
     scan_duration = db.Column(db.Float, nullable=True)  # Time taken to scan in seconds
     scan_output = db.Column(db.Text)  # Full tool output for debugging
@@ -82,6 +83,7 @@ class ScanResult(db.Model):
             'scan_status': self.scan_status,
             'file_hash': self.file_hash,
             'last_modified': convert_to_tz(self.last_modified),
+            'last_integrity_check_date': convert_to_tz(self.last_integrity_check_date),
             'scan_tool': self.scan_tool,
             'scan_duration': self.scan_duration,
             'scan_output': self.scan_output,

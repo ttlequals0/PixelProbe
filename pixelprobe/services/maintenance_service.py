@@ -671,7 +671,6 @@ class MaintenanceService:
             file_changes_record.progress_message = f'Phase 2 of 3: Starting to process {len(all_results):,} files...'
             db.session.commit()
             # Force a small delay to allow UI to see initial progress
-            import time
             time.sleep(0.1)
 
             # Sort files by size for better batch management (small files first)
@@ -702,6 +701,15 @@ class MaintenanceService:
                         try:
                             result = task.get(timeout=1)
                             total_files_processed += 1
+
+                            # Update last integrity check timestamp for this file
+                            try:
+                                file_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
+                                if file_record:
+                                    file_record.last_integrity_check_date = datetime.now(timezone.utc)
+                            except Exception as e:
+                                logger.error(f"Error updating last_integrity_check_date for {result['file_path']}: {e}")
+
                             if result.get('changed'):
                                 changed_files.append({
                                     'file_path': result['file_path'],

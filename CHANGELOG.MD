@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.113] - 2025-11-13
+
+### Fixed
+- **Fixed integrity check failing with time import error**
+  - Removed duplicate time import in maintenance_service.py that was causing scope issue
+  - Integrity check now completes successfully without "cannot access local variable 'time'" error
+
+### Added
+- **Added last integrity check timestamp tracking**
+  - New database field: last_integrity_check_date in ScanResult model
+  - Timestamp is updated every time a file's integrity is checked
+  - Display last integrity check date in file details (UI and API)
+  - Available in file details popup for each file
+
 ## [2.4.112] - 2025-11-11
 
 ### Fixed

@@ -1080,6 +1080,10 @@ class TableManager {
                     <span class="value">${file.scan_tool || 'N/A'}</span>
                     <span class="label">Scanned:</span>
                     <span class="value">${this.formatDate(file.scan_date)}</span>
+                    ${file.last_integrity_check_date ? `
+                        <span class="label">Last Integrity Check:</span>
+                        <span class="value">${this.formatDate(file.last_integrity_check_date)}</span>
+                    ` : ''}
                     ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
                         <span class="label">Details:</span>
                         <span class="value">${this.escapeHtml(file.corruption_details || file.scan_output || file.error_message || file.warning_details || '')}</span>
