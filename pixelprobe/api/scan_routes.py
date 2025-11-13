@@ -341,12 +341,24 @@ def scan_file():
         
         if celery_enabled:
             # Use Celery task queue
-            from pixelprobe.tasks import scan_media_task
+            from pixelprobe.tasks import scan_media_task, ui_progress_update_task
             from uuid import uuid4
-            
+
             # Generate scan ID
             scan_id = str(uuid4())
-            
+
+            # Create ScanState record for UI progress tracking
+            scan_state = ScanState.create_new_scan()
+            scan_state.scan_id = scan_id
+            scan_state.start_scan([validated_path], force_rescan=True)
+
+            # Start UI progress worker for single file scan
+            try:
+                ui_progress_update_task.delay(scan_id)
+                logger.info(f"Started UI progress worker for scan {scan_id}")
+            except Exception as e:
+                logger.warning(f"Failed to start UI progress worker: {e}")
+
             # Queue the single file scan task
             task = scan_media_task.delay(
                 scan_id=scan_id,
@@ -354,9 +366,9 @@ def scan_file():
                 scan_type='single',
                 force_rescan=True
             )
-            
+
             logger.info(f"Queued single file scan task {task.id} for {validated_path}")
-            
+
             return jsonify({
                 'status': 'queued',
                 'scan_id': scan_id,

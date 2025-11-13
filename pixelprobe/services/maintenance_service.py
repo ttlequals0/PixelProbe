@@ -710,6 +710,14 @@ class MaintenanceService:
                             except Exception as e:
                                 logger.error(f"Error updating last_integrity_check_date for {result['file_path']}: {e}")
 
+                            # For single file scans, update progress immediately so UI can see it
+                            if len(all_results) == 1:
+                                file_changes_record.phase_current = total_files_processed
+                                file_changes_record.phase_total = 1
+                                file_changes_record.progress_message = f'Phase 2 of 3: Completed checking file'
+                                db.session.commit()
+                                logger.info(f"Single file integrity check complete: {result['file_path']}")
+
                             if result.get('changed'):
                                 changed_files.append({
                                     'file_path': result['file_path'],

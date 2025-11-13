@@ -2758,6 +2758,7 @@ class PixelProbeApp {
                 <p><strong>Status:</strong> ${file.marked_as_good ? 'Healthy' : (file.is_corrupted ? 'Corrupted' : (file.has_warnings ? 'Warning' : 'Healthy'))}</p>
                 <p><strong>Tool:</strong> ${file.scan_tool || 'N/A'}</p>
                 <p><strong>Scanned:</strong> ${file.scan_date ? new Date(file.scan_date).toLocaleString() : 'N/A'}</p>
+                ${file.last_integrity_check_date ? `<p><strong>Last Integrity Check:</strong> ${new Date(file.last_integrity_check_date).toLocaleString()}</p>` : ''}
                 <hr>
                 ${detailsHtml}
             </div>

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.115] - 2025-11-13
+
+### Fixed
+- **Fixed single file scan UI progress not updating** (regression from v2.4.75)
+  - Single file scans now create ScanState records for UI progress tracking
+  - Added UI progress worker initialization for both Celery and direct scan paths
+  - Progress bar now correctly shows "1 of 1 files" during single file scans
+  - Fixes issue where progress stayed at 0% for single file scans
+
+### Added
+- **Display last integrity check date in file details popup**
+  - Shows when each file was last checked for integrity
+  - Available in "Scan Output Details" modal popup
+  - Timestamp updates automatically when integrity checks run
+
 ## [2.4.114] - 2025-11-13
 
 ### Fixed

@@ -95,22 +95,56 @@ class ScanService:
         """Scan a single file"""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
-        
+
         if self.is_scan_running():
             raise RuntimeError("Another scan is already in progress")
-        
+
         # Initialize progress
         self.update_progress(0, 1, file_path, 'scanning')
         self.scan_cancelled = False
-        
+
+        # Create ScanState record for UI progress tracking
+        scan_state = ScanState.create_new_scan()
+        scan_state.start_scan([file_path], force_rescan)
+        scan_state.phase = 'initializing'
+        scan_state.progress_message = 'Initializing single file scan'
+        scan_state.estimated_total = 1
+        scan_state.phase_total = 1
+        db.session.commit()
+
+        # Capture scan ID for UI progress tracking
+        scan_state_id = scan_state.id
+        scan_id = scan_state.scan_id
+
+        # Start UI progress worker task if using Celery
+        try:
+            from pixelprobe.tasks import ui_progress_update_task
+            # Start the UI progress worker in the background
+            ui_worker = ui_progress_update_task.delay(scan_id, update_interval=0.5)
+            logger.info(f"Started UI progress worker task: {ui_worker.id} for single file scan {scan_id}")
+        except (ImportError, Exception) as e:
+            logger.warning(f"UI progress worker not available - using direct database updates: {e}")
+            ui_worker = None
+
         # Capture Flask app context for the thread
         app = current_app._get_current_object()
-        
+
         # Create scan thread
         def run_scan():
             # Set up Flask app context for the thread
             with app.app_context():
                 try:
+                    # Get fresh ScanState object in worker thread to avoid detached instance
+                    scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                    if not scan_state:
+                        logger.error(f"Could not find scan state with ID {scan_state_id}")
+                        return
+
+                    # Update phase to scanning
+                    scan_state.phase = 'scanning'
+                    scan_state.progress_message = f'Scanning {os.path.basename(file_path)}'
+                    db.session.commit()
+
                     excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
                     checker = PixelProbe(
                         database_path=self.database_uri,
@@ -119,22 +153,42 @@ class ScanService:
                         excluded_patterns=excluded_patterns
                     )
                     result = checker.scan_file(file_path, force_rescan=force_rescan)
+
+                    # Update scan state to completed
+                    scan_state.files_processed = 1
+                    scan_state.phase = 'completed'
+                    scan_state.progress_message = 'Single file scan completed'
+                    scan_state.is_active = False
+                    db.session.commit()
+
                     self.update_progress(1, 1, file_path, 'completed')
                     return result
                 except Exception as e:
                     logger.error(f"Error scanning file: {e}")
+
+                    # Update scan state to error
+                    try:
+                        scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                        if scan_state:
+                            scan_state.phase = 'error'
+                            scan_state.error_message = str(e)
+                            scan_state.is_active = False
+                            db.session.commit()
+                    except Exception as db_error:
+                        logger.error(f"Failed to update scan state with error: {db_error}")
+
                     self.update_progress(1, 1, file_path, 'error')
                     raise
                 finally:
                     # Clear thread reference to allow new scans
                     self.current_scan_thread = None
                     logger.debug("Single file scan thread cleaned up")
-        
+
         self.current_scan_thread = threading.Thread(target=run_scan, name="SingleFileScan")
         logger.info(f"Starting single file scan thread: {self.current_scan_thread.name}")
         self.current_scan_thread.start()
-        
-        return {'status': 'started', 'message': 'Scan started', 'file_path': file_path}
+
+        return {'status': 'started', 'message': 'Scan started', 'file_path': file_path, 'scan_id': scan_id}
     
     def scan_directories(self, directories: List[str], force_rescan: bool = False, 
                         num_workers: int = 1, async_mode: bool = True) -> Dict:
