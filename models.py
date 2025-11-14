@@ -502,18 +502,43 @@ class ScanState(db.Model):
             raise
     
     def complete_scan(self):
-        """Mark scan as completed - thread-safe version"""
+        """Mark scan as completed - thread-safe version
+
+        Also cleans up any orphaned pending files that were discovered
+        during this scan but never actually scanned.
+        """
         try:
             # Get the scan ID before we lose session binding
             scan_id = self.id if hasattr(self, 'id') and self.id else 'unknown'
-            
+            end_time = datetime.now(timezone.utc)
+            start_time = self.start_time if hasattr(self, 'start_time') else None
+
             # Update the database record directly using thread-safe query
             # This avoids the detached instance problem
             from sqlalchemy import text
             db.session.execute(
                 text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': datetime.now(timezone.utc), 'id': scan_id}
+                {'end_time': end_time, 'id': scan_id}
             )
+
+            # Clean up orphaned pending files that were discovered during this scan
+            # but never actually scanned (likely due to filters or exclusions)
+            if start_time:
+                orphaned_result = db.session.execute(
+                    text("""
+                        UPDATE scan_results
+                        SET scan_status = 'skipped',
+                            scan_output = 'File discovered but not scanned (likely filtered or excluded)'
+                        WHERE scan_status = 'pending'
+                        AND discovered_date >= :start_time
+                        AND discovered_date <= :end_time
+                    """),
+                    {'start_time': start_time, 'end_time': end_time}
+                )
+                orphaned_count = orphaned_result.rowcount
+                if orphaned_count > 0:
+                    logger.info(f"Scan {scan_id}: Cleaned up {orphaned_count} orphaned pending files")
+
             db.session.commit()
             logger.info(f"Scan {scan_id} completed - phase set to 'completed', is_active=False")
         except Exception as e:

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.120] - 2025-11-13
+
+### Added
+- New diagnostic endpoint /api/diagnose-pending-files to investigate files stuck in pending status
+  - Shows when pending files were discovered
+  - Identifies which scan they were discovered during
+  - Returns detailed information about file types and sizes
+  - Helps diagnose why files aren't being scanned
+
+### Fixed
+- Automatic cleanup of orphaned pending files on scan completion
+  - Files discovered during a scan but not actually scanned are now marked as 'skipped'
+  - Adds explanation: "File discovered but not scanned (likely filtered or excluded)"
+  - Prevents accumulation of pending files when filters or exclusions prevent scanning
+  - Cleanup happens automatically when each scan completes
+
+### Technical Details
+- models.py:504 - Updated ScanState.complete_scan() to mark orphaned pending files as 'skipped'
+- scan_routes.py:1450 - Added diagnose_pending_files endpoint for troubleshooting
+- Uses discovered_date timestamps to identify files discovered during specific scans
+- SQL UPDATE query marks pending files as skipped if discovered between scan start/end times
+
 ## [2.4.119] - 2025-11-13
 
 ### Fixed

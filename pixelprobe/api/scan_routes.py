@@ -1447,6 +1447,73 @@ def diagnose_incomplete_scans():
         logger.error(f"Error diagnosing incomplete scans: {e}")
         return jsonify({'error': str(e)}), 500
 
+@scan_bp.route('/diagnose-pending-files', methods=['GET'])
+@rate_limit("5 per minute")
+@auth_required
+def diagnose_pending_files():
+    """Investigate files stuck in pending status
+
+    Returns detailed information about pending files including:
+    - When they were discovered
+    - If they were discovered during recent scans
+    - Whether they match scan criteria
+    """
+    try:
+        # Get all pending files with details
+        pending_files = ScanResult.query.filter(
+            ScanResult.scan_status == 'pending'
+        ).order_by(ScanResult.discovered_date.desc()).all()
+
+        # Get recent scans for comparison
+        recent_scans = ScanState.query.order_by(
+            ScanState.start_time.desc()
+        ).limit(5).all()
+
+        diagnostics = {
+            'total_pending': len(pending_files),
+            'recent_scans': []
+        }
+
+        for scan in recent_scans:
+            scan_info = {
+                'scan_id': scan.scan_id,
+                'start_time': str(scan.start_time) if scan.start_time else None,
+                'end_time': str(scan.end_time) if scan.end_time else None,
+                'phase': scan.phase,
+                'files_processed': scan.files_processed,
+                'estimated_total': scan.estimated_total
+            }
+            diagnostics['recent_scans'].append(scan_info)
+
+        # Categorize pending files
+        pending_details = []
+        for file in pending_files[:30]:  # Limit to 30 for readability
+            file_info = {
+                'file_path': file.file_path,
+                'file_type': file.file_type,
+                'discovered_date': str(file.discovered_date) if file.discovered_date else None,
+                'file_size': file.file_size,
+                'scan_status': file.scan_status
+            }
+
+            # Check if discovered during recent scans
+            if file.discovered_date and recent_scans:
+                for scan in recent_scans:
+                    if scan.start_time and scan.end_time:
+                        if scan.start_time <= file.discovered_date <= scan.end_time:
+                            file_info['discovered_during_scan'] = scan.scan_id
+                            break
+
+            pending_details.append(file_info)
+
+        diagnostics['pending_files'] = pending_details
+
+        return jsonify(diagnostics)
+
+    except Exception as e:
+        logger.error(f"Error diagnosing pending files: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @scan_bp.route('/worker-status')
 @exempt_from_rate_limit
 @auth_required
