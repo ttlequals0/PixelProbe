@@ -49,7 +49,7 @@
                 
                 <div class="nav-section">
                     <div class="nav-section-title">Tools</div>
-                    <a href="#" class="nav-item" onclick="app.startScan()" title="Start Scan">
+                    <a href="#" class="nav-item" onclick="app.startScan(); return false;" title="Start Scan">
                         <i class="fas fa-play"></i>
                         <span>Start Scan</span>
                     </a>
@@ -57,15 +57,15 @@
                         <i class="fas fa-broom"></i>
                         <span>Cleanup</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.checkFileChanges()" title="Integrity Check">
+                    <a href="#" class="nav-item" onclick="app.checkFileChanges(); return false;" title="Integrity Check">
                         <i class="fas fa-shield-alt"></i>
                         <span>Integrity Check</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showSchedules()" title="Manage Schedules">
+                    <a href="#" class="nav-item" onclick="app.showSchedules(); return false;" title="Manage Schedules">
                         <i class="fas fa-clock"></i>
                         <span>Schedules</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showExclusions()" title="Manage Exclusions">
+                    <a href="#" class="nav-item" onclick="app.showExclusions(); return false;" title="Manage Exclusions">
                         <i class="fas fa-ban"></i>
                         <span>Exclusions</span>
                     </a>
@@ -73,11 +73,11 @@
                 
                 <div class="nav-section">
                     <div class="nav-section-title">System</div>
-                    <a href="#" class="nav-item" onclick="app.showSystemStats()" title="System Stats">
+                    <a href="#" class="nav-item" onclick="app.showSystemStats(); return false;" title="System Stats">
                         <i class="fas fa-chart-line"></i>
                         <span>System Stats</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showScanReports()" title="Scan Reports">
+                    <a href="#" class="nav-item" onclick="app.showScanReports(); return false;" title="Scan Reports">
                         <i class="fas fa-file-alt"></i>
                         <span>Scan Reports</span>
                     </a>
