@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.121] - 2025-11-14
+
+### Fixed
+- **Scheduled scans no longer reset counter on app restart**
+  - Interval-based schedules now preserve their countdown across app restarts
+  - Next run time calculated from last_run timestamp instead of "now"
+  - Only recalculates if next_run is in the past
+  - Prevents schedules from starting over every time the app restarts
+
+- **Mobile cleanup confirmation dialog**
+  - Added custom confirmation modal for better mobile browser support
+  - Native confirm() doesn't work reliably on mobile devices
+  - New modal with proper Cancel/Confirm buttons
+  - Works consistently across all devices and browsers
+
+### Technical Details
+- scheduler.py:154-210 - Updated _activate_schedule() to preserve interval countdown
+- templates/index.html:576-591 - Added confirm-modal HTML
+- static/js/app.js:1785-1820 - Added showConfirmModal() and hideConfirmModal() methods
+- static/js/app.js:1475-1484 - Updated cleanupOrphaned() to use custom modal
+
 ## [2.4.120] - 2025-11-13
 
 ### Added

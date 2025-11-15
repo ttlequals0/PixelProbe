@@ -1473,10 +1473,16 @@ class PixelProbeApp {
     }
 
     async cleanupOrphaned() {
-        if (!confirm('Remove database entries for files that no longer exist on disk?')) {
+        // Use custom confirmation modal for better mobile support
+        const confirmed = await this.showConfirmModal(
+            'Confirm Cleanup',
+            'Remove database entries for files that no longer exist on disk?'
+        );
+
+        if (!confirmed) {
             return;
         }
-        
+
         try {
             const result = await this.api.cleanupOrphaned();
             console.log('Cleanup response:', result);
@@ -1762,18 +1768,61 @@ class PixelProbeApp {
         const notification = document.createElement('div');
         notification.className = `notification notification-${type}`;
         notification.textContent = message;
-        
+
         // Add to page
         document.body.appendChild(notification);
-        
+
         // Show with animation
         setTimeout(() => notification.classList.add('show'), 10);
-        
+
         // Remove after 3 seconds
         setTimeout(() => {
             notification.classList.remove('show');
             setTimeout(() => notification.remove(), 300);
         }, 3000);
+    }
+
+    showConfirmModal(title, message) {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('confirm-modal');
+            const titleEl = document.getElementById('confirm-title');
+            const messageEl = document.getElementById('confirm-message');
+
+            if (!modal || !titleEl || !messageEl) {
+                console.error('Confirm modal elements not found');
+                resolve(false);
+                return;
+            }
+
+            // Set content
+            titleEl.textContent = title;
+            messageEl.textContent = message;
+
+            // Store the resolve function for later use
+            this._confirmResolve = resolve;
+
+            // Setup close button handler
+            const closeBtn = modal.querySelector('.modal-close');
+            if (closeBtn) {
+                closeBtn.onclick = () => this.hideConfirmModal(false);
+            }
+
+            // Show modal
+            modal.classList.add('active');
+        });
+    }
+
+    hideConfirmModal(confirmed) {
+        const modal = document.getElementById('confirm-modal');
+        if (modal) {
+            modal.classList.remove('active');
+        }
+
+        // Resolve the promise with the user's choice
+        if (this._confirmResolve) {
+            this._confirmResolve(confirmed);
+            this._confirmResolve = null;
+        }
     }
 
     async showSystemStats() {

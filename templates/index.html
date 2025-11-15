@@ -572,7 +572,24 @@
             </div>
         </div>
     </div>
-    
+
+    <!-- Confirmation Modal -->
+    <div id="confirm-modal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3 class="modal-title" id="confirm-title">Confirm Action</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-message"></p>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 10px; justify-content: flex-end; padding: 1rem;">
+                <button class="btn btn-secondary" onclick="app.hideConfirmModal(false)">Cancel</button>
+                <button class="btn btn-primary" onclick="app.hideConfirmModal(true)">Confirm</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="/static/js/app.js?v={{ version }}"></script>
     <script src="/static/js/auth.js?v={{ version }}"></script>
