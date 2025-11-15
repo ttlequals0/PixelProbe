@@ -5,7 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.4.121] - 2025-11-14
+## [2.4.122] - 2025-11-14
+
+### Fixed
+- **JavaScript const assignment error causing mobile table not to load**
+  - Changed `const container` to `let container` in renderMobileCards()
+  - Fixes "Assignment to constant variable" error
+
+- **Scheduler timezone comparison errors**
+  - Fixed "can't compare offset-naive and offset-aware datetimes" errors
+  - Ensures all datetime comparisons use timezone-aware datetimes
+  - Scheduled scans (AddNew, cleanup, Integrity) now activate properly
+
+- **Modal display method inconsistency**
+  - Changed custom confirm modal to use `modal.style.display = 'block'/'none'`
+  - Matches existing modal pattern instead of classList.add('active')
+  - Modal now actually displays on screen
+
+- **Button event handling**
+  - Added `return false;` to cleanup button onclick to prevent page navigation
+
+### Technical Details
+- static/js/app.js:1038 - Changed const to let for container reassignment
+- scheduler.py:179-199 - Added timezone-aware datetime handling
+- static/js/app.js:1811,1818 - Changed modal display method
+- templates/index.html:56 - Added return false to button
+- static/js/app.js:1476-1494 - Added extensive console logging for debugging
+
+## [2.4.121] - 2025-11-14 [BROKEN - Multiple JS errors]
 
 ### Fixed
 - **Scheduled scans no longer reset counter on app restart**

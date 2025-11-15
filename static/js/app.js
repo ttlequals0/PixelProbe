@@ -1035,12 +1035,12 @@ class TableManager {
     }
 
     renderMobileCards(data) {
-        const container = document.querySelector('.mobile-results');
+        let container = document.querySelector('.mobile-results');
         if (!container) {
             // Create mobile results container if it doesn't exist
             const tableContainer = document.querySelector('.table-container');
             if (!tableContainer) return;
-            
+
             const mobileContainer = document.createElement('div');
             mobileContainer.className = 'mobile-results';
             tableContainer.parentNode.insertBefore(mobileContainer, tableContainer.nextSibling);
@@ -1473,13 +1473,23 @@ class PixelProbeApp {
     }
 
     async cleanupOrphaned() {
-        // Use custom confirmation modal for better mobile support
-        const confirmed = await this.showConfirmModal(
-            'Confirm Cleanup',
-            'Remove database entries for files that no longer exist on disk?'
-        );
+        console.log('cleanupOrphaned() called');
+        try {
+            // Use custom confirmation modal for better mobile support
+            const confirmed = await this.showConfirmModal(
+                'Confirm Cleanup',
+                'Remove database entries for files that no longer exist on disk?'
+            );
+            console.log('Modal confirmed:', confirmed);
 
-        if (!confirmed) {
+            if (!confirmed) {
+                console.log('User cancelled cleanup');
+                return;
+            }
+
+            console.log('Proceeding with cleanup...');
+        } catch (error) {
+            console.error('Error showing confirm modal:', error);
             return;
         }
 
@@ -1807,15 +1817,15 @@ class PixelProbeApp {
                 closeBtn.onclick = () => this.hideConfirmModal(false);
             }
 
-            // Show modal
-            modal.classList.add('active');
+            // Show modal using same pattern as other modals
+            modal.style.display = 'block';
         });
     }
 
     hideConfirmModal(confirmed) {
         const modal = document.getElementById('confirm-modal');
         if (modal) {
-            modal.classList.remove('active');
+            modal.style.display = 'none';
         }
 
         // Resolve the promise with the user's choice

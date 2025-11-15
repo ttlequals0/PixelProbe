@@ -175,12 +175,26 @@ class MediaScheduler:
                     if schedule.last_run:
                         from datetime import timedelta
                         interval_kwargs = {unit: value}
-                        next_run_time = schedule.last_run + timedelta(**interval_kwargs)
+
+                        # Ensure last_run is timezone-aware
+                        last_run = schedule.last_run
+                        if last_run.tzinfo is None:
+                            last_run = last_run.replace(tzinfo=timezone.utc)
+
+                        next_run_time = last_run + timedelta(**interval_kwargs)
 
                         # If calculated next_run is in the past, use current next_run or now + interval
                         if next_run_time < datetime.now(timezone.utc):
-                            if schedule.next_run and schedule.next_run > datetime.now(timezone.utc):
-                                next_run_time = schedule.next_run
+                            if schedule.next_run:
+                                # Ensure next_run is timezone-aware for comparison
+                                stored_next_run = schedule.next_run
+                                if stored_next_run.tzinfo is None:
+                                    stored_next_run = stored_next_run.replace(tzinfo=timezone.utc)
+
+                                if stored_next_run > datetime.now(timezone.utc):
+                                    next_run_time = stored_next_run
+                                else:
+                                    next_run_time = datetime.now(timezone.utc) + timedelta(**interval_kwargs)
                             else:
                                 next_run_time = datetime.now(timezone.utc) + timedelta(**interval_kwargs)
 
