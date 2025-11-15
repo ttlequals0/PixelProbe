@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.126] - 2025-11-14
+
+### Fixed
+- **Further compacted mobile Scan Reports UI**
+  - Made top control buttons icon-only (Refresh, Download, Delete)
+  - Reduced card padding from 0.875rem to 0.625rem
+  - Reduced card margins from 0.75rem to 0.5rem
+  - Smaller fonts: header 0.875rem, info 0.75rem
+  - Tighter line spacing throughout
+  - Users can now see 3-4 report entries at once
+  - Matches compact sizing of Schedules and Exclusions views
+
+### Technical Details
+- templates/index.html:373-394 - Wrapped button text in .btn-text spans
+- static/css/mobile.css:922-924 - Hide .btn-text on mobile
+- static/css/mobile.css:870-940 - Reduced all spacing and font sizes
+
 ## [2.4.125] - 2025-11-14
 
 ### Fixed
