@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.125] - 2025-11-14
+
+### Fixed
+- **PDF generation error with directories field**
+  - Fixed "Flowable <Table> with tallest row 28938" error in report info table
+  - Limited directory list to 20 entries in PDF with "and X more" indicator
+  - Used smaller font size for directory lists to prevent overflow
+  - Prevents table cell height from exceeding PDF page limits
+
+- **Made mobile Scan Reports UI more compact**
+  - Reduced card padding and margins for better screen space utilization
+  - Changed footer buttons to icon-only (View, JSON, PDF)
+  - Buttons now in single row instead of stacked
+  - Smaller font sizes and tighter spacing
+  - Combined Files and Issues info on one line
+  - Users can now see 2-3 report entries at once instead of just one
+
+### Technical Details
+- pixelprobe/api/reports_routes.py:547-569 - Limited directories list and added smaller font style
+- static/js/app.js:2166-2198 - Updated card layout with compact buttons
+- static/css/mobile.css:856-929 - Added compact spacing and btn-xs style
+
 ## [2.4.124] - 2025-11-14
 
 ### Fixed

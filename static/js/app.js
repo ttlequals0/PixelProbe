@@ -2171,28 +2171,26 @@ class PixelProbeApp {
                         <div class="report-card-header">
                             <h4>${scanType}</h4>
                             <div class="report-card-actions">
-                                <button class="btn btn-sm ${statusClass === 'text-success' ? 'btn-success' : statusClass === 'text-danger' ? 'btn-danger' : 'btn-warning'}">${report.status}</button>
-                                <button class="btn btn-sm btn-danger" onclick="app.deleteScanReport('${report.report_id}')" title="Delete">
+                                <button class="btn btn-xs ${statusClass === 'text-success' ? 'btn-success' : statusClass === 'text-danger' ? 'btn-danger' : 'btn-warning'}">${report.status}</button>
+                                <button class="btn btn-xs btn-danger" onclick="app.deleteScanReport('${report.report_id}')" title="Delete">
                                     <i class="fas fa-trash"></i>
                                 </button>
                             </div>
                         </div>
                         <div class="report-card-info">
                             <p><strong>Date:</strong> ${this.table.formatDate(report.start_time)}</p>
-                            <p><strong>Type:</strong> ${scanType}</p>
                             <p><strong>Duration:</strong> ${report.duration_formatted || 'N/A'}</p>
-                            <p><strong>Files:</strong> ${filesInfo}</p>
-                            <p><strong>Issues:</strong> ${issuesInfo}</p>
+                            <p><strong>Files:</strong> ${filesInfo} | <strong>Issues:</strong> ${issuesInfo}</p>
                         </div>
                         <div class="report-card-footer">
-                            <button class="btn btn-primary" onclick="app.viewScanReport('${report.report_id}')" style="flex: 1;">
-                                <i class="fas fa-eye"></i> View
+                            <button class="btn btn-sm btn-primary" onclick="app.viewScanReport('${report.report_id}')" title="View">
+                                <i class="fas fa-eye"></i>
                             </button>
-                            <button class="btn btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'json')" style="flex: 1;">
-                                <i class="fas fa-file-export"></i> JSON
+                            <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'json')" title="Export JSON">
+                                <i class="fas fa-file-code"></i>
                             </button>
-                            <button class="btn btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'pdf')" style="flex: 1;">
-                                <i class="fas fa-file-pdf"></i> PDF
+                            <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'pdf')" title="Export PDF">
+                                <i class="fas fa-file-pdf"></i>
                             </button>
                         </div>
                     `;

@@ -545,15 +545,29 @@ def export_scan_report_pdf(report_id):
                 report_info.append(['Directories:', report.directories_scanned])
         
         # Convert text fields to Paragraph objects for better formatting
+        # Use smaller font for directories to prevent overflow
+        cell_style_small = ParagraphStyle(
+            'CellStyleSmall',
+            parent=styles['Normal'],
+            fontSize=7,
+            leading=8,
+            wordWrap='CJK'
+        )
+
         formatted_info = []
         for row in report_info:
             label = row[0]
             value = row[1]
-            # Use Paragraph for multi-line text (directories)
+            # Use Paragraph for multi-line text (directories) with smaller font
             if '\n' in str(value):
-                value = Paragraph(value.replace('\n', '<br/>'), styles['Normal'])
+                # Limit directory list to prevent table overflow
+                dirs_list = str(value).split('\n')
+                if len(dirs_list) > 20:
+                    # Show first 20 directories and indicate more
+                    value = '\n'.join(dirs_list[:20]) + f'\n... and {len(dirs_list) - 20} more directories'
+                value = Paragraph(str(value).replace('\n', '<br/>'), cell_style_small)
             formatted_info.append([label, value])
-        
+
         info_table = Table(formatted_info, colWidths=[2*inch, 4*inch])
         info_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
