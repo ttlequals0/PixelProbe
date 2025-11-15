@@ -2086,16 +2086,19 @@ class PixelProbeApp {
             
             // Update table
             const tbody = document.querySelector('#scan-reports-table tbody');
+            const cardsContainer = document.querySelector('#scan-reports-cards');
             if (!tbody) return;
-            
+
             tbody.innerHTML = '';
-            
+            if (cardsContainer) cardsContainer.innerHTML = '';
+
             if (data.reports.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="8" class="text-center">No reports found</td></tr>';
+                if (cardsContainer) cardsContainer.innerHTML = '<p style="text-align: center; padding: 20px;">No reports found</p>';
                 return;
             }
-            
-            // Render reports
+
+            // Render reports in both formats
             data.reports.forEach((report) => {
                 const row = document.createElement('tr');
                 
@@ -2157,10 +2160,46 @@ class PixelProbeApp {
                         </button>
                     </td>
                 `;
-                
+
                 tbody.appendChild(row);
+
+                // Create mobile card
+                if (cardsContainer) {
+                    const card = document.createElement('div');
+                    card.className = 'report-card';
+                    card.innerHTML = `
+                        <div class="report-card-header">
+                            <h4>${scanType}</h4>
+                            <div class="report-card-actions">
+                                <button class="btn btn-sm ${statusClass === 'text-success' ? 'btn-success' : statusClass === 'text-danger' ? 'btn-danger' : 'btn-warning'}">${report.status}</button>
+                                <button class="btn btn-sm btn-danger" onclick="app.deleteScanReport('${report.report_id}')" title="Delete">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="report-card-info">
+                            <p><strong>Date:</strong> ${this.table.formatDate(report.start_time)}</p>
+                            <p><strong>Type:</strong> ${scanType}</p>
+                            <p><strong>Duration:</strong> ${report.duration_formatted || 'N/A'}</p>
+                            <p><strong>Files:</strong> ${filesInfo}</p>
+                            <p><strong>Issues:</strong> ${issuesInfo}</p>
+                        </div>
+                        <div class="report-card-footer">
+                            <button class="btn btn-primary" onclick="app.viewScanReport('${report.report_id}')" style="flex: 1;">
+                                <i class="fas fa-eye"></i> View
+                            </button>
+                            <button class="btn btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'json')" style="flex: 1;">
+                                <i class="fas fa-file-export"></i> JSON
+                            </button>
+                            <button class="btn btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'pdf')" style="flex: 1;">
+                                <i class="fas fa-file-pdf"></i> PDF
+                            </button>
+                        </div>
+                    `;
+                    cardsContainer.appendChild(card);
+                }
             });
-            
+
             // Update pagination
             this.updateScanReportsPagination(data.page, data.pages, data.total);
             

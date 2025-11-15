@@ -852,4 +852,39 @@
         min-height: 44px;
         padding: 8px 12px;
     }
+
+    /* Scan Reports - Show cards, hide table on mobile */
+    #scan-reports-table-container {
+        display: none !important;
+    }
+
+    #scan-reports-cards {
+        display: block !important;
+    }
+
+    .reports-cards-container {
+        display: block !important;
+        padding: 0;
+    }
+
+    .report-card {
+        margin-bottom: 1rem;
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .report-card-header h4 {
+        font-size: 1rem;
+    }
+
+    .report-card-footer {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .report-card-footer .btn {
+        width: 100%;
+        padding: 0.75rem;
+        font-size: 0.95rem;
+    }
 }

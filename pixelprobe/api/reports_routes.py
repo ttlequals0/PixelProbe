@@ -750,28 +750,44 @@ def export_scan_report_pdf(report_id):
                             scan_date
                         ])
                 
-                # Create files table with appropriate columns based on scan type
-                if report.scan_type == 'cleanup':
-                    # Simpler table for cleanup with just 3 columns
-                    files_table = Table(files_data, colWidths=[7.4*inch, 1.5*inch, 1.5*inch], repeatRows=1)
-                else:
-                    # Full table for other scan types
-                    files_table = Table(files_data, colWidths=[3.8*inch, 0.7*inch, 0.7*inch, 0.9*inch, 0.7*inch, 2.6*inch, 1.0*inch], repeatRows=1)
-                files_table.setStyle(TableStyle([
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 8),
-                    ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-                    ('ALIGN', (0, 0), (0, -1), 'LEFT'),  # Left align file paths
-                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Top align all cells
-                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                    ('BACKGROUND', (0, 0), (-1, 0), gradient_end),
-                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
-                    ('PADDING', (0, 0), (-1, -1), 4),
-                ]))
-                
-                elements.append(files_table)
+                # Split large tables into chunks to avoid PDF generation errors
+                # ReportLab has a maximum table height limit (~200 rows works reliably)
+                CHUNK_SIZE = 150
+                header_row = files_data[0]
+                data_rows = files_data[1:]
+
+                # Process files in chunks
+                for chunk_start in range(0, len(data_rows), CHUNK_SIZE):
+                    chunk_end = min(chunk_start + CHUNK_SIZE, len(data_rows))
+                    chunk_data = [header_row] + data_rows[chunk_start:chunk_end]
+
+                    # Create files table with appropriate columns based on scan type
+                    if report.scan_type == 'cleanup':
+                        # Simpler table for cleanup with just 3 columns
+                        files_table = Table(chunk_data, colWidths=[7.4*inch, 1.5*inch, 1.5*inch], repeatRows=1)
+                    else:
+                        # Full table for other scan types
+                        files_table = Table(chunk_data, colWidths=[3.8*inch, 0.7*inch, 0.7*inch, 0.9*inch, 0.7*inch, 2.6*inch, 1.0*inch], repeatRows=1)
+
+                    files_table.setStyle(TableStyle([
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 8),
+                        ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+                        ('ALIGN', (0, 0), (0, -1), 'LEFT'),  # Left align file paths
+                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Top align all cells
+                        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                        ('BACKGROUND', (0, 0), (-1, 0), gradient_end),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                        ('PADDING', (0, 0), (-1, -1), 4),
+                    ]))
+
+                    elements.append(files_table)
+
+                    # Add page break between chunks if there are more chunks to come
+                    if chunk_end < len(data_rows):
+                        elements.append(PageBreak())
                 
                 # Show total count for large reports
                 if len(scanned_files) >= 1000:

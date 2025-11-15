@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.124] - 2025-11-14
+
+### Fixed
+- **PDF generation failure with large scan reports**
+  - Fixed "Flowable <Table> with tallest row 28938" error
+  - Split large tables into chunks of 150 rows per page
+  - Prevents table height from exceeding PDF page limits
+  - Automatically adds page breaks between chunks
+  - PDF exports now work for scans with 100K+ files
+
+- **Scan Reports mobile UI improvements**
+  - Redesigned mobile UI to match Schedules card-based layout
+  - Replaced cramped table view with clean, touch-friendly cards
+  - Better use of screen space with larger buttons
+  - Improved readability with clear text labels
+  - Status badges now properly colored
+  - Action buttons full-width for easy tapping
+
+### Technical Details
+- pixelprobe/api/reports_routes.py:753-790 - Implemented table chunking for PDF generation
+- templates/index.html:412-438 - Added mobile card container for Scan Reports
+- static/js/app.js:2087-2200 - Added card rendering logic alongside table
+- static/css/desktop.css:981-1037 - Added report-card styling
+- static/css/mobile.css:856-890 - Added responsive show/hide for cards vs table
+
 ## [2.4.123] - 2025-11-14
 
 ### Fixed

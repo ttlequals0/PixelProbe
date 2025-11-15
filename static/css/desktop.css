@@ -978,6 +978,64 @@ input:checked + .toggle-slider:before {
     color: var(--text-primary);
 }
 
+/* Report cards (mobile) - hidden on desktop */
+.reports-cards-container {
+    display: none;
+}
+
+.report-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    transition: box-shadow 0.2s;
+}
+
+.report-card:hover {
+    box-shadow: var(--shadow-sm);
+}
+
+.report-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.report-card-header h4 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1.1rem;
+}
+
+.report-card-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.report-card-info {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+.report-card-info p {
+    margin: 0.25rem 0;
+}
+
+.report-card-info strong {
+    color: var(--text-primary);
+}
+
+.report-card-footer {
+    display: flex;
+    gap: 0.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
 /* Exclusions styles */
 .exclusions-section {
     margin-bottom: 2rem;
