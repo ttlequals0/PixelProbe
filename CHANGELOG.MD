@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.134] - 2025-11-15
+
+### Fixed
+- **Mobile file detail buttons - CSS specificity issue**
+  - Root cause: desktop.css .action-buttons rules were overriding mobile.css rules
+  - Wrapped desktop.css column layout in @media (min-width: 769px) to only apply on desktop
+  - This allows mobile.css horizontal row layout to work properly on mobile devices
+  - Buttons now properly display in a single horizontal row with icons only on mobile
+
+### Technical Details
+- static/css/desktop.css:810-824 - Wrapped .action-buttons column layout in desktop-only media query
+
 ## [2.4.133] - 2025-11-15
 
 ### Fixed

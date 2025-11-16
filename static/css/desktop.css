@@ -807,18 +807,20 @@ input:checked + .toggle-slider:before {
     pointer-events: none;
 }
 
-/* Action buttons - stacked layout */
-.action-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    min-width: 120px;
-}
+/* Action buttons - stacked layout (desktop only) */
+@media (min-width: 769px) {
+    .action-buttons {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        min-width: 120px;
+    }
 
-.action-buttons .btn {
-    width: 100%;
-    white-space: nowrap;
-    text-align: center;
+    .action-buttons .btn {
+        width: 100%;
+        white-space: nowrap;
+        text-align: center;
+    }
 }
 
 /* Small buttons */
