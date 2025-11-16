@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.136] - 2025-11-15
+
+### Fixed
+- **Mobile buttons - enforce equal width with !important**
+  - Added `!important` flags to `flex: 1` and `display: flex` rules
+  - This overrides the inline `style="display: inline-block;"` on action-dropdown div
+  - Applied to both file detail buttons (.action-buttons) and top action buttons (.results-actions)
+  - All buttons now have equal width regardless of inline styles
+
+- **Media viewer modal - filename text size on mobile**
+  - Reduced font size to 0.9rem to prevent overflow
+  - Added word-wrap, word-break, and overflow-wrap for long filenames
+  - Filenames now wrap properly and fit within modal window
+
+### Technical Details
+- static/css/mobile.css:315,317,323 - Added !important flags to file detail buttons
+- static/css/mobile.css:972-999 - Added flexbox equal-width rules to results-actions buttons
+- static/css/mobile.css:1010-1021 - Added media viewer modal title sizing and wrapping
+
 ## [2.4.135] - 2025-11-15
 
 ### Fixed

@@ -312,15 +312,15 @@
     .result-card .action-buttons .action-dropdown {
         font-size: 1.1rem;
         padding: 0.65rem 0.5rem;
-        flex: 1;
+        flex: 1 !important;
         min-width: 0;
-        display: flex;
+        display: flex !important;
         align-items: center;
         justify-content: center;
     }
 
     .result-card .action-buttons .action-dropdown {
-        flex: 1;
+        flex: 1 !important;
     }
 
     .result-card .action-buttons .action-dropdown .btn {
@@ -969,6 +969,10 @@
     }
 
     /* Make results action buttons icon-only on mobile */
+    .results-actions {
+        flex-wrap: nowrap !important;
+    }
+
     .results-actions .btn-text {
         display: none;
     }
@@ -977,10 +981,23 @@
         margin-right: 0;
     }
 
-    .results-actions .btn {
+    .results-actions .btn,
+    .results-actions .action-dropdown {
         padding: 0.4rem 0.625rem;
         font-size: 0.95rem;
-        min-width: 2.5rem;
+        min-width: 0;
+        flex: 1 !important;
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .results-actions .action-dropdown {
+        flex: 1 !important;
+    }
+
+    .results-actions .action-dropdown .btn {
+        width: 100%;
     }
 
     /* Hide button text on mobile file detail cards - show icons only */
@@ -1002,5 +1019,19 @@
         padding: 0.2rem 0.4rem;
         font-size: 0.7rem;
         line-height: 1.2;
+    }
+
+    /* Media viewer modal - smaller filename on mobile */
+    #media-viewer-modal .modal-title {
+        font-size: 0.9rem !important;
+        word-wrap: break-word;
+        word-break: break-all;
+        overflow-wrap: break-word;
+        line-height: 1.3;
+        max-width: 100%;
+    }
+
+    #media-viewer-modal .modal-header {
+        padding: 0.75rem 1rem;
     }
 }
