@@ -333,16 +333,38 @@
         width: calc(100% - 2rem);
     }
     
-    /* System Stats Modal mobile */
+    /* System Stats Modal mobile - full screen like schedules */
     #system-stats-modal .modal-content {
-        max-width: calc(100% - 2rem);
-        width: calc(100% - 2rem);
+        max-width: 100%;
+        width: 100%;
+        margin: 0;
+        height: 100vh;
+        border-radius: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg-primary);
     }
-    
+
+    #system-stats-modal .modal-header {
+        flex-shrink: 0;
+        padding: 1rem;
+        border-bottom: 1px solid var(--border-color);
+        background: var(--bg-secondary);
+    }
+
+    #system-stats-modal .modal-body {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 0.5rem;
+        min-height: 0;
+        -webkit-overflow-scrolling: touch;
+    }
+
     .stats-columns {
         display: block;
     }
-    
+
     .stats-column {
         width: 100%;
         margin-bottom: 1rem;
@@ -925,6 +947,21 @@
 
     .filter-controls .btn i {
         margin-right: 0;
+    }
+
+    /* Make results action buttons icon-only on mobile */
+    .results-actions .btn-text {
+        display: none;
+    }
+
+    .results-actions .btn i {
+        margin-right: 0;
+    }
+
+    .results-actions .btn {
+        padding: 0.4rem 0.625rem;
+        font-size: 0.95rem;
+        min-width: 2.5rem;
     }
 
     .filter-controls select {

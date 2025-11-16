@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.127] - 2025-11-15
+
+### Fixed
+- **File statistics calculation**
+  - Fixed total file count math: corrupted + healthy + warnings now equals total completed files
+  - Corrected healthy files calculation to exclude files with warnings
+  - Ensured marked_as_good files are properly counted
+  - Updated all stats queries for consistency across endpoints
+
+- **Mobile UI improvements**
+  - System Stats modal now uses full screen like Schedules and Scan Reports
+  - Main results page action buttons (Mark as Good, Actions, Download, Export) are now icon-only on mobile
+  - All mobile modals now have consistent full-screen sizing
+
+### Technical Details
+- pixelprobe/api/stats_routes.py:40-54 - Fixed stats calculation logic
+- pixelprobe/api/stats_routes.py:130-144 - Fixed system-info stats calculation
+- pixelprobe/services/stats_service.py:26-40 - Updated stats service calculations
+- static/css/mobile.css:336-371 - System Stats modal full-screen styling
+- templates/index.html:225-256 - Wrapped results action button text in spans
+- static/css/mobile.css:952-965 - Icon-only results action buttons on mobile
+
 ## [2.4.126] - 2025-11-14
 
 ### Fixed
