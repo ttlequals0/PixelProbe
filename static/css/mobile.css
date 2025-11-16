@@ -325,7 +325,12 @@
 
     .result-card .action-buttons .action-dropdown .btn {
         width: 100%;
+        height: 100%;
         padding: 0.65rem 0.5rem;
+        font-size: 1.1rem !important;
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
     }
     
     .result-card .file-checkbox {
@@ -998,6 +1003,12 @@
 
     .results-actions .action-dropdown .btn {
         width: 100%;
+        height: 100%;
+        padding: 0.4rem 0.625rem !important;
+        font-size: 0.95rem !important;
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
     }
 
     /* Hide button text on mobile file detail cards - show icons only */

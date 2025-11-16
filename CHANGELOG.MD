@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.137] - 2025-11-15
+
+### Fixed
+- **Dropdown button icon sizing on mobile**
+  - Added height: 100% to dropdown buttons to match other icon buttons
+  - Added explicit font-size and padding with !important flags
+  - Dropdown icons now same size as other action button icons
+  - Applied to both file detail and top action dropdowns
+
+### Technical Details
+- static/css/mobile.css:326-334 - Fixed file detail dropdown button sizing
+- static/css/mobile.css:1004-1012 - Fixed top action dropdown button sizing
+
 ## [2.4.136] - 2025-11-15
 
 ### Fixed
