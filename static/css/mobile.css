@@ -995,7 +995,8 @@
     }
 
     .results-actions .btn,
-    .results-actions .action-dropdown {
+    .results-actions .action-dropdown,
+    .results-actions .export-dropdown {
         display: flex !important;
         align-items: center;
         justify-content: center;
@@ -1008,15 +1009,22 @@
         font-size: 0.95rem;
     }
 
-    .results-actions .action-dropdown {
+    .results-actions .action-dropdown,
+    .results-actions .export-dropdown {
         position: relative !important;
     }
 
-    .results-actions .action-dropdown .btn {
+    .results-actions .action-dropdown .btn,
+    .results-actions .export-dropdown .btn {
         width: 100% !important;
         height: 100% !important;
         padding: 0.4rem 0.625rem !important;
         font-size: 0.95rem !important;
+    }
+
+    /* Hide caret in export dropdown on mobile */
+    .results-actions .export-dropdown .fa-caret-down {
+        display: none;
     }
 
     /* Hide button text on mobile file detail cards - show icons only */

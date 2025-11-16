@@ -5325,3 +5325,10 @@ GROUP BY scan_status, is_corrupted;
 - Mobile UI: Grid ensures all buttons (including dropdown containers) render at exactly the same width
 - Mobile UI: Removed flex properties that were causing sizing inconsistencies
 
+
+## v2.4.145 - 2025-11-15
+### Fixed
+- Mobile UI: Added CSS rules for .export-dropdown to match .action-dropdown styling
+- Mobile UI: Export button now has same grid sizing as other action buttons
+- Mobile UI: Hide caret-down icon in export dropdown on mobile
+
