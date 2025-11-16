@@ -1492,7 +1492,13 @@ class PixelProbe:
         
         except FileNotFoundError:
             logger.warning("FFmpeg not found, skipping advanced video checks")
+        except OSError as e:
+            # OSError includes SIGBUS and other memory-related errors
+            logger.error(f"FFmpeg process crashed with OS error for {file_path}: {str(e)}")
+            corruption_details.append(f"FFmpeg process crashed (possible memory error): {str(e)}")
+            is_corrupted = True
         except Exception as e:
+            logger.error(f"FFmpeg validation error for {file_path}: {str(e)}")
             corruption_details.append(f"FFmpeg validation error: {str(e)}")
             is_corrupted = True
         
@@ -1901,6 +1907,11 @@ class PixelProbe:
                         
         except subprocess.TimeoutExpired:
             corruption_details.append("Frame integrity check timeout")
+        except OSError as e:
+            # OSError includes SIGBUS and other memory-related errors
+            logger.error(f"FFprobe process crashed with OS error for {file_path}: {str(e)}")
+            corruption_details.append(f"FFprobe crashed (possible memory error)")
+            is_corrupted = True
         except Exception as e:
             logger.debug(f"Frame integrity check error: {str(e)}")
         
@@ -1958,6 +1969,11 @@ class PixelProbe:
                         
         except subprocess.TimeoutExpired:
             corruption_details.append("Temporal outlier check timeout")
+        except OSError as e:
+            # OSError includes SIGBUS and other memory-related errors
+            logger.error(f"FFprobe process crashed with OS error during temporal outlier check for {file_path}: {str(e)}")
+            corruption_details.append(f"Temporal outlier check crashed (possible memory error)")
+            is_corrupted = True
         except Exception as e:
             logger.debug(f"Temporal outlier check error: {str(e)}")
         

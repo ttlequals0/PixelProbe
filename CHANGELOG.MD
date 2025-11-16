@@ -5,6 +5,114 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.147] - 2025-11-16
+
+### Fixed
+- **Database connection retry logic for OperationalError**
+  - Added retry logic with exponential backoff (3 attempts, 1s/2s/4s delays) for database connection timeouts
+  - Prevents scan failures when PostgreSQL connections are lost during long-running scans
+  - Applied to corrupted file count queries in scan_service.py:710-712 and 922-924
+  - Includes session rollback and close between retries to get fresh connections
+
+- **Memory error handling for FFmpeg/FFprobe crashes (SIGBUS)**
+  - Added OSError exception handling for FFmpeg validation subprocess calls
+  - Catches SIGBUS and other memory-related errors that occur during video processing
+  - Files that cause FFmpeg crashes are now marked as corrupted instead of crashing workers
+  - Applied to: main FFmpeg validation, frame integrity checks, and temporal outlier checks
+  - Prevents Celery worker process crashes when scanning corrupted video files
+
+- **SQLAlchemy warning at scan_service.py:2102**
+  - Wrapped _get_chunk_file_count method with db.session.no_autoflush context manager
+  - Prevents "Attribute history events accumulated within inner-flush event handlers" warning
+  - Avoids unnecessary autoflush when accessing chunk.directory_path attributes
+  - Eliminates SQLAlchemy warnings in worker logs during chunk processing
+
+- **Progress calculation showing incorrect total files**
+  - Fixed scan_state.estimated_total to use total_files_to_scan instead of total_files
+  - Previously showed all discovered files instead of just pending files
+  - Progress now correctly shows "X of Y files" where Y is pending files, not all files
+  - Applied in tasks_parallel.py:785
+
+### Technical Details
+- pixelprobe/services/scan_service.py:19 - Added OperationalError import
+- pixelprobe/services/scan_service.py:710-733 - Added database retry logic (2 instances)
+- media_checker.py:1495-1503 - Added OSError handling for FFmpeg validation
+- media_checker.py:1910-1916 - Added OSError handling for frame integrity checks
+- media_checker.py:1972-1978 - Added OSError handling for temporal outlier checks
+- pixelprobe/services/scan_service.py:2081 - Added no_autoflush context manager
+- pixelprobe/tasks_parallel.py:785 - Fixed progress calculation variable
+
+## [2.4.146] - 2025-11-16
+
+### Fixed
+- **Progress calculation showing incorrect total files**
+  - Fixed scan_state.estimated_total to use total_files_to_scan instead of total_files
+  - Previously showed all discovered files instead of just pending files
+  - Progress now correctly shows "X of Y files" where Y is pending files, not all files
+
+### Technical Details
+- pixelprobe/tasks_parallel.py:785 - Changed from total_files to total_files_to_scan
+
+## [2.4.145] - 2025-11-15
+
+### Fixed
+- **Export button sizing to match other buttons**
+  - Added .export-dropdown to grid item selectors in .results-actions
+  - Export dropdown now gets same styling as action dropdown
+  - Hide caret-down icon in export dropdown on mobile
+  - Export button now renders at same width as other action buttons
+
+### Technical Details
+- static/css/mobile.css - Added .export-dropdown to grid selectors
+
+## [2.4.144] - 2025-11-15
+
+### Fixed
+- **Switch to CSS Grid for equal button widths**
+  - Replaced flexbox with CSS Grid for button containers
+  - Using grid-auto-flow: column and grid-auto-columns: 1fr
+  - Grid layout ensures exact equal width for all columns
+  - Fixes dropdown buttons appearing narrower than regular buttons
+
+### Technical Details
+- static/css/mobile.css - Changed from flexbox to CSS Grid layout
+
+## [2.4.143] - 2025-11-15
+
+### Fixed
+- **Unify flex properties to ensure equal button sizing**
+  - Combined CSS selectors for .btn and .action-dropdown to apply identical flex properties
+  - Added max-width: none to prevent dropdown containers from shrinking
+  - Set flex: none on dropdown buttons to avoid nested flex conflicts
+  - Ensures all buttons render at exactly the same width on mobile
+
+### Technical Details
+- static/css/mobile.css - Unified flex properties across button types
+
+## [2.4.142] - 2025-11-15
+
+### Fixed
+- **Hide dropdown caret icon on mobile to fix button sizing**
+  - Hide .fa-caret-down icon on mobile action buttons
+  - Dropdown buttons now show only one icon (like regular buttons)
+  - Prevents icon overflow when 5 buttons are in a row
+  - Ensures equal content width across all buttons
+
+### Technical Details
+- static/css/mobile.css - Added display: none for .fa-caret-down on mobile
+
+## [2.4.141] - 2025-11-15
+
+### Fixed
+- **Mobile dropdown button sizing with flex: 1 1 0**
+  - Changed flex property from 'flex: 1' to 'flex: 1 1 0' for consistent sizing
+  - Added box-sizing: border-box to all buttons and dropdown containers
+  - Added flex-shrink: 0 to dropdown buttons to prevent compression
+  - Ensures equal width distribution across all action buttons on mobile
+
+### Technical Details
+- static/css/mobile.css - Changed flex properties for equal button distribution
+
 ## [2.4.140] - 2025-11-15
 
 ### Fixed

@@ -782,7 +782,7 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         # Phase 3: Spawn parallel chunk processing tasks
         logger.info(f"Phase 3: Spawning {len(chunks_created)} parallel tasks")
         scan_state.phase = 'scanning'
-        scan_state.estimated_total = total_files
+        scan_state.estimated_total = total_files_to_scan
         db.session.commit()
         
         # Create a group of parallel tasks
