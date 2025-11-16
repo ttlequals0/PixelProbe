@@ -1865,16 +1865,15 @@ class PixelProbeApp {
             html += '<h4>Database Statistics</h4>';
             html += '<div class="stats-section">';
             html += `<p>Total Files: ${info.database.total_files?.toLocaleString() || 0}</p>`;
-            html += `<p>Completed Files: ${info.database.completed_files?.toLocaleString() || 0}</p>`;
-            html += `<p>Corrupted Files: ${info.database.corrupted_files?.toLocaleString() || 0}</p>`;
+            // Healthy files already includes marked as good
             html += `<p>Healthy Files: ${info.database.healthy_files?.toLocaleString() || 0}</p>`;
+            html += `<p>Corrupted Files: ${info.database.corrupted_files?.toLocaleString() || 0}</p>`;
             html += `<p>Warning Files: ${info.database.warning_files?.toLocaleString() || 0}</p>`;
             html += `<p>Error Files: ${info.database.error_files?.toLocaleString() || 0}</p>`;
-            html += `<p>Marked as Good: ${info.database.marked_as_good?.toLocaleString() || 0}</p>`;
             html += '</div>';
         }
         
-        // Performance Stats
+        // Scan Performance Stats
         if (info.database && info.database.performance) {
             const perf = info.database.performance;
             html += '<h4>Scan Performance</h4>';

@@ -301,12 +301,14 @@
         flex-wrap: wrap;
         gap: 0.5rem;
         margin-top: 0.75rem;
+        justify-content: space-between;
     }
-    
+
     .result-card .action-buttons .btn {
         font-size: 0.75rem;
         padding: 0.5rem;
-        width: 100%;
+        flex: 1;
+        min-width: 0;
     }
     
     .result-card .file-checkbox {
@@ -371,6 +373,10 @@
     }
     
     /* Scan Reports Modal mobile */
+    #scan-reports-modal.modal {
+        padding: 0 !important;
+    }
+
     #scan-reports-modal .modal-dialog {
         max-width: 100%;
         width: 100%;
@@ -384,6 +390,7 @@
         margin: 0;
         height: 100vh;
         border-radius: 0;
+        border: none;
         display: flex;
         flex-direction: column;
         background: var(--bg-primary);

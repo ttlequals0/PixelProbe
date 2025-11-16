@@ -205,11 +205,16 @@ def get_system_info():
         
         # Database performance statistics - with database-specific fallbacks
         try:
-            # Try PostgreSQL-specific query first
+            # Get actual scan count from scan_reports table
+            scan_count_query = db.session.execute(
+                text("SELECT COUNT(*) as total_scans FROM scan_reports WHERE status = 'completed'")
+            ).fetchone()
+            actual_total_scans = scan_count_query[0] if scan_count_query else 0
+
+            # Try PostgreSQL-specific query for file scan performance
             db_perf_query = db.session.execute(
                 text("""
                     SELECT
-                        COUNT(*) as total_scans,
                         AVG(CASE
                             WHEN scan_status = 'completed'
                             THEN EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' - scan_date)) / 86400.0
@@ -221,18 +226,27 @@ def get_system_info():
                     WHERE scan_status = 'completed'
                 """)
             ).fetchone()
+            total_scans = actual_total_scans
+            avg_days_since_scan = db_perf_query[0] if db_perf_query else 0
+            oldest_scan = db_perf_query[1] if db_perf_query else None
+            newest_scan = db_perf_query[2] if db_perf_query else None
         except Exception as e:
             logger.warning(f"PostgreSQL-specific query failed, trying SQLite fallback: {e}")
             try:
-                # Fallback to SQLite-specific query
+                # Get actual scan count from scan_reports table
+                scan_count_query = db.session.execute(
+                    text("SELECT COUNT(*) as total_scans FROM scan_reports WHERE status = 'completed'")
+                ).fetchone()
+                actual_total_scans = scan_count_query[0] if scan_count_query else 0
+
+                # Fallback to SQLite-specific query for file scan performance
                 db_perf_query = db.session.execute(
                     text("""
-                        SELECT 
-                            COUNT(*) as total_scans,
-                            AVG(CASE 
-                                WHEN scan_status = 'completed' 
-                                THEN julianday('now') - julianday(scan_date) 
-                                ELSE NULL 
+                        SELECT
+                            AVG(CASE
+                                WHEN scan_status = 'completed'
+                                THEN julianday('now') - julianday(scan_date)
+                                ELSE NULL
                             END) as avg_days_since_scan,
                             MIN(scan_date) as oldest_scan,
                             MAX(scan_date) as newest_scan
@@ -240,20 +254,22 @@ def get_system_info():
                         WHERE scan_status = 'completed'
                     """)
                 ).fetchone()
+                total_scans = actual_total_scans
+                avg_days_since_scan = db_perf_query[0] if db_perf_query else 0
+                oldest_scan = db_perf_query[1] if db_perf_query else None
+                newest_scan = db_perf_query[2] if db_perf_query else None
             except Exception as e2:
                 logger.warning(f"SQLite fallback also failed, using basic query: {e2}")
                 # Final fallback to basic ORM queries
-                total_scans = ScanResult.query.filter_by(scan_status='completed').count()
+                try:
+                    from models import ScanReport
+                    total_scans = ScanReport.query.filter_by(status='completed').count()
+                except:
+                    total_scans = 0
                 avg_days_since_scan = 0
                 oldest_scan = None
                 newest_scan = None
-                db_perf_query = (total_scans, avg_days_since_scan, oldest_scan, newest_scan)
-        
-        total_scans = db_perf_query[0] or 0
-        avg_days_since_scan = db_perf_query[1] or 0
-        oldest_scan = db_perf_query[2]
-        newest_scan = db_perf_query[3]
-        
+
         # Convert scan dates to configured timezone for display
         if oldest_scan:
             try:
@@ -307,7 +323,7 @@ def get_system_info():
                 'warning_files': db_warning_files,
                 'performance': {
                     'total_scans': total_scans,
-                    'avg_days_since_scan': round(avg_days_since_scan, 2),
+                    'avg_days_since_scan': round(avg_days_since_scan, 2) if avg_days_since_scan is not None else 0,
                     'oldest_scan': oldest_scan,
                     'newest_scan': newest_scan
                 }

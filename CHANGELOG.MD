@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.130] - 2025-11-15
+
+### Fixed
+- **System Statistics modal cleanup**
+  - Simplified Database Statistics section to show only: Total Files, Healthy Files, Corrupted Files, Warning Files, Error Files
+  - Removed redundant "Completed Files" and "Marked as Good" entries (marked as good is already included in healthy files)
+  - Fixed "Total Scans" to show actual number of scan operations from scan_reports table instead of file count
+  - Clarified distinction between scan operations vs file scanning metrics
+
+- **Mobile file detail card buttons**
+  - Fixed buttons stacking vertically on mobile
+  - Buttons now display in a single row with flexbox layout
+  - Changed from width: 100% to flex: 1 for proper horizontal distribution
+
+- **Scan Reports modal on mobile**
+  - Added padding: 0 to modal element to remove default Bootstrap padding
+  - Added border: none to modal-content to prevent border causing width issues
+  - Modal now truly uses full viewport width with no wasted space
+
+### Technical Details
+- pixelprobe/api/stats_routes.py:209-271 - Query scan_reports table for actual scan count instead of file count
+- static/js/app.js:1865-1873 - Simplified Database Statistics display
+- static/css/mobile.css:299-312 - Fixed action buttons to use flexbox instead of width: 100%
+- static/css/mobile.css:376-397 - Enhanced Scan Reports modal full-screen styling
+
 ## [2.4.129] - 2025-11-15
 
 ### Fixed
