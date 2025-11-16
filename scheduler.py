@@ -156,34 +156,70 @@ class MediaScheduler:
         try:
             job_id = f"schedule_{schedule.id}"
             schedule_id = schedule.id  # Store the ID, not the object
-            
+
             # Create job function with schedule ID (not the object to avoid detached instance)
             def job_func():
                 self._run_scheduled_scan(schedule_id)
-                
-            # Check if it's an interval or cron format
+
+            # For interval-based schedules, calculate next_run based on last_run if available
+            # This prevents the schedule from resetting on app restart
+            next_run_time = None
             if schedule.cron_expression.startswith('interval:'):
                 # Parse interval format: interval:unit:value
                 parts = schedule.cron_expression.split(':')
                 if len(parts) == 3:
                     unit = parts[1]
                     value = int(parts[2])
+
+                    # If we have a last_run time and it's in the past, calculate next run from it
+                    if schedule.last_run:
+                        from datetime import timedelta
+                        interval_kwargs = {unit: value}
+
+                        # Ensure last_run is timezone-aware
+                        last_run = schedule.last_run
+                        if last_run.tzinfo is None:
+                            last_run = last_run.replace(tzinfo=timezone.utc)
+
+                        next_run_time = last_run + timedelta(**interval_kwargs)
+
+                        # If calculated next_run is in the past, use current next_run or now + interval
+                        if next_run_time < datetime.now(timezone.utc):
+                            if schedule.next_run:
+                                # Ensure next_run is timezone-aware for comparison
+                                stored_next_run = schedule.next_run
+                                if stored_next_run.tzinfo is None:
+                                    stored_next_run = stored_next_run.replace(tzinfo=timezone.utc)
+
+                                if stored_next_run > datetime.now(timezone.utc):
+                                    next_run_time = stored_next_run
+                                else:
+                                    next_run_time = datetime.now(timezone.utc) + timedelta(**interval_kwargs)
+                            else:
+                                next_run_time = datetime.now(timezone.utc) + timedelta(**interval_kwargs)
+
                     self._add_interval_job(job_id, job_func, unit, value)
                 else:
                     raise ValueError(f"Invalid interval format: {schedule.cron_expression}")
             else:
                 # Standard cron format
                 self._add_cron_job(job_id, job_func, schedule.cron_expression)
-            
-            # Update next run time
+
+            # Update next run time only if we don't have a preserved value
             jobs = self.scheduler.get_jobs()
             for job in jobs:
                 if job.id == job_id:
-                    schedule.next_run = job.next_run_time
+                    # For interval schedules, if we calculated a next_run_time, modify the job
+                    if next_run_time:
+                        job.modify(next_run_time=next_run_time)
+                        schedule.next_run = next_run_time
+                    else:
+                        # For cron schedules or new interval schedules, use APScheduler's calculation
+                        schedule.next_run = job.next_run_time
                     db.session.commit()
                     break
-                    
-            logger.info(f"Activated schedule: {schedule.name}")
+
+            logger.info(f"Activated schedule: {schedule.name} (next run: {schedule.next_run})")
         except Exception as e:
             logger.error(f"Failed to activate schedule {schedule.name}: {e}")
             

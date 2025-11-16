@@ -49,23 +49,23 @@
                 
                 <div class="nav-section">
                     <div class="nav-section-title">Tools</div>
-                    <a href="#" class="nav-item" onclick="app.startScan()" title="Start Scan">
+                    <a href="#" class="nav-item" onclick="app.startScan(); return false;" title="Start Scan">
                         <i class="fas fa-play"></i>
                         <span>Start Scan</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.cleanupOrphaned()" title="Cleanup Orphaned">
+                    <a href="#" class="nav-item" onclick="app.cleanupOrphaned(); return false;" title="Cleanup">
                         <i class="fas fa-broom"></i>
-                        <span>Cleanup Orphaned</span>
+                        <span>Cleanup</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.checkFileChanges()" title="Check File Changes">
-                        <i class="fas fa-sync"></i>
-                        <span>Check File Changes</span>
+                    <a href="#" class="nav-item" onclick="app.checkFileChanges(); return false;" title="Integrity Check">
+                        <i class="fas fa-shield-alt"></i>
+                        <span>Integrity Check</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showSchedules()" title="Manage Schedules">
+                    <a href="#" class="nav-item" onclick="app.showSchedules(); return false;" title="Manage Schedules">
                         <i class="fas fa-clock"></i>
                         <span>Schedules</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showExclusions()" title="Manage Exclusions">
+                    <a href="#" class="nav-item" onclick="app.showExclusions(); return false;" title="Manage Exclusions">
                         <i class="fas fa-ban"></i>
                         <span>Exclusions</span>
                     </a>
@@ -73,11 +73,11 @@
                 
                 <div class="nav-section">
                     <div class="nav-section-title">System</div>
-                    <a href="#" class="nav-item" onclick="app.showSystemStats()" title="System Stats">
+                    <a href="#" class="nav-item" onclick="app.showSystemStats(); return false;" title="System Stats">
                         <i class="fas fa-chart-line"></i>
                         <span>System Stats</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showScanReports()" title="Scan Reports">
+                    <a href="#" class="nav-item" onclick="app.showScanReports(); return false;" title="Scan Reports">
                         <i class="fas fa-file-alt"></i>
                         <span>Scan Reports</span>
                     </a>
@@ -222,37 +222,37 @@
                                 </label>
                                 <span class="selection-info text-muted"></span>
                             </div>
-                            <div class="d-flex gap-2">
+                            <div class="d-flex gap-2 results-actions">
                                 <button class="btn btn-secondary" onclick="app.markSelectedAsGood()"
-                                        id="mark-good-btn" disabled>
-                                    <i class="fas fa-check"></i> Mark as Good
+                                        id="mark-good-btn" disabled title="Mark as Good">
+                                    <i class="fas fa-check"></i><span class="btn-text"> Mark as Good</span>
                                 </button>
                                 <!-- Action Dropdown for Bulk Operations -->
                                 <div class="action-dropdown">
                                     <button class="btn btn-secondary" type="button"
                                             id="bulk-action-btn" disabled
-                                            onclick="app.toggleActionDropdown(event, 'bulk-action-menu')">
-                                        <i class="fas fa-tasks"></i> Actions <i class="fas fa-caret-down"></i>
+                                            onclick="app.toggleActionDropdown(event, 'bulk-action-menu')" title="Actions">
+                                        <i class="fas fa-tasks"></i><span class="btn-text"> Actions</span> <i class="fas fa-caret-down"></i>
                                     </button>
                                     <ul class="dropdown-menu" id="bulk-action-menu" style="display: none;">
                                         <li><a class="dropdown-item" href="#" onclick="app.rescanSelected(); return false;">
                                             <i class="fas fa-sync"></i> Rescan
                                         </a></li>
                                         <li><a class="dropdown-item" href="#" onclick="app.orphanScanSelected(); return false;">
-                                            <i class="fas fa-search"></i> Orphan Check
+                                            <i class="fas fa-search"></i> Cleanup
                                         </a></li>
                                         <li><a class="dropdown-item" href="#" onclick="app.changeCheckSelected(); return false;">
-                                            <i class="fas fa-exchange-alt"></i> Change Check
+                                            <i class="fas fa-shield-alt"></i> Integrity Check
                                         </a></li>
                                     </ul>
                                 </div>
                                 <button class="btn btn-secondary" onclick="app.downloadSelected()"
-                                        id="download-btn" disabled>
-                                    <i class="fas fa-download"></i> Download
+                                        id="download-btn" disabled title="Download">
+                                    <i class="fas fa-download"></i><span class="btn-text"> Download</span>
                                 </button>
                                 <div class="export-dropdown">
-                                    <button class="btn btn-secondary" onclick="app.toggleExportMenu(event)">
-                                        <i class="fas fa-file-export"></i> Export <i class="fas fa-caret-down"></i>
+                                    <button class="btn btn-secondary" onclick="app.toggleExportMenu(event)" title="Export">
+                                        <i class="fas fa-file-export"></i><span class="btn-text"> Export</span> <i class="fas fa-caret-down"></i>
                                     </button>
                                     <div class="export-dropdown-menu" id="exportDropdownMenu">
                                         <a href="#" onclick="app.exportData('csv'); return false;">
@@ -341,7 +341,7 @@
     
     <!-- Scan Reports Modal -->
     <div id="scan-reports-modal" class="modal">
-        <div class="modal-content" style="max-width: 90%; width: 90%;">
+        <div class="modal-content">
             <div class="modal-header">
                 <h3 class="modal-title">Scan Reports</h3>
                 <button class="modal-close">&times;</button>
@@ -370,12 +370,12 @@
                                 <option value="cancelled">Cancelled</option>
                             </select>
                         </div>
-                        <button class="btn btn-primary" onclick="app.loadScanReports()">
-                            <i class="fas fa-sync"></i> Refresh
+                        <button class="btn btn-primary" onclick="app.loadScanReports()" title="Refresh">
+                            <i class="fas fa-sync"></i><span class="btn-text"> Refresh</span>
                         </button>
                         <div class="dropdown" style="display: inline-block;">
-                            <button class="btn btn-primary dropdown-toggle" onclick="app.toggleDropdown(event, 'bulk-download-menu')" disabled id="downloadBtn">
-                                <i class="fas fa-download"></i> Download Selected
+                            <button class="btn btn-primary dropdown-toggle" onclick="app.toggleDropdown(event, 'bulk-download-menu')" disabled id="downloadBtn" title="Download Selected">
+                                <i class="fas fa-download"></i><span class="btn-text"> Download Selected</span>
                             </button>
                             <div id="bulk-download-menu" class="dropdown-menu" style="display: none; position: absolute; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 1000; min-width: 150px; right: 0;">
                                 <a class="dropdown-item" onclick="app.downloadSelectedReports('json')" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
@@ -389,8 +389,8 @@
                                 </a>
                             </div>
                         </div>
-                        <button class="btn btn-danger" onclick="app.deleteSelectedReports()" disabled id="deleteBtn">
-                            <i class="fas fa-trash"></i> Delete Selected
+                        <button class="btn btn-danger" onclick="app.deleteSelectedReports()" disabled id="deleteBtn" title="Delete Selected">
+                            <i class="fas fa-trash"></i><span class="btn-text"> Delete Selected</span>
                         </button>
                     </div>
                     
@@ -408,7 +408,14 @@
                             background: var(--bg-tertiary);
                         }
                     </style>
-                    <div class="table-container">
+
+                    <!-- Mobile Card View -->
+                    <div id="scan-reports-cards" class="reports-cards-container" style="display: none;">
+                        <!-- Reports cards will be loaded here for mobile -->
+                    </div>
+
+                    <!-- Desktop Table View -->
+                    <div class="table-container" id="scan-reports-table-container">
                         <table class="table" id="scan-reports-table">
                             <thead>
                                 <tr>
@@ -517,8 +524,8 @@
                         <label for="scan-type">Scan Type</label>
                         <select id="scan-type" class="form-control">
                             <option value="normal">Normal Scan (Scan All Files)</option>
-                            <option value="orphan">Orphan Cleanup</option>
-                            <option value="file_changes">File Changes Scan</option>
+                            <option value="orphan">Cleanup</option>
+                            <option value="file_changes">Integrity Check</option>
                         </select>
                         <small class="form-text text-muted">Choose what type of operation to perform</small>
                     </div>
@@ -572,7 +579,24 @@
             </div>
         </div>
     </div>
-    
+
+    <!-- Confirmation Modal -->
+    <div id="confirm-modal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3 class="modal-title" id="confirm-title">Confirm Action</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-message"></p>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 10px; justify-content: flex-end; padding: 1rem;">
+                <button class="btn btn-secondary" onclick="app.hideConfirmModal(false)">Cancel</button>
+                <button class="btn btn-primary" onclick="app.hideConfirmModal(true)">Confirm</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="/static/js/app.js?v={{ version }}"></script>
     <script src="/static/js/auth.js?v={{ version }}"></script>

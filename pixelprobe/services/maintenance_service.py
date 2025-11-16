@@ -664,6 +664,15 @@ class MaintenanceService:
 
             logger.info(f"Processing {len(all_results)} files with size-aware batching...")
 
+            # Set initial progress to show we're starting
+            file_changes_record.phase_current = 0
+            file_changes_record.phase_total = len(all_results)
+            file_changes_record.files_processed = 0
+            file_changes_record.progress_message = f'Phase 2 of 3: Starting to process {len(all_results):,} files...'
+            db.session.commit()
+            # Force a small delay to allow UI to see initial progress
+            time.sleep(0.1)
+
             # Sort files by size for better batch management (small files first)
             # Handle NULL file_size by treating as 0 for sorting
             all_results_sorted = sorted(all_results, key=lambda x: x.file_size if x.file_size else 0)
@@ -692,6 +701,38 @@ class MaintenanceService:
                         try:
                             result = task.get(timeout=1)
                             total_files_processed += 1
+
+                            # Update last integrity check timestamp for this file
+                            try:
+                                file_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
+                                if file_record:
+                                    file_record.last_integrity_check_date = datetime.now(timezone.utc)
+                            except Exception as e:
+                                logger.error(f"Error updating last_integrity_check_date for {result['file_path']}: {e}")
+
+                            # For single file scans, update progress immediately so UI can see it
+                            if len(all_results) == 1:
+                                file_changes_record.phase_current = total_files_processed
+                                file_changes_record.phase_total = 1
+                                file_changes_record.progress_message = f'Phase 2 of 3: Completed checking file'
+
+                                # Also update ScanState for UI progress bar
+                                try:
+                                    from models import ScanState
+                                    scan_state = ScanState.query.filter_by(scan_id=check_id).first()
+                                    if scan_state:
+                                        scan_state.files_processed = 1
+                                        scan_state.estimated_total = 1
+                                        scan_state.progress_message = 'Integrity check complete'
+                                        scan_state.phase = 'scanning'  # Use 'scanning' phase for proper UI display
+                                        scan_state.current_file = result['file_path']
+                                        logger.info(f"Updated ScanState for single file integrity check")
+                                except Exception as e:
+                                    logger.warning(f"Failed to update ScanState for single file integrity check: {e}")
+
+                                db.session.commit()
+                                logger.info(f"Single file integrity check complete: {result['file_path']}")
+
                             if result.get('changed'):
                                 changed_files.append({
                                     'file_path': result['file_path'],
@@ -754,6 +795,11 @@ class MaintenanceService:
                         task_results.append(task_result)
                         files_queued += 1
                         file_index += 1
+
+                        # Update progress immediately when processing single files
+                        if len(all_results) == 1:
+                            file_changes_record.progress_message = f'Phase 2 of 3: Processing {result.file_path.split("/")[-1]}...'
+                            db.session.commit()
                     except Exception as e:
                         logger.error(f"Error submitting task for {result.file_path}: {e}")
                         if "maxmemory" in str(e):
@@ -765,8 +811,25 @@ class MaintenanceService:
                 if file_index < len(all_results_sorted) and len(active_tasks) > 0:
                     time.sleep(0.1)  # Brief sleep to avoid busy waiting
 
-                # Update progress periodically
-                if total_files_processed % 1000 == 0 and total_files_processed > 0:
+                    # Update progress while waiting for single file
+                    if len(all_results) == 1 and len(active_tasks) > 0:
+                        file_changes_record.progress_message = f'Phase 2 of 3: Checking file for changes...'
+                        file_changes_record.phase_current = 0
+                        file_changes_record.phase_total = 1
+                        db.session.commit()
+
+                # Update progress periodically - every file for tiny sets, every 10 for small, every 100 for larger
+                if len(all_results) <= 10:
+                    update_interval = 1  # Update after every file for 10 or fewer files
+                elif len(all_results) < 1000:
+                    update_interval = 10
+                else:
+                    update_interval = 100
+
+                # Update progress when we hit the interval OR if we've processed all files
+                if (total_files_processed > 0 and
+                    (total_files_processed % update_interval == 0 or
+                     total_files_processed == len(all_results))):
                     file_changes_record.phase_current = total_files_processed
                     file_changes_record.phase_total = len(all_results)
                     pct = int((total_files_processed / len(all_results) * 100)) if len(all_results) > 0 else 0
@@ -868,13 +931,24 @@ class MaintenanceService:
 
             file_changes_record.is_active = False
             file_changes_record.end_time = datetime.now(timezone.utc)
+
+            # Complete ScanState if this was a single file integrity check
+            try:
+                from models import ScanState
+                scan_state = ScanState.query.filter_by(scan_id=check_id).first()
+                if scan_state:
+                    scan_state.complete_scan()
+                    logger.info(f"Completed ScanState for single file integrity check")
+            except Exception as e:
+                logger.warning(f"Failed to complete ScanState for single file integrity check: {e}")
+
             db.session.commit()
 
             # Create scan report for file changes operation
             # Always try to create a report even if there was an error, as long as we have some data
             if file_changes_record.phase in ('complete', 'error'):
                 self._create_file_changes_report(file_changes_record, getattr(self, 'changed_files_list', []), deleted_count if changed_files else 0)
-            
+
             with self.file_changes_lock:
                 self.file_changes_state['is_running'] = False
                 self.file_changes_state['phase'] = file_changes_record.phase

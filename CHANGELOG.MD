@@ -5,6 +5,797 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.147] - 2025-11-16
+
+### Fixed
+- **Database connection retry logic for OperationalError**
+  - Added retry logic with exponential backoff (3 attempts, 1s/2s/4s delays) for database connection timeouts
+  - Prevents scan failures when PostgreSQL connections are lost during long-running scans
+  - Applied to corrupted file count queries in scan_service.py:710-712 and 922-924
+  - Includes session rollback and close between retries to get fresh connections
+
+- **Memory error handling for FFmpeg/FFprobe crashes (SIGBUS)**
+  - Added OSError exception handling for FFmpeg validation subprocess calls
+  - Catches SIGBUS and other memory-related errors that occur during video processing
+  - Files that cause FFmpeg crashes are now marked as corrupted instead of crashing workers
+  - Applied to: main FFmpeg validation, frame integrity checks, and temporal outlier checks
+  - Prevents Celery worker process crashes when scanning corrupted video files
+
+- **SQLAlchemy warning at scan_service.py:2102**
+  - Wrapped _get_chunk_file_count method with db.session.no_autoflush context manager
+  - Prevents "Attribute history events accumulated within inner-flush event handlers" warning
+  - Avoids unnecessary autoflush when accessing chunk.directory_path attributes
+  - Eliminates SQLAlchemy warnings in worker logs during chunk processing
+
+- **Progress calculation showing incorrect total files**
+  - Fixed scan_state.estimated_total to use total_files_to_scan instead of total_files
+  - Previously showed all discovered files instead of just pending files
+  - Progress now correctly shows "X of Y files" where Y is pending files, not all files
+  - Applied in tasks_parallel.py:785
+
+### Technical Details
+- pixelprobe/services/scan_service.py:19 - Added OperationalError import
+- pixelprobe/services/scan_service.py:710-733 - Added database retry logic (2 instances)
+- media_checker.py:1495-1503 - Added OSError handling for FFmpeg validation
+- media_checker.py:1910-1916 - Added OSError handling for frame integrity checks
+- media_checker.py:1972-1978 - Added OSError handling for temporal outlier checks
+- pixelprobe/services/scan_service.py:2081 - Added no_autoflush context manager
+- pixelprobe/tasks_parallel.py:785 - Fixed progress calculation variable
+
+## [2.4.146] - 2025-11-16
+
+### Fixed
+- **Progress calculation showing incorrect total files**
+  - Fixed scan_state.estimated_total to use total_files_to_scan instead of total_files
+  - Previously showed all discovered files instead of just pending files
+  - Progress now correctly shows "X of Y files" where Y is pending files, not all files
+
+### Technical Details
+- pixelprobe/tasks_parallel.py:785 - Changed from total_files to total_files_to_scan
+
+## [2.4.145] - 2025-11-15
+
+### Fixed
+- **Export button sizing to match other buttons**
+  - Added .export-dropdown to grid item selectors in .results-actions
+  - Export dropdown now gets same styling as action dropdown
+  - Hide caret-down icon in export dropdown on mobile
+  - Export button now renders at same width as other action buttons
+
+### Technical Details
+- static/css/mobile.css - Added .export-dropdown to grid selectors
+
+## [2.4.144] - 2025-11-15
+
+### Fixed
+- **Switch to CSS Grid for equal button widths**
+  - Replaced flexbox with CSS Grid for button containers
+  - Using grid-auto-flow: column and grid-auto-columns: 1fr
+  - Grid layout ensures exact equal width for all columns
+  - Fixes dropdown buttons appearing narrower than regular buttons
+
+### Technical Details
+- static/css/mobile.css - Changed from flexbox to CSS Grid layout
+
+## [2.4.143] - 2025-11-15
+
+### Fixed
+- **Unify flex properties to ensure equal button sizing**
+  - Combined CSS selectors for .btn and .action-dropdown to apply identical flex properties
+  - Added max-width: none to prevent dropdown containers from shrinking
+  - Set flex: none on dropdown buttons to avoid nested flex conflicts
+  - Ensures all buttons render at exactly the same width on mobile
+
+### Technical Details
+- static/css/mobile.css - Unified flex properties across button types
+
+## [2.4.142] - 2025-11-15
+
+### Fixed
+- **Hide dropdown caret icon on mobile to fix button sizing**
+  - Hide .fa-caret-down icon on mobile action buttons
+  - Dropdown buttons now show only one icon (like regular buttons)
+  - Prevents icon overflow when 5 buttons are in a row
+  - Ensures equal content width across all buttons
+
+### Technical Details
+- static/css/mobile.css - Added display: none for .fa-caret-down on mobile
+
+## [2.4.141] - 2025-11-15
+
+### Fixed
+- **Mobile dropdown button sizing with flex: 1 1 0**
+  - Changed flex property from 'flex: 1' to 'flex: 1 1 0' for consistent sizing
+  - Added box-sizing: border-box to all buttons and dropdown containers
+  - Added flex-shrink: 0 to dropdown buttons to prevent compression
+  - Ensures equal width distribution across all action buttons on mobile
+
+### Technical Details
+- static/css/mobile.css - Changed flex properties for equal button distribution
+
+## [2.4.140] - 2025-11-15
+
+### Fixed
+- **Separate button and dropdown container CSS rules**
+  - Split combined `.btn, .action-dropdown` selectors into separate rules
+  - `.action-dropdown` container now only gets flex properties, not button padding/font-size
+  - Only the button INSIDE the dropdown gets padding and font-size
+  - This prevents the dropdown container from having double padding/sizing issues
+  - Applied to both file detail buttons and top action buttons
+
+### Technical Details
+- static/css/mobile.css:311-335 - Separated file detail button and dropdown rules
+- static/css/mobile.css:989-1013 - Separated top action button and dropdown rules
+
+## [2.4.139] - 2025-11-15
+
+### Fixed
+- **Remove inline styles from action-dropdown divs**
+  - Removed `style="display: inline-block;"` from both mobile and desktop file action dropdowns
+  - Inline styles have highest CSS specificity and were overriding all CSS rules
+  - Now CSS rules can properly control dropdown display behavior
+  - Dropdown buttons should now match size of other buttons on mobile
+
+### Technical Details
+- static/js/app.js:1098 - Removed inline style from mobile file action dropdown
+- static/js/app.js:1151 - Removed inline style from desktop file action dropdown
+
+## [2.4.138] - 2025-11-15
+
+### Fixed
+- **Dropdown button display on mobile - CSS inheritance fix**
+  - Wrapped desktop.css `.action-dropdown { display: inline-block; }` in @media (min-width: 769px)
+  - This was overriding mobile.css `display: flex !important` rule
+  - Desktop dropdown styles now only apply on desktop, not mobile
+  - Mobile flex layout for dropdowns now works correctly
+
+### Technical Details
+- static/css/desktop.css:1251-1257 - Wrapped action-dropdown display rule in desktop media query
+
+## [2.4.137] - 2025-11-15
+
+### Fixed
+- **Dropdown button icon sizing on mobile**
+  - Added height: 100% to dropdown buttons to match other icon buttons
+  - Added explicit font-size and padding with !important flags
+  - Dropdown icons now same size as other action button icons
+  - Applied to both file detail and top action dropdowns
+
+### Technical Details
+- static/css/mobile.css:326-334 - Fixed file detail dropdown button sizing
+- static/css/mobile.css:1004-1012 - Fixed top action dropdown button sizing
+
+## [2.4.136] - 2025-11-15
+
+### Fixed
+- **Mobile buttons - enforce equal width with !important**
+  - Added `!important` flags to `flex: 1` and `display: flex` rules
+  - This overrides the inline `style="display: inline-block;"` on action-dropdown div
+  - Applied to both file detail buttons (.action-buttons) and top action buttons (.results-actions)
+  - All buttons now have equal width regardless of inline styles
+
+- **Media viewer modal - filename text size on mobile**
+  - Reduced font size to 0.9rem to prevent overflow
+  - Added word-wrap, word-break, and overflow-wrap for long filenames
+  - Filenames now wrap properly and fit within modal window
+
+### Technical Details
+- static/css/mobile.css:315,317,323 - Added !important flags to file detail buttons
+- static/css/mobile.css:972-999 - Added flexbox equal-width rules to results-actions buttons
+- static/css/mobile.css:1010-1021 - Added media viewer modal title sizing and wrapping
+
+## [2.4.135] - 2025-11-15
+
+### Fixed
+- **Mobile file detail buttons - equal width and full space utilization**
+  - Changed from `flex: 0 1 auto` to `flex: 1` for equal width distribution
+  - Removed `justify-content: space-between` to allow gap spacing
+  - All buttons now have equal width and utilize full available container width
+
+### Technical Details
+- static/css/mobile.css:299-330 - Changed flex sizing to `flex: 1` for equal distribution
+
+## [2.4.134] - 2025-11-15
+
+### Fixed
+- **Mobile file detail buttons - CSS specificity issue**
+  - Root cause: desktop.css .action-buttons rules were overriding mobile.css rules
+  - Wrapped desktop.css column layout in @media (min-width: 769px) to only apply on desktop
+  - This allows mobile.css horizontal row layout to work properly on mobile devices
+  - Buttons now properly display in a single horizontal row with icons only on mobile
+
+### Technical Details
+- static/css/desktop.css:810-824 - Wrapped .action-buttons column layout in desktop-only media query
+
+## [2.4.133] - 2025-11-15
+
+### Fixed
+- **Mobile file detail buttons - proper single row layout**
+  - Changed flex sizing from `flex: 1 1 0` to `flex: 0 1 auto` for natural button sizing
+  - Added `justify-content: space-between` to distribute buttons evenly
+  - Reduced padding to 0.65rem to fit all 5 buttons in single row
+  - Buttons now properly display in a single horizontal row even with all 5 buttons present
+
+### Technical Details
+- static/css/mobile.css:299-330 - Fixed flex sizing and spacing for 5-button layout
+
+## [2.4.132] - 2025-11-15
+
+### Fixed
+- **Mobile file detail buttons to icon-only display**
+  - Hide button text labels (.btn-text) on mobile to show icons only
+  - Increased icon font size to 1rem for better visibility
+  - Improved padding to 0.75rem 0.5rem for better touch targets
+  - Added flexbox centering (align-items: center, justify-content: center)
+  - Buttons now display as 4 icon-only buttons in a single row
+
+### Technical Details
+- static/css/mobile.css:307-332 - Hide .btn-text, increase font-size, improve padding and centering
+
+## [2.4.131] - 2025-11-15
+
+### Fixed
+- **Scan Reports modal full-screen on mobile**
+  - Removed inline styles (max-width: 90%; width: 90%) from modal HTML
+  - Simplified CSS to match schedules modal structure
+  - Modal now properly uses full viewport width without wasted space
+
+- **Days Since Last Scan metric**
+  - Changed from average days across all files to days since last scan operation
+  - Now queries scan_reports table for last completed scan time
+  - Renamed label from "Average Days Since Scan" to "Days Since Last Scan" for clarity
+
+- **Mobile file detail buttons layout**
+  - Fixed buttons stacking vertically by using flex-wrap: nowrap
+  - Applied flex: 1 1 0 to both buttons and action-dropdown div
+  - Buttons now display in single row with equal width distribution
+
+### Technical Details
+- templates/index.html:344 - Removed inline styles from scan-reports-modal
+- static/css/mobile.css:375-385 - Simplified scan-reports-modal CSS
+- static/css/mobile.css:299-321 - Fixed action-buttons flexbox layout
+- pixelprobe/api/stats_routes.py:208-291 - Query scan_reports for last scan time instead of averaging file scan dates
+- static/js/app.js:1882 - Renamed label to "Days Since Last Scan"
+
+## [2.4.130] - 2025-11-15
+
+### Fixed
+- **System Statistics modal cleanup**
+  - Simplified Database Statistics section to show only: Total Files, Healthy Files, Corrupted Files, Warning Files, Error Files
+  - Removed redundant "Completed Files" and "Marked as Good" entries (marked as good is already included in healthy files)
+  - Fixed "Total Scans" to show actual number of scan operations from scan_reports table instead of file count
+  - Clarified distinction between scan operations vs file scanning metrics
+
+- **Mobile file detail card buttons**
+  - Fixed buttons stacking vertically on mobile
+  - Buttons now display in a single row with flexbox layout
+  - Changed from width: 100% to flex: 1 for proper horizontal distribution
+
+- **Scan Reports modal on mobile**
+  - Added padding: 0 to modal element to remove default Bootstrap padding
+  - Added border: none to modal-content to prevent border causing width issues
+  - Modal now truly uses full viewport width with no wasted space
+
+### Technical Details
+- pixelprobe/api/stats_routes.py:209-271 - Query scan_reports table for actual scan count instead of file count
+- static/js/app.js:1865-1873 - Simplified Database Statistics display
+- static/css/mobile.css:299-312 - Fixed action buttons to use flexbox instead of width: 100%
+- static/css/mobile.css:376-397 - Enhanced Scan Reports modal full-screen styling
+
+## [2.4.129] - 2025-11-15
+
+### Fixed
+- **Dashboard file count display**
+  - Changed Total Files card to show completed_files instead of total_files
+  - Math now adds up correctly: healthy + corrupted + warnings = total displayed
+  - Pending files are shown separately and don't affect the total
+
+- **System Stats percentage formatting**
+  - Applied consistent .toFixed(1) formatting to both Percentage Tracked and Percentage Checked
+  - Both now display as "100.0%" instead of mixed "100%" and "100.0%" formats
+
+- **Mobile file detail card buttons**
+  - View, Actions, Details, Download, and Mark Good buttons are now icon-only on mobile
+  - Wrapped button text in .btn-text spans with display: none on mobile
+  - Buttons now fit in single row on narrow screens
+
+- **Scan Reports modal sizing on mobile**
+  - Added .modal-dialog styling to ensure full-screen width
+  - Fixed wasted space on right side of modal
+  - Modal now properly uses 100% viewport width like Scan Schedules modal
+
+### Technical Details
+- static/js/app.js:320 - Changed from total_files to completed_files for dashboard display
+- static/js/app.js:1920-1921 - Applied .toFixed(1) to percentageTracked for consistency
+- static/js/app.js:1094-1125 - Wrapped file card button text in .btn-text spans
+- static/css/mobile.css:967-974 - Added CSS to hide .btn-text on mobile for file cards
+- static/css/mobile.css:374-379 - Added .modal-dialog full-screen styling for Scan Reports
+
+## [2.4.128] - 2025-11-15
+
+### Fixed
+- **Average days since scan calculation for PostgreSQL**
+  - Fixed timezone handling in PostgreSQL query
+  - Changed from NOW() to CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+  - Ensures accurate calculation regardless of database timezone settings
+  - Average days will now update correctly when new scans are performed
+
+### Technical Details
+- pixelprobe/api/stats_routes.py:209-223 - Fixed PostgreSQL avg_days_since_scan query with UTC timezone
+
+## [2.4.127] - 2025-11-15
+
+### Fixed
+- **File statistics calculation**
+  - Fixed total file count math: corrupted + healthy + warnings now equals total completed files
+  - Corrected healthy files calculation to exclude files with warnings
+  - Ensured marked_as_good files are properly counted
+  - Updated all stats queries for consistency across endpoints
+
+- **Mobile UI improvements**
+  - System Stats modal now uses full screen like Schedules and Scan Reports
+  - Main results page action buttons (Mark as Good, Actions, Download, Export) are now icon-only on mobile
+  - All mobile modals now have consistent full-screen sizing
+
+### Technical Details
+- pixelprobe/api/stats_routes.py:40-54 - Fixed stats calculation logic
+- pixelprobe/api/stats_routes.py:130-144 - Fixed system-info stats calculation
+- pixelprobe/services/stats_service.py:26-40 - Updated stats service calculations
+- static/css/mobile.css:336-371 - System Stats modal full-screen styling
+- templates/index.html:225-256 - Wrapped results action button text in spans
+- static/css/mobile.css:952-965 - Icon-only results action buttons on mobile
+
+## [2.4.126] - 2025-11-14
+
+### Fixed
+- **Further compacted mobile Scan Reports UI**
+  - Made top control buttons icon-only (Refresh, Download, Delete)
+  - Reduced card padding from 0.875rem to 0.625rem
+  - Reduced card margins from 0.75rem to 0.5rem
+  - Smaller fonts: header 0.875rem, info 0.75rem
+  - Tighter line spacing throughout
+  - Users can now see 3-4 report entries at once
+  - Matches compact sizing of Schedules and Exclusions views
+
+### Technical Details
+- templates/index.html:373-394 - Wrapped button text in .btn-text spans
+- static/css/mobile.css:922-924 - Hide .btn-text on mobile
+- static/css/mobile.css:870-940 - Reduced all spacing and font sizes
+
+## [2.4.125] - 2025-11-14
+
+### Fixed
+- **PDF generation error with directories field**
+  - Fixed "Flowable <Table> with tallest row 28938" error in report info table
+  - Limited directory list to 20 entries in PDF with "and X more" indicator
+  - Used smaller font size for directory lists to prevent overflow
+  - Prevents table cell height from exceeding PDF page limits
+
+- **Made mobile Scan Reports UI more compact**
+  - Reduced card padding and margins for better screen space utilization
+  - Changed footer buttons to icon-only (View, JSON, PDF)
+  - Buttons now in single row instead of stacked
+  - Smaller font sizes and tighter spacing
+  - Combined Files and Issues info on one line
+  - Users can now see 2-3 report entries at once instead of just one
+
+### Technical Details
+- pixelprobe/api/reports_routes.py:547-569 - Limited directories list and added smaller font style
+- static/js/app.js:2166-2198 - Updated card layout with compact buttons
+- static/css/mobile.css:856-929 - Added compact spacing and btn-xs style
+
+## [2.4.124] - 2025-11-14
+
+### Fixed
+- **PDF generation failure with large scan reports**
+  - Fixed "Flowable <Table> with tallest row 28938" error
+  - Split large tables into chunks of 150 rows per page
+  - Prevents table height from exceeding PDF page limits
+  - Automatically adds page breaks between chunks
+  - PDF exports now work for scans with 100K+ files
+
+- **Scan Reports mobile UI improvements**
+  - Redesigned mobile UI to match Schedules card-based layout
+  - Replaced cramped table view with clean, touch-friendly cards
+  - Better use of screen space with larger buttons
+  - Improved readability with clear text labels
+  - Status badges now properly colored
+  - Action buttons full-width for easy tapping
+
+### Technical Details
+- pixelprobe/api/reports_routes.py:753-790 - Implemented table chunking for PDF generation
+- templates/index.html:412-438 - Added mobile card container for Scan Reports
+- static/js/app.js:2087-2200 - Added card rendering logic alongside table
+- static/css/desktop.css:981-1037 - Added report-card styling
+- static/css/mobile.css:856-890 - Added responsive show/hide for cards vs table
+
+## [2.4.123] - 2025-11-14
+
+### Fixed
+- **Inconsistent onclick handler behavior across navigation buttons**
+  - Added `return false;` to all navigation onclick handlers that were missing it
+  - Prevents default anchor tag navigation behavior
+  - Ensures consistent behavior across all UI buttons, especially on mobile
+  - Fixed buttons: startScan, checkFileChanges, showSchedules, showExclusions, showSystemStats, showScanReports
+
+### Technical Details
+- templates/index.html:52,60,64,68,76,80 - Added `return false;` to nav-item onclick handlers
+- Ensures all `<a href="#">` links with onclick handlers properly prevent default behavior
+- Matches pattern already used in cleanup, rescan, orphan scan, and export dropdown items
+
+## [2.4.122] - 2025-11-14
+
+### Fixed
+- **JavaScript const assignment error causing mobile table not to load**
+  - Changed `const container` to `let container` in renderMobileCards()
+  - Fixes "Assignment to constant variable" error
+
+- **Scheduler timezone comparison errors**
+  - Fixed "can't compare offset-naive and offset-aware datetimes" errors
+  - Ensures all datetime comparisons use timezone-aware datetimes
+  - Scheduled scans (AddNew, cleanup, Integrity) now activate properly
+
+- **Modal display method inconsistency**
+  - Changed custom confirm modal to use `modal.style.display = 'block'/'none'`
+  - Matches existing modal pattern instead of classList.add('active')
+  - Modal now actually displays on screen
+
+- **Button event handling**
+  - Added `return false;` to cleanup button onclick to prevent page navigation
+
+### Technical Details
+- static/js/app.js:1038 - Changed const to let for container reassignment
+- scheduler.py:179-199 - Added timezone-aware datetime handling
+- static/js/app.js:1811,1818 - Changed modal display method
+- templates/index.html:56 - Added return false to button
+- static/js/app.js:1476-1494 - Added extensive console logging for debugging
+
+## [2.4.121] - 2025-11-14 [BROKEN - Multiple JS errors]
+
+### Fixed
+- **Scheduled scans no longer reset counter on app restart**
+  - Interval-based schedules now preserve their countdown across app restarts
+  - Next run time calculated from last_run timestamp instead of "now"
+  - Only recalculates if next_run is in the past
+  - Prevents schedules from starting over every time the app restarts
+
+- **Mobile cleanup confirmation dialog**
+  - Added custom confirmation modal for better mobile browser support
+  - Native confirm() doesn't work reliably on mobile devices
+  - New modal with proper Cancel/Confirm buttons
+  - Works consistently across all devices and browsers
+
+### Technical Details
+- scheduler.py:154-210 - Updated _activate_schedule() to preserve interval countdown
+- templates/index.html:576-591 - Added confirm-modal HTML
+- static/js/app.js:1785-1820 - Added showConfirmModal() and hideConfirmModal() methods
+- static/js/app.js:1475-1484 - Updated cleanupOrphaned() to use custom modal
+
+## [2.4.120] - 2025-11-13
+
+### Added
+- New diagnostic endpoint /api/diagnose-pending-files to investigate files stuck in pending status
+  - Shows when pending files were discovered
+  - Identifies which scan they were discovered during
+  - Returns detailed information about file types and sizes
+  - Helps diagnose why files aren't being scanned
+
+### Fixed
+- Automatic cleanup of orphaned pending files on scan completion
+  - Files discovered during a scan but not actually scanned are now marked as 'skipped'
+  - Adds explanation: "File discovered but not scanned (likely filtered or excluded)"
+  - Prevents accumulation of pending files when filters or exclusions prevent scanning
+  - Cleanup happens automatically when each scan completes
+
+### Technical Details
+- models.py:504 - Updated ScanState.complete_scan() to mark orphaned pending files as 'skipped'
+- scan_routes.py:1450 - Added diagnose_pending_files endpoint for troubleshooting
+- Uses discovered_date timestamps to identify files discovered during specific scans
+- SQL UPDATE query marks pending files as skipped if discovered between scan start/end times
+
+## [2.4.119] - 2025-11-13
+
+### Fixed
+- **Fixed single file integrity check UI progress tracking** (complete fix for regression from v2.4.75)
+  - Changed frontend to monitor 'scan' type instead of 'file_changes' for single file integrity checks
+  - Update ScanState.files_processed and estimated_total fields for UI display
+  - Set phase to 'scanning' and current_file for proper progress display
+  - UI now correctly polls /api/scan-status for ScanState progress
+  - Progress bar shows "1 of 1 files" during single file integrity checks
+
+### Technical Details
+- Frontend: Changed startMonitoring('file_changes') to startMonitoring('scan') in changeCheckFile()
+- Backend: Update files_processed, estimated_total, current_file, and phase='scanning' in ScanState
+- This matches how the scan-status endpoint reports progress to the frontend
+
+## [2.4.118] - 2025-11-13 [BROKEN - Wrong fields updated]
+
+### Fixed
+- **Fixed complete_scan() method call with incorrect arguments**
+  - ScanState.complete_scan() takes no arguments but was being called with keyword arguments
+  - Fixes "ScanState.complete_scan() got an unexpected keyword argument 'files_scanned'" error
+  - Scan now properly completes and marks is_active=False
+
+### Note
+- v2.4.117 fixed imports but broke on complete_scan() call signature
+- This version completes the fix chain
+
+## [2.4.117] - 2025-11-13 [BROKEN - Wrong method signature]
+
+### Fixed
+- **Fixed incorrect ScanState import causing integrity check progress tracking to fail**
+  - Changed import from `from pixelprobe.models import ScanState` to `from models import ScanState`
+  - ScanState is located in root-level models.py, not in pixelprobe.models package
+  - Fixes "cannot import name 'ScanState' from 'pixelprobe.models'" error
+
+### Note
+- v2.4.116 had the right logic but wrong import path
+- Still broken due to complete_scan() signature issue
+
+## [2.4.116] - 2025-11-13 [BROKEN - Import Error]
+
+### Fixed
+- **Fixed single file integrity check UI progress not updating** (regression from v2.4.75)
+  - Single file integrity checks now create ScanState records for UI progress tracking
+  - Progress bar correctly updates when clicking "Integrity Check" on individual files
+  - ScanState gets created and updated during single file integrity check operations
+  - Fixes issue where progress stayed at 0% when checking single file integrity
+
+- **Fixed Actions dropdown not collapsing after clicking action**
+  - Added closeAllDropdowns() helper function
+  - All action functions (Rescan, Cleanup, Integrity Check) now close dropdown on click
+  - Dropdowns properly collapse after selecting an action
+
+### Added
+- **Display last integrity check date in file details popup**
+  - Shows when each file was last checked for integrity
+  - Available in "Scan Output Details" modal popup
+  - Timestamp updates automatically when integrity checks run
+
+## [2.4.115] - 2025-11-13
+
+### Fixed
+- **Fixed single file scan UI progress not updating** (regression from v2.4.75)
+  - Single file scans now create ScanState records for UI progress tracking
+  - Added UI progress worker initialization for both Celery and direct scan paths
+  - Progress bar now correctly shows "1 of 1 files" during single file scans
+  - Fixes issue where progress stayed at 0% for single file scans
+
+### Note
+- This version fixed single file SCANS but not single file INTEGRITY CHECKS
+- v2.4.116 addresses the integrity check progress issue
+
+## [2.4.114] - 2025-11-13
+
+### Fixed
+- **Added database migration for last_integrity_check_date column**
+  - Migration runs automatically on app startup
+  - Creates index for better query performance
+  - Fixes "column does not exist" error when loading scan results
+
+## [2.4.113] - 2025-11-13
+
+### Fixed
+- **Fixed integrity check failing with time import error**
+  - Removed duplicate time import in maintenance_service.py that was causing scope issue
+  - Integrity check now completes successfully without "cannot access local variable 'time'" error
+
+### Added
+- **Added last integrity check timestamp tracking**
+  - New database field: last_integrity_check_date in ScanResult model
+  - Timestamp is updated every time a file's integrity is checked
+  - Display last integrity check date in file details (UI and API)
+  - Available in file details popup for each file
+
+## [2.4.112] - 2025-11-11
+
+### Fixed
+- **Fixed syntax error in UI worker that prevented scans from starting**
+  - Corrected indentation issues in tasks.py ui_progress_update_task
+  - Fixed try/except block structure that was causing SyntaxError
+  - All code within try block is now properly indented
+
+## [2.4.111] - 2025-11-11
+
+### Fixed
+- **Eliminated "X of 0" flashing in UI during scanning**
+  - Removed UI worker's attempt to sync estimated_total and phase_total (caused race conditions)
+  - UI worker now only updates timestamps, not progress values
+  - Added distributed lock to prevent multiple UI workers for same scan
+  - Improved protection against setting totals to 0 in all phases (not just scanning)
+  - Progress values are now only set by scan worker to avoid conflicts
+
+## [2.4.110] - 2025-11-11
+
+### Fixed
+- **Fixed inconsistent UI updates during scanning**
+  - Scan progress was jumping around erratically (e.g., from 63 to 3, showing 4/0)
+  - Improved scan state management to prevent multiple active scan states
+  - Fixed scan-status API to return consistent scan state when no active scan exists
+  - Added cleanup of stale active scans when creating new scan
+  - Prioritizes completed scans over partial/interrupted ones in status display
+  - Ensures UI shows consistent progress values throughout scan lifecycle
+
+## [2.4.109] - 2025-11-11
+
+### Fixed
+- **Enhanced integrity check UI progress visibility**
+  - Added 0.1s delay after initial progress update to ensure UI can poll and see it
+  - Added immediate progress update when processing single files
+  - Added progress updates while waiting for tasks to complete
+  - Frontend now properly uses phase_current/phase_total for progress calculation
+  - Ensures progress is visible even for operations that complete in <1 second
+
+## [2.4.108] - 2025-11-11
+
+### Fixed
+- **Fixed integrity check (file changes) progress staying at 0%**
+  - Progress was only updating every 1000 files, causing no updates for small file sets
+  - Changed update intervals: every file for ≤10 files, every 10 for <1000 files, every 100 for larger sets
+  - Added initial progress message when starting Phase 2
+  - Ensures progress updates even when checking single files
+  - Fixed progress to update on completion even if interval not reached
+
+## [2.4.107] - 2025-11-11
+
+### Fixed
+- **CRITICAL: Fixed "x of 0 files" still occurring during Phase 3 scanning**
+  - The update_progress method was resetting phase_total to 0 during chunk processing
+  - Added protection to preserve phase_total during scanning phase when total_files is 0
+  - This ensures the UI always shows the correct "x of N files" progress during scanning
+  - Root cause: When processing chunks with no files, total_files_to_scan became 0, which overwrote the correct phase_total
+
+## [2.4.106] - 2025-11-10
+
+### Fixed
+- **Corrected version numbering**
+  - Version.py was incorrectly set to 2.4.105 instead of 2.4.106
+  - Docker image now properly reflects version 2.4.106
+  - All UI improvements from previous commit included
+
+## [2.4.105] - 2025-11-10
+
+### Fixed
+- **Reduced excessive warning logging in UI worker**
+  - "Zero total detected" warning was being logged every 0.5 seconds during discovery phase
+  - Now only logs once and only for unexpected phases (not during discovery/idle/pending)
+  - Reduces log spam from 70+ warnings to maximum 1 warning per scan
+
+- **Corrected UI terminology**
+  - Changed "Cleanup Check" to just "Cleanup" in dropdown menus
+  - Updated all notification messages to use consistent terminology
+  - Affects both bulk actions dropdown and individual file actions
+
+- **Improved UI icons**
+  - Changed Integrity Check icon from fa-exchange-alt to fa-shield-alt
+  - Shield icon better represents integrity/validation checking
+  - Updated in sidebar navigation, dropdown menus, and buttons
+
+### Technical Details
+- Added phase checking to skip warnings during expected zero-total phases
+- Added flag to ensure warning is only logged once per scan state
+- Improves log readability and reduces Celery worker log size
+
+## [2.4.104] - 2025-11-10
+
+### Changed
+- **UI Terminology Updates (NO LOGIC CHANGES)**
+  - Renamed "Check Changes" to "Integrity Check" throughout UI
+  - Renamed "Orphan Cleanup" to "Cleanup" throughout UI
+  - Updated button labels, menu items, and documentation
+  - No functional changes - only display text updated
+
+### Fixed
+- **CRITICAL: Fixed "x of 0 files" regression in UI progress display**
+  - UI worker was not seeing updated estimated_total and phase_total values from database
+  - Added session.commit() before reading scan_state to ensure fresh data
+  - Forces new transaction to see latest updates from other workers
+  - Added debug logging to track when zero totals are detected
+
+- **CRITICAL: Added database connection recovery for scan workers**
+  - Added retry logic for "server closed the connection unexpectedly" errors
+  - Scan workers now retry up to 3 times with exponential backoff
+  - Properly rollback and remove sessions on connection errors
+  - Prevents scan failures due to temporary database connectivity issues
+
+### Technical Details
+- UI worker issue: SQLAlchemy session was reading from stale transaction
+- Solution: Call ui_session.commit() before query to start fresh transaction
+- Database errors: psycopg2.OperationalError during large file processing
+- Solution: Wrap database queries in retry loop with proper error handling
+
+## [2.4.103] - 2025-11-09
+
+### Fixed
+- **CRITICAL: Fixed syntax error in version.py preventing application startup**
+  - Removed stray "check" text that was accidentally appended to line 12
+  - Application now starts successfully without SyntaxError
+
+## [2.4.102] - 2025-11-09
+
+### Fixed
+- **CRITICAL: Fixed SQLAlchemy session concurrency error preventing file scanning**
+  - UI worker database session was interfering with ForkPool scan workers
+  - Error: "This session is provisioning a new connection; concurrent operations are not permitted"
+  - Created separate session for UI worker using `scoped_session` and `sessionmaker`
+  - UI worker now uses isolated session that doesn't block concurrent scan workers
+  - Added proper session cleanup with `session.close()` and `UiSession.remove()`
+
+- **CRITICAL: Fixed rescan not actually rescanning files**
+  - Individual file rescan was not sending `force_rescan: true` flag
+  - Files were being returned from cache instead of being rescanned
+  - Updated `rescanFile()` function in app.js to include `force_rescan: true`
+  - Now properly forces MediaChecker to rescan the file instead of using cached results
+
+### Technical Details
+- UI worker creates its own session: `ui_session_factory = sessionmaker(bind=flask_db.engine)`
+- Uses `scoped_session` to ensure thread-local session management
+- Properly closes and removes sessions after each iteration
+- Frontend was missing `force_rescan` flag in rescanFile() function (line 1630 in app.js)
+
+### Impact
+- Files can now be scanned successfully without "concurrent operations" errors
+- UI worker no longer blocks parallel scan workers from saving results
+- Individual file rescan now works correctly and actually rescans the file
+- Fixes regression introduced in v2.4.101 where database activity checking caused session conflicts
+- All workers can now access database concurrently without errors
+
+## [2.4.101] - 2025-11-09
+
+### Fixed
+- **CRITICAL: Improved UI worker activity detection to handle large file scanning**
+  - UI worker now checks for database updates in addition to file count changes
+  - Detects when scan workers are actively updating the database during large file processing
+  - Added check for `is_active` flag to properly detect when scan is no longer running
+  - Prevents false "no activity" detection when large files are being hashed
+  - Large files (20-48GB) can take 10+ minutes to hash, during which file count doesn't change
+  - UI worker now correctly identifies scan activity even when file count is static
+
+### Changed
+- **Enhanced activity detection logic in UI worker**
+  - Tracks `last_update` timestamp changes from scan workers
+  - Considers scan active if either file count changes OR database is being updated
+  - More accurate detection of stuck/inactive scans vs. scans processing large files
+
+### Impact
+- UI worker stays alive during large file processing and correctly detects activity
+- Scans with very large files (20GB+) no longer trigger false "no activity" warnings
+- Better differentiation between truly stuck scans and scans actively processing large files
+- Complements v2.4.100 timeout fix with smarter activity detection
+
+## [2.4.100] - 2025-11-09
+
+### Fixed
+- **CRITICAL: Fixed UI worker exiting too early during large file scans**
+  - Increased UI worker timeout from 120 seconds (2 minutes) to 1800 seconds (30 minutes)
+  - UI worker was exiting after 2 minutes of no file count progress
+  - Large files (20-48GB) take longer than 2 minutes to hash/scan
+  - When UI worker exited, it stopped updating `last_update` timestamp
+  - This caused stuck scan detection to incorrectly mark scans as crashed after 30 minutes
+  - UI worker timeout now matches stuck scan detection timeout (30 minutes)
+
+### Impact
+- UI worker now stays alive during processing of large files
+- Scans with large files (20GB+) no longer get marked as crashed
+- `last_update` timestamp continues to be updated throughout entire scan
+- Fixes regression where v2.4.99 still crashed despite timestamp fix
+- Restores ability to scan very large files that was working in v2.4.75
+
+## [2.4.99] - 2025-11-09
+
+### Fixed
+- **CRITICAL: Fixed scans being incorrectly marked as crashed after 30 minutes**
+  - UI worker now updates `last_update` timestamp every iteration
+  - Prevents stuck scan detection from incorrectly flagging active scans as crashed
+  - Scans were being marked crashed after 30 minutes despite actively processing files
+  - This regression was introduced in recent UI worker changes (v2.4.88-v2.4.98)
+
+### Impact
+- Scans now complete successfully without being interrupted by stuck scan detection
+- Long-running scans (>30 minutes) no longer get incorrectly terminated
+- Fixes issue where scans would be marked crashed while still actively scanning files
+- Restores functionality from v2.4.75 which successfully handled 1M+ file scans
+
 ## [2.4.98] - 2025-11-08
 
 ### Fixed
@@ -4614,3 +5405,38 @@ GROUP BY scan_status, is_corrupted;
   - **Thread Stability**: This was the actual cause of scanning stopping at ~400k files - not database connection issues or memory problems
   - **User Feedback Integration**: Responded to user feedback that "this worked in previous versions" by identifying and removing the regression
   - This is the REAL fix for the 400k file performance cliff that has been causing issues since v2.2.8
+## v2.4.141 - 2025-11-15
+### Fixed
+- Mobile UI: Fixed dropdown button sizing to match regular buttons by using flex: 1 1 0 and adding box-sizing: border-box
+- Mobile UI: Ensured all action buttons (both regular and dropdown) have consistent equal width distribution
+- Mobile UI: Added flex-shrink: 0 to dropdown buttons to prevent compression
+
+
+## v2.4.142 - 2025-11-15
+### Fixed
+- Mobile UI: Hide dropdown caret-down icon on mobile to prevent icon overflow
+- Mobile UI: Dropdown buttons now have only one icon (like regular buttons) preventing size mismatch and overflow
+
+
+## v2.4.143 - 2025-11-15
+### Fixed
+- Mobile UI: Unified flex properties for buttons and dropdown containers to ensure equal sizing
+- Mobile UI: Added max-width: none to prevent dropdown containers from shrinking
+- Mobile UI: Set flex: none on dropdown buttons to prevent flex calculation conflicts
+- Mobile UI: All action buttons now render at exactly the same width
+
+
+## v2.4.144 - 2025-11-15
+### Fixed
+- Mobile UI: Switched from flexbox to CSS Grid for button layout
+- Mobile UI: Using grid-auto-flow: column with grid-auto-columns: 1fr for truly equal column widths
+- Mobile UI: Grid ensures all buttons (including dropdown containers) render at exactly the same width
+- Mobile UI: Removed flex properties that were causing sizing inconsistencies
+
+
+## v2.4.145 - 2025-11-15
+### Fixed
+- Mobile UI: Added CSS rules for .export-dropdown to match .action-dropdown styling
+- Mobile UI: Export button now has same grid sizing as other action buttons
+- Mobile UI: Hide caret-down icon in export dropdown on mobile
+

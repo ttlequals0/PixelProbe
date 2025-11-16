@@ -1,46 +1,61 @@
-# CLAUDE.md
+ CLAUDE.md
 
-## CRITICAL INSTRUCTIONS -- ALWAYS READ THIS BEFORE EVERY CHANGE!!!
-- **NEVER create mock data or simplified components** unless explicitly told to do so
-- **NEVER replace existing complex components with simplified versions** - always fix the actual problem
-- **ALWAYS work with the existing codebase** - do not create new simplified alternatives
-- **ALWAYS find and fix the root cause** of issues instead of creating workarounds
-- **ALWAYS Track all changes in CHANGELOG.MD**
-- **ALWAYS refer to CHANGELOG.MD when working on tasks**
-- **Always make sure the App builds successfully**
-- **Always scrub out all sensitive data in the repo**
-- ALWAYS run all tests after code changes.
-- When debugging issues, focus on fixing the existing implementation, not replacing it
-- When something doesn't work, debug and fix it - don't start over with a simple version
-- Always build new changes off the previous version in CHANGELOG never MAIN branch unless explicitly told to.
-- Always look at live server logs before making changes.
+  Core Principles
+
+  - NEVER create mock data or simplified components unless explicitly told to do so
+  - NEVER replace existing complex components with simplified versions - always fix the actual problem
+  - ALWAYS work with the existing codebase - do not create new simplified alternatives
+  - ALWAYS find and fix the root cause of issues instead of creating workarounds
+  - NEVER remove failed tests, ALWAYS fix them
+  - NEVER skip tests - always wait for them to finish and fix any failures
+  - NEVER just agree - always state your reasons for choices made. We are a TEAM
+
+  Change Management
+
+  - ALWAYS track all changes in CHANGELOG.md
+  - ALWAYS refer to CHANGELOG.md when working on tasks
+  - Always build new changes off the previous version in CHANGELOG, never MAIN branch unless explicitly told to
+  - Always work from the latest versioned branch
+  - NEVER commit directly to main or master branches
+
+
+  Testing Requirements
+
+  - Run ALL tests after code changes
+  - NEVER skip failed tests, ALWAYS fix the problem
+  - Python testing should use venv
+  - Always run test suite before each build and make sure the app will actually start
+  - Always make sure the App builds successfully
+
+  Docker Guidelines
+
+  - Build for platform="linux/amd64"
+  - Docker Hub user and org are ttlequals0
+  - Always check what the next version should be before tagging (from Docker Hub and CHANGELOG.md)
+  - Tag format: latest and version matching '/Users/dkrachtus/repos/PixelProbe/version.py'
+  - Do NOT tag with major.minor only (e.g., avoid ttlequals0/pixelprobe:2.0)
+  - If testing locally, cleanup afterwards
+
+  Live Server Debugging
+
+  - Always look at live server logs before making changes
   - Server: https://pixelprobe.ttlequals0.com/
   - Verify app version from server
-  - use portainer API to access container loges
-  - example ```curl -X GET "https://portainer.ttlequals0.com/api/endpoints/2/docker/containers/<CONTAINER_ID>/logs?stdout=true&stderr=true" \
-    -H "Authorization: Bearer $BEARER"
-    --output -```
-- docker should be built for platform="linux/amd64" 
-- docker always check what the next version should be before tagging, you can get this info from docker hub and should be tracked in CHANGELOG.md
-- Always update version.py
-- docker hub user and org are ttlequals0
-- docker if you test locally cleanup afterwards
-- python testing should use venv
-- dont add yourself or claude to git commits
-- NEVER remove failed tests , ALWAYS fix them
-- Run ALL tests NEVER skip them.
-- Always follow claude.md
-- Always run test suite before each build and make sure the app will actually start. 
-- NEVER skip failed test, ALWAYS fix the problem
-- NEVER skip tests because it takes too long ALWAYS wait for them to finish
-- ALWAYS keep 2.1_AUDIT_IMPLEMENTATION_PLAN.md
-- Always work from the latest versioned branch
-- NEVER commit directly to main or master branches
-- NO emojis in any code or documentation
-### Docker Tagging Notes
-- dont tage  - ttlequals0/pixelprobe:2.0
-- docker tag is always latest and the same as version in '/Users/dkrachtus/repos/PixelProbe/version.py'
-NEVER just agree with me ALWAYS state your reasons for choices you made. We are a TEAM
+  - Use Portainer API to access container logs:
+  curl -X GET "https://portainer.ttlequals0.com/api/endpoints/2/docker/containers/<CONTAINER_ID>/logs?stdout=true&stderr=true" \
+    -H "Authorization: Bearer $BEARER" \
+    --output -
 
-### Workspace Guidelines
-- only work in /Users/dkrachtus/repos/PixelProbe
+  Version Management
+
+  - Always update version.py with changes
+
+  Security & Quality
+
+  - Always scrub out all sensitive data in the repo
+  - NO emojis in any code or documentation
+  - Don't add yourself or Claude to git commits
+
+  Workspace
+
+  - Only work in /Users/dkrachtus/repos/PixelProbe

@@ -112,7 +112,7 @@ def test_cleanup():
 @exempt_from_rate_limit
 @auth_required
 def get_cleanup_status():
-    """Get current cleanup orphans operation status"""
+    """Get current cleanup operation status"""
     try:
         # Expire all cached objects to ensure we get fresh data from the database
         # This is critical because cleanup runs in a background thread
@@ -492,6 +492,23 @@ def check_file_changes():
     )
     db.session.add(file_changes_record)
     db.session.commit()
+
+    # Create ScanState for UI progress tracking (single file integrity checks)
+    scan_state = None
+    if file_paths and len(file_paths) == 1:
+        try:
+            from models import ScanState
+            scan_state = ScanState.create_new_scan()
+            scan_state.scan_id = check_id
+            scan_state.start_scan(file_paths, force_rescan=False)
+            scan_state.phase = 'integrity_check'
+            scan_state.progress_message = 'Starting integrity check'
+            scan_state.estimated_total = 1
+            scan_state.phase_total = 1
+            db.session.commit()
+            logger.info(f"Created ScanState {scan_state.id} for single file integrity check")
+        except Exception as e:
+            logger.warning(f"Failed to create ScanState for single file integrity check: {e}")
 
     # Start file changes check in background thread - capture app instance for thread context
     app = current_app._get_current_object()

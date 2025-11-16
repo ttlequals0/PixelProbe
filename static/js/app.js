@@ -316,7 +316,8 @@ class StatsDashboard {
 
     renderStats(stats) {
         // Update stat cards
-        this.updateStatCard('total-files', stats.total_files);
+        // Show completed files as total so math adds up: healthy + corrupted + warnings = total
+        this.updateStatCard('total-files', stats.completed_files);
         this.updateStatCard('healthy-files', stats.healthy_files);
         this.updateStatCard('corrupted-files', stats.corrupted_files);
         this.updateStatCard('warning-files', stats.warning_files || 0);
@@ -538,9 +539,9 @@ class ProgressManager {
         const cleanupButton = document.querySelector('[onclick*="cleanupOrphaned"]');
         if (cleanupButton) {
             cleanupButton.disabled = isRunning;
-            cleanupButton.innerHTML = isRunning ? 
-                '<i class="fas fa-spinner fa-spin"></i> Cleaning up...' : 
-                '<i class="fas fa-broom"></i> Cleanup Orphaned';
+            cleanupButton.innerHTML = isRunning ?
+                '<i class="fas fa-spinner fa-spin"></i> Cleaning up...' :
+                '<i class="fas fa-broom"></i> Cleanup';
         }
     }
     
@@ -548,9 +549,9 @@ class ProgressManager {
         const fileChangesButton = document.querySelector('[onclick*="checkFileChanges"]');
         if (fileChangesButton) {
             fileChangesButton.disabled = isRunning;
-            fileChangesButton.innerHTML = isRunning ? 
-                '<i class="fas fa-spinner fa-spin"></i> Checking...' : 
-                '<i class="fas fa-exchange-alt"></i> Check File Changes';
+            fileChangesButton.innerHTML = isRunning ?
+                '<i class="fas fa-spinner fa-spin"></i> Checking...' :
+                '<i class="fas fa-shield-alt"></i> Integrity Check';
         }
     }
     
@@ -681,16 +682,30 @@ class ProgressManager {
             details = parts.join(' - ');
             
         } else if (operationType === 'file-changes') {
-            // Use the progress percentage directly from the backend
-            percentage = Math.round(status.progress_percentage || 0);
-            
+            // Calculate percentage from phase information if backend doesn't provide it
+            if (status.progress_percentage !== undefined) {
+                percentage = Math.round(status.progress_percentage);
+            } else if (status.phase_total > 0) {
+                // Calculate from phase progress
+                const phaseNumber = status.phase_number || 1;
+                const totalPhases = status.total_phases || 3;
+                const phasePercentage = 100 / totalPhases;
+                const phaseStart = (phaseNumber - 1) * phasePercentage;
+                const phaseProgress = (status.phase_current / status.phase_total) * phasePercentage;
+                percentage = Math.round(phaseStart + phaseProgress);
+            } else {
+                percentage = 0;
+            }
+
             text = status.progress_message || 'Checking for file changes...';
-            
+
             const parts = [];
-            
-            // Add file count
-            if (status.current > 0 && status.total > 0) {
-                parts.push(`${status.current.toLocaleString()} of ${status.total.toLocaleString()} files`);
+
+            // Add file count - use phase_current/phase_total or files_processed/total_files
+            const current = status.phase_current || status.files_processed || status.current || 0;
+            const total = status.phase_total || status.total_files || status.total || 0;
+            if (current > 0 || total > 0) {
+                parts.push(`${current.toLocaleString()} of ${total.toLocaleString()} files`);
             }
             
             if (status.current_file) {
@@ -1021,12 +1036,12 @@ class TableManager {
     }
 
     renderMobileCards(data) {
-        const container = document.querySelector('.mobile-results');
+        let container = document.querySelector('.mobile-results');
         if (!container) {
             // Create mobile results container if it doesn't exist
             const tableContainer = document.querySelector('.table-container');
             if (!tableContainer) return;
-            
+
             const mobileContainer = document.createElement('div');
             mobileContainer.className = 'mobile-results';
             tableContainer.parentNode.insertBefore(mobileContainer, tableContainer.nextSibling);
@@ -1066,43 +1081,47 @@ class TableManager {
                     <span class="value">${file.scan_tool || 'N/A'}</span>
                     <span class="label">Scanned:</span>
                     <span class="value">${this.formatDate(file.scan_date)}</span>
+                    ${file.last_integrity_check_date ? `
+                        <span class="label">Last Integrity Check:</span>
+                        <span class="value">${this.formatDate(file.last_integrity_check_date)}</span>
+                    ` : ''}
                     ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
                         <span class="label">Details:</span>
                         <span class="value">${this.escapeHtml(file.corruption_details || file.scan_output || file.error_message || file.warning_details || '')}</span>
                     ` : ''}
                 </div>
                 <div class="action-buttons">
-                    <button class="btn btn-secondary" onclick="app.viewFile(${file.id})">
-                        <i class="fas fa-eye"></i> View
+                    <button class="btn btn-secondary" onclick="app.viewFile(${file.id})" title="View File">
+                        <i class="fas fa-eye"></i><span class="btn-text"> View</span>
                     </button>
                     <!-- Individual File Actions Dropdown for Mobile -->
-                    <div class="action-dropdown" style="display: inline-block;">
+                    <div class="action-dropdown">
                         <button class="btn btn-secondary" type="button"
-                                onclick="app.toggleActionDropdown(event, 'mobile-file-action-menu-${file.id}')">
-                            <i class="fas fa-tasks"></i> Actions <i class="fas fa-caret-down"></i>
+                                onclick="app.toggleActionDropdown(event, 'mobile-file-action-menu-${file.id}')" title="Actions">
+                            <i class="fas fa-tasks"></i><span class="btn-text"> Actions</span> <i class="fas fa-caret-down"></i>
                         </button>
                         <ul class="dropdown-menu" id="mobile-file-action-menu-${file.id}" style="display: none;">
                             <li><a class="dropdown-item" href="#" onclick="app.rescanFile(${file.id}); return false;">
                                 <i class="fas fa-sync"></i> Rescan
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
-                                <i class="fas fa-search"></i> Orphan Check
+                                <i class="fas fa-search"></i> Cleanup
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
-                                <i class="fas fa-exchange-alt"></i> Change Check
+                                <i class="fas fa-shield-alt"></i> Integrity Check
                             </a></li>
                         </ul>
                     </div>
                     ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
-                        <button class="btn btn-secondary" onclick="app.viewScanOutput(${file.id})">
-                            <i class="fas fa-file-alt"></i> Details
+                        <button class="btn btn-secondary" onclick="app.viewScanOutput(${file.id})" title="View Details">
+                            <i class="fas fa-file-alt"></i><span class="btn-text"> Details</span>
                         </button>
                     ` : ''}
-                    <button class="btn btn-secondary" onclick="app.downloadFile(${file.id})">
-                        <i class="fas fa-download"></i> Download
+                    <button class="btn btn-secondary" onclick="app.downloadFile(${file.id})" title="Download">
+                        <i class="fas fa-download"></i><span class="btn-text"> Download</span>
                     </button>
-                    <button class="btn btn-primary" onclick="app.markFileAsGood(${file.id})">
-                        <i class="fas fa-check"></i> Mark Good
+                    <button class="btn btn-primary" onclick="app.markFileAsGood(${file.id})" title="Mark as Good">
+                        <i class="fas fa-check"></i><span class="btn-text"> Mark Good</span>
                     </button>
                 </div>
                 <input type="checkbox" class="file-checkbox" value="${file.id}" ${this.selectedFiles.has(file.id) ? 'checked' : ''}>
@@ -1129,7 +1148,7 @@ class TableManager {
                         <i class="fas fa-eye"></i> View
                     </button>
                     <!-- Individual File Actions Dropdown -->
-                    <div class="action-dropdown" style="display: inline-block;">
+                    <div class="action-dropdown">
                         <button class="btn btn-sm btn-secondary" type="button"
                                 onclick="app.toggleActionDropdown(event, 'file-action-menu-${file.id}')">
                             <i class="fas fa-tasks"></i> Actions <i class="fas fa-caret-down"></i>
@@ -1139,10 +1158,10 @@ class TableManager {
                                 <i class="fas fa-sync"></i> Rescan
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
-                                <i class="fas fa-search"></i> Orphan Check
+                                <i class="fas fa-search"></i> Cleanup
                             </a></li>
                             <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
-                                <i class="fas fa-exchange-alt"></i> Change Check
+                                <i class="fas fa-shield-alt"></i> Integrity Check
                             </a></li>
                         </ul>
                     </div>
@@ -1340,8 +1359,8 @@ class PixelProbeApp {
     formatScanType(type) {
         const types = {
             'normal': 'Normal Scan',
-            'orphan': 'Orphan Cleanup',
-            'file_changes': 'File Changes Scan'
+            'orphan': 'Cleanup',
+            'file_changes': 'Integrity Check'
         };
         return types[type] || type;
     }
@@ -1455,10 +1474,26 @@ class PixelProbeApp {
     }
 
     async cleanupOrphaned() {
-        if (!confirm('Remove database entries for files that no longer exist on disk?')) {
+        console.log('cleanupOrphaned() called');
+        try {
+            // Use custom confirmation modal for better mobile support
+            const confirmed = await this.showConfirmModal(
+                'Confirm Cleanup',
+                'Remove database entries for files that no longer exist on disk?'
+            );
+            console.log('Modal confirmed:', confirmed);
+
+            if (!confirmed) {
+                console.log('User cancelled cleanup');
+                return;
+            }
+
+            console.log('Proceeding with cleanup...');
+        } catch (error) {
+            console.error('Error showing confirm modal:', error);
             return;
         }
-        
+
         try {
             const result = await this.api.cleanupOrphaned();
             console.log('Cleanup response:', result);
@@ -1513,7 +1548,7 @@ class PixelProbeApp {
             }
         } catch (error) {
             console.error('File changes error:', error);
-            this.showNotification('Failed to check file changes', 'error');
+            this.showNotification('Failed to perform integrity check', 'error');
         }
     }
 
@@ -1610,6 +1645,9 @@ class PixelProbeApp {
     }
 
     async rescanFile(fileId) {
+        // Close all dropdowns first
+        this.closeAllDropdowns();
+
         try {
             // Check if scan is already running
             const status = await this.api.getScanStatus();
@@ -1626,7 +1664,8 @@ class PixelProbeApp {
                 const scanResponse = await this.api.request('/scan-parallel', {
                     method: 'POST',
                     body: JSON.stringify({
-                        file_paths: [file.file_path]
+                        file_paths: [file.file_path],
+                        force_rescan: true  // Force rescan to actually re-scan the file
                     })
                 });
                 this.showNotification(scanResponse.message || 'File rescan started', 'success');
@@ -1640,12 +1679,15 @@ class PixelProbeApp {
     }
 
     async orphanCheckFile(fileId) {
+        // Close all dropdowns first
+        this.closeAllDropdowns();
+
         try {
             // Get file path first
             const response = await fetch(`/api/scan-results/${fileId}`);
             if (response.ok) {
                 const file = await response.json();
-                // Start orphan check for this file
+                // Start cleanup for this file
                 const orphanResponse = await fetch('/api/cleanup-orphaned', {
                     method: 'POST',
                     headers: {
@@ -1657,20 +1699,23 @@ class PixelProbeApp {
                 });
 
                 if (orphanResponse.ok) {
-                    this.showNotification('Orphan check started for file', 'success');
+                    this.showNotification('Cleanup started for file', 'success');
                     this.progress.startMonitoring('cleanup');
                 } else {
-                    throw new Error('Failed to start orphan check');
+                    throw new Error('Failed to start cleanup');
                 }
             } else {
                 throw new Error('Failed to get file info');
             }
         } catch (error) {
-            this.showNotification(error.message || 'Failed to start orphan check', 'error');
+            this.showNotification(error.message || 'Failed to start cleanup', 'error');
         }
     }
 
     async changeCheckFile(fileId) {
+        // Close all dropdowns first
+        this.closeAllDropdowns();
+
         try {
             // Get file path first
             const response = await fetch(`/api/scan-results/${fileId}`);
@@ -1688,16 +1733,17 @@ class PixelProbeApp {
                 });
 
                 if (changeResponse.ok) {
-                    this.showNotification('Change check started for file', 'success');
-                    this.progress.startMonitoring('file_changes');
+                    this.showNotification('Integrity check started for file', 'success');
+                    // Monitor as 'scan' type since we create ScanState for single file integrity checks
+                    this.progress.startMonitoring('scan');
                 } else {
-                    throw new Error('Failed to start change check');
+                    throw new Error('Failed to start integrity check');
                 }
             } else {
                 throw new Error('Failed to get file info');
             }
         } catch (error) {
-            this.showNotification(error.message || 'Failed to start change check', 'error');
+            this.showNotification(error.message || 'Failed to start integrity check', 'error');
         }
     }
 
@@ -1733,18 +1779,61 @@ class PixelProbeApp {
         const notification = document.createElement('div');
         notification.className = `notification notification-${type}`;
         notification.textContent = message;
-        
+
         // Add to page
         document.body.appendChild(notification);
-        
+
         // Show with animation
         setTimeout(() => notification.classList.add('show'), 10);
-        
+
         // Remove after 3 seconds
         setTimeout(() => {
             notification.classList.remove('show');
             setTimeout(() => notification.remove(), 300);
         }, 3000);
+    }
+
+    showConfirmModal(title, message) {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('confirm-modal');
+            const titleEl = document.getElementById('confirm-title');
+            const messageEl = document.getElementById('confirm-message');
+
+            if (!modal || !titleEl || !messageEl) {
+                console.error('Confirm modal elements not found');
+                resolve(false);
+                return;
+            }
+
+            // Set content
+            titleEl.textContent = title;
+            messageEl.textContent = message;
+
+            // Store the resolve function for later use
+            this._confirmResolve = resolve;
+
+            // Setup close button handler
+            const closeBtn = modal.querySelector('.modal-close');
+            if (closeBtn) {
+                closeBtn.onclick = () => this.hideConfirmModal(false);
+            }
+
+            // Show modal using same pattern as other modals
+            modal.style.display = 'block';
+        });
+    }
+
+    hideConfirmModal(confirmed) {
+        const modal = document.getElementById('confirm-modal');
+        if (modal) {
+            modal.style.display = 'none';
+        }
+
+        // Resolve the promise with the user's choice
+        if (this._confirmResolve) {
+            this._confirmResolve(confirmed);
+            this._confirmResolve = null;
+        }
     }
 
     async showSystemStats() {
@@ -1776,22 +1865,21 @@ class PixelProbeApp {
             html += '<h4>Database Statistics</h4>';
             html += '<div class="stats-section">';
             html += `<p>Total Files: ${info.database.total_files?.toLocaleString() || 0}</p>`;
-            html += `<p>Completed Files: ${info.database.completed_files?.toLocaleString() || 0}</p>`;
-            html += `<p>Corrupted Files: ${info.database.corrupted_files?.toLocaleString() || 0}</p>`;
+            // Healthy files already includes marked as good
             html += `<p>Healthy Files: ${info.database.healthy_files?.toLocaleString() || 0}</p>`;
+            html += `<p>Corrupted Files: ${info.database.corrupted_files?.toLocaleString() || 0}</p>`;
             html += `<p>Warning Files: ${info.database.warning_files?.toLocaleString() || 0}</p>`;
             html += `<p>Error Files: ${info.database.error_files?.toLocaleString() || 0}</p>`;
-            html += `<p>Marked as Good: ${info.database.marked_as_good?.toLocaleString() || 0}</p>`;
             html += '</div>';
         }
         
-        // Performance Stats
+        // Scan Performance Stats
         if (info.database && info.database.performance) {
             const perf = info.database.performance;
             html += '<h4>Scan Performance</h4>';
             html += '<div class="stats-section">';
             html += `<p>Total Scans: ${perf.total_scans?.toLocaleString() || 0}</p>`;
-            html += `<p>Average Days Since Scan: ${perf.avg_days_since_scan ? parseFloat(perf.avg_days_since_scan).toFixed(1) : 0} days</p>`;
+            html += `<p>Days Since Last Scan: ${perf.avg_days_since_scan ? parseFloat(perf.avg_days_since_scan).toFixed(1) : 0} days</p>`;
             if (perf.newest_scan) {
                 html += `<p>Last Scan: ${new Date(perf.newest_scan).toLocaleString()}</p>`;
             }
@@ -1828,9 +1916,9 @@ class PixelProbeApp {
             html += '<div class="stats-section">';
             const totalFiles = info.filesystem?.total_files || info.database?.total_files || 0;
             const completedFiles = info.database?.completed_files || 0;
-            const percentageTracked = totalFiles > 0 ? 100 : 0;
-            const percentageChecked = totalFiles > 0 ? ((completedFiles / totalFiles) * 100).toFixed(1) : 0;
-            
+            const percentageTracked = totalFiles > 0 ? (100).toFixed(1) : (0).toFixed(1);
+            const percentageChecked = totalFiles > 0 ? ((completedFiles / totalFiles) * 100).toFixed(1) : (0).toFixed(1);
+
             html += `<p>Total Files Found: ${totalFiles.toLocaleString()}</p>`;
             html += `<p>Paths Monitored: ${info.filesystem?.paths_monitored || 0}</p>`;
             html += `<p>Percentage Tracked: ${percentageTracked}%</p>`;
@@ -1998,16 +2086,19 @@ class PixelProbeApp {
             
             // Update table
             const tbody = document.querySelector('#scan-reports-table tbody');
+            const cardsContainer = document.querySelector('#scan-reports-cards');
             if (!tbody) return;
-            
+
             tbody.innerHTML = '';
-            
+            if (cardsContainer) cardsContainer.innerHTML = '';
+
             if (data.reports.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="8" class="text-center">No reports found</td></tr>';
+                if (cardsContainer) cardsContainer.innerHTML = '<p style="text-align: center; padding: 20px;">No reports found</p>';
                 return;
             }
-            
-            // Render reports
+
+            // Render reports in both formats
             data.reports.forEach((report) => {
                 const row = document.createElement('tr');
                 
@@ -2069,10 +2160,44 @@ class PixelProbeApp {
                         </button>
                     </td>
                 `;
-                
+
                 tbody.appendChild(row);
+
+                // Create mobile card
+                if (cardsContainer) {
+                    const card = document.createElement('div');
+                    card.className = 'report-card';
+                    card.innerHTML = `
+                        <div class="report-card-header">
+                            <h4>${scanType}</h4>
+                            <div class="report-card-actions">
+                                <button class="btn btn-xs ${statusClass === 'text-success' ? 'btn-success' : statusClass === 'text-danger' ? 'btn-danger' : 'btn-warning'}">${report.status}</button>
+                                <button class="btn btn-xs btn-danger" onclick="app.deleteScanReport('${report.report_id}')" title="Delete">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="report-card-info">
+                            <p><strong>Date:</strong> ${this.table.formatDate(report.start_time)}</p>
+                            <p><strong>Duration:</strong> ${report.duration_formatted || 'N/A'}</p>
+                            <p><strong>Files:</strong> ${filesInfo} | <strong>Issues:</strong> ${issuesInfo}</p>
+                        </div>
+                        <div class="report-card-footer">
+                            <button class="btn btn-sm btn-primary" onclick="app.viewScanReport('${report.report_id}')" title="View">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'json')" title="Export JSON">
+                                <i class="fas fa-file-code"></i>
+                            </button>
+                            <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'pdf')" title="Export PDF">
+                                <i class="fas fa-file-pdf"></i>
+                            </button>
+                        </div>
+                    `;
+                    cardsContainer.appendChild(card);
+                }
             });
-            
+
             // Update pagination
             this.updateScanReportsPagination(data.page, data.pages, data.total);
             
@@ -2593,7 +2718,7 @@ class PixelProbeApp {
                 }
             }
 
-            // Start orphan check for selected files
+            // Start cleanup for selected files
             const response = await fetch('/api/cleanup-orphaned', {
                 method: 'POST',
                 headers: {
@@ -2605,13 +2730,13 @@ class PixelProbeApp {
             });
 
             if (response.ok) {
-                this.showNotification(`Orphan check started for ${fileIds.length} files`, 'success');
+                this.showNotification(`Cleanup started for ${fileIds.length} files`, 'success');
                 this.progress.startMonitoring('cleanup');
             } else {
-                throw new Error('Orphan check failed');
+                throw new Error('Cleanup failed');
             }
         } catch (error) {
-            this.showNotification('Failed to start orphan check', 'error');
+            this.showNotification('Failed to start cleanup', 'error');
         }
     }
 
@@ -2646,14 +2771,21 @@ class PixelProbeApp {
             });
 
             if (response.ok) {
-                this.showNotification(`Change check started for ${fileIds.length} files`, 'success');
+                this.showNotification(`Integrity check started for ${fileIds.length} files`, 'success');
                 this.progress.startMonitoring('file_changes');
             } else {
-                throw new Error('Change check failed');
+                throw new Error('Integrity check failed');
             }
         } catch (error) {
-            this.showNotification('Failed to start change check', 'error');
+            this.showNotification('Failed to start integrity check', 'error');
         }
+    }
+
+    closeAllDropdowns() {
+        // Close all dropdown menus
+        document.querySelectorAll('.dropdown-menu').forEach(menu => {
+            menu.style.display = 'none';
+        });
     }
 
     toggleActionDropdown(event, dropdownId) {
@@ -2739,6 +2871,7 @@ class PixelProbeApp {
                 <p><strong>Status:</strong> ${file.marked_as_good ? 'Healthy' : (file.is_corrupted ? 'Corrupted' : (file.has_warnings ? 'Warning' : 'Healthy'))}</p>
                 <p><strong>Tool:</strong> ${file.scan_tool || 'N/A'}</p>
                 <p><strong>Scanned:</strong> ${file.scan_date ? new Date(file.scan_date).toLocaleString() : 'N/A'}</p>
+                ${file.last_integrity_check_date ? `<p><strong>Last Integrity Check:</strong> ${new Date(file.last_integrity_check_date).toLocaleString()}</p>` : ''}
                 <hr>
                 ${detailsHtml}
             </div>

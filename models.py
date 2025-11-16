@@ -40,6 +40,7 @@ class ScanResult(db.Model):
     # New fields for enhanced features
     file_hash = db.Column(db.String(64), nullable=True, index=True)  # SHA-256 hash for change detection
     last_modified = db.Column(db.DateTime, nullable=True, index=True)  # File system modification time
+    last_integrity_check_date = db.Column(db.DateTime, nullable=True, index=True)  # Last time integrity check was run on this file
     scan_tool = db.Column(db.String(50), nullable=True)  # Tool used for detection (ffmpeg, imagemagick, pil)
     scan_duration = db.Column(db.Float, nullable=True)  # Time taken to scan in seconds
     scan_output = db.Column(db.Text)  # Full tool output for debugging
@@ -82,6 +83,7 @@ class ScanResult(db.Model):
             'scan_status': self.scan_status,
             'file_hash': self.file_hash,
             'last_modified': convert_to_tz(self.last_modified),
+            'last_integrity_check_date': convert_to_tz(self.last_integrity_check_date),
             'scan_tool': self.scan_tool,
             'scan_duration': self.scan_duration,
             'scan_output': self.scan_output,
@@ -357,6 +359,20 @@ class ScanState(db.Model):
     @staticmethod
     def create_new_scan():
         """Create a new scan state record for starting a new scan"""
+        # First, ensure no other scans are active (clean up any stale active states)
+        try:
+            # Deactivate any existing active scans
+            active_scans = ScanState.query.filter_by(is_active=True).all()
+            for scan in active_scans:
+                logger.warning(f"Deactivating stale active scan {scan.id} before creating new scan")
+                scan.is_active = False
+                scan.phase = 'interrupted' if scan.phase != 'completed' else 'completed'
+            if active_scans:
+                db.session.commit()
+        except Exception as e:
+            logger.error(f"Error cleaning up active scans: {e}")
+            db.session.rollback()
+
         # Always create a fresh scan state when starting a new scan
         scan_state = ScanState()
         scan_state.scan_id = str(uuid.uuid4())
@@ -408,9 +424,22 @@ class ScanState(db.Model):
         """Update scan progress with safer transaction handling"""
         try:
             self.files_processed = files_processed
-            self.estimated_total = total_files
-            # CRITICAL: Also update phase_total and phase_current to keep UI display consistent
-            self.phase_total = total_files
+
+            # CRITICAL: Prevent "x of 0" display issue
+            # Never allow estimated_total to be set to 0 if we already have a positive value
+            # This can happen due to race conditions between workers
+            if total_files == 0 and self.estimated_total > 0 and self.phase not in ['idle', 'discovering']:
+                logger.debug(f"Keeping estimated_total={self.estimated_total} (not overwriting with 0)")
+            else:
+                self.estimated_total = total_files
+
+            # Also protect phase_total from being reset to 0
+            # This applies to all phases except idle and discovering
+            if total_files == 0 and self.phase_total > 0 and self.phase not in ['idle', 'discovering']:
+                logger.debug(f"Keeping phase_total={self.phase_total} in phase '{self.phase}' (not overwriting with 0)")
+            else:
+                self.phase_total = total_files
+
             self.phase_current = files_processed
             
             # Update last_update timestamp for stuck scan detection
@@ -473,18 +502,43 @@ class ScanState(db.Model):
             raise
     
     def complete_scan(self):
-        """Mark scan as completed - thread-safe version"""
+        """Mark scan as completed - thread-safe version
+
+        Also cleans up any orphaned pending files that were discovered
+        during this scan but never actually scanned.
+        """
         try:
             # Get the scan ID before we lose session binding
             scan_id = self.id if hasattr(self, 'id') and self.id else 'unknown'
-            
+            end_time = datetime.now(timezone.utc)
+            start_time = self.start_time if hasattr(self, 'start_time') else None
+
             # Update the database record directly using thread-safe query
             # This avoids the detached instance problem
             from sqlalchemy import text
             db.session.execute(
                 text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': datetime.now(timezone.utc), 'id': scan_id}
+                {'end_time': end_time, 'id': scan_id}
             )
+
+            # Clean up orphaned pending files that were discovered during this scan
+            # but never actually scanned (likely due to filters or exclusions)
+            if start_time:
+                orphaned_result = db.session.execute(
+                    text("""
+                        UPDATE scan_results
+                        SET scan_status = 'skipped',
+                            scan_output = 'File discovered but not scanned (likely filtered or excluded)'
+                        WHERE scan_status = 'pending'
+                        AND discovered_date >= :start_time
+                        AND discovered_date <= :end_time
+                    """),
+                    {'start_time': start_time, 'end_time': end_time}
+                )
+                orphaned_count = orphaned_result.rowcount
+                if orphaned_count > 0:
+                    logger.info(f"Scan {scan_id}: Cleaned up {orphaned_count} orphaned pending files")
+
             db.session.commit()
             logger.info(f"Scan {scan_id} completed - phase set to 'completed', is_active=False")
         except Exception as e:

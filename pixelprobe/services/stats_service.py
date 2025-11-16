@@ -25,16 +25,16 @@ class StatsService:
             # Use optimized single query
             stats = db.session.execute(
                 text("""
-                    SELECT 
+                    SELECT
                         COUNT(*) as total_files,
                         SUM(CASE WHEN scan_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
                         SUM(CASE WHEN scan_status = 'pending' THEN 1 ELSE 0 END) as pending_files,
                         SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
                         SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
-                        SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE AND (has_warnings = FALSE OR has_warnings IS NULL) THEN 1 ELSE 0 END) as corrupted_files,
-                        SUM(CASE WHEN (is_corrupted = FALSE OR marked_as_good = TRUE) THEN 1 ELSE 0 END) as healthy_files,
+                        SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,
+                        SUM(CASE WHEN (is_corrupted = FALSE OR is_corrupted IS NULL OR marked_as_good = TRUE) AND (has_warnings = FALSE OR has_warnings IS NULL) AND scan_status = 'completed' THEN 1 ELSE 0 END) as healthy_files,
                         SUM(CASE WHEN marked_as_good = TRUE THEN 1 ELSE 0 END) as marked_as_good,
-                        SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as warning_files
+                        SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) THEN 1 ELSE 0 END) as warning_files
                     FROM scan_results
                 """)
             ).fetchone()
@@ -137,20 +137,22 @@ class StatsService:
             error_files = ScanResult.query.filter_by(scan_status='error').count()
             
             corrupted_files = ScanResult.query.filter(
-                (ScanResult.is_corrupted == True) & 
-                (ScanResult.marked_as_good == False) &
-                ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None))
-            ).count()
-            
-            warning_files = ScanResult.query.filter(
-                (ScanResult.has_warnings == True) &
+                (ScanResult.is_corrupted == True) &
                 (ScanResult.marked_as_good == False)
             ).count()
-            
+
+            warning_files = ScanResult.query.filter(
+                (ScanResult.has_warnings == True) &
+                (ScanResult.marked_as_good == False) &
+                ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None))
+            ).count()
+
             marked_as_good = ScanResult.query.filter_by(marked_as_good=True).count()
-            
+
             healthy_files = ScanResult.query.filter(
-                (ScanResult.is_corrupted == False) | (ScanResult.marked_as_good == True)
+                ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None) | (ScanResult.marked_as_good == True)) &
+                ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None)) &
+                (ScanResult.scan_status == 'completed')
             ).count()
             
             return {

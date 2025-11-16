@@ -103,7 +103,7 @@ POST /api/force-scan-pending
 - To catch file corruption over time
 
 **How it works**:
-1. **Phase 1 - Check Changes**: Compares file modification times with database
+1. **Phase 1 - Integrity Check**: Compares file modification times with database
 2. **Phase 2 - Scan Changed**: Re-scans files that have been modified
 3. Updates database with new scan results
 
@@ -119,7 +119,7 @@ POST /api/force-scan-pending
 POST /api/file-changes
 ```
 
-### 5. Orphan Cleanup (`orphan`)
+### 5. Cleanup (`cleanup`)
 **Endpoint**: `/api/cleanup-orphaned`
 **Purpose**: Remove database entries for deleted files
 **When to use**:
@@ -182,7 +182,7 @@ POST /api/scan-file
 1. APScheduler triggers at configured times
 2. Uses HTTP self-call to `/api/scan` (v2.2.50 fix)
 3. Runs with pre-configured paths and options
-4. Can be any scan type (full, changes, orphan)
+4. Can be any scan type (full, changes, cleanup)
 
 **Configuration**:
 - Via environment variables

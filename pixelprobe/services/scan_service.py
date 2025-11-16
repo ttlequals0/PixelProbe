@@ -16,6 +16,7 @@ from media_checker import PixelProbe, load_exclusions, load_exclusions_with_patt
 from models import db, ScanResult, ScanState, ScanReport, ScanChunk
 from utils import ProgressTracker
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 import hashlib
 
 logger = logging.getLogger(__name__)
@@ -95,22 +96,56 @@ class ScanService:
         """Scan a single file"""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
-        
+
         if self.is_scan_running():
             raise RuntimeError("Another scan is already in progress")
-        
+
         # Initialize progress
         self.update_progress(0, 1, file_path, 'scanning')
         self.scan_cancelled = False
-        
+
+        # Create ScanState record for UI progress tracking
+        scan_state = ScanState.create_new_scan()
+        scan_state.start_scan([file_path], force_rescan)
+        scan_state.phase = 'initializing'
+        scan_state.progress_message = 'Initializing single file scan'
+        scan_state.estimated_total = 1
+        scan_state.phase_total = 1
+        db.session.commit()
+
+        # Capture scan ID for UI progress tracking
+        scan_state_id = scan_state.id
+        scan_id = scan_state.scan_id
+
+        # Start UI progress worker task if using Celery
+        try:
+            from pixelprobe.tasks import ui_progress_update_task
+            # Start the UI progress worker in the background
+            ui_worker = ui_progress_update_task.delay(scan_id, update_interval=0.5)
+            logger.info(f"Started UI progress worker task: {ui_worker.id} for single file scan {scan_id}")
+        except (ImportError, Exception) as e:
+            logger.warning(f"UI progress worker not available - using direct database updates: {e}")
+            ui_worker = None
+
         # Capture Flask app context for the thread
         app = current_app._get_current_object()
-        
+
         # Create scan thread
         def run_scan():
             # Set up Flask app context for the thread
             with app.app_context():
                 try:
+                    # Get fresh ScanState object in worker thread to avoid detached instance
+                    scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                    if not scan_state:
+                        logger.error(f"Could not find scan state with ID {scan_state_id}")
+                        return
+
+                    # Update phase to scanning
+                    scan_state.phase = 'scanning'
+                    scan_state.progress_message = f'Scanning {os.path.basename(file_path)}'
+                    db.session.commit()
+
                     excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
                     checker = PixelProbe(
                         database_path=self.database_uri,
@@ -119,22 +154,42 @@ class ScanService:
                         excluded_patterns=excluded_patterns
                     )
                     result = checker.scan_file(file_path, force_rescan=force_rescan)
+
+                    # Update scan state to completed
+                    scan_state.files_processed = 1
+                    scan_state.phase = 'completed'
+                    scan_state.progress_message = 'Single file scan completed'
+                    scan_state.is_active = False
+                    db.session.commit()
+
                     self.update_progress(1, 1, file_path, 'completed')
                     return result
                 except Exception as e:
                     logger.error(f"Error scanning file: {e}")
+
+                    # Update scan state to error
+                    try:
+                        scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                        if scan_state:
+                            scan_state.phase = 'error'
+                            scan_state.error_message = str(e)
+                            scan_state.is_active = False
+                            db.session.commit()
+                    except Exception as db_error:
+                        logger.error(f"Failed to update scan state with error: {db_error}")
+
                     self.update_progress(1, 1, file_path, 'error')
                     raise
                 finally:
                     # Clear thread reference to allow new scans
                     self.current_scan_thread = None
                     logger.debug("Single file scan thread cleaned up")
-        
+
         self.current_scan_thread = threading.Thread(target=run_scan, name="SingleFileScan")
         logger.info(f"Starting single file scan thread: {self.current_scan_thread.name}")
         self.current_scan_thread.start()
-        
-        return {'status': 'started', 'message': 'Scan started', 'file_path': file_path}
+
+        return {'status': 'started', 'message': 'Scan started', 'file_path': file_path, 'scan_id': scan_id}
     
     def scan_directories(self, directories: List[str], force_rescan: bool = False, 
                         num_workers: int = 1, async_mode: bool = True) -> Dict:
@@ -650,12 +705,31 @@ class ScanService:
                 # Get final scan state for results
                 final_scan_state = ScanState.query.get(scan_state_id)
                 if final_scan_state:
-                    # Get corrupted file count from ScanResult table
+                    # Get corrupted file count from ScanResult table with retry logic
                     # Note: ScanResult doesn't have scan_id, so we query all corrupted files
                     from models import ScanResult
-                    corrupted_found = db.session.query(ScanResult).filter_by(
-                        is_corrupted=True
-                    ).count()
+
+                    # Retry logic for database connection issues
+                    max_retries = 3
+                    retry_delay = 1  # seconds
+                    corrupted_found = 0
+
+                    for attempt in range(max_retries):
+                        try:
+                            corrupted_found = db.session.query(ScanResult).filter_by(
+                                is_corrupted=True
+                            ).count()
+                            break  # Success, exit retry loop
+                        except OperationalError as e:
+                            if attempt < max_retries - 1:
+                                logger.warning(f"Database connection lost (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s: {e}")
+                                time.sleep(retry_delay)
+                                db.session.rollback()
+                                db.session.close()
+                                retry_delay *= 2  # Exponential backoff
+                            else:
+                                logger.error(f"Database connection failed after {max_retries} attempts: {e}")
+                                corrupted_found = 0
                     return {
                         'status': 'completed',
                         'message': 'Scan completed',
@@ -862,12 +936,31 @@ class ScanService:
                 # Get final scan state for results
                 final_scan_state = ScanState.query.get(scan_state_id)
                 if final_scan_state:
-                    # Get corrupted file count from ScanResult table
+                    # Get corrupted file count from ScanResult table with retry logic
                     # Note: ScanResult doesn't have scan_id, so we query all corrupted files
                     from models import ScanResult
-                    corrupted_found = db.session.query(ScanResult).filter_by(
-                        is_corrupted=True
-                    ).count()
+
+                    # Retry logic for database connection issues
+                    max_retries = 3
+                    retry_delay = 1  # seconds
+                    corrupted_found = 0
+
+                    for attempt in range(max_retries):
+                        try:
+                            corrupted_found = db.session.query(ScanResult).filter_by(
+                                is_corrupted=True
+                            ).count()
+                            break  # Success, exit retry loop
+                        except OperationalError as e:
+                            if attempt < max_retries - 1:
+                                logger.warning(f"Database connection lost (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s: {e}")
+                                time.sleep(retry_delay)
+                                db.session.rollback()
+                                db.session.close()
+                                retry_delay *= 2  # Exponential backoff
+                            else:
+                                logger.error(f"Database connection failed after {max_retries} attempts: {e}")
+                                corrupted_found = 0
                     return {
                         'status': 'completed',
                         'message': f'Scan completed for {len(valid_files)} files',
@@ -1338,11 +1431,31 @@ class ScanService:
             with app.app_context():
                 if self.scan_cancelled:
                     return None
-                # Get a fresh scan_state from database for this thread to avoid session conflicts
-                thread_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
-                if not thread_scan_state:
-                    logger.error(f"Could not find scan_state with id {scan_state_id}")
-                    return None
+
+                # Handle database connection errors with retry
+                from sqlalchemy.exc import OperationalError
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        # Get a fresh scan_state from database for this thread to avoid session conflicts
+                        thread_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                        if not thread_scan_state:
+                            logger.error(f"Could not find scan_state with id {scan_state_id}")
+                            return None
+                        break
+                    except OperationalError as e:
+                        if "server closed the connection" in str(e) or "SSL connection has been closed" in str(e):
+                            logger.warning(f"Database connection lost, attempt {attempt + 1}/{max_retries}: {e}")
+                            if attempt < max_retries - 1:
+                                # Rollback and retry
+                                db.session.rollback()
+                                db.session.remove()
+                                time.sleep(1 * (attempt + 1))  # Exponential backoff
+                            else:
+                                logger.error(f"Failed to reconnect to database after {max_retries} attempts")
+                                raise
+                        else:
+                            raise
                 # For parallel scan, we can't pass cumulative counts, so pass 0
                 # The main thread will handle updating the cumulative progress
                 # CRITICAL: When processing chunks in parallel, disable file-level parallelism
@@ -1964,51 +2077,53 @@ class ScanService:
     
     def _get_chunk_file_count(self, chunk: ScanChunk, force_rescan: bool) -> int:
         """Get count of files to scan in a chunk without actually scanning them"""
-        # Check if this is the special pending files chunk
-        if chunk.directory_path == 'PENDING_FILES':
-            # Count ALL pending files regardless of directory
-            return db.session.query(ScanResult).filter(
-                ScanResult.scan_status == 'pending'
-            ).count()
-
-        # Check if this is a FILE_CHUNK format (FILE_CHUNK:offset:limit)
-        if chunk.directory_path.startswith('FILE_CHUNK:'):
-            # Parse the offset and limit from the chunk directory_path
-            parts = chunk.directory_path.split(':')
-            if len(parts) == 3:
-                offset = int(parts[1])
-                limit = int(parts[2])
-
-                # Query for pending files with offset and limit
-                if force_rescan:
-                    count = db.session.query(ScanResult).offset(offset).limit(limit).count()
-                else:
-                    count = db.session.query(ScanResult).filter(
-                        ScanResult.scan_status == 'pending'
-                    ).offset(offset).limit(limit).count()
-
-                return count
-            else:
-                logger.warning(f"Invalid FILE_CHUNK format: {chunk.directory_path}")
-                return 0
-
-        chunk_dir = chunk.directory_path.rstrip(os.sep)
-
-        if force_rescan:
-            # Count all files that start with this directory path
-            count = db.session.query(ScanResult).filter(
-                ScanResult.file_path.startswith(chunk_dir)
-            ).count()
-        else:
-            # Count only pending files
-            count = db.session.query(ScanResult).filter(
-                db.and_(
-                    ScanResult.file_path.startswith(chunk_dir),
+        # Disable autoflush to avoid SQLAlchemy warnings when accessing chunk attributes
+        with db.session.no_autoflush:
+            # Check if this is the special pending files chunk
+            if chunk.directory_path == 'PENDING_FILES':
+                # Count ALL pending files regardless of directory
+                return db.session.query(ScanResult).filter(
                     ScanResult.scan_status == 'pending'
-                )
-            ).count()
+                ).count()
 
-        return count
+            # Check if this is a FILE_CHUNK format (FILE_CHUNK:offset:limit)
+            if chunk.directory_path.startswith('FILE_CHUNK:'):
+                # Parse the offset and limit from the chunk directory_path
+                parts = chunk.directory_path.split(':')
+                if len(parts) == 3:
+                    offset = int(parts[1])
+                    limit = int(parts[2])
+
+                    # Query for pending files with offset and limit
+                    if force_rescan:
+                        count = db.session.query(ScanResult).offset(offset).limit(limit).count()
+                    else:
+                        count = db.session.query(ScanResult).filter(
+                            ScanResult.scan_status == 'pending'
+                        ).offset(offset).limit(limit).count()
+
+                    return count
+                else:
+                    logger.warning(f"Invalid FILE_CHUNK format: {chunk.directory_path}")
+                    return 0
+
+            chunk_dir = chunk.directory_path.rstrip(os.sep)
+
+            if force_rescan:
+                # Count all files that start with this directory path
+                count = db.session.query(ScanResult).filter(
+                    ScanResult.file_path.startswith(chunk_dir)
+                ).count()
+            else:
+                # Count only pending files
+                count = db.session.query(ScanResult).filter(
+                    db.and_(
+                        ScanResult.file_path.startswith(chunk_dir),
+                        ScanResult.scan_status == 'pending'
+                    )
+                ).count()
+
+            return count
     
     def _scan_chunk_files(self, chunk: ScanChunk, checker: PixelProbe, force_rescan: bool = False,
                           total_scanned_so_far: int = 0, total_to_scan: int = 0, scan_state: ScanState = None,

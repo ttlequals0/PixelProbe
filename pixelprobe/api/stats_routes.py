@@ -39,14 +39,14 @@ def get_stats():
         # Use a single query with subqueries for better performance
         stats = db.session.execute(
             text("""
-                SELECT 
+                SELECT
                     COUNT(*) as total_files,
                     SUM(CASE WHEN scan_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
                     SUM(CASE WHEN scan_status = 'pending' THEN 1 ELSE 0 END) as pending_files,
                     SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
                     SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
                     SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,
-                    SUM(CASE WHEN (is_corrupted = FALSE AND scan_status = 'completed') OR marked_as_good = TRUE THEN 1 ELSE 0 END) as healthy_files,
+                    SUM(CASE WHEN (is_corrupted = FALSE OR is_corrupted IS NULL OR marked_as_good = TRUE) AND (has_warnings = FALSE OR has_warnings IS NULL) AND scan_status = 'completed' THEN 1 ELSE 0 END) as healthy_files,
                     SUM(CASE WHEN marked_as_good = TRUE THEN 1 ELSE 0 END) as marked_as_good,
                     SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) THEN 1 ELSE 0 END) as warning_files
                 FROM scan_results
@@ -79,26 +79,26 @@ def get_stats():
             scanning_files = ScanResult.query.filter_by(scan_status='scanning').count()
             error_files = ScanResult.query.filter_by(scan_status='error').count()
             
-            # Count files, excluding marked_as_good from corrupted and warning counts
-            # Corrupted files include ALL files marked as corrupted (regardless of warnings)
+            # Corrupted files: corrupted AND not marked as good
             corrupted_files = ScanResult.query.filter(
-                (ScanResult.is_corrupted == True) & 
+                (ScanResult.is_corrupted == True) &
                 (ScanResult.marked_as_good == False)
             ).count()
-            
-            # Warning files are those with warnings but NOT corrupted
+
+            # Warning files: has warnings, not marked as good, and not corrupted
             warning_files = ScanResult.query.filter(
                 (ScanResult.has_warnings == True) &
                 (ScanResult.marked_as_good == False) &
                 ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None))
             ).count()
-            
+
             marked_as_good = ScanResult.query.filter_by(marked_as_good=True).count()
-            
-            # Files are only healthy if actually scanned and not corrupted, OR marked as good
+
+            # Healthy files: completed, no warnings, and (not corrupted OR marked as good)
             healthy_files = ScanResult.query.filter(
-                ((ScanResult.is_corrupted == False) & (ScanResult.scan_status == 'completed')) | 
-                (ScanResult.marked_as_good == True)
+                ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None) | (ScanResult.marked_as_good == True)) &
+                ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None)) &
+                (ScanResult.scan_status == 'completed')
             ).count()
             
             return jsonify({
@@ -129,14 +129,14 @@ def get_system_info():
         # Database statistics - use single query for better performance
         stats_query = db.session.execute(
             text("""
-                SELECT 
+                SELECT
                     COUNT(*) as total_files,
                     SUM(CASE WHEN scan_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
                     SUM(CASE WHEN scan_status = 'pending' THEN 1 ELSE 0 END) as pending_files,
                     SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
                     SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
                     SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,
-                    SUM(CASE WHEN (is_corrupted = FALSE AND scan_status = 'completed') OR marked_as_good = TRUE THEN 1 ELSE 0 END) as healthy_files,
+                    SUM(CASE WHEN (is_corrupted = FALSE OR is_corrupted IS NULL OR marked_as_good = TRUE) AND (has_warnings = FALSE OR has_warnings IS NULL) AND scan_status = 'completed' THEN 1 ELSE 0 END) as healthy_files,
                     SUM(CASE WHEN marked_as_good = TRUE THEN 1 ELSE 0 END) as marked_as_good,
                     SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) THEN 1 ELSE 0 END) as warning_files
                 FROM scan_results
@@ -152,12 +152,6 @@ def get_system_info():
         db_healthy_files = stats_query[6] or 0
         db_marked_as_good = stats_query[7] or 0
         db_warning_files = stats_query[8] or 0
-        
-        # Files are only healthy if actually scanned and not corrupted, OR marked as good
-        db_healthy_files = ScanResult.query.filter(
-            ((ScanResult.is_corrupted == False) & (ScanResult.scan_status == 'completed')) |
-            (ScanResult.marked_as_good == True)
-        ).count()
         
         # Get monitored paths info from database in a single query
         monitored_paths = []
@@ -211,55 +205,89 @@ def get_system_info():
         
         # Database performance statistics - with database-specific fallbacks
         try:
-            # Try PostgreSQL-specific query first
-            db_perf_query = db.session.execute(
+            # Get actual scan count and last scan date from scan_reports table
+            scan_stats_query = db.session.execute(
                 text("""
-                    SELECT 
+                    SELECT
                         COUNT(*) as total_scans,
-                        AVG(CASE 
-                            WHEN scan_status = 'completed' 
-                            THEN EXTRACT(EPOCH FROM (NOW() - scan_date)) / 86400.0
-                            ELSE NULL 
-                        END) as avg_days_since_scan,
-                        MIN(scan_date) as oldest_scan,
-                        MAX(scan_date) as newest_scan
-                    FROM scan_results
-                    WHERE scan_status = 'completed'
+                        MAX(start_time) as last_scan_time,
+                        MIN(start_time) as first_scan_time
+                    FROM scan_reports
+                    WHERE status = 'completed'
                 """)
             ).fetchone()
+            actual_total_scans = scan_stats_query[0] if scan_stats_query else 0
+            last_scan_time = scan_stats_query[1] if scan_stats_query else None
+            first_scan_time = scan_stats_query[2] if scan_stats_query else None
+
+            # Calculate days since last scan operation (not file scan)
+            if last_scan_time:
+                try:
+                    if isinstance(last_scan_time, str):
+                        last_scan_dt = datetime.fromisoformat(last_scan_time.replace('Z', '+00:00'))
+                    else:
+                        last_scan_dt = last_scan_time
+                    now_utc = datetime.now(timezone.utc)
+                    if last_scan_dt.tzinfo is None:
+                        last_scan_dt = last_scan_dt.replace(tzinfo=timezone.utc)
+                    avg_days_since_scan = (now_utc - last_scan_dt).total_seconds() / 86400.0
+                except:
+                    avg_days_since_scan = 0
+            else:
+                avg_days_since_scan = 0
+
+            total_scans = actual_total_scans
+            oldest_scan = first_scan_time
+            newest_scan = last_scan_time
         except Exception as e:
-            logger.warning(f"PostgreSQL-specific query failed, trying SQLite fallback: {e}")
+            logger.warning(f"Main query failed, trying SQLite fallback: {e}")
             try:
-                # Fallback to SQLite-specific query
-                db_perf_query = db.session.execute(
+                # SQLite fallback: Get actual scan count and last scan date from scan_reports table
+                scan_stats_query = db.session.execute(
                     text("""
-                        SELECT 
+                        SELECT
                             COUNT(*) as total_scans,
-                            AVG(CASE 
-                                WHEN scan_status = 'completed' 
-                                THEN julianday('now') - julianday(scan_date) 
-                                ELSE NULL 
-                            END) as avg_days_since_scan,
-                            MIN(scan_date) as oldest_scan,
-                            MAX(scan_date) as newest_scan
-                        FROM scan_results
-                        WHERE scan_status = 'completed'
+                            MAX(start_time) as last_scan_time,
+                            MIN(start_time) as first_scan_time
+                        FROM scan_reports
+                        WHERE status = 'completed'
                     """)
                 ).fetchone()
+                actual_total_scans = scan_stats_query[0] if scan_stats_query else 0
+                last_scan_time = scan_stats_query[1] if scan_stats_query else None
+                first_scan_time = scan_stats_query[2] if scan_stats_query else None
+
+                # Calculate days since last scan operation
+                if last_scan_time:
+                    try:
+                        if isinstance(last_scan_time, str):
+                            last_scan_dt = datetime.fromisoformat(last_scan_time.replace('Z', '+00:00'))
+                        else:
+                            last_scan_dt = last_scan_time
+                        now_utc = datetime.now(timezone.utc)
+                        if last_scan_dt.tzinfo is None:
+                            last_scan_dt = last_scan_dt.replace(tzinfo=timezone.utc)
+                        avg_days_since_scan = (now_utc - last_scan_dt).total_seconds() / 86400.0
+                    except:
+                        avg_days_since_scan = 0
+                else:
+                    avg_days_since_scan = 0
+
+                total_scans = actual_total_scans
+                oldest_scan = first_scan_time
+                newest_scan = last_scan_time
             except Exception as e2:
                 logger.warning(f"SQLite fallback also failed, using basic query: {e2}")
                 # Final fallback to basic ORM queries
-                total_scans = ScanResult.query.filter_by(scan_status='completed').count()
+                try:
+                    from models import ScanReport
+                    total_scans = ScanReport.query.filter_by(status='completed').count()
+                except:
+                    total_scans = 0
                 avg_days_since_scan = 0
                 oldest_scan = None
                 newest_scan = None
-                db_perf_query = (total_scans, avg_days_since_scan, oldest_scan, newest_scan)
-        
-        total_scans = db_perf_query[0] or 0
-        avg_days_since_scan = db_perf_query[1] or 0
-        oldest_scan = db_perf_query[2]
-        newest_scan = db_perf_query[3]
-        
+
         # Convert scan dates to configured timezone for display
         if oldest_scan:
             try:
@@ -313,7 +341,7 @@ def get_system_info():
                 'warning_files': db_warning_files,
                 'performance': {
                     'total_scans': total_scans,
-                    'avg_days_since_scan': round(avg_days_since_scan, 2),
+                    'avg_days_since_scan': round(avg_days_since_scan, 2) if avg_days_since_scan is not None else 0,
                     'oldest_scan': oldest_scan,
                     'newest_scan': newest_scan
                 }

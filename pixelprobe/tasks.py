@@ -703,11 +703,11 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
 @celery_app.task(bind=True, priority=9)
 def ui_progress_update_task(self, scan_id, update_interval=1.0):
     """
-    UI worker that periodically reads scan state from database and ensures
-    phase_total and estimated_total are kept in sync for proper UI display.
+    UI worker that periodically reads scan state from database and updates
+    the last_update timestamp to prevent stuck scan detection.
 
-    The scanning workers update files_processed and phase_total in the database.
-    This worker ensures estimated_total matches phase_total so the UI shows correct totals.
+    IMPORTANT: This worker should NOT modify progress values - only update timestamps.
+    Progress values should only be set by the scan worker to avoid race conditions.
 
     Args:
         scan_id (str): The scan ID to track progress for
@@ -725,91 +725,141 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from app import app, db as flask_db
+    from sqlalchemy.orm import scoped_session, sessionmaker
+    from models import ScanState
 
-    app_context = app.app_context()
-    app_context.push()
+    # Use distributed lock to ensure only one UI worker per scan
+    lock_name = f'pixelprobe:ui_worker:{scan_id}'
+    with distributed_lock(lock_name, timeout=3600, blocking_timeout=1) as lock_acquired:
+        if not lock_acquired:
+            logger.warning(f"UI worker already running for scan {scan_id}, skipping duplicate")
+            return {'status': 'skipped', 'reason': 'duplicate_worker'}
 
-    try:
-        consecutive_no_change = 0
-        max_no_change = 120  # Stop after 2 minutes of no activity
-        last_files_processed = -1
+        app_context = app.app_context()
+        app_context.push()
 
-        while True:
-            try:
-                from models import ScanState
+        # Create a separate session for the UI worker to avoid conflicts with scan workers
+        ui_session_factory = sessionmaker(bind=flask_db.engine)
+        UiSession = scoped_session(ui_session_factory)
 
-                # Read current scan state from database
-                scan_state = flask_db.session.query(ScanState).filter_by(scan_id=scan_id).first()
-
-                if not scan_state:
-                    logger.warning(f"Scan state not found for {scan_id}")
-                    break
-
-                # Check if scan is complete
-                if scan_state.phase in ['completed', 'error', 'cancelled', 'crashed']:
-                    logger.info(f"Scan {scan_id} finished with phase: {scan_state.phase}")
-                    break
-
-                # Get current values
-                files_processed = scan_state.files_processed or 0
-                phase_total = scan_state.phase_total or 0
-
-                # The key fix: if estimated_total is 0 but phase_total has a value, sync them
-                if scan_state.estimated_total == 0 and phase_total > 0:
-                    logger.info(f"Fixing estimated_total: was 0, setting to phase_total={phase_total}")
-                    scan_state.estimated_total = phase_total
-                    flask_db.session.commit()
-                    logger.info(f"Updated scan {scan_id}: estimated_total now {phase_total}")
-
-                # Also ensure phase_total matches estimated_total if it has a value
-                elif scan_state.estimated_total > 0 and phase_total != scan_state.estimated_total:
-                    logger.info(f"Syncing phase_total to estimated_total: {scan_state.estimated_total}")
-                    scan_state.phase_total = scan_state.estimated_total
-                    flask_db.session.commit()
-
-                # Check for progress
-                if files_processed == last_files_processed:
-                    consecutive_no_change += 1
-                    if consecutive_no_change >= max_no_change:
-                        logger.warning(f"No progress for {max_no_change} seconds, stopping UI worker")
-                        break
-                else:
-                    consecutive_no_change = 0
-                    last_files_processed = files_processed
-                    logger.debug(f"Scan {scan_id} progress: {files_processed}/{scan_state.estimated_total}")
-
-                # Close the session to avoid stale data
-                flask_db.session.close()
-
-            except Exception as e:
-                logger.error(f"Error in UI worker: {e}", exc_info=True)
-                try:
-                    flask_db.session.rollback()
-                except:
-                    pass
-
-            # Sleep before next update
-            time.sleep(update_interval)
-
-        return {
-            'status': 'SUCCESS',
-            'scan_id': scan_id,
-            'final_progress': last_files_processed
-        }
-
-    except Exception as exc:
-        logger.error(f"UI progress worker failed for scan {scan_id}: {str(exc)}")
-        return {
-            'status': 'ERROR',
-            'scan_id': scan_id,
-            'error': str(exc)
-        }
-    finally:
-        # Clean up Flask app context
         try:
-            app_context.pop()
-        except:
-            pass
+            consecutive_no_change = 0
+            max_no_change = 1800  # Stop after 30 minutes of no activity (matches stuck scan detection timeout)
+            last_files_processed = -1
+            last_db_update = None
+
+            while True:
+                try:
+                    # Use separate UI session to avoid concurrent access issues
+                    ui_session = UiSession()
+
+                    # Ensure we're reading fresh data by committing any pending transaction
+                    # This forces the session to start a new transaction and see latest data
+                    ui_session.commit()
+
+                    # Read current scan state from database
+                    scan_state = ui_session.query(ScanState).filter_by(scan_id=scan_id).first()
+
+                    if not scan_state:
+                        logger.warning(f"Scan state not found for {scan_id}")
+                        break
+
+                    # Check if scan is complete
+                    if scan_state.phase in ['completed', 'error', 'cancelled', 'crashed']:
+                        logger.info(f"Scan {scan_id} finished with phase: {scan_state.phase}")
+                        break
+
+                    # Check if scan is still active
+                    if not scan_state.is_active:
+                        logger.info(f"Scan {scan_id} is no longer active, stopping UI worker")
+                        break
+
+                    # Get current values
+                    files_processed = scan_state.files_processed or 0
+                    phase_total = scan_state.phase_total or 0
+                    current_db_update = scan_state.last_update
+
+                    # Update last_update timestamp to prevent stuck scan detection
+                    scan_state.last_update = datetime.now(timezone.utc)
+
+                    # Debug logging for the "x of 0 files" issue - only log once and only after discovery phase
+                    if (scan_state.estimated_total == 0 or phase_total == 0) and scan_state.phase not in ['discovering', 'idle', 'pending']:
+                        # Only log warning once to avoid spam
+                        if not getattr(scan_state, '_zero_total_logged', False):
+                            logger.warning(f"Zero total detected in phase '{scan_state.phase}' - estimated_total={scan_state.estimated_total}, phase_total={phase_total}, files_processed={files_processed}")
+                            scan_state._zero_total_logged = True
+
+                    # IMPORTANT: Do NOT sync estimated_total and phase_total in the UI worker!
+                    # This causes race conditions where we might overwrite valid values with 0
+                    # The scan worker is responsible for setting these values correctly
+                    # The UI worker should ONLY update the last_update timestamp
+
+                    # Just commit to update last_update timestamp
+                    ui_session.commit()
+
+                    # Expire the scan_state object to release locks and allow concurrent access
+                    ui_session.expire(scan_state)
+
+                    # Check for activity: either file count changed OR database was updated by scan workers
+                    # This handles large files where file count doesn't change but workers are still active
+                    db_was_updated = (last_db_update is not None and
+                                 current_db_update is not None and
+                                 current_db_update > last_db_update)
+
+                    files_changed = files_processed != last_files_processed
+
+                    if files_changed or db_was_updated:
+                        # There's activity - reset the no-change counter
+                        consecutive_no_change = 0
+                        last_files_processed = files_processed
+                        last_db_update = current_db_update
+                        logger.debug(f"Scan {scan_id} progress: {files_processed}/{scan_state.estimated_total}")
+                    else:
+                        # No activity detected
+                        consecutive_no_change += 1
+                        if consecutive_no_change >= max_no_change:
+                            logger.warning(f"No database activity for {max_no_change} seconds, stopping UI worker")
+                            break
+
+                    # Close and remove the UI session to release connections
+                    ui_session.close()
+                    UiSession.remove()
+
+                except Exception as e:
+                    logger.error(f"Error in UI worker: {e}", exc_info=True)
+                    try:
+                        ui_session.rollback()
+                        ui_session.close()
+                        UiSession.remove()
+                    except:
+                        pass
+
+                # Sleep before next update
+                time.sleep(update_interval)
+
+            return {
+                'status': 'SUCCESS',
+                'scan_id': scan_id,
+                'final_progress': last_files_processed
+            }
+
+        except Exception as exc:
+            logger.error(f"UI progress worker failed for scan {scan_id}: {str(exc)}")
+            return {
+                'status': 'ERROR',
+                'scan_id': scan_id,
+                'error': str(exc)
+            }
+        finally:
+            # Clean up UI session and Flask app context
+            try:
+                UiSession.remove()
+            except:
+                pass
+            try:
+                app_context.pop()
+            except:
+                pass
 
 
 # update_scan_progress_redis is now imported from progress_utils to avoid circular imports
