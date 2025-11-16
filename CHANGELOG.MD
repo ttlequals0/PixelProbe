@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.135] - 2025-11-15
+
+### Fixed
+- **Mobile file detail buttons - equal width and full space utilization**
+  - Changed from `flex: 0 1 auto` to `flex: 1` for equal width distribution
+  - Removed `justify-content: space-between` to allow gap spacing
+  - All buttons now have equal width and utilize full available container width
+
+### Technical Details
+- static/css/mobile.css:299-330 - Changed flex sizing to `flex: 1` for equal distribution
+
 ## [2.4.134] - 2025-11-15
 
 ### Fixed

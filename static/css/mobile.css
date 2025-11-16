@@ -301,7 +301,6 @@
         flex-wrap: nowrap;
         gap: 0.25rem;
         margin-top: 0.75rem;
-        justify-content: space-between;
     }
 
     /* Hide button text labels on mobile - show icons only */
@@ -313,7 +312,7 @@
     .result-card .action-buttons .action-dropdown {
         font-size: 1.1rem;
         padding: 0.65rem 0.5rem;
-        flex: 0 1 auto;
+        flex: 1;
         min-width: 0;
         display: flex;
         align-items: center;
@@ -321,7 +320,7 @@
     }
 
     .result-card .action-buttons .action-dropdown {
-        flex: 0 1 auto;
+        flex: 1;
     }
 
     .result-card .action-buttons .action-dropdown .btn {
