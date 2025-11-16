@@ -5297,3 +5297,9 @@ GROUP BY scan_status, is_corrupted;
   - **Thread Stability**: This was the actual cause of scanning stopping at ~400k files - not database connection issues or memory problems
   - **User Feedback Integration**: Responded to user feedback that "this worked in previous versions" by identifying and removing the regression
   - This is the REAL fix for the 400k file performance cliff that has been causing issues since v2.2.8
+## v2.4.141 - 2025-11-15
+### Fixed
+- Mobile UI: Fixed dropdown button sizing to match regular buttons by using flex: 1 1 0 and adding box-sizing: border-box
+- Mobile UI: Ensured all action buttons (both regular and dropdown) have consistent equal width distribution
+- Mobile UI: Added flex-shrink: 0 to dropdown buttons to prevent compression
+
