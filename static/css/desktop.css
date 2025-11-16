@@ -1249,9 +1249,11 @@ textarea.form-control {
 }
 
 /* Action dropdown styles */
-.action-dropdown {
-    position: relative;
-    display: inline-block;
+@media (min-width: 769px) {
+    .action-dropdown {
+        position: relative;
+        display: inline-block;
+    }
 }
 
 .action-dropdown .dropdown-menu {

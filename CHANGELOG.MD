@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.138] - 2025-11-15
+
+### Fixed
+- **Dropdown button display on mobile - CSS inheritance fix**
+  - Wrapped desktop.css `.action-dropdown { display: inline-block; }` in @media (min-width: 769px)
+  - This was overriding mobile.css `display: flex !important` rule
+  - Desktop dropdown styles now only apply on desktop, not mobile
+  - Mobile flex layout for dropdowns now works correctly
+
+### Technical Details
+- static/css/desktop.css:1251-1257 - Wrapped action-dropdown display rule in desktop media query
+
 ## [2.4.137] - 2025-11-15
 
 ### Fixed
