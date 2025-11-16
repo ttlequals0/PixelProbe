@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.132] - 2025-11-15
+
+### Fixed
+- **Mobile file detail buttons to icon-only display**
+  - Hide button text labels (.btn-text) on mobile to show icons only
+  - Increased icon font size to 1rem for better visibility
+  - Improved padding to 0.75rem 0.5rem for better touch targets
+  - Added flexbox centering (align-items: center, justify-content: center)
+  - Buttons now display as 4 icon-only buttons in a single row
+
+### Technical Details
+- static/css/mobile.css:307-332 - Hide .btn-text, increase font-size, improve padding and centering
+
 ## [2.4.131] - 2025-11-15
 
 ### Fixed
