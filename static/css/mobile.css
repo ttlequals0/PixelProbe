@@ -371,6 +371,13 @@
     }
     
     /* Scan Reports Modal mobile */
+    #scan-reports-modal .modal-dialog {
+        max-width: 100%;
+        width: 100%;
+        margin: 0;
+        height: 100vh;
+    }
+
     #scan-reports-modal .modal-content {
         max-width: 100%;
         width: 100%;
@@ -962,6 +969,15 @@
         padding: 0.4rem 0.625rem;
         font-size: 0.95rem;
         min-width: 2.5rem;
+    }
+
+    /* Hide button text on mobile file detail cards - show icons only */
+    .action-buttons .btn-text {
+        display: none;
+    }
+
+    .action-buttons .btn i {
+        margin-right: 0;
     }
 
     .filter-controls select {

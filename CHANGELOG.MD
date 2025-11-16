@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.129] - 2025-11-15
+
+### Fixed
+- **Dashboard file count display**
+  - Changed Total Files card to show completed_files instead of total_files
+  - Math now adds up correctly: healthy + corrupted + warnings = total displayed
+  - Pending files are shown separately and don't affect the total
+
+- **System Stats percentage formatting**
+  - Applied consistent .toFixed(1) formatting to both Percentage Tracked and Percentage Checked
+  - Both now display as "100.0%" instead of mixed "100%" and "100.0%" formats
+
+- **Mobile file detail card buttons**
+  - View, Actions, Details, Download, and Mark Good buttons are now icon-only on mobile
+  - Wrapped button text in .btn-text spans with display: none on mobile
+  - Buttons now fit in single row on narrow screens
+
+- **Scan Reports modal sizing on mobile**
+  - Added .modal-dialog styling to ensure full-screen width
+  - Fixed wasted space on right side of modal
+  - Modal now properly uses 100% viewport width like Scan Schedules modal
+
+### Technical Details
+- static/js/app.js:320 - Changed from total_files to completed_files for dashboard display
+- static/js/app.js:1920-1921 - Applied .toFixed(1) to percentageTracked for consistency
+- static/js/app.js:1094-1125 - Wrapped file card button text in .btn-text spans
+- static/css/mobile.css:967-974 - Added CSS to hide .btn-text on mobile for file cards
+- static/css/mobile.css:374-379 - Added .modal-dialog full-screen styling for Scan Reports
+
 ## [2.4.128] - 2025-11-15
 
 ### Fixed

@@ -316,7 +316,8 @@ class StatsDashboard {
 
     renderStats(stats) {
         // Update stat cards
-        this.updateStatCard('total-files', stats.total_files);
+        // Show completed files as total so math adds up: healthy + corrupted + warnings = total
+        this.updateStatCard('total-files', stats.completed_files);
         this.updateStatCard('healthy-files', stats.healthy_files);
         this.updateStatCard('corrupted-files', stats.corrupted_files);
         this.updateStatCard('warning-files', stats.warning_files || 0);
@@ -1090,14 +1091,14 @@ class TableManager {
                     ` : ''}
                 </div>
                 <div class="action-buttons">
-                    <button class="btn btn-secondary" onclick="app.viewFile(${file.id})">
-                        <i class="fas fa-eye"></i> View
+                    <button class="btn btn-secondary" onclick="app.viewFile(${file.id})" title="View File">
+                        <i class="fas fa-eye"></i><span class="btn-text"> View</span>
                     </button>
                     <!-- Individual File Actions Dropdown for Mobile -->
                     <div class="action-dropdown" style="display: inline-block;">
                         <button class="btn btn-secondary" type="button"
-                                onclick="app.toggleActionDropdown(event, 'mobile-file-action-menu-${file.id}')">
-                            <i class="fas fa-tasks"></i> Actions <i class="fas fa-caret-down"></i>
+                                onclick="app.toggleActionDropdown(event, 'mobile-file-action-menu-${file.id}')" title="Actions">
+                            <i class="fas fa-tasks"></i><span class="btn-text"> Actions</span> <i class="fas fa-caret-down"></i>
                         </button>
                         <ul class="dropdown-menu" id="mobile-file-action-menu-${file.id}" style="display: none;">
                             <li><a class="dropdown-item" href="#" onclick="app.rescanFile(${file.id}); return false;">
@@ -1112,15 +1113,15 @@ class TableManager {
                         </ul>
                     </div>
                     ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
-                        <button class="btn btn-secondary" onclick="app.viewScanOutput(${file.id})">
-                            <i class="fas fa-file-alt"></i> Details
+                        <button class="btn btn-secondary" onclick="app.viewScanOutput(${file.id})" title="View Details">
+                            <i class="fas fa-file-alt"></i><span class="btn-text"> Details</span>
                         </button>
                     ` : ''}
-                    <button class="btn btn-secondary" onclick="app.downloadFile(${file.id})">
-                        <i class="fas fa-download"></i> Download
+                    <button class="btn btn-secondary" onclick="app.downloadFile(${file.id})" title="Download">
+                        <i class="fas fa-download"></i><span class="btn-text"> Download</span>
                     </button>
-                    <button class="btn btn-primary" onclick="app.markFileAsGood(${file.id})">
-                        <i class="fas fa-check"></i> Mark Good
+                    <button class="btn btn-primary" onclick="app.markFileAsGood(${file.id})" title="Mark as Good">
+                        <i class="fas fa-check"></i><span class="btn-text"> Mark Good</span>
                     </button>
                 </div>
                 <input type="checkbox" class="file-checkbox" value="${file.id}" ${this.selectedFiles.has(file.id) ? 'checked' : ''}>
@@ -1916,9 +1917,9 @@ class PixelProbeApp {
             html += '<div class="stats-section">';
             const totalFiles = info.filesystem?.total_files || info.database?.total_files || 0;
             const completedFiles = info.database?.completed_files || 0;
-            const percentageTracked = totalFiles > 0 ? 100 : 0;
-            const percentageChecked = totalFiles > 0 ? ((completedFiles / totalFiles) * 100).toFixed(1) : 0;
-            
+            const percentageTracked = totalFiles > 0 ? (100).toFixed(1) : (0).toFixed(1);
+            const percentageChecked = totalFiles > 0 ? ((completedFiles / totalFiles) * 100).toFixed(1) : (0).toFixed(1);
+
             html += `<p>Total Files Found: ${totalFiles.toLocaleString()}</p>`;
             html += `<p>Paths Monitored: ${info.filesystem?.paths_monitored || 0}</p>`;
             html += `<p>Percentage Tracked: ${percentageTracked}%</p>`;
