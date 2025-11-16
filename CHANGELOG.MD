@@ -5317,3 +5317,11 @@ GROUP BY scan_status, is_corrupted;
 - Mobile UI: Set flex: none on dropdown buttons to prevent flex calculation conflicts
 - Mobile UI: All action buttons now render at exactly the same width
 
+
+## v2.4.144 - 2025-11-15
+### Fixed
+- Mobile UI: Switched from flexbox to CSS Grid for button layout
+- Mobile UI: Using grid-auto-flow: column with grid-auto-columns: 1fr for truly equal column widths
+- Mobile UI: Grid ensures all buttons (including dropdown containers) render at exactly the same width
+- Mobile UI: Removed flex properties that were causing sizing inconsistencies
+

@@ -297,8 +297,9 @@
     }
     
     .result-card .action-buttons {
-        display: flex;
-        flex-wrap: nowrap;
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 1fr;
         gap: 0.25rem;
         margin-top: 0.75rem;
     }
@@ -310,13 +311,11 @@
 
     .result-card .action-buttons .btn,
     .result-card .action-buttons .action-dropdown {
-        flex: 1 1 0 !important;
-        min-width: 0 !important;
-        max-width: none !important;
         display: flex !important;
         align-items: center;
         justify-content: center;
         box-sizing: border-box !important;
+        min-width: 0;
     }
 
     .result-card .action-buttons .btn {
@@ -333,8 +332,6 @@
         height: 100% !important;
         padding: 0.65rem 0.5rem !important;
         font-size: 1.1rem !important;
-        flex: none !important;
-        min-width: 0 !important;
     }
     
     .result-card .file-checkbox {
@@ -979,7 +976,9 @@
 
     /* Make results action buttons icon-only on mobile */
     .results-actions {
-        flex-wrap: nowrap !important;
+        display: grid !important;
+        grid-auto-flow: column;
+        grid-auto-columns: 1fr;
     }
 
     .results-actions .btn-text {
@@ -997,13 +996,11 @@
 
     .results-actions .btn,
     .results-actions .action-dropdown {
-        flex: 1 1 0 !important;
-        min-width: 0 !important;
-        max-width: none !important;
         display: flex !important;
         align-items: center;
         justify-content: center;
         box-sizing: border-box !important;
+        min-width: 0;
     }
 
     .results-actions .btn {
@@ -1020,8 +1017,6 @@
         height: 100% !important;
         padding: 0.4rem 0.625rem !important;
         font-size: 0.95rem !important;
-        flex: none !important;
-        min-width: 0 !important;
     }
 
     /* Hide button text on mobile file detail cards - show icons only */
