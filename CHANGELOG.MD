@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.131] - 2025-11-15
+
+### Fixed
+- **Scan Reports modal full-screen on mobile**
+  - Removed inline styles (max-width: 90%; width: 90%) from modal HTML
+  - Simplified CSS to match schedules modal structure
+  - Modal now properly uses full viewport width without wasted space
+
+- **Days Since Last Scan metric**
+  - Changed from average days across all files to days since last scan operation
+  - Now queries scan_reports table for last completed scan time
+  - Renamed label from "Average Days Since Scan" to "Days Since Last Scan" for clarity
+
+- **Mobile file detail buttons layout**
+  - Fixed buttons stacking vertically by using flex-wrap: nowrap
+  - Applied flex: 1 1 0 to both buttons and action-dropdown div
+  - Buttons now display in single row with equal width distribution
+
+### Technical Details
+- templates/index.html:344 - Removed inline styles from scan-reports-modal
+- static/css/mobile.css:375-385 - Simplified scan-reports-modal CSS
+- static/css/mobile.css:299-321 - Fixed action-buttons flexbox layout
+- pixelprobe/api/stats_routes.py:208-291 - Query scan_reports for last scan time instead of averaging file scan dates
+- static/js/app.js:1882 - Renamed label to "Days Since Last Scan"
+
 ## [2.4.130] - 2025-11-15
 
 ### Fixed

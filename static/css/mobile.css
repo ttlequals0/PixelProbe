@@ -298,17 +298,26 @@
     
     .result-card .action-buttons {
         display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem;
+        flex-wrap: nowrap;
+        gap: 0.25rem;
         margin-top: 0.75rem;
-        justify-content: space-between;
+    }
+
+    .result-card .action-buttons .btn,
+    .result-card .action-buttons .action-dropdown {
+        font-size: 0.75rem;
+        padding: 0;
+        flex: 1 1 0;
+        min-width: 0;
     }
 
     .result-card .action-buttons .btn {
-        font-size: 0.75rem;
-        padding: 0.5rem;
-        flex: 1;
-        min-width: 0;
+        padding: 0.5rem 0.25rem;
+    }
+
+    .result-card .action-buttons .action-dropdown .btn {
+        width: 100%;
+        padding: 0.5rem 0.25rem;
     }
     
     .result-card .file-checkbox {
@@ -372,25 +381,13 @@
         margin-bottom: 1rem;
     }
     
-    /* Scan Reports Modal mobile */
-    #scan-reports-modal.modal {
-        padding: 0 !important;
-    }
-
-    #scan-reports-modal .modal-dialog {
-        max-width: 100%;
-        width: 100%;
-        margin: 0;
-        height: 100vh;
-    }
-
+    /* Scan Reports Modal mobile - full screen like schedules */
     #scan-reports-modal .modal-content {
         max-width: 100%;
         width: 100%;
-        margin: 0;
+        margin: 0 !important;
         height: 100vh;
         border-radius: 0;
-        border: none;
         display: flex;
         flex-direction: column;
         background: var(--bg-primary);

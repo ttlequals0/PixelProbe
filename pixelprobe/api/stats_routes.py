@@ -205,59 +205,77 @@ def get_system_info():
         
         # Database performance statistics - with database-specific fallbacks
         try:
-            # Get actual scan count from scan_reports table
-            scan_count_query = db.session.execute(
-                text("SELECT COUNT(*) as total_scans FROM scan_reports WHERE status = 'completed'")
-            ).fetchone()
-            actual_total_scans = scan_count_query[0] if scan_count_query else 0
-
-            # Try PostgreSQL-specific query for file scan performance
-            db_perf_query = db.session.execute(
+            # Get actual scan count and last scan date from scan_reports table
+            scan_stats_query = db.session.execute(
                 text("""
                     SELECT
-                        AVG(CASE
-                            WHEN scan_status = 'completed'
-                            THEN EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' - scan_date)) / 86400.0
-                            ELSE NULL
-                        END) as avg_days_since_scan,
-                        MIN(scan_date) as oldest_scan,
-                        MAX(scan_date) as newest_scan
-                    FROM scan_results
-                    WHERE scan_status = 'completed'
+                        COUNT(*) as total_scans,
+                        MAX(start_time) as last_scan_time,
+                        MIN(start_time) as first_scan_time
+                    FROM scan_reports
+                    WHERE status = 'completed'
                 """)
             ).fetchone()
-            total_scans = actual_total_scans
-            avg_days_since_scan = db_perf_query[0] if db_perf_query else 0
-            oldest_scan = db_perf_query[1] if db_perf_query else None
-            newest_scan = db_perf_query[2] if db_perf_query else None
-        except Exception as e:
-            logger.warning(f"PostgreSQL-specific query failed, trying SQLite fallback: {e}")
-            try:
-                # Get actual scan count from scan_reports table
-                scan_count_query = db.session.execute(
-                    text("SELECT COUNT(*) as total_scans FROM scan_reports WHERE status = 'completed'")
-                ).fetchone()
-                actual_total_scans = scan_count_query[0] if scan_count_query else 0
+            actual_total_scans = scan_stats_query[0] if scan_stats_query else 0
+            last_scan_time = scan_stats_query[1] if scan_stats_query else None
+            first_scan_time = scan_stats_query[2] if scan_stats_query else None
 
-                # Fallback to SQLite-specific query for file scan performance
-                db_perf_query = db.session.execute(
+            # Calculate days since last scan operation (not file scan)
+            if last_scan_time:
+                try:
+                    if isinstance(last_scan_time, str):
+                        last_scan_dt = datetime.fromisoformat(last_scan_time.replace('Z', '+00:00'))
+                    else:
+                        last_scan_dt = last_scan_time
+                    now_utc = datetime.now(timezone.utc)
+                    if last_scan_dt.tzinfo is None:
+                        last_scan_dt = last_scan_dt.replace(tzinfo=timezone.utc)
+                    avg_days_since_scan = (now_utc - last_scan_dt).total_seconds() / 86400.0
+                except:
+                    avg_days_since_scan = 0
+            else:
+                avg_days_since_scan = 0
+
+            total_scans = actual_total_scans
+            oldest_scan = first_scan_time
+            newest_scan = last_scan_time
+        except Exception as e:
+            logger.warning(f"Main query failed, trying SQLite fallback: {e}")
+            try:
+                # SQLite fallback: Get actual scan count and last scan date from scan_reports table
+                scan_stats_query = db.session.execute(
                     text("""
                         SELECT
-                            AVG(CASE
-                                WHEN scan_status = 'completed'
-                                THEN julianday('now') - julianday(scan_date)
-                                ELSE NULL
-                            END) as avg_days_since_scan,
-                            MIN(scan_date) as oldest_scan,
-                            MAX(scan_date) as newest_scan
-                        FROM scan_results
-                        WHERE scan_status = 'completed'
+                            COUNT(*) as total_scans,
+                            MAX(start_time) as last_scan_time,
+                            MIN(start_time) as first_scan_time
+                        FROM scan_reports
+                        WHERE status = 'completed'
                     """)
                 ).fetchone()
+                actual_total_scans = scan_stats_query[0] if scan_stats_query else 0
+                last_scan_time = scan_stats_query[1] if scan_stats_query else None
+                first_scan_time = scan_stats_query[2] if scan_stats_query else None
+
+                # Calculate days since last scan operation
+                if last_scan_time:
+                    try:
+                        if isinstance(last_scan_time, str):
+                            last_scan_dt = datetime.fromisoformat(last_scan_time.replace('Z', '+00:00'))
+                        else:
+                            last_scan_dt = last_scan_time
+                        now_utc = datetime.now(timezone.utc)
+                        if last_scan_dt.tzinfo is None:
+                            last_scan_dt = last_scan_dt.replace(tzinfo=timezone.utc)
+                        avg_days_since_scan = (now_utc - last_scan_dt).total_seconds() / 86400.0
+                    except:
+                        avg_days_since_scan = 0
+                else:
+                    avg_days_since_scan = 0
+
                 total_scans = actual_total_scans
-                avg_days_since_scan = db_perf_query[0] if db_perf_query else 0
-                oldest_scan = db_perf_query[1] if db_perf_query else None
-                newest_scan = db_perf_query[2] if db_perf_query else None
+                oldest_scan = first_scan_time
+                newest_scan = last_scan_time
             except Exception as e2:
                 logger.warning(f"SQLite fallback also failed, using basic query: {e2}")
                 # Final fallback to basic ORM queries
