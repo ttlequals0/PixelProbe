@@ -165,3 +165,4 @@ pixelprobe.db
 *.db
 docs/development/
 docker-compose.local.yml
+CLAUDE.md

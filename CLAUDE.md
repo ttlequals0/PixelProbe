@@ -1,5 +1,3 @@
- CLAUDE.md
-
   Core Principles
 
   - NEVER create mock data or simplified components unless explicitly told to do so
@@ -14,10 +12,8 @@
 
   - ALWAYS track all changes in CHANGELOG.md
   - ALWAYS refer to CHANGELOG.md when working on tasks
-  - Always build new changes off the previous version in CHANGELOG, never MAIN branch unless explicitly told to
-  - Always work from the latest versioned branch
+  - Nuild new changes into a feature / fix branch off oof master
   - NEVER commit directly to main or master branches
-
 
   Testing Requirements
 
