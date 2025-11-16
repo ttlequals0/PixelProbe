@@ -5309,3 +5309,11 @@ GROUP BY scan_status, is_corrupted;
 - Mobile UI: Hide dropdown caret-down icon on mobile to prevent icon overflow
 - Mobile UI: Dropdown buttons now have only one icon (like regular buttons) preventing size mismatch and overflow
 
+
+## v2.4.143 - 2025-11-15
+### Fixed
+- Mobile UI: Unified flex properties for buttons and dropdown containers to ensure equal sizing
+- Mobile UI: Added max-width: none to prevent dropdown containers from shrinking
+- Mobile UI: Set flex: none on dropdown buttons to prevent flex calculation conflicts
+- Mobile UI: All action buttons now render at exactly the same width
+

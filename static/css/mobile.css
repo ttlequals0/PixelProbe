@@ -308,34 +308,33 @@
         display: none;
     }
 
+    .result-card .action-buttons .btn,
+    .result-card .action-buttons .action-dropdown {
+        flex: 1 1 0 !important;
+        min-width: 0 !important;
+        max-width: none !important;
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box !important;
+    }
+
     .result-card .action-buttons .btn {
         font-size: 1.1rem;
         padding: 0.65rem 0.5rem;
-        flex: 1 1 0 !important;
-        min-width: 0;
-        display: flex !important;
-        align-items: center;
-        justify-content: center;
-        box-sizing: border-box;
     }
 
     .result-card .action-buttons .action-dropdown {
-        flex: 1 1 0 !important;
-        min-width: 0;
-        display: flex !important;
-        box-sizing: border-box;
+        position: relative !important;
     }
 
     .result-card .action-buttons .action-dropdown .btn {
-        width: 100%;
-        height: 100%;
-        padding: 0.65rem 0.5rem;
+        width: 100% !important;
+        height: 100% !important;
+        padding: 0.65rem 0.5rem !important;
         font-size: 1.1rem !important;
-        display: flex !important;
-        align-items: center;
-        justify-content: center;
-        box-sizing: border-box;
-        flex-shrink: 0;
+        flex: none !important;
+        min-width: 0 !important;
     }
     
     .result-card .file-checkbox {
@@ -996,34 +995,33 @@
         display: none;
     }
 
+    .results-actions .btn,
+    .results-actions .action-dropdown {
+        flex: 1 1 0 !important;
+        min-width: 0 !important;
+        max-width: none !important;
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box !important;
+    }
+
     .results-actions .btn {
         padding: 0.4rem 0.625rem;
         font-size: 0.95rem;
-        min-width: 0;
-        flex: 1 1 0 !important;
-        display: flex !important;
-        align-items: center;
-        justify-content: center;
-        box-sizing: border-box;
     }
 
     .results-actions .action-dropdown {
-        flex: 1 1 0 !important;
-        min-width: 0;
-        display: flex !important;
-        box-sizing: border-box;
+        position: relative !important;
     }
 
     .results-actions .action-dropdown .btn {
-        width: 100%;
-        height: 100%;
+        width: 100% !important;
+        height: 100% !important;
         padding: 0.4rem 0.625rem !important;
         font-size: 0.95rem !important;
-        display: flex !important;
-        align-items: center;
-        justify-content: center;
-        box-sizing: border-box;
-        flex-shrink: 0;
+        flex: none !important;
+        min-width: 0 !important;
     }
 
     /* Hide button text on mobile file detail cards - show icons only */
