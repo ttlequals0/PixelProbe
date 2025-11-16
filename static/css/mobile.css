@@ -301,6 +301,7 @@
         flex-wrap: nowrap;
         gap: 0.25rem;
         margin-top: 0.75rem;
+        justify-content: space-between;
     }
 
     /* Hide button text labels on mobile - show icons only */
@@ -310,25 +311,22 @@
 
     .result-card .action-buttons .btn,
     .result-card .action-buttons .action-dropdown {
-        font-size: 1rem;
-        padding: 0;
-        flex: 1 1 0;
+        font-size: 1.1rem;
+        padding: 0.65rem 0.5rem;
+        flex: 0 1 auto;
         min-width: 0;
-    }
-
-    .result-card .action-buttons .btn {
-        padding: 0.75rem 0.5rem;
         display: flex;
         align-items: center;
         justify-content: center;
+    }
+
+    .result-card .action-buttons .action-dropdown {
+        flex: 0 1 auto;
     }
 
     .result-card .action-buttons .action-dropdown .btn {
         width: 100%;
-        padding: 0.75rem 0.5rem;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        padding: 0.65rem 0.5rem;
     }
     
     .result-card .file-checkbox {

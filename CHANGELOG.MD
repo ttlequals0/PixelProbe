@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.133] - 2025-11-15
+
+### Fixed
+- **Mobile file detail buttons - proper single row layout**
+  - Changed flex sizing from `flex: 1 1 0` to `flex: 0 1 auto` for natural button sizing
+  - Added `justify-content: space-between` to distribute buttons evenly
+  - Reduced padding to 0.65rem to fit all 5 buttons in single row
+  - Buttons now properly display in a single horizontal row even with all 5 buttons present
+
+### Technical Details
+- static/css/mobile.css:299-330 - Fixed flex sizing and spacing for 5-button layout
+
 ## [2.4.132] - 2025-11-15
 
 ### Fixed
