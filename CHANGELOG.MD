@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.140] - 2025-11-15
+
+### Fixed
+- **Separate button and dropdown container CSS rules**
+  - Split combined `.btn, .action-dropdown` selectors into separate rules
+  - `.action-dropdown` container now only gets flex properties, not button padding/font-size
+  - Only the button INSIDE the dropdown gets padding and font-size
+  - This prevents the dropdown container from having double padding/sizing issues
+  - Applied to both file detail buttons and top action buttons
+
+### Technical Details
+- static/css/mobile.css:311-335 - Separated file detail button and dropdown rules
+- static/css/mobile.css:989-1013 - Separated top action button and dropdown rules
+
 ## [2.4.139] - 2025-11-15
 
 ### Fixed

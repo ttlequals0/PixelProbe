@@ -308,8 +308,7 @@
         display: none;
     }
 
-    .result-card .action-buttons .btn,
-    .result-card .action-buttons .action-dropdown {
+    .result-card .action-buttons .btn {
         font-size: 1.1rem;
         padding: 0.65rem 0.5rem;
         flex: 1 !important;
@@ -321,6 +320,8 @@
 
     .result-card .action-buttons .action-dropdown {
         flex: 1 !important;
+        min-width: 0;
+        display: flex !important;
     }
 
     .result-card .action-buttons .action-dropdown .btn {
@@ -986,8 +987,7 @@
         margin-right: 0;
     }
 
-    .results-actions .btn,
-    .results-actions .action-dropdown {
+    .results-actions .btn {
         padding: 0.4rem 0.625rem;
         font-size: 0.95rem;
         min-width: 0;
@@ -999,6 +999,8 @@
 
     .results-actions .action-dropdown {
         flex: 1 !important;
+        min-width: 0;
+        display: flex !important;
     }
 
     .results-actions .action-dropdown .btn {
