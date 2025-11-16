@@ -208,12 +208,12 @@ def get_system_info():
             # Try PostgreSQL-specific query first
             db_perf_query = db.session.execute(
                 text("""
-                    SELECT 
+                    SELECT
                         COUNT(*) as total_scans,
-                        AVG(CASE 
-                            WHEN scan_status = 'completed' 
-                            THEN EXTRACT(EPOCH FROM (NOW() - scan_date)) / 86400.0
-                            ELSE NULL 
+                        AVG(CASE
+                            WHEN scan_status = 'completed'
+                            THEN EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' - scan_date)) / 86400.0
+                            ELSE NULL
                         END) as avg_days_since_scan,
                         MIN(scan_date) as oldest_scan,
                         MAX(scan_date) as newest_scan

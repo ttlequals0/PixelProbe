@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.128] - 2025-11-15
+
+### Fixed
+- **Average days since scan calculation for PostgreSQL**
+  - Fixed timezone handling in PostgreSQL query
+  - Changed from NOW() to CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+  - Ensures accurate calculation regardless of database timezone settings
+  - Average days will now update correctly when new scans are performed
+
+### Technical Details
+- pixelprobe/api/stats_routes.py:209-223 - Fixed PostgreSQL avg_days_since_scan query with UTC timezone
+
 ## [2.4.127] - 2025-11-15
 
 ### Fixed
