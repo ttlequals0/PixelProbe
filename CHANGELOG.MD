@@ -5303,3 +5303,9 @@ GROUP BY scan_status, is_corrupted;
 - Mobile UI: Ensured all action buttons (both regular and dropdown) have consistent equal width distribution
 - Mobile UI: Added flex-shrink: 0 to dropdown buttons to prevent compression
 
+
+## v2.4.142 - 2025-11-15
+### Fixed
+- Mobile UI: Hide dropdown caret-down icon on mobile to prevent icon overflow
+- Mobile UI: Dropdown buttons now have only one icon (like regular buttons) preventing size mismatch and overflow
+

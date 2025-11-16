@@ -991,6 +991,11 @@
         margin-right: 0;
     }
 
+    /* Hide dropdown caret icon on mobile */
+    .results-actions .fa-caret-down {
+        display: none;
+    }
+
     .results-actions .btn {
         padding: 0.4rem 0.625rem;
         font-size: 0.95rem;
@@ -1028,6 +1033,11 @@
 
     .action-buttons .btn i {
         margin-right: 0;
+    }
+
+    /* Hide dropdown caret icon on mobile */
+    .action-buttons .fa-caret-down {
+        display: none;
     }
 
     .filter-controls select {
