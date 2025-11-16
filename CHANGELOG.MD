@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.149] - 2025-11-16
+
+### Fixed
+- **Phase 3 progress counter resetting when switching from small to large files**
+  - Fixed issue where file count would reset (e.g., from "145 of 228" to "14 of 228") when scanning large files after small files
+  - Progress counter now never decreases when parallel chunks complete out of order
+  - Added protection to ensure scan_state.files_processed only moves forward
+  - Enhanced logging to track chunk completion and detect data integrity issues
+  - Prevents confusing progress display when processing files of varying sizes
+
+### Technical Details
+- pixelprobe/tasks_parallel.py:274-307 - Added check to prevent progress counter from decreasing
+- Added logging for chunk completion with before/after progress values
+- Added warning log when sum of chunks is less than current progress (indicates data issue)
+- Counts completed chunks for better debugging visibility
+
+## [2.4.148] - 2025-11-16
+
+### Added
+- **New API endpoint for error files**
+  - Added GET /api/error-files endpoint to retrieve list of files that failed to scan
+  - Returns paginated results with file details and error messages
+  - Supports filtering by file path search query
+  - Supports sorting by scan_date, file_path, file_size, file_type, or scan_duration
+  - Supports pagination (default 100 per page, use -1 for all results)
+  - Includes error_message, scan_date, scan_duration, and scan_tool information
+  - Rate limited to 10 requests per minute per user
+
+### Technical Details
+- pixelprobe/api/scan_routes.py:1517-1616 - Added get_error_files endpoint
+- Queries ScanResult with scan_status='error' filter
+- Returns JSON with error_files array, total count, pages, and current_page
+
 ## [2.4.147] - 2025-11-16
 
 ### Fixed

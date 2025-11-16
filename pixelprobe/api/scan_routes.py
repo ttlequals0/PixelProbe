@@ -1514,6 +1514,107 @@ def diagnose_pending_files():
         logger.error(f"Error diagnosing pending files: {e}")
         return jsonify({'error': str(e)}), 500
 
+@scan_bp.route('/error-files', methods=['GET'])
+@rate_limit("10 per minute")
+@auth_required
+def get_error_files():
+    """Get list of files that failed to scan
+
+    Returns paginated list of files with scan_status='error' including:
+    - File path, size, type
+    - Error message
+    - When the error occurred (scan_date)
+    - Scan duration if available
+
+    Query parameters:
+    - page: Page number (default: 1)
+    - per_page: Results per page (default: 100, use -1 for all)
+    - sort_field: Field to sort by (default: scan_date)
+    - sort_order: asc or desc (default: desc)
+    - search: Filter by file path (optional)
+    """
+    try:
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 100, type=int)
+        sort_field = request.args.get('sort_field', 'scan_date')
+        sort_order = request.args.get('sort_order', 'desc')
+        search_query = request.args.get('search', '').strip()
+
+        # Build query for error files
+        query = ScanResult.query.filter_by(scan_status='error')
+
+        # Apply search filter if provided
+        if search_query:
+            query = query.filter(ScanResult.file_path.ilike(f'%{search_query}%'))
+
+        # Apply sorting
+        field_mapping = {
+            'scan_date': ScanResult.scan_date,
+            'file_path': ScanResult.file_path,
+            'file_size': ScanResult.file_size,
+            'file_type': ScanResult.file_type,
+            'scan_duration': ScanResult.scan_duration
+        }
+
+        if sort_field in field_mapping:
+            field_attr = field_mapping[sort_field]
+            if sort_order.lower() == 'asc':
+                query = query.order_by(field_attr.asc())
+            else:
+                query = query.order_by(field_attr.desc())
+        else:
+            # Default sorting by most recent errors first
+            query = query.order_by(ScanResult.scan_date.desc())
+
+        # Paginate - handle -1 as "show all"
+        if per_page == -1:
+            all_results = query.all()
+            class MockPagination:
+                def __init__(self, items, total):
+                    self.items = items
+                    self.total = total
+                    self.pages = 1
+            pagination = MockPagination(all_results, len(all_results))
+        else:
+            pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        # Build response
+        results = []
+        for result in pagination.items:
+            error_file = {
+                'id': result.id,
+                'file_path': result.file_path,
+                'file_size': result.file_size,
+                'file_type': result.file_type,
+                'error_message': result.error_message,
+                'scan_date': None,
+                'scan_duration': result.scan_duration,
+                'scan_tool': result.scan_tool,
+                'discovered_date': None
+            }
+
+            # Convert timestamps to configured timezone
+            if result.scan_date:
+                display_dt = from_utc_to_configured(result.scan_date)
+                error_file['scan_date'] = display_dt.isoformat() if display_dt else None
+
+            if result.discovered_date:
+                display_dt = from_utc_to_configured(result.discovered_date)
+                error_file['discovered_date'] = display_dt.isoformat() if display_dt else None
+
+            results.append(error_file)
+
+        return jsonify({
+            'error_files': results,
+            'total': pagination.total,
+            'pages': pagination.pages,
+            'current_page': page
+        })
+
+    except Exception as e:
+        logger.error(f"Error retrieving error files: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @scan_bp.route('/worker-status')
 @exempt_from_rate_limit
 @auth_required

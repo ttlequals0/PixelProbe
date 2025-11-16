@@ -277,15 +277,31 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
             if scan_state:
                 # Update last_update to show recent activity
                 scan_state.last_update = datetime.now(timezone.utc)
-                
-                # Recalculate total progress from all chunks
+
+                # Recalculate total progress from ALL chunks (including in-progress ones)
+                # This ensures we don't lose progress when chunks complete out of order
                 total_processed = db.session.query(
                     db.func.sum(ScanChunk.files_processed)
                 ).filter_by(scan_id=scan_id).scalar() or 0
-                
-                scan_state.files_processed = total_processed
+
+                # Count completed chunks for debugging
+                completed_chunks = db.session.query(
+                    db.func.count(ScanChunk.id)
+                ).filter_by(scan_id=scan_id, is_complete=True).scalar() or 0
+
+                # CRITICAL FIX: Never decrease the progress counter
+                # When chunks complete out of order in parallel, ensure we only move forward
+                # This prevents the counter from appearing to reset when processing large files
+                if total_processed > scan_state.files_processed:
+                    logger.info(f"Chunk {chunk_id} complete ({files_processed} files). Total progress: {scan_state.files_processed} -> {total_processed}/{scan_state.estimated_total} ({completed_chunks} chunks done)")
+                    scan_state.files_processed = total_processed
+                elif total_processed < scan_state.files_processed:
+                    # This shouldn't happen, but log it if it does for debugging
+                    logger.warning(f"Chunk {chunk_id} complete, but sum of chunks ({total_processed}) < current progress ({scan_state.files_processed})! Not updating. ({completed_chunks} chunks done)")
+                else:
+                    logger.debug(f"Chunk {chunk_id} complete ({files_processed} files), progress unchanged at {total_processed}/{scan_state.estimated_total}")
+
                 db.session.commit()
-                logger.info(f"Chunk {chunk_id} complete. Total scan progress: {total_processed}/{scan_state.estimated_total} files")
         except Exception as e:
             logger.error(f"Failed to update scan state on chunk completion: {e}")
             db.session.rollback()
