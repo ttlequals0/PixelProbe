@@ -1095,7 +1095,7 @@ class TableManager {
                         <i class="fas fa-eye"></i><span class="btn-text"> View</span>
                     </button>
                     <!-- Individual File Actions Dropdown for Mobile -->
-                    <div class="action-dropdown" style="display: inline-block;">
+                    <div class="action-dropdown">
                         <button class="btn btn-secondary" type="button"
                                 onclick="app.toggleActionDropdown(event, 'mobile-file-action-menu-${file.id}')" title="Actions">
                             <i class="fas fa-tasks"></i><span class="btn-text"> Actions</span> <i class="fas fa-caret-down"></i>
@@ -1148,7 +1148,7 @@ class TableManager {
                         <i class="fas fa-eye"></i> View
                     </button>
                     <!-- Individual File Actions Dropdown -->
-                    <div class="action-dropdown" style="display: inline-block;">
+                    <div class="action-dropdown">
                         <button class="btn btn-sm btn-secondary" type="button"
                                 onclick="app.toggleActionDropdown(event, 'file-action-menu-${file.id}')">
                             <i class="fas fa-tasks"></i> Actions <i class="fas fa-caret-down"></i>

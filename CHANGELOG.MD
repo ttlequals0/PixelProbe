@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.139] - 2025-11-15
+
+### Fixed
+- **Remove inline styles from action-dropdown divs**
+  - Removed `style="display: inline-block;"` from both mobile and desktop file action dropdowns
+  - Inline styles have highest CSS specificity and were overriding all CSS rules
+  - Now CSS rules can properly control dropdown display behavior
+  - Dropdown buttons should now match size of other buttons on mobile
+
+### Technical Details
+- static/js/app.js:1098 - Removed inline style from mobile file action dropdown
+- static/js/app.js:1151 - Removed inline style from desktop file action dropdown
+
 ## [2.4.138] - 2025-11-15
 
 ### Fixed
