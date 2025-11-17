@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.156] - 2025-11-17
+
+### Fixed
+- **Fixed scan progress showing "X of 0" files during Phase 3 parallel scanning**
+  - Root cause: Line 1417 in scan_service.py was reading `estimated_total` from a stale scan_state object before it was properly calculated
+  - The value was later recalculated correctly at lines 1472-1481, but UI updates between initialization and recalculation showed "/0"
+  - Fix: Initialize `total_files_to_scan` to 0 instead of reading from potentially stale object, let it be set by actual file count calculation
+  - Impact: UI progress now shows correct "X of Y" throughout entire scan
+
+### Technical Details
+- pixelprobe/services/scan_service.py:1417 - Changed from reading stale `scan_state.estimated_total` to initializing as 0
+- Actual file count is calculated at lines 1472-1481 by counting files in all chunks
+- Redis progress updates at line 1488 now always use the correct calculated value
+- Prevents race condition where stale database object values are used before proper calculation
+
 ## [2.4.155] - 2025-11-16
 
 ### Fixed

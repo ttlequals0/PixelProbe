@@ -1414,7 +1414,7 @@ class ScanService:
         total_chunks = len(chunks)
         completed_chunks = 0
         total_files_scanned = 0
-        total_files_to_scan = scan_state.phase_total  # Initial estimate from scanning phase
+        total_files_to_scan = 0  # Will be calculated from actual chunk file counts below (lines 1472-1481)
         actual_total_discovered = 0  # Track actual total as we discover files in chunks
         files_scanned_lock = threading.Lock()
         discovery_lock = threading.Lock()
