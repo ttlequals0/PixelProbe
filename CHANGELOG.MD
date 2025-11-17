@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.151] - 2025-11-16
+
+### Fixed
+- **Fixed multiple Swagger endpoints returning 500 errors**
+  - /api/v1/scan/error-files - Reimplemented endpoint logic directly
+  - /api/v1/scan/scan-results - Reimplemented with full filtering and sorting support
+  - /api/v1/scan/diagnose-incomplete-scans - Fixed AttributeError (tool_output -> scan_output)
+  - /api/v1/stats/system-info - Changed to call stats_service directly
+  - /api/v1/export - Changed to use ExportService directly
+  - Root cause: test_request_context proxy doesn't work with @rate_limit and @auth_required decorators
+
+### Technical Details
+- pixelprobe/api/swagger_routes.py:361-487 - Reimplemented scan-results endpoint with direct implementation
+- pixelprobe/api/swagger_routes.py:525-633 - Reimplemented error-files endpoint with direct implementation
+- pixelprobe/api/swagger_routes.py:792 - Fixed diagnose-incomplete-scans attribute error (ScanResult.tool_output -> scan_output)
+- pixelprobe/api/swagger_routes.py:945-959 - Changed system-info to call stats_service.get_system_info() directly
+- pixelprobe/api/swagger_routes.py:1224-1273 - Changed export to use ExportService directly
+- All endpoints now properly handle pagination, filtering, search, and sorting
+- All 181 tests passing
+
 ## [2.4.150] - 2025-11-16
 
 ### Added

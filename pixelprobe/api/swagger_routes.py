@@ -368,15 +368,123 @@ class GetScanResults(Resource):
         if not check_auth():
             return {'error': 'Authentication required'}, 401
 
-        from pixelprobe.api.scan_routes import get_scan_results
-        from flask import current_app
-        with current_app.test_request_context(
-            path='/api/scan-results',
-            query_string=request.query_string,
-            headers=request.headers,
-            method='GET'
-        ):
-            return get_scan_results()
+        from models import ScanResult
+        from pixelprobe.utils.timezone_utils import from_utc_to_configured
+        import os
+
+        try:
+            page = request.args.get('page', 1, type=int)
+            per_page = request.args.get('per_page', 100, type=int)
+            scan_status = request.args.get('scan_status', 'all')
+            is_corrupted = request.args.get('is_corrupted', 'all')
+            has_warnings = request.args.get('has_warnings', 'all')
+            search_query = request.args.get('search', '').strip()
+            sort_field = request.args.get('sort_field', 'scan_date')
+            sort_order = request.args.get('sort_order', 'desc')
+
+            # Build query
+            query = ScanResult.query
+
+            # Apply search filter
+            if search_query:
+                query = query.filter(ScanResult.file_path.ilike(f'%{search_query}%'))
+
+            # Apply status filter
+            if scan_status != 'all':
+                query = query.filter_by(scan_status=scan_status)
+
+            # Apply corruption filter
+            if is_corrupted == 'true':
+                query = query.filter_by(is_corrupted=True).filter_by(marked_as_good=False)
+            elif is_corrupted == 'false':
+                query = query.filter(
+                    (ScanResult.is_corrupted == False) |
+                    (ScanResult.marked_as_good == True)
+                )
+
+            # Apply warnings filter
+            if has_warnings == 'true':
+                query = query.filter(
+                    (ScanResult.has_warnings == True) &
+                    (ScanResult.marked_as_good == False) &
+                    (ScanResult.is_corrupted == False)
+                )
+
+            # Apply sorting
+            field_mapping = {
+                'scan_date': ScanResult.scan_date,
+                'file_path': ScanResult.file_path,
+                'file_size': ScanResult.file_size,
+                'file_type': ScanResult.file_type,
+                'scan_status': ScanResult.scan_status,
+                'status': ScanResult.is_corrupted,
+                'is_corrupted': ScanResult.is_corrupted,
+                'marked_as_good': ScanResult.marked_as_good,
+                'scan_tool': ScanResult.scan_tool,
+                'corruption_details': ScanResult.corruption_details,
+                'discovered_date': ScanResult.discovered_date,
+                'last_modified': ScanResult.last_modified
+            }
+
+            if sort_field in field_mapping:
+                field_attr = field_mapping[sort_field]
+                if sort_order.lower() == 'asc':
+                    query = query.order_by(field_attr.asc())
+                else:
+                    query = query.order_by(field_attr.desc())
+            else:
+                query = query.order_by(ScanResult.scan_date.desc())
+
+            # Paginate - handle -1 as "show all"
+            if per_page == -1:
+                all_results = query.all()
+                class MockPagination:
+                    def __init__(self, items, total):
+                        self.items = items
+                        self.total = total
+                        self.pages = 1
+                pagination = MockPagination(all_results, len(all_results))
+            else:
+                pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+            # Build response
+            results = []
+            for result in pagination.items:
+                result_dict = result.to_dict()
+
+                # Convert timestamps to configured timezone
+                if result.scan_date:
+                    display_dt = from_utc_to_configured(result.scan_date)
+                    result_dict['scan_date'] = display_dt.isoformat() if display_dt else None
+
+                if result.discovered_date:
+                    display_dt = from_utc_to_configured(result.discovered_date)
+                    result_dict['discovered_date'] = display_dt.isoformat() if display_dt else None
+
+                if result.creation_date:
+                    display_dt = from_utc_to_configured(result.creation_date)
+                    result_dict['creation_date'] = display_dt.isoformat() if display_dt else None
+
+                if result.last_modified:
+                    display_dt = from_utc_to_configured(result.last_modified)
+                    result_dict['last_modified'] = display_dt.isoformat() if display_dt else None
+
+                # Add file_name for frontend convenience
+                result_dict['file_name'] = os.path.basename(result.file_path) if result.file_path else ''
+
+                results.append(result_dict)
+
+            return {
+                'results': results,
+                'total': pagination.total,
+                'page': page,
+                'per_page': per_page,
+                'pages': pagination.pages
+            }
+
+        except Exception as e:
+            logger.error(f"Error retrieving scan results: {e}")
+            return {'error': str(e)}, 500
 
 @scan_ns.route('/scan-results/<int:result_id>')
 class GetScanResult(Resource):
@@ -436,15 +544,91 @@ class GetErrorFiles(Resource):
         if not check_auth():
             return {'error': 'Authentication required'}, 401
 
-        from pixelprobe.api.scan_routes import get_error_files
-        from flask import current_app
-        with current_app.test_request_context(
-            path='/api/error-files',
-            query_string=request.query_string,
-            headers=request.headers,
-            method='GET'
-        ):
-            return get_error_files()
+        from models import ScanResult
+        from pixelprobe.utils.timezone_utils import from_utc_to_configured
+
+        try:
+            page = request.args.get('page', 1, type=int)
+            per_page = request.args.get('per_page', 100, type=int)
+            sort_field = request.args.get('sort_field', 'scan_date')
+            sort_order = request.args.get('sort_order', 'desc')
+            search_query = request.args.get('search', '').strip()
+
+            # Build query for error files
+            query = ScanResult.query.filter_by(scan_status='error')
+
+            # Apply search filter if provided
+            if search_query:
+                query = query.filter(ScanResult.file_path.ilike(f'%{search_query}%'))
+
+            # Apply sorting
+            field_mapping = {
+                'scan_date': ScanResult.scan_date,
+                'file_path': ScanResult.file_path,
+                'file_size': ScanResult.file_size,
+                'file_type': ScanResult.file_type,
+                'scan_duration': ScanResult.scan_duration
+            }
+
+            if sort_field in field_mapping:
+                field_attr = field_mapping[sort_field]
+                if sort_order.lower() == 'asc':
+                    query = query.order_by(field_attr.asc())
+                else:
+                    query = query.order_by(field_attr.desc())
+            else:
+                # Default sorting by most recent errors first
+                query = query.order_by(ScanResult.scan_date.desc())
+
+            # Paginate - handle -1 as "show all"
+            if per_page == -1:
+                all_results = query.all()
+                class MockPagination:
+                    def __init__(self, items, total):
+                        self.items = items
+                        self.total = total
+                        self.pages = 1
+                pagination = MockPagination(all_results, len(all_results))
+            else:
+                pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+            # Build response
+            results = []
+            for result in pagination.items:
+                error_file = {
+                    'id': result.id,
+                    'file_path': result.file_path,
+                    'file_size': result.file_size,
+                    'file_type': result.file_type,
+                    'error_message': result.error_message,
+                    'scan_date': None,
+                    'scan_duration': result.scan_duration,
+                    'scan_tool': result.scan_tool,
+                    'discovered_date': None
+                }
+
+                # Convert timestamps to configured timezone
+                if result.scan_date:
+                    display_dt = from_utc_to_configured(result.scan_date)
+                    error_file['scan_date'] = display_dt.isoformat() if display_dt else None
+
+                if result.discovered_date:
+                    display_dt = from_utc_to_configured(result.discovered_date)
+                    error_file['discovered_date'] = display_dt.isoformat() if display_dt else None
+
+                results.append(error_file)
+
+            return {
+                'error_files': results,
+                'total': pagination.total,
+                'pages': pagination.pages,
+                'current_page': page,
+                'per_page': per_page if per_page != -1 else pagination.total
+            }
+
+        except Exception as e:
+            logger.error(f"Error retrieving error files: {e}")
+            return {'error': str(e)}, 500
 
 @scan_ns.route('/scan-file')
 class ScanSingleFile(Resource):
@@ -605,7 +789,7 @@ class DiagnoseIncompleteScans(Resource):
                 ScanResult.scan_status == 'completed',
                 or_(
                     ScanResult.scan_date == None,
-                    ScanResult.tool_output == None
+                    ScanResult.scan_output == None
                 )
             ).all()
 
@@ -767,14 +951,12 @@ class GetSystemInfo(Resource):
         if not check_auth():
             return {'error': 'Authentication required'}, 401
 
-        from pixelprobe.api.stats_routes import get_system_info
-        from flask import current_app
-        with current_app.test_request_context(
-            path='/api/system-info',
-            headers=request.headers,
-            method='GET'
-        ):
-            return get_system_info()
+        try:
+            stats_service = current_app.stats_service
+            return stats_service.get_system_info()
+        except Exception as e:
+            logger.error(f"Error getting system info: {e}")
+            return {'error': str(e)}, 500
 
 # Maintenance endpoints
 @maintenance_ns.route('/file-changes')
@@ -1045,15 +1227,24 @@ class Export(Resource):
         if not check_auth():
             return {'error': 'Authentication required'}, 401
 
-        # Import here to avoid circular dependency
-        from pixelprobe.api.export_routes import export_scan_results
-        from flask import current_app
-        with current_app.test_request_context(
-            path=request.path,
-            query_string=request.query_string,
-            method='GET'
-        ):
-            return export_scan_results()
+        try:
+            from pixelprobe.services.export_service import ExportService
+            export_service = ExportService()
+
+            # Get parameters
+            export_format = request.args.get('format', 'csv').lower()
+            filter_type = request.args.get('filter', 'all')
+            search_query = request.args.get('search', '')
+
+            # Use the export service directly
+            return export_service.export_results(
+                export_format=export_format,
+                filter_type=filter_type,
+                search_query=search_query
+            )
+        except Exception as e:
+            logger.error(f"Error exporting results: {e}")
+            return {'error': str(e)}, 500
 
     def post(self):
         """Export scan results with POST body"""
@@ -1061,15 +1252,25 @@ class Export(Resource):
         if not check_auth():
             return {'error': 'Authentication required'}, 401
 
-        # Import here to avoid circular dependency
-        from pixelprobe.api.export_routes import export_scan_results
-        from flask import current_app
-        with current_app.test_request_context(
-            path=request.path,
-            method='POST',
-            json=request.get_json()
-        ):
-            return export_scan_results()
+        try:
+            from pixelprobe.services.export_service import ExportService
+            export_service = ExportService()
+
+            data = request.get_json() or {}
+            filters = data.get('filters', {})
+
+            export_format = filters.get('format', 'csv').lower()
+            filter_type = filters.get('filter', 'all')
+            search_query = filters.get('search', '')
+
+            return export_service.export_results(
+                export_format=export_format,
+                filter_type=filter_type,
+                search_query=search_query
+            )
+        except Exception as e:
+            logger.error(f"Error exporting results: {e}")
+            return {'error': str(e)}, 500
 
 @export_ns.route('/view/<int:result_id>')
 class ViewFile(Resource):
