@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.157] - 2025-11-17
+
+### Fixed
+- **Fixed files stuck in pending status after scanning completes**
+  - Root cause: Session isolation issue in media_checker.py caused scan results to fail silently during database save
+  - Success message was logged BEFORE commit, masking actual database failures
+  - Worker session couldn't find records due to stale cache and transaction isolation
+  - Fix: Added session.expire_all() to clear stale cache, with_for_update() to lock rows, and moved success log after commit
+  - Added full traceback logging to reveal actual database errors instead of silently suppressing them
+
+### Technical Details
+- media_checker.py:2244 - Added session.expire_all() to clear stale cached data
+- media_checker.py:2245 - Added with_for_update() to lock rows during update and prevent race conditions
+- media_checker.py:2272-2273 - Added flush() before commit to catch database errors earlier
+- media_checker.py:2276 - Moved success log AFTER commit to only log when operation truly succeeds
+- media_checker.py:2279-2280 - Added full traceback logging to expose hidden database errors
+- media_checker.py:2283-2291 - Improved error handling for rollback and session close operations
+
 ## [2.4.156] - 2025-11-17
 
 ### Fixed

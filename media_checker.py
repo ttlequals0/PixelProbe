@@ -2228,24 +2228,29 @@ class PixelProbe:
         """Save scan result to database cache"""
         if not self.database_path:
             return
-            
+
         session = None
         try:
             from models import ScanResult
-            from datetime import datetime, timezone, timezone
-            
+            from datetime import datetime, timezone
+            import traceback
+
             session = self._get_db_session()
             if not session:
                 logger.warning(f"No database session available for caching {file_path}")
                 return
-            
-            # Check for existing record
-            db_result = session.query(ScanResult).filter_by(file_path=file_path).first()
-            
+
+            # Check for existing record with explicit expiry to avoid stale data
+            session.expire_all()
+            db_result = session.query(ScanResult).filter_by(file_path=file_path).with_for_update().first()
+
             if not db_result:
+                # Record doesn't exist - this shouldn't happen as records are created during discovery
+                # Log a warning but continue to create the record
+                logger.warning(f"Record not found for {file_path} during save - creating new record")
                 db_result = ScanResult(file_path=file_path)
                 session.add(db_result)
-            
+
             # Update with scan results
             db_result.file_size = scan_result.get('file_size')
             db_result.file_type = scan_result.get('file_type')
@@ -2262,19 +2267,28 @@ class PixelProbe:
             db_result.scan_date = datetime.now(timezone.utc)
             db_result.scan_status = 'completed'
             db_result.file_exists = True
-            
+
+            # Flush first to catch any database errors before commit
+            session.flush()
             session.commit()
-            logger.info(f"Saved scan result to cache for {file_path}")
+
+            # Only log success AFTER commit succeeds
+            logger.info(f"Successfully saved scan result for {file_path}")
         except Exception as e:
+            import traceback
             logger.error(f"Error saving to cache for {file_path}: {e}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             if session:
                 try:
                     session.rollback()
-                except:
-                    pass
+                except Exception as rollback_error:
+                    logger.error(f"Error during rollback: {rollback_error}")
         finally:
             if session:
-                session.close()
+                try:
+                    session.close()
+                except Exception as close_error:
+                    logger.error(f"Error closing session: {close_error}")
     
     def _check_ignored_patterns(self, error_output):
         """Check if error output contains any ignored patterns"""
