@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.153] - 2025-11-16
+
+### Fixed
+- **Fixed scan progress showing incorrect estimated_total file count**
+  - Scan progress was showing "19 of 571 files" when only ~200 files actually needed scanning
+  - Root cause: For regular scans, code was counting ALL discovered files instead of only PENDING files
+  - Now correctly counts only files that need scanning (pending status) for all scan types
+  - Estimated total now accurately reflects number of files to be scanned, not total discovered
+
+- **Enhanced dashboard statistics to filter by active scan paths**
+  - When a scan is active, statistics now filter to only show files in the current scan paths
+  - When no scan is active, statistics show all files in database (previous behavior)
+  - Provides more accurate statistics during active scans
+
+### Technical Details
+- pixelprobe/tasks_parallel.py:715-740 - Removed scan_type conditional, now ALWAYS filters to pending files
+- Previously only scans with type 'full' or 'file_changes' filtered correctly
+- All scan types now query database for pending files instead of using all discovered files
+- pixelprobe/api/stats_routes.py:33-84,100-155 - Added active scan path filtering to statistics endpoints
+
 ## [2.4.152] - 2025-11-16
 
 ### Fixed

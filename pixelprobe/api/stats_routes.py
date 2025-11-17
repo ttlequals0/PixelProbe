@@ -34,11 +34,40 @@ def exempt_from_rate_limit(f):
 @exempt_from_rate_limit
 @auth_required
 def get_stats():
-    """Get statistics about scanned files"""
+    """Get statistics about scanned files
+
+    When a scan is active, returns statistics filtered to the current scan paths.
+    When no scan is active, returns statistics for all files in database.
+    """
     try:
+        # Check if there's an active scan and get its paths
+        from models import ScanState
+        import json
+
+        scan_state = ScanState.query.filter_by(is_active=True).first()
+        where_clause = ""
+
+        if scan_state and scan_state.directories:
+            # Parse the directories JSON and build a WHERE clause
+            try:
+                directories = json.loads(scan_state.directories) if isinstance(scan_state.directories, str) else scan_state.directories
+                if directories and isinstance(directories, list):
+                    # Build OR conditions for each directory
+                    path_conditions = []
+                    for directory in directories:
+                        # Escape single quotes in directory path for SQL
+                        escaped_dir = directory.replace("'", "''")
+                        path_conditions.append(f"file_path LIKE '{escaped_dir}%'")
+
+                    if path_conditions:
+                        where_clause = "WHERE " + " OR ".join(path_conditions)
+                        logger.info(f"Filtering stats to active scan paths: {directories}")
+            except Exception as e:
+                logger.warning(f"Could not parse scan directories, showing all stats: {e}")
+
         # Use a single query with subqueries for better performance
         stats = db.session.execute(
-            text("""
+            text(f"""
                 SELECT
                     COUNT(*) as total_files,
                     SUM(CASE WHEN scan_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
@@ -50,6 +79,7 @@ def get_stats():
                     SUM(CASE WHEN marked_as_good = TRUE THEN 1 ELSE 0 END) as marked_as_good,
                     SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) THEN 1 ELSE 0 END) as warning_files
                 FROM scan_results
+                {where_clause}
             """)
         ).fetchone()
         
@@ -71,31 +101,54 @@ def get_stats():
         logger.error(f"Error getting stats: {str(e)}")
         # Fallback to individual queries if the optimized query fails
         try:
-            total_files = ScanResult.query.count()
-            completed_files = ScanResult.query.filter_by(scan_status='completed').count()
-            pending_files = ScanResult.query.filter(
+            # Check if there's an active scan to filter by paths (same logic as main query)
+            from models import ScanState
+            from sqlalchemy import or_
+            import json
+
+            base_query = ScanResult.query
+            scan_state = ScanState.query.filter_by(is_active=True).first()
+
+            if scan_state and scan_state.directories:
+                try:
+                    directories = json.loads(scan_state.directories) if isinstance(scan_state.directories, str) else scan_state.directories
+                    if directories and isinstance(directories, list):
+                        # Build OR conditions for each directory
+                        path_filters = []
+                        for directory in directories:
+                            path_filters.append(ScanResult.file_path.like(f"{directory}%"))
+
+                        if path_filters:
+                            base_query = base_query.filter(or_(*path_filters))
+                            logger.info(f"Filtering fallback stats to active scan paths: {directories}")
+                except Exception as e2:
+                    logger.warning(f"Could not parse scan directories in fallback, showing all stats: {e2}")
+
+            total_files = base_query.count()
+            completed_files = base_query.filter_by(scan_status='completed').count()
+            pending_files = base_query.filter(
                 ScanResult.scan_status == 'pending'
             ).count()
-            scanning_files = ScanResult.query.filter_by(scan_status='scanning').count()
-            error_files = ScanResult.query.filter_by(scan_status='error').count()
-            
+            scanning_files = base_query.filter_by(scan_status='scanning').count()
+            error_files = base_query.filter_by(scan_status='error').count()
+
             # Corrupted files: corrupted AND not marked as good
-            corrupted_files = ScanResult.query.filter(
+            corrupted_files = base_query.filter(
                 (ScanResult.is_corrupted == True) &
                 (ScanResult.marked_as_good == False)
             ).count()
 
             # Warning files: has warnings, not marked as good, and not corrupted
-            warning_files = ScanResult.query.filter(
+            warning_files = base_query.filter(
                 (ScanResult.has_warnings == True) &
                 (ScanResult.marked_as_good == False) &
                 ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None))
             ).count()
 
-            marked_as_good = ScanResult.query.filter_by(marked_as_good=True).count()
+            marked_as_good = base_query.filter_by(marked_as_good=True).count()
 
             # Healthy files: completed, no warnings, and (not corrupted OR marked as good)
-            healthy_files = ScanResult.query.filter(
+            healthy_files = base_query.filter(
                 ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None) | (ScanResult.marked_as_good == True)) &
                 ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None)) &
                 (ScanResult.scan_status == 'completed')

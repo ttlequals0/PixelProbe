@@ -713,41 +713,31 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         files_by_dir = {}
         
         # Get all pending files in one query
-        if scan_type in ['full', 'file_changes']:
-            # SIMPLIFIED: Just get files that need scanning directly from database
-            # No need to iterate through discovered_files if we can query directly
-            
-            if force_rescan:
-                # Get all files (new, pending, and completed for rescan)
-                files_to_scan = ScanResult.query.filter(
-                    db.or_(
-                        ScanResult.scan_status == 'pending',
-                        ScanResult.scan_status == 'completed'
-                    )
-                ).with_entities(ScanResult.file_path).all()
-                files_needing_scan = [f[0] for f in files_to_scan]
-            else:
-                # Just get pending files (new and never scanned)
-                files_to_scan = ScanResult.query.filter_by(
-                    scan_status='pending'
-                ).with_entities(ScanResult.file_path).all()
-                files_needing_scan = [f[0] for f in files_to_scan]
-            
-            logger.info(f"Found {len(files_needing_scan)} files that need scanning (pending or force rescan)")
-            
-            # Group by directory for chunk creation
-            for file_path in files_needing_scan:
-                dir_path = '/'.join(file_path.split('/')[:-1])
-                if dir_path not in files_by_dir:
-                    files_by_dir[dir_path] = []
-                files_by_dir[dir_path].append(file_path)
+        # ALWAYS filter to only files that need scanning, regardless of scan_type
+        if force_rescan:
+            # Get all files (new, pending, and completed for rescan)
+            files_to_scan = ScanResult.query.filter(
+                db.or_(
+                    ScanResult.scan_status == 'pending',
+                    ScanResult.scan_status == 'completed'
+                )
+            ).with_entities(ScanResult.file_path).all()
+            files_needing_scan = [f[0] for f in files_to_scan]
         else:
-            # For other scan types, use all discovered files
-            for file_path in discovered_files:
-                dir_path = '/'.join(file_path.split('/')[:-1])
-                if dir_path not in files_by_dir:
-                    files_by_dir[dir_path] = []
-                files_by_dir[dir_path].append(file_path)
+            # Just get pending files (new and never scanned)
+            files_to_scan = ScanResult.query.filter_by(
+                scan_status='pending'
+            ).with_entities(ScanResult.file_path).all()
+            files_needing_scan = [f[0] for f in files_to_scan]
+
+        logger.info(f"Found {len(files_needing_scan)} files that need scanning (pending or force rescan) out of {len(discovered_files)} discovered")
+
+        # Group by directory for chunk creation
+        for file_path in files_needing_scan:
+            dir_path = '/'.join(file_path.split('/')[:-1])
+            if dir_path not in files_by_dir:
+                files_by_dir[dir_path] = []
+            files_by_dir[dir_path].append(file_path)
         
         # Log how many files actually need scanning
         total_files_to_scan = sum(len(files) for files in files_by_dir.values())
