@@ -369,7 +369,7 @@ class GetScanResults(Resource):
             return {'error': 'Authentication required'}, 401
 
         from models import ScanResult
-        from pixelprobe.utils.timezone_utils import from_utc_to_configured
+        from pixelprobe.utils.timezone import from_utc_to_configured
         import os
 
         try:
@@ -545,7 +545,7 @@ class GetErrorFiles(Resource):
             return {'error': 'Authentication required'}, 401
 
         from models import ScanResult
-        from pixelprobe.utils.timezone_utils import from_utc_to_configured
+        from pixelprobe.utils.timezone import from_utc_to_configured
 
         try:
             page = request.args.get('page', 1, type=int)
