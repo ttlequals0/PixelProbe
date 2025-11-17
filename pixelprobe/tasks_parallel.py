@@ -170,6 +170,8 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                     
                 except Exception as e:
                     logger.error(f"Error removing orphan {file_path}: {e}")
+                    # Rollback the session to prevent "prepared state" errors
+                    db.session.rollback()
                     continue
         else:
             # Regular file scanning
@@ -276,6 +278,18 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                     
                 except Exception as e:
                     logger.error(f"Error scanning file {file_path} in chunk {chunk_id}: {e}")
+                    # Rollback the session to prevent "prepared state" errors
+                    db.session.rollback()
+                    # Mark file as error in database
+                    try:
+                        db_result = ScanResult.query.filter_by(file_path=file_path).first()
+                        if db_result:
+                            db_result.scan_status = 'error'
+                            db_result.error_message = str(e)[:500]
+                            db.session.commit()
+                    except Exception as db_error:
+                        logger.error(f"Failed to mark file as error: {db_error}")
+                        db.session.rollback()
                     continue
         
         # Final commit

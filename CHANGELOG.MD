@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.155] - 2025-11-16
+
+### Fixed
+- **Fixed "prepared state" database session errors during file scanning**
+  - Error message: "This session is in 'prepared' state; no further SQL can be emitted within this transaction"
+  - Root cause: Exception handlers didn't rollback the session after database errors
+  - Now: db.session.rollback() called in all exception handlers
+  - Files with scan errors are now properly marked with scan_status='error'
+
+- **Fixed stats math for files marked_as_good with warnings/corruption**
+  - Files with marked_as_good=TRUE and has_warnings=TRUE were not counted in any category
+  - Root cause: healthy query required has_warnings=FALSE, excluding marked_as_good files with warnings
+  - Now: files marked_as_good are always counted as healthy, regardless of warnings/corruption
+  - Formula: completed_files = healthy_files + corrupted_files + warning_files
+
+### Technical Details
+- pixelprobe/tasks_parallel.py:279-290 - Added db.session.rollback() and error file marking in exception handler
+- pixelprobe/tasks_parallel.py:173-174 - Added db.session.rollback() in orphan cleanup exception handler
+- pixelprobe/api/stats_routes.py:49 - Updated healthy_files query logic to prioritize marked_as_good
+- pixelprobe/api/stats_routes.py:100-109 - Updated healthy_files fallback query logic
+- Files with marked_as_good=TRUE now bypass corruption/warning checks for health classification
+- Prevents session from getting stuck in "prepared state" after errors
+
 ## [2.4.154] - 2025-11-16
 
 ### Fixed
