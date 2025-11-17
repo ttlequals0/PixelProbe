@@ -413,6 +413,39 @@ class GetScanResult(Resource):
             logger.error(f"Error getting scan result: {e}")
             return {'error': str(e)}, 500
 
+@scan_ns.route('/error-files')
+class GetErrorFiles(Resource):
+    @scan_ns.doc('get_error_files',
+                 params={
+                     'page': {'description': 'Page number', 'type': 'int', 'default': 1},
+                     'per_page': {'description': 'Results per page (use -1 for all)', 'type': 'int', 'default': 100},
+                     'sort_field': {'description': 'Field to sort by', 'type': 'string', 'default': 'scan_date', 'enum': ['scan_date', 'file_path', 'file_size', 'file_type', 'scan_duration']},
+                     'sort_order': {'description': 'Sort order', 'type': 'string', 'default': 'desc', 'enum': ['asc', 'desc']},
+                     'search': {'description': 'Filter by file path (optional)', 'type': 'string'}
+                 })
+    @scan_ns.response(200, 'Error files retrieved')
+    @scan_ns.response(401, 'Authentication required')
+    @scan_ns.response(500, 'Internal error', error_model)
+    def get(self):
+        """Get list of files that failed to scan
+
+        Returns paginated list of files with scan_status='error' including error messages,
+        scan dates, duration, and tool information. Supports filtering by file path and
+        sorting by various fields.
+        """
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.scan_routes import get_error_files
+        from flask import current_app
+        with current_app.test_request_context(
+            path='/api/error-files',
+            query_string=request.query_string,
+            headers=request.headers,
+            method='GET'
+        ):
+            return get_error_files()
+
 @scan_ns.route('/scan-file')
 class ScanSingleFile(Resource):
     @scan_ns.doc('scan_file')

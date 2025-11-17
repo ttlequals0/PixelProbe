@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.150] - 2025-11-16
+
+### Added
+- **Swagger/OpenAPI documentation for /api/error-files endpoint**
+  - Added endpoint documentation with parameter descriptions
+  - Supports query parameters: page, per_page, sort_field, sort_order, search
+  - Now visible in API documentation at /api/v1/docs
+
+- **Comprehensive API documentation for error-files endpoint**
+  - Added detailed usage guide in docs/api/README.md
+  - Explains why and when to use the endpoint
+  - Includes usage examples in curl and Python
+  - Documents common use cases and error patterns
+  - Provides guidance on resetting error files for retry
+
+### Technical Details
+- pixelprobe/api/swagger_routes.py:416-447 - Added GetErrorFiles Swagger resource
+- docs/api/README.md:494-607 - Added Error Management Endpoints section with comprehensive documentation
+
 ## [2.4.149] - 2025-11-16
 
 ### Fixed
