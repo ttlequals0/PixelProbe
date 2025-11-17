@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.4.153] - 2025-11-16
+## [2.4.154] - 2025-11-16
 
 ### Fixed
 - **Fixed scan progress showing incorrect estimated_total file count**
@@ -14,10 +14,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Now correctly counts only files that need scanning (pending status) for all scan types
   - Estimated total now accurately reflects number of files to be scanned, not total discovered
 
+- **Fixed double/triple counting of files during parallel scanning**
+  - Multiple parallel worker chunks were processing the same files, causing inflated progress counts
+  - Root cause: Multiple chunks queried for ALL pending files in a directory without claiming them
+  - No mechanism existed to prevent race conditions where chunks processed duplicate files
+  - Implemented file claiming mechanism: files are marked as 'scanning' before processing
+  - Queries now exclude files with 'scanning' status to prevent duplicate processing
+  - Progress counter now accurately reflects unique files processed, not duplicates
+
+- **Fixed dashboard statistics not adding up correctly (missing 44 files)**
+  - corrupted_files and warning_files were counting files in ANY status (including 'error')
+  - healthy_files only counted 'completed' status files
+  - This caused completed_files ≠ healthy + corrupted + warning
+  - Root cause: Missing scan_status='completed' filter on corrupted and warning queries
+  - Now all three categories (healthy, corrupted, warning) only count completed files
+  - Math now works: completed_files = healthy_files + corrupted_files + warning_files
+
 ### Technical Details
 - pixelprobe/tasks_parallel.py:715-740 - Removed scan_type conditional, now ALWAYS filters to pending files
+- pixelprobe/tasks_parallel.py:76-77 - Updated PENDING_FILES query to exclude 'scanning' status files
+- pixelprobe/tasks_parallel.py:85-95 - Updated directory chunk query to exclude 'scanning' status files
+- pixelprobe/tasks_parallel.py:124-135 - Added file claiming by marking files as 'scanning' before processing
+- pixelprobe/tasks_parallel.py:131 - Fixed claiming to handle both 'pending' AND 'completed' files (force_rescan)
+- pixelprobe/api/stats_routes.py:48 - Added scan_status='completed' filter to corrupted_files query
+- pixelprobe/api/stats_routes.py:51 - Added scan_status='completed' filter to warning_files query
+- pixelprobe/api/stats_routes.py:83-87 - Added scan_status='completed' filter to corrupted_files fallback query
+- pixelprobe/api/stats_routes.py:90-95 - Added scan_status='completed' filter to warning_files fallback query
 - Previously only scans with type 'full' or 'file_changes' filtered correctly
 - All scan types now query database for pending files instead of using all discovered files
+- File claiming prevents race conditions in distributed parallel processing
+- Force rescan now properly claims 'completed' files to prevent double counting
+- Stats queries now consistently filter by scan_status='completed' for health classifications
 
 ## [2.4.152] - 2025-11-16
 

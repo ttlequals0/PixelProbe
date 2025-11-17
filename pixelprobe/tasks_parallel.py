@@ -72,35 +72,37 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
         
         if chunk.directory_path == 'PENDING_FILES':
             # Special handling for pending files
+            # CRITICAL: Only get 'pending' files, NOT 'scanning' (which are claimed by other chunks)
             pending_files = ScanResult.query.filter_by(
                 scan_status='pending'
             ).limit(1000).all()  # Process 1000 pending files per chunk
-            
+
             files_to_scan = [f.file_path for f in pending_files]
-            logger.info(f"Processing {len(files_to_scan)} pending files in chunk {chunk_id}")
+            logger.info(f"Processing {len(files_to_scan)} pending files in chunk {chunk_id} (excluding files already being scanned)")
         else:
             # Regular directory chunk - get files from database
+            # CRITICAL: Only get 'pending' files, NOT 'scanning' (which are claimed by other chunks)
             files_in_chunk = ScanResult.query.filter(
                 ScanResult.file_path.like(f"{chunk.directory_path}%")
             ).filter(
                 db.or_(
-                    ScanResult.scan_status == 'pending',
+                    ScanResult.scan_status == 'pending',  # New files to scan
                     db.and_(
                         force_rescan == True,
-                        ScanResult.scan_status == 'completed'
+                        ScanResult.scan_status == 'completed'  # Rescan completed files if force_rescan
                     )
                 )
             ).limit(1000).all()  # Process up to 1000 files per chunk
-            
+
             files_to_scan = [f.file_path for f in files_in_chunk]
-            logger.info(f"Chunk {chunk.chunk_id}: Found {len(files_to_scan)} files to scan in {chunk.directory_path}")
+            logger.info(f"Chunk {chunk.chunk_id}: Found {len(files_to_scan)} files to scan in {chunk.directory_path} (excluding files already being scanned)")
         
         # Skip empty chunks
         if not files_to_scan:
             logger.info(f"Chunk {chunk_id} is empty, marking as complete")
             chunk.is_complete = True
             chunk.files_processed = 0
-            
+
             # IMPORTANT: Clear the current_file in scan_state when skipping empty chunks
             # Otherwise the UI will show stale directory paths
             scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
@@ -109,7 +111,7 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                 scan_state.current_file = ''
                 # Update the message to reflect we're skipping empty directories
                 scan_state.progress_message = f'Scanning: skipping empty directory {chunk.directory_path}'
-            
+
             db.session.commit()
             return {
                 'status': 'SKIPPED',
@@ -118,6 +120,19 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                 'files_processed': 0,
                 'reason': 'No files to scan in chunk'
             }
+
+        # CRITICAL FIX: Claim these files by marking them as 'scanning' to prevent other chunks from processing them
+        # This prevents race conditions where multiple chunks process the same files
+        if scan_type != 'orphan_cleanup':
+            logger.info(f"Chunk {chunk_id}: Claiming {len(files_to_scan)} files by marking as 'scanning'")
+            claimed_count = 0
+            for file_path in files_to_scan:
+                db_result = ScanResult.query.filter_by(file_path=file_path).first()
+                if db_result and db_result.scan_status in ['pending', 'completed']:
+                    db_result.scan_status = 'scanning'
+                    claimed_count += 1
+            db.session.commit()
+            logger.info(f"Chunk {chunk_id}: Successfully claimed {claimed_count} files")
         
         # Process files based on scan type
         files_processed = 0
