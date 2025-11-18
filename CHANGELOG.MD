@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.158] - 2025-11-17
+
+### Fixed
+- **Fixed "prepared state" errors during parallel scanning**
+  - Root cause: v2.4.157 added with_for_update() which requires an active transaction
+  - When one file save failed, session was left in 'prepared' state causing all subsequent saves on that worker to fail
+  - Fix: Removed with_for_update() (unnecessary since each worker has separate session) and added session.rollback() at start of _save_to_cache
+  - Impact: Workers can now recover from failed transactions and continue scanning other files
+
+### Technical Details
+- media_checker.py:2243-2247 - Added session.rollback() at start to clean up previous failed transactions
+- media_checker.py:2251 - Removed with_for_update() which was causing prepared state errors
+- Session cleanup happens before each save attempt, ensuring clean transaction state
+
 ## [2.4.157] - 2025-11-17
 
 ### Fixed

@@ -2240,9 +2240,15 @@ class PixelProbe:
                 logger.warning(f"No database session available for caching {file_path}")
                 return
 
+            # Rollback any previous failed transaction to ensure session is clean
+            try:
+                session.rollback()
+            except:
+                pass  # Session might not be in a transaction
+
             # Check for existing record with explicit expiry to avoid stale data
             session.expire_all()
-            db_result = session.query(ScanResult).filter_by(file_path=file_path).with_for_update().first()
+            db_result = session.query(ScanResult).filter_by(file_path=file_path).first()
 
             if not db_result:
                 # Record doesn't exist - this shouldn't happen as records are created during discovery
