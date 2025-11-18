@@ -2240,14 +2240,21 @@ class PixelProbe:
                 logger.warning(f"No database session available for caching {file_path}")
                 return
 
-            # Rollback any previous failed transaction to ensure session is clean
+            # Only rollback if session is in a failed/invalid state
+            # Don't rollback unconditionally as it disrupts concurrent operations on shared sessions
             try:
-                session.rollback()
-            except:
-                pass  # Session might not be in a transaction
+                # Check if session is in a bad state by attempting a simple operation
+                # If it fails, we'll catch it and rollback
+                session.expire_all()
+            except Exception as e:
+                # Session is in bad state, rollback and retry
+                logger.debug(f"Session in bad state, rolling back: {e}")
+                try:
+                    session.rollback()
+                    session.expire_all()
+                except:
+                    pass
 
-            # Check for existing record with explicit expiry to avoid stale data
-            session.expire_all()
             db_result = session.query(ScanResult).filter_by(file_path=file_path).first()
 
             if not db_result:

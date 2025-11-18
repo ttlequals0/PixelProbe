@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.159] - 2025-11-17
+
+### Fixed
+- **Fixed "provisioning a new connection" errors during parallel scanning**
+  - Root cause: v2.4.158's unconditional session.rollback() disrupted concurrent operations on shared sessions
+  - Multiple threads in same worker process share a database session
+  - Thread A calling rollback() interrupted Thread B's active operations, causing "concurrent operations are not permitted" errors
+  - Fix: Only rollback when session is actually in a bad state (test with expire_all() first)
+  - Impact: Threads can now safely share sessions without disrupting each other's operations
+
+### Technical Details
+- media_checker.py:2243-2256 - Changed from unconditional rollback to conditional rollback only when session is in bad state
+- First attempt expire_all() to test session state
+- Only rollback if expire_all() fails, indicating session is in bad state
+- Prevents concurrent thread operations from being disrupted by unnecessary rollbacks
+
 ## [2.4.158] - 2025-11-17
 
 ### Fixed
