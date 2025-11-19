@@ -19,11 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Fixed progress tracking showing individual chunk progress instead of total**
   - Progress was showing "42 of 142 files" instead of "42 of 1,094,089 files"
-  - Root cause: Parallel chunk workers were overwriting estimated_total with chunk size
+  - Root cause: Parallel chunk workers had race condition overwriting aggregate progress
+    - Multiple workers updated files_processed with their local chunk count (e.g., 10)
+    - This overwrote the aggregate count (e.g., 1050) that the main thread calculated
+    - Last writer wins, so UI showed random chunk's progress instead of aggregate
   - Each of 20 workers processes a chunk (e.g., 142 files), but UI should show aggregate progress
-  - Solution: Chunk workers now preserve the aggregate estimated_total set at scan initialization
-  - Workers only update files_processed, not estimated_total
-  - Impact: UI now shows correct total progress across all workers
+  - Solution:
+    - Chunk workers NO LONGER update files_processed in parallel mode
+    - Only the main thread aggregates and updates files_processed
+    - Chunk workers only update current_file, last_update, progress_message for real-time feedback
+    - Progress message uses aggregate files_processed from database, not chunk's local count
+    - Chunk workers preserve estimated_total set at scan initialization
+  - Impact: UI now shows correct aggregate progress across all workers
   - API log evidence: current=2, total=142 (should be total=1,094,089)
 
 ### Technical Details
@@ -33,16 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Changed task_time_limit from 7200 to None
   - Comment clarifies: "No global timeouts - scan tasks with 1M+ files can take 3-4+ hours"
 
-- scan_service.py:2356-2390 (parallel file processing)
+- scan_service.py:2355-2385 (parallel file processing)
   - Added aggregate_total calculation using existing estimated_total from scan_state
-  - When total_to_scan=0 (parallel chunk worker), only update files_processed and current_file
-  - Do not call update_progress() which would overwrite estimated_total
-  - Use aggregate_total for progress message generation, not chunk's total_to_scan
+  - When total_to_scan=0 (parallel chunk worker):
+    - DO NOT update files_processed (prevents race condition)
+    - Only update current_file and last_update
+    - Use aggregate files_processed from DB for progress_message
+  - When total_to_scan>0 (sequential mode):
+    - Update both files_processed and estimated_total normally
+  - Use aggregate_total for progress message generation
 
-- scan_service.py:2430-2478 (sequential file processing)
-  - Applied same aggregate_total fix for consistency
-  - Preserves estimated_total when processing in parallel mode
-  - Error recovery also uses aggregate_total
+- scan_service.py:2431-2483 (sequential file processing)
+  - Applied same logic for consistency
+  - Parallel mode: skip files_processed update
+  - Sequential mode: update files_processed normally
+  - Error recovery also respects parallel vs sequential mode
 
 ### Root Cause Analysis
 
@@ -52,13 +64,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - But parallel scans with 20 workers processing 1.09M files take 3-4+ hours total
 - Workers were killed at 2-hour mark, leaving files in pending state
 
-**Issue 2: Progress Tracking**
+**Issue 2: Progress Tracking Race Condition**
 - At scan initialization, estimated_total correctly set to full count (1,094,089 files)
-- Parallel scan spawns 20 chunk workers, each processing subset (e.g., 142 files)
-- Each chunk worker called _scan_chunk_files() with total_to_scan=0 parameter
-- However, workers then called update_progress() which attempted to set estimated_total
-- Protection in update_progress() prevented overwriting with 0, but chunk's file count was being used
-- This caused UI to show one worker's chunk progress instead of aggregate
+- Main thread in _parallel_scan_chunks aggregates chunk results and updates files_processed
+- BUT: Each chunk worker ALSO tried to update files_processed with its local count
+- Race condition:
+  - Worker A scans 10 files locally, writes files_processed=10
+  - Worker B scans 5 files locally, writes files_processed=5
+  - Main thread aggregates: worker_A(10) + worker_B(5) = 15, writes files_processed=15
+  - Final value depends on write order (last writer wins)
+  - If worker B writes last: files_processed=5 (WRONG! Should be 15)
+- This caused UI to show random chunk's progress instead of aggregate
+- Fix: Chunk workers no longer update files_processed, only main thread does
 
 ## [2.4.160] - 2025-11-18
 
