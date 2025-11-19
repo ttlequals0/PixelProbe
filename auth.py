@@ -58,13 +58,10 @@ def init_auth(app):
             except Exception as e:
                 logger.error(f"Error loading user from API token: {e}")
 
-        # Check for API token in query parameter (for backward compatibility)
-        token = request.args.get('api_token')
-        if token:
-            api_token = APIToken.query.filter_by(token=token, is_active=True).first()
-            if api_token and api_token.is_valid():
-                api_token.update_last_used()
-                return api_token.user
+        # SECURITY: API tokens in query parameters removed per P0 security audit
+        # Tokens in URLs are logged and exposed in browser history
+        # API tokens MUST be sent via Authorization header only
+        # If you need to authenticate, use: Authorization: Bearer <token>
 
         return None
 

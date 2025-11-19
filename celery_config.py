@@ -1,6 +1,5 @@
 """
 Celery Configuration Module for PixelProbe
-P1 Implementation per 2.1_AUDIT_IMPLEMENTATION_PLAN.md
 """
 
 from celery import Celery
@@ -50,12 +49,11 @@ def create_celery(app=None):
         'task_default_routing_key': 'pixelprobe',
         
         # Retry and timeout settings
-        'task_acks_late': False,  # Acknowledge immediately to prevent redelivery
+        'task_acks_late': True,  # Acknowledge only after successful completion to prevent task loss
         'task_reject_on_worker_lost': True,
-        # Note: Timeouts disabled for scan tasks to allow processing large datasets
-        # Individual tasks can override these if needed
-        'task_soft_time_limit': None,  # No soft limit by default
-        'task_time_limit': None,        # No hard limit by default
+        # Timeouts set to prevent worker hangs, individual tasks can override if needed
+        'task_soft_time_limit': 3600,  # 1 hour soft limit
+        'task_time_limit': 7200,        # 2 hour hard limit
         
         # Worker settings
         'worker_prefetch_multiplier': 1,  # One task per worker at a time

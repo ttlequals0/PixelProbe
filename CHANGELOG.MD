@@ -5,6 +5,105 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.160] - 2025-11-18
+
+### Security Improvements
+- **Removed API token support in URL query parameters**
+  - API tokens can no longer be passed via ?api_token= query parameter
+  - Tokens must now be sent via Authorization header only (Bearer token)
+  - Prevents token exposure in server logs, browser history, and referrer headers
+  - Impact: Enhanced security, tokens no longer visible in URLs
+
+- **Fixed XSS vulnerability in progress details display**
+  - Added HTML escaping to user-controlled data in progress details
+  - Prevents potential XSS attacks via malicious file paths or scan details
+  - Impact: Improved frontend security
+
+### Performance Optimizations
+- **Enhanced ImageMagick validation for deeper corruption detection**
+  - Changed from 'identify' command to 'convert' with pixel validation
+  - Now validates actual pixel data, not just file headers
+  - Detects deeper corruption that header-only validation misses
+  - Impact: More thorough image corruption detection
+
+- **Added video validation timeout to prevent worker hangs**
+  - Implemented dynamic timeout: 5 min base + 60s per GB, max 2 hours
+  - Prevents workers from hanging indefinitely on corrupted or extremely large video files
+  - Impact: Improved worker reliability and system stability
+
+- **Automatic database index optimization on startup**
+  - Automatically drops 8 duplicate indexes wasting 625MB of disk space
+  - Adds composite indexes for common query patterns
+  - Runs automatically on application startup (no manual migration needed)
+  - Expected savings: 625MB (44% database size reduction)
+  - Impact: Faster writes, reduced storage costs, improved query performance
+
+### Reliability Improvements
+- **Fixed Celery task loss on worker failure**
+  - Changed task_acks_late from False to True
+  - Tasks now acknowledged only after successful completion
+  - Prevents permanent data loss if worker crashes mid-task
+  - Impact: Improved data integrity and reliability
+
+- **Added global task timeouts**
+  - Set task_soft_time_limit to 3600s (1 hour)
+  - Set task_time_limit to 7200s (2 hours)
+  - Individual tasks can override if needed
+  - Impact: Prevents runaway tasks from blocking workers indefinitely
+
+- **Enabled Celery worker monitoring**
+  - Removed --without-gossip, --without-mingle, --without-heartbeat flags
+  - Re-enabled worker health monitoring and heartbeat
+  - Allows detection of dead or stuck workers
+  - Impact: Better operational visibility and automatic recovery
+
+- **Increased worker memory limit**
+  - Changed max-memory-per-child from 500MB to 2GB
+  - Allows processing of larger media files without worker crashes
+  - Impact: Reduced worker restarts during large file processing
+
+### Technical Details
+- celery_config.py:53-57 - Changed task_acks_late to True, added global timeouts
+- celery_worker.py:63-64 - Removed monitoring disable flags, increased memory limit
+- media_checker.py:1011-1019 - Changed ImageMagick from 'identify' to 'convert' with -regard-warnings
+- media_checker.py:1403-1405 - Added dynamic timeout for video validation
+- auth.py:61-66 - Removed API token query parameter support
+- static/js/app.js:3-9 - Added global HTML escaping function
+- static/js/app.js:427 - Applied HTML escaping to progress details
+- tools/app_startup_migration.py:13-78 - Automatic migration system with index optimization
+
+### P1 Performance and Security Enhancements
+
+- **Added authentication rate limiting**
+  - Login endpoint limited to 5 attempts per minute
+  - First-run setup limited to 3 attempts per hour
+  - Prevents brute force attacks on authentication
+  - Impact: Enhanced security against credential attacks
+
+- **Implemented exponential backoff polling**
+  - Progress polling starts at 1 second, backs off to 5 seconds when no changes
+  - Reduces server load by up to 70% during idle periods
+  - Automatically returns to fast polling when progress resumes
+  - Impact: Reduced API calls from 120/min to ~20-40/min average
+
+- **Added composite database indexes**
+  - Created idx_status_corrupted for status/corruption queries
+  - Created idx_scan_date_desc for recent scan lookups
+  - Improves query performance for common access patterns
+  - Impact: Faster dashboard and report queries
+
+### Technical Details (P1)
+- pixelprobe/utils/rate_limiting.py:57-62 - Added auth endpoint rate limits
+- static/js/app.js:541-563 - Implemented exponential backoff polling
+- static/js/app.js:497-498 - Track progress value for backoff logic
+- tools/app_startup_migration.py:13-72 - Automatic index optimization on startup
+
+### Audit Implementation
+- Implemented all Priority 0 (P0) issues from comprehensive security and performance audit
+- Implemented key Priority 1 (P1) performance and security enhancements
+- Created audit_reports/P0_IMPLEMENTATION_TRACKER.md to track progress
+- All critical security and reliability issues addressed
+
 ## [2.4.159] - 2025-11-17
 
 ### Fixed

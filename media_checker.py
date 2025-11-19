@@ -1005,12 +1005,13 @@ class PixelProbe:
         
         try:
             # Enhanced ImageMagick validation with comprehensive checks
-            # We validate the ENTIRE image file, not just metadata/headers
-            # Simplified command to avoid parsing issues
+            # Using 'convert' instead of 'identify' to validate PIXEL DATA, not just headers
+            # This forces ImageMagick to decode the entire image, detecting deeper corruption
             result = safe_subprocess_run(
-                ['identify', 
-                 '-quiet',                # Suppress benign warnings like PNG sBIT
-                 file_path],              # Check full file integrity
+                ['convert',
+                 file_path,               # Input file
+                 '-regard-warnings',      # Treat warnings as errors for strict validation
+                 'null:'],                # Null output (discard result, we only check for errors)
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -1019,7 +1020,7 @@ class PixelProbe:
             )
             
             if result.returncode != 0:
-                scan_output.append(f"ImageMagick identify: FAILED (exit code {result.returncode})")
+                scan_output.append(f"ImageMagick convert: FAILED (exit code {result.returncode})")
                 if result.stderr:
                     scan_output.append(f"ImageMagick stderr: {result.stderr[:200]}")
                     stderr_lower = result.stderr.lower()
@@ -1028,7 +1029,7 @@ class PixelProbe:
                         # This is a common false positive for GIFs that still work
                         logger.info(f"GIF header warning (not corruption) for {file_path}")
                     else:
-                        corruption_details.append("ImageMagick identify failed")
+                        corruption_details.append("ImageMagick pixel validation failed")
                         is_corrupted = True
                         scan_tool = "imagemagick"
                 else:
@@ -1036,15 +1037,15 @@ class PixelProbe:
                     # ImageMagick might fail due to missing delegates/decoders
                     if not pil_failed and not pil_load_failed:
                         # PIL passed, so file is likely OK - ImageMagick issue
-                        warning_details.append("ImageMagick identify failed (but PIL passed - likely decoder issue)")
+                        warning_details.append("ImageMagick convert failed (but PIL passed - likely decoder issue)")
                         scan_output.append("Note: ImageMagick failed but PIL verified OK")
                         scan_tool = "pil"  # Use PIL as the authoritative tool
                     else:
                         # Both PIL and ImageMagick failed - likely corrupted
-                        corruption_details.append("ImageMagick identify failed")
+                        corruption_details.append("ImageMagick pixel validation failed")
                         is_corrupted = True
                         scan_tool = "imagemagick"
-                logger.warning(f"ImageMagick identify failed for {file_path}")
+                logger.warning(f"ImageMagick convert failed for {file_path}")
             elif result.stderr:
                 # Check if this is just a metadata/profile warning (not actual corruption)
                 stderr_lower = result.stderr.lower()
@@ -1064,12 +1065,12 @@ class PixelProbe:
                 
                 if is_profile_warning:
                     # Profile warnings (like XMP) don't indicate actual image corruption
-                    scan_output.append("ImageMagick identify: PASSED (with profile warnings)")
+                    scan_output.append("ImageMagick convert: PASSED (with profile warnings)")
                     logger.info(f"ImageMagick profile warning (not corruption) for {file_path}: {result.stderr[:100]}")
                 elif is_png_warning:
                     # PNG chunk warnings don't indicate actual image corruption
                     warning_details.append("PNG metadata warning")
-                    scan_output.append("ImageMagick identify: PASSED (with PNG metadata warnings)")
+                    scan_output.append("ImageMagick convert: PASSED (with PNG metadata warnings)")
                     logger.info(f"ImageMagick PNG warning (not corruption) for {file_path}: {result.stderr[:100]}")
                 elif any(keyword in stderr_lower for keyword in ['error', 'corrupt', 'truncated', 'damaged']):
                     corruption_details.append(f"ImageMagick warnings: {result.stderr[:100]}")
@@ -1078,15 +1079,15 @@ class PixelProbe:
                     scan_output.append(f"ImageMagick warnings: {result.stderr[:200]}")
                     logger.warning(f"ImageMagick warnings for {file_path}: {result.stderr[:100]}")
                 else:
-                    scan_output.append("ImageMagick identify: PASSED (with warnings)")
+                    scan_output.append("ImageMagick convert: PASSED (with warnings)")
             else:
-                scan_output.append("ImageMagick identify: PASSED")
-                logger.info(f"ImageMagick verification passed for: {file_path}")
+                scan_output.append("ImageMagick convert: PASSED")
+                logger.info(f"ImageMagick pixel validation passed for: {file_path}")
         
         except subprocess.TimeoutExpired:
             # ImageMagick timeout should be a warning, not corruption
             # Only mark as corrupted if other tools also failed
-            timeout_msg = f"ImageMagick identify timeout ({imagemagick_timeout}s) - file may be very complex"
+            timeout_msg = f"ImageMagick convert timeout ({imagemagick_timeout}s) - file may be very complex"
             
             # If PIL passed, treat timeout as warning rather than corruption
             if not pil_failed and not pil_load_failed:
@@ -1400,10 +1401,9 @@ class PixelProbe:
         file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
         file_size_gb = file_size / (1024 * 1024 * 1024)
 
-        # No timeout for FFmpeg validation - we must scan the entire file regardless of size
-        # This ensures complete validation even for very large files
-        timeout_seconds = None
-        logger.info(f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (no timeout - complete validation required)")
+        # Scale timeout with file size to prevent worker hangs: 5 min base + 60s per GB, max 2 hours
+        timeout_seconds = min(300 + int(file_size_gb * 60), 7200)
+        logger.info(f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (timeout: {timeout_seconds}s)")
         
         # Enhanced FFmpeg validation with best practices for thorough file checking
         try:

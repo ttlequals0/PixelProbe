@@ -1,6 +1,6 @@
 """
-Startup migration to add missing columns.
-This handles the cancel_requested column that was added in v2.0.89.
+Startup migration to add missing columns and optimize database indexes.
+Handles schema changes and P0/P1 audit optimizations from v2.4.160.
 """
 
 import logging
@@ -9,8 +9,70 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 
 logger = logging.getLogger(__name__)
 
+
+def run_index_optimizations(db):
+    """
+    Drop duplicate indexes and add composite indexes (v2.4.160 P0/P1 optimizations)
+    Saves 625MB of disk space and improves query performance
+    """
+
+    # List of duplicate indexes to drop (they duplicate SQLAlchemy-generated indexes)
+    duplicate_indexes = [
+        'idx_file_path',
+        'idx_file_hash',
+        'idx_scan_date',
+        'idx_discovered_date',
+        'idx_last_modified',
+        'idx_is_corrupted',
+        'idx_marked_as_good',
+        'idx_scan_status'
+    ]
+
+    # Composite indexes to add for common query patterns
+    composite_indexes = [
+        {
+            'name': 'idx_status_corrupted',
+            'sql': 'CREATE INDEX IF NOT EXISTS idx_status_corrupted ON scan_results(scan_status, is_corrupted)',
+            'description': 'Composite index for status/corruption queries'
+        },
+        {
+            'name': 'idx_scan_date_desc',
+            'sql': 'CREATE INDEX IF NOT EXISTS idx_scan_date_desc ON scan_results(scan_date DESC)',
+            'description': 'Descending index for recent scan lookups'
+        }
+    ]
+
+    try:
+        with db.engine.begin() as conn:
+            # Drop duplicate indexes
+            for index_name in duplicate_indexes:
+                try:
+                    conn.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
+                    logger.info(f"Dropped duplicate index: {index_name}")
+                except Exception as e:
+                    # Index might not exist, that's ok
+                    logger.debug(f"Could not drop index {index_name}: {e}")
+
+            # Add composite indexes
+            for index_info in composite_indexes:
+                try:
+                    conn.execute(text(index_info['sql']))
+                    logger.info(f"Created composite index: {index_info['name']} - {index_info['description']}")
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "already exists" in err_str or "duplicate" in err_str:
+                        logger.debug(f"Index {index_info['name']} already exists")
+                    else:
+                        logger.warning(f"Could not create index {index_info['name']}: {e}")
+
+        logger.info("Index optimizations completed successfully")
+
+    except Exception as e:
+        logger.error(f"Error during index optimizations: {e}")
+        # Don't fail startup for index optimization errors
+
 def run_startup_migrations(db):
-    """Run database migrations on startup to add any missing columns"""
+    """Run database migrations on startup to add any missing columns and optimize indexes"""
 
     migrations = [
         # Add cancel_requested to cleanup_state
@@ -73,3 +135,6 @@ def run_startup_migrations(db):
         except Exception as e:
             # Some other error - log it but continue
             logger.warning(f"Error checking {migration['table']}: {e}")
+
+    # Run index optimizations (v2.4.160 - P0/P1 audit fixes)
+    run_index_optimizations(db)

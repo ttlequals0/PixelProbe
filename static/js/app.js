@@ -1,5 +1,13 @@
 // PixelProbe Modern UI JavaScript
 
+// HTML Escaping Utility to prevent XSS attacks
+function escapeHtml(text) {
+    if (text == null) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML;
+}
+
 // Theme Management
 class ThemeManager {
     constructor() {
@@ -416,7 +424,7 @@ class ProgressManager {
             // Add recovery button if scan is stuck
             if (isStuck && this.operationType === 'scan') {
                 progressDetails.innerHTML = `
-                    <div>${detailsText}</div>
+                    <div>${escapeHtml(detailsText)}</div>
                     <div style="margin-top: 10px;">
                         <button class="btn btn-warning" onclick="app.recoverStuckScan()">
                             <i class="fas fa-wrench"></i> Recover Stuck Scan
@@ -485,6 +493,9 @@ class ProgressManager {
                         file: status.file
                     };
                 }
+
+                // Track progress value for exponential backoff polling
+                this.lastProgressValue = status.current || 0;
             } else if (this.operationType === 'cleanup') {
                 status = await this.api.getCleanupStatus();
                 isRunning = status.is_running;
@@ -529,10 +540,30 @@ class ProgressManager {
         
         // Immediately check status once
         await this.checkProgress();
-        
-        this.checkInterval = setInterval(async () => {
+
+        // Implement exponential backoff polling (P1 performance optimization)
+        // Start at 1 second, backoff to max 5 seconds if no changes
+        this.pollDelay = 1000;
+        this.lastProgressValue = null;
+
+        const pollWithBackoff = async () => {
+            const previousProgress = this.lastProgressValue;
             await this.checkProgress();
-        }, 1000); // Poll every 1 second
+
+            // If progress changed, reset to fast polling
+            // Otherwise, increase delay with exponential backoff
+            const currentProgress = this.lastProgressValue;
+            if (currentProgress !== previousProgress && currentProgress !== null) {
+                this.pollDelay = 1000; // Reset to 1 second on change
+            } else {
+                // Exponential backoff: increase by 1.5x, max 5 seconds
+                this.pollDelay = Math.min(this.pollDelay * 1.5, 5000);
+            }
+
+            this.checkInterval = setTimeout(pollWithBackoff, this.pollDelay);
+        };
+
+        this.checkInterval = setTimeout(pollWithBackoff, this.pollDelay);
     }
     
     updateCleanupButton(isRunning) {
