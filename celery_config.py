@@ -51,9 +51,10 @@ def create_celery(app=None):
         # Retry and timeout settings
         'task_acks_late': True,  # Acknowledge only after successful completion to prevent task loss
         'task_reject_on_worker_lost': True,
-        # Timeouts set to prevent worker hangs, individual tasks can override if needed
-        'task_soft_time_limit': 3600,  # 1 hour soft limit
-        'task_time_limit': 7200,        # 2 hour hard limit
+        # No global timeouts - scan tasks with 1M+ files can take 3-4+ hours
+        # Individual media validation has its own timeouts (video: dynamic based on size)
+        'task_soft_time_limit': None,  # No soft limit - scans need unlimited time
+        'task_time_limit': None,        # No hard limit - scans need unlimited time
         
         # Worker settings
         'worker_prefetch_multiplier': 1,  # One task per worker at a time

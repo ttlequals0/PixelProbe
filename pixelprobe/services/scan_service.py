@@ -2352,14 +2352,30 @@ class ScanService:
                                         # Merge the scan_state into the new session
                                         progress_scan_state = progress_session.merge(scan_state)
                                         progress_scan_state.files_processed = current_total
-                                        progress_scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+
+                                        # CRITICAL FIX (v2.4.161): For parallel scans, use the existing estimated_total
+                                        # from scan_state instead of the chunk's total_to_scan.
+                                        # The estimated_total was already set correctly at the beginning of parallel scan
+                                        # to the full count across ALL chunks. Each chunk worker should only update
+                                        # files_processed, not estimated_total.
+                                        aggregate_total = progress_scan_state.estimated_total if progress_scan_state.estimated_total > 0 else total_to_scan
+
+                                        # Only update estimated_total if we have a valid total_to_scan
+                                        # (0 means we're in a parallel chunk worker and shouldn't override the aggregate total)
+                                        if total_to_scan > 0:
+                                            progress_scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+                                        else:
+                                            # Parallel worker: only update files_processed and current_file, preserve estimated_total
+                                            progress_scan_state.files_processed = current_total
+                                            progress_scan_state.current_file = file_result.file_path
+                                            progress_scan_state.last_update = datetime.now(timezone.utc)
 
                                         from utils import ProgressTracker
                                         progress_tracker = ProgressTracker('scan')
                                         progress_scan_state.progress_message = progress_tracker.get_progress_message(
                                             f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
                                             current_total,
-                                            total_to_scan,
+                                            aggregate_total,  # Use aggregate total, not chunk total
                                             os.path.basename(file_result.file_path)
                                         )
                                         progress_session.commit()
@@ -2410,7 +2426,19 @@ class ScanService:
                             if scan_state and (scanned - last_commit_count) >= update_threshold:
                                 try:
                                     scan_state.files_processed = current_total
-                                    scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+
+                                    # CRITICAL FIX (v2.4.161): For parallel scans, use the existing estimated_total
+                                    # from scan_state instead of the chunk's total_to_scan
+                                    aggregate_total = scan_state.estimated_total if scan_state.estimated_total > 0 else total_to_scan
+
+                                    # Only update estimated_total if we have a valid total_to_scan
+                                    if total_to_scan > 0:
+                                        scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+                                    else:
+                                        # Parallel worker: only update files_processed and current_file, preserve estimated_total
+                                        scan_state.files_processed = current_total
+                                        scan_state.current_file = file_result.file_path
+                                        scan_state.last_update = datetime.now(timezone.utc)
 
                                     # Update progress message with current file info
                                     from utils import ProgressTracker
@@ -2418,7 +2446,7 @@ class ScanService:
                                     scan_state.progress_message = progress_tracker.get_progress_message(
                                         f'Phase 3 of 3: Scanning files',
                                         current_total,
-                                        total_to_scan,
+                                        aggregate_total,  # Use aggregate total, not chunk total
                                         os.path.basename(file_result.file_path)
                                     )
                                     db.session.commit()
@@ -2436,7 +2464,14 @@ class ScanService:
                                     # Re-get scan state and try again without aggressive session cleanup
                                     scan_state = db.session.query(ScanState).filter_by(id=scan_state.id).first()
                                     if scan_state:
-                                        scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+                                        # Use aggregate_total for recovery too
+                                        recovery_total = scan_state.estimated_total if scan_state.estimated_total > 0 else total_to_scan
+                                        if total_to_scan > 0:
+                                            scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+                                        else:
+                                            scan_state.files_processed = current_total
+                                            scan_state.current_file = file_result.file_path
+                                            scan_state.last_update = datetime.now(timezone.utc)
                                         db.session.commit()
                                         last_commit_count = scanned
                                 except Exception as e2:

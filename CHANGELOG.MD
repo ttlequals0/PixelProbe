@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.161] - 2025-11-19
+
+### Critical Fixes
+
+- **Fixed task timeout killing large scans**
+  - Reverted global task timeouts (task_soft_time_limit and task_time_limit) to None
+  - The 2-hour timeout added in v2.4.160 was causing scans with 1M+ files to fail silently
+  - Scans with 1,094,089 files take 3-4+ hours to complete - need unlimited time
+  - Individual media validation still has appropriate timeouts (video: dynamic based on size)
+  - Impact: Large scans can now complete without timing out
+  - Log evidence: "Hard time limit (7200s) exceeded for pixelprobe.tasks.scan_media_task"
+
+- **Fixed progress tracking showing individual chunk progress instead of total**
+  - Progress was showing "42 of 142 files" instead of "42 of 1,094,089 files"
+  - Root cause: Parallel chunk workers were overwriting estimated_total with chunk size
+  - Each of 20 workers processes a chunk (e.g., 142 files), but UI should show aggregate progress
+  - Solution: Chunk workers now preserve the aggregate estimated_total set at scan initialization
+  - Workers only update files_processed, not estimated_total
+  - Impact: UI now shows correct total progress across all workers
+  - API log evidence: current=2, total=142 (should be total=1,094,089)
+
+### Technical Details
+
+- celery_config.py:56-57
+  - Changed task_soft_time_limit from 3600 to None
+  - Changed task_time_limit from 7200 to None
+  - Comment clarifies: "No global timeouts - scan tasks with 1M+ files can take 3-4+ hours"
+
+- scan_service.py:2356-2390 (parallel file processing)
+  - Added aggregate_total calculation using existing estimated_total from scan_state
+  - When total_to_scan=0 (parallel chunk worker), only update files_processed and current_file
+  - Do not call update_progress() which would overwrite estimated_total
+  - Use aggregate_total for progress message generation, not chunk's total_to_scan
+
+- scan_service.py:2430-2478 (sequential file processing)
+  - Applied same aggregate_total fix for consistency
+  - Preserves estimated_total when processing in parallel mode
+  - Error recovery also uses aggregate_total
+
+### Root Cause Analysis
+
+**Issue 1: Task Timeout**
+- v2.4.160 added global 2-hour (7200s) timeout as P0 fix
+- Timeout appropriate for individual media file validation
+- But parallel scans with 20 workers processing 1.09M files take 3-4+ hours total
+- Workers were killed at 2-hour mark, leaving files in pending state
+
+**Issue 2: Progress Tracking**
+- At scan initialization, estimated_total correctly set to full count (1,094,089 files)
+- Parallel scan spawns 20 chunk workers, each processing subset (e.g., 142 files)
+- Each chunk worker called _scan_chunk_files() with total_to_scan=0 parameter
+- However, workers then called update_progress() which attempted to set estimated_total
+- Protection in update_progress() prevented overwriting with 0, but chunk's file count was being used
+- This caused UI to show one worker's chunk progress instead of aggregate
+
 ## [2.4.160] - 2025-11-18
 
 ### Security Improvements
