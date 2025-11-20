@@ -190,6 +190,10 @@ class APIClient {
         return this.request('/system-info');
     }
 
+    async getTrends() {
+        return this.request('/trends');
+    }
+
     // Scan methods
     async getScanResults(params = {}) {
         const queryString = new URLSearchParams(params).toString();
@@ -1869,28 +1873,37 @@ class PixelProbeApp {
 
     async showSystemStats() {
         try {
-            const info = await this.api.getSystemInfo();
-            this.showSystemStatsModal(info);
+            const [info, trends] = await Promise.all([
+                this.api.getSystemInfo(),
+                this.api.getTrends()
+            ]);
+            this.showSystemStatsModal(info, trends);
         } catch (error) {
             console.error('System info error:', error);
             this.showNotification('Failed to load system info', 'error');
         }
     }
 
-    showSystemStatsModal(info) {
+    showSystemStatsModal(info, trends) {
         const modal = document.querySelector('#system-stats-modal');
         if (!modal) return;
-        
+
         const modalBody = modal.querySelector('.modal-body');
         if (!modalBody) return;
-        
+
         // Format the system info with columns layout
         let html = '<div class="system-stats-content">';
+
+        // Add Trends Section at the top
+        if (trends && trends.trends) {
+            html += this.renderTrendsSection(trends);
+        }
+
         html += '<div class="stats-columns">';
-        
+
         // Column 1
         html += '<div class="stats-column">';
-        
+
         // Database Stats
         if (info.database) {
             html += '<h4>Database Statistics</h4>';
@@ -1903,7 +1916,7 @@ class PixelProbeApp {
             html += `<p>Error Files: ${info.database.error_files?.toLocaleString() || 0}</p>`;
             html += '</div>';
         }
-        
+
         // Scan Performance Stats
         if (info.database && info.database.performance) {
             const perf = info.database.performance;
@@ -1919,12 +1932,12 @@ class PixelProbeApp {
             }
             html += '</div>';
         }
-        
+
         html += '</div>'; // End Column 1
-        
+
         // Column 2
         html += '<div class="stats-column">';
-        
+
         // System Information
         if (info.version || info.timezone || info.features) {
             html += '<h4>System Information</h4>';
@@ -1940,7 +1953,7 @@ class PixelProbeApp {
             }
             html += '</div>';
         }
-        
+
         // File System Statistics
         if (info.filesystem || info.database) {
             html += '<h4>File System Statistics</h4>';
@@ -1956,7 +1969,7 @@ class PixelProbeApp {
             html += `<p>Percentage Checked: ${percentageChecked}%</p>`;
             html += '</div>';
         }
-        
+
         // Features
         if (info.features) {
             html += '<h4>Features</h4>';
@@ -1967,9 +1980,9 @@ class PixelProbeApp {
             });
             html += '</div>';
         }
-        
+
         html += '</div>'; // End Column 2
-        
+
         // Column 3 - Monitored Paths (if they exist)
         if (info.monitored_paths && info.monitored_paths.length > 0) {
             html += '<div class="stats-column">';
@@ -1983,25 +1996,143 @@ class PixelProbeApp {
             html += '</div>';
             html += '</div>'; // End Column 3
         }
-        
+
         html += '</div>'; // End stats-columns
         html += '</div>';
-        
+
         modalBody.innerHTML = html;
         modal.style.display = 'block';
-        
+
+        // Setup period tab switchers
+        this.setupTrendTabs();
+
         // Setup close handlers
         const closeBtn = modal.querySelector('.modal-close');
         if (closeBtn) {
             closeBtn.onclick = () => modal.style.display = 'none';
         }
-        
+
         // Close on outside click
         modal.onclick = (e) => {
             if (e.target === modal) {
                 modal.style.display = 'none';
             }
         };
+    }
+
+    renderTrendsSection(trends) {
+        let html = '<div class="trends-section">';
+        html += '<h3>Trends Analysis</h3>';
+
+        // Period selector tabs
+        html += '<div class="period-tabs">';
+        html += '<button class="period-tab active" data-period="30d">30 Days</button>';
+        html += '<button class="period-tab" data-period="60d">60 Days</button>';
+        html += '<button class="period-tab" data-period="90d">90 Days</button>';
+        html += '<button class="period-tab" data-period="1y">1 Year</button>';
+        html += '</div>';
+
+        // Trend content for each period
+        ['30d', '60d', '90d', '1y'].forEach((period, index) => {
+            const periodData = trends.trends[period];
+            if (!periodData) return;
+
+            const isActive = index === 0 ? 'active' : '';
+            html += `<div class="trend-content ${isActive}" data-period="${period}">`;
+            html += '<div class="trend-columns">';
+
+            // Corruption Trends Column
+            html += '<div class="trend-column">';
+            html += '<h4>Corruption Trends</h4>';
+            html += '<div class="stats-section">';
+            html += `<p>Corruption Rate: ${periodData.corruption.corruption_rate.toFixed(2)}%</p>`;
+            html += `<p>Total Scanned: ${periodData.corruption.total_scanned.toLocaleString()}</p>`;
+            html += `<p>Corrupted Files: ${periodData.corruption.corrupted.toLocaleString()}</p>`;
+            html += `<p>Files with Warnings: ${periodData.corruption.warnings.toLocaleString()}</p>`;
+            if (periodData.corruption.top_corrupted_types && periodData.corruption.top_corrupted_types.length > 0) {
+                html += '<p><strong>Top Corrupted Types:</strong></p>';
+                html += '<ul style="margin-left: 20px;">';
+                periodData.corruption.top_corrupted_types.slice(0, 5).forEach(item => {
+                    html += `<li>${item.file_type}: ${item.count} files</li>`;
+                });
+                html += '</ul>';
+            }
+            html += '</div>';
+            html += '</div>'; // End Corruption Column
+
+            // Storage Trends Column
+            html += '<div class="trend-column">';
+            html += '<h4>Storage Trends</h4>';
+            html += '<div class="stats-section">';
+            html += `<p>Total Storage: ${periodData.storage.total_gb.toFixed(2)} GB</p>`;
+            html += `<p>Growth Rate: ${periodData.storage.gb_per_day.toFixed(2)} GB/day</p>`;
+            html += '<p><strong>Projections:</strong></p>';
+            html += `<p>Next 30 days: ${periodData.storage.projections.next_30d_gb.toFixed(2)} GB</p>`;
+            html += `<p>Next 1 year: ${periodData.storage.projections.next_1y_gb.toFixed(2)} GB</p>`;
+            if (periodData.storage.by_file_type && periodData.storage.by_file_type.length > 0) {
+                html += '<p><strong>Top Types by Storage:</strong></p>';
+                html += '<ul style="margin-left: 20px;">';
+                periodData.storage.by_file_type.slice(0, 5).forEach(item => {
+                    html += `<li>${item.file_type}: ${item.total_gb.toFixed(2)} GB (${item.count} files)</li>`;
+                });
+                html += '</ul>';
+            }
+            html += '</div>';
+            html += '</div>'; // End Storage Column
+
+            // Scanning Performance Column
+            html += '<div class="trend-column">';
+            html += '<h4>Scanning Performance</h4>';
+            html += '<div class="stats-section">';
+            html += `<p>File Types Scanned: ${periodData.scanning.unique_file_types}</p>`;
+            html += `<p>Avg Scan Duration: ${periodData.scanning.avg_scan_duration.toFixed(2)}s</p>`;
+            html += `<p>Files per Day: ${periodData.scanning.files_per_day.toFixed(1)}</p>`;
+            html += '</div>';
+            html += '</div>'; // End Performance Column
+
+            html += '</div>'; // End trend-columns
+            html += '</div>'; // End trend-content
+        });
+
+        // Overall Summary
+        if (trends.summary) {
+            html += '<div class="trend-summary">';
+            html += '<h4>Overall Summary</h4>';
+            html += '<div class="stats-section">';
+            html += `<p>Total Storage: ${trends.summary.total_storage_gb.toFixed(2)} GB (${trends.summary.total_storage_tb.toFixed(2)} TB)</p>`;
+            html += `<p>Total Files: ${trends.summary.total_files.toLocaleString()}</p>`;
+            html += `<p>Collection Age: ${trends.summary.collection_age_days} days</p>`;
+            html += `<p>Average Growth: ${trends.summary.avg_gb_per_day.toFixed(2)} GB/day</p>`;
+            html += '</div>';
+            html += '</div>';
+        }
+
+        html += '</div>'; // End trends-section
+        return html;
+    }
+
+    setupTrendTabs() {
+        const tabs = document.querySelectorAll('.period-tab');
+        const contents = document.querySelectorAll('.trend-content');
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const period = tab.dataset.period;
+
+                // Update active tab
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+
+                // Update active content
+                contents.forEach(c => {
+                    if (c.dataset.period === period) {
+                        c.classList.add('active');
+                    } else {
+                        c.classList.remove('active');
+                    }
+                });
+            });
+        });
     }
 
     async showApiDocs() {

@@ -1295,4 +1295,138 @@ textarea.form-control {
     width: 16px;
     text-align: center;
 }
+
+/* Trends Section Styles */
+.trends-section {
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+}
+
+.trends-section h3 {
+    margin-bottom: 1rem;
+    color: var(--primary-green);
+}
+
+/* Period Tabs */
+.period-tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 0.5rem;
+}
+
+.period-tab {
+    padding: 0.5rem 1rem;
+    background-color: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: all 0.2s ease;
+}
+
+.period-tab:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-tertiary);
+}
+
+.period-tab.active {
+    color: var(--primary-green);
+    border-bottom-color: var(--primary-green);
+}
+
+/* Trend Content */
+.trend-content {
+    display: none;
+}
+
+.trend-content.active {
+    display: block;
+}
+
+.trend-columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.trend-column {
+    background-color: var(--bg-primary);
+    padding: 1rem;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+}
+
+.trend-column h4 {
+    margin-bottom: 0.75rem;
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.trend-column .stats-section p {
+    margin: 0.5rem 0;
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.trend-column .stats-section ul {
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0;
+}
+
+.trend-column .stats-section ul li {
+    padding: 0.25rem 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+/* Trend Summary */
+.trend-summary {
+    background-color: var(--bg-primary);
+    padding: 1rem;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    margin-top: 1rem;
+}
+
+.trend-summary h4 {
+    margin-bottom: 0.75rem;
+    color: var(--primary-green);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.trend-summary .stats-section p {
+    margin: 0.5rem 0;
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+/* Responsive adjustments for trends */
+@media (max-width: 768px) {
+    .trend-columns {
+        grid-template-columns: 1fr;
+    }
+
+    .period-tabs {
+        flex-wrap: wrap;
+    }
+
+    .period-tab {
+        flex: 1;
+        min-width: 80px;
+        text-align: center;
+    }
+}
+
 EOF < /dev/null

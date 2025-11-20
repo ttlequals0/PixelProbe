@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.166] - 2025-11-20
+
+### Trends Analytics Feature
+
+- **Added comprehensive trends analysis to System Stats modal**
+  - New /api/trends endpoint providing corruption and storage trends over multiple time periods
+  - Period selector tabs: 30 days, 60 days, 90 days, and 1 year
+  - Corruption trends: Rates, counts, top corrupted file types
+  - Storage trends: Total GB, growth rate, projections (30d and 1y), breakdown by file type
+  - Scanning performance metrics: File types scanned, average duration, throughput
+  - Overall summary: Total storage, collection age, average growth rate
+
+- **UI Implementation**
+  - Added trends section at the top of System Stats modal
+  - Interactive period tabs with smooth transitions
+  - Responsive grid layout for trend data columns
+  - Mobile-friendly design with stacked layout on small screens
+
+- **Files modified**
+  - pixelprobe/api/stats_routes.py: Added GET /api/trends endpoint (~180 lines)
+  - static/js/app.js: Added getTrends() API method, renderTrendsSection(), setupTrendTabs()
+  - static/css/desktop.css: Added comprehensive CSS for trends UI components
+  - version.py: 2.4.165 → 2.4.166
+
+### Use Cases
+
+- Capacity planning: Storage projections help predict future storage needs
+- Quality monitoring: Track corruption rates over time to identify degradation patterns
+- Performance analysis: Monitor scanning efficiency and throughput
+- Resource allocation: Identify file types consuming most storage
+
 ## [2.4.165] - 2025-11-20
 
 ### Data Retention - Disable scan_output Archival
