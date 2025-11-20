@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.175] - 2025-11-20
+
+### Documentation
+
+- **P2 Optimization #12: Complete Documentation Updates**
+  - Created INSTALLATION.md: Comprehensive installation guide for Docker and manual installation
+  - Created CONFIGURATION.md: Complete reference for all environment variables and performance tuning
+  - Created TROUBLESHOOTING.md: Detailed troubleshooting guide for common issues
+  - Covers installation, configuration, Docker setup, database, scanning, performance, authentication
+  - Includes debug mode instructions, log locations, and getting help section
+
+### Files Created
+
+- INSTALLATION.md (395 lines): Docker and manual installation instructions
+- CONFIGURATION.md (595 lines): All configuration options and performance tuning
+- TROUBLESHOOTING.md (685 lines): Common issues and solutions
+- version.py: 2.4.174 → 2.4.175
+
+### Impact
+
+- Reduces support requests with comprehensive self-service documentation
+- Improves onboarding for new users
+- Better troubleshooting with detailed diagnostic steps
+- Complete configuration reference for all use cases
+
 ## [2.4.174] - 2025-11-20
 
 ### Features
