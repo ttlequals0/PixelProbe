@@ -1873,18 +1873,25 @@ class PixelProbeApp {
 
     async showSystemStats() {
         try {
-            const [info, trends] = await Promise.all([
-                this.api.getSystemInfo(),
-                this.api.getTrends()
-            ]);
-            this.showSystemStatsModal(info, trends);
+            const info = await this.api.getSystemInfo();
+            this.showSystemStatsModal(info);
         } catch (error) {
             console.error('System info error:', error);
             this.showNotification('Failed to load system info', 'error');
         }
     }
 
-    showSystemStatsModal(info, trends) {
+    async showTrends() {
+        try {
+            const trends = await this.api.getTrends();
+            this.showTrendsModal(trends);
+        } catch (error) {
+            console.error('Trends error:', error);
+            this.showNotification('Failed to load trends data', 'error');
+        }
+    }
+
+    showSystemStatsModal(info) {
         const modal = document.querySelector('#system-stats-modal');
         if (!modal) return;
 
@@ -1893,12 +1900,6 @@ class PixelProbeApp {
 
         // Format the system info with columns layout
         let html = '<div class="system-stats-content">';
-
-        // Add Trends Section at the top
-        if (trends && trends.trends) {
-            html += this.renderTrendsSection(trends);
-        }
-
         html += '<div class="stats-columns">';
 
         // Column 1
@@ -2045,15 +2046,15 @@ class PixelProbeApp {
             html += '<div class="trend-column">';
             html += '<h4>Corruption Trends</h4>';
             html += '<div class="stats-section">';
-            html += `<p>Corruption Rate: ${periodData.corruption.corruption_rate.toFixed(2)}%</p>`;
-            html += `<p>Total Scanned: ${periodData.corruption.total_scanned.toLocaleString()}</p>`;
-            html += `<p>Corrupted Files: ${periodData.corruption.corrupted.toLocaleString()}</p>`;
-            html += `<p>Files with Warnings: ${periodData.corruption.warnings.toLocaleString()}</p>`;
+            html += `<p>Corruption Rate: ${Number(periodData.corruption.corruption_rate).toFixed(2)}%</p>`;
+            html += `<p>Total Scanned: ${Number(periodData.corruption.total_scanned).toLocaleString()}</p>`;
+            html += `<p>Corrupted Files: ${Number(periodData.corruption.corrupted).toLocaleString()}</p>`;
+            html += `<p>Files with Warnings: ${Number(periodData.corruption.warnings).toLocaleString()}</p>`;
             if (periodData.corruption.top_corrupted_types && periodData.corruption.top_corrupted_types.length > 0) {
                 html += '<p><strong>Top Corrupted Types:</strong></p>';
                 html += '<ul style="margin-left: 20px;">';
                 periodData.corruption.top_corrupted_types.slice(0, 5).forEach(item => {
-                    html += `<li>${item.file_type}: ${item.count} files</li>`;
+                    html += `<li>${item.type}: ${item.count} files</li>`;
                 });
                 html += '</ul>';
             }
@@ -2064,16 +2065,16 @@ class PixelProbeApp {
             html += '<div class="trend-column">';
             html += '<h4>Storage Trends</h4>';
             html += '<div class="stats-section">';
-            html += `<p>Total Storage: ${periodData.storage.total_gb.toFixed(2)} GB</p>`;
-            html += `<p>Growth Rate: ${periodData.storage.gb_per_day.toFixed(2)} GB/day</p>`;
+            html += `<p>Total Storage: ${Number(periodData.storage.total_gb).toFixed(2)} GB</p>`;
+            html += `<p>Growth Rate: ${Number(periodData.storage.gb_per_day).toFixed(2)} GB/day</p>`;
             html += '<p><strong>Projections:</strong></p>';
-            html += `<p>Next 30 days: ${periodData.storage.projections.next_30d_gb.toFixed(2)} GB</p>`;
-            html += `<p>Next 1 year: ${periodData.storage.projections.next_1y_gb.toFixed(2)} GB</p>`;
+            html += `<p>Next 30 days: ${Number(periodData.storage.projections.next_30d_gb).toFixed(2)} GB</p>`;
+            html += `<p>Next 1 year: ${Number(periodData.storage.projections.next_1y_gb).toFixed(2)} GB</p>`;
             if (periodData.storage.by_file_type && periodData.storage.by_file_type.length > 0) {
                 html += '<p><strong>Top Types by Storage:</strong></p>';
                 html += '<ul style="margin-left: 20px;">';
                 periodData.storage.by_file_type.slice(0, 5).forEach(item => {
-                    html += `<li>${item.file_type}: ${item.total_gb.toFixed(2)} GB (${item.count} files)</li>`;
+                    html += `<li>${item.type}: ${Number(item.total_gb).toFixed(2)} GB (${item.file_count} files)</li>`;
                 });
                 html += '</ul>';
             }
@@ -2085,8 +2086,8 @@ class PixelProbeApp {
             html += '<h4>Scanning Performance</h4>';
             html += '<div class="stats-section">';
             html += `<p>File Types Scanned: ${periodData.scanning.unique_file_types}</p>`;
-            html += `<p>Avg Scan Duration: ${periodData.scanning.avg_scan_duration.toFixed(2)}s</p>`;
-            html += `<p>Files per Day: ${periodData.scanning.files_per_day.toFixed(1)}</p>`;
+            html += `<p>Avg Scan Duration: ${Number(periodData.scanning.avg_scan_duration).toFixed(2)}s</p>`;
+            html += `<p>Files per Day: ${Number(periodData.scanning.files_per_day).toFixed(1)}</p>`;
             html += '</div>';
             html += '</div>'; // End Performance Column
 
@@ -2099,16 +2100,33 @@ class PixelProbeApp {
             html += '<div class="trend-summary">';
             html += '<h4>Overall Summary</h4>';
             html += '<div class="stats-section">';
-            html += `<p>Total Storage: ${trends.summary.total_storage_gb.toFixed(2)} GB (${trends.summary.total_storage_tb.toFixed(2)} TB)</p>`;
-            html += `<p>Total Files: ${trends.summary.total_files.toLocaleString()}</p>`;
+            html += `<p>Total Storage: ${Number(trends.summary.total_storage_gb).toFixed(2)} GB (${Number(trends.summary.total_storage_tb).toFixed(2)} TB)</p>`;
+            html += `<p>Total Files: ${Number(trends.summary.total_files).toLocaleString()}</p>`;
             html += `<p>Collection Age: ${trends.summary.collection_age_days} days</p>`;
-            html += `<p>Average Growth: ${trends.summary.avg_gb_per_day.toFixed(2)} GB/day</p>`;
+            html += `<p>Average Growth: ${Number(trends.summary.avg_gb_per_day).toFixed(2)} GB/day</p>`;
             html += '</div>';
             html += '</div>';
         }
 
         html += '</div>'; // End trends-section
         return html;
+    }
+
+    showTrendsModal(trends) {
+        const modal = document.querySelector('#trends-modal');
+        if (!modal) return;
+
+        const modalBody = modal.querySelector('.modal-body');
+        if (!modalBody) return;
+
+        // Render trends content
+        modalBody.innerHTML = this.renderTrendsSection(trends);
+
+        // Setup tab switching
+        this.setupTrendTabs();
+
+        // Show modal
+        modal.style.display = 'flex';
     }
 
     setupTrendTabs() {

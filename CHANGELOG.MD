@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.170] - 2025-11-20
+
+### Features
+
+- **Separated Trends into standalone modal**
+  - Created dedicated Trends modal independent from System Stats
+  - Added new showTrends() and showTrendsModal() methods in app.js
+  - System Stats modal now only shows system information
+  - Trends modal displays all analytics data (corruption, storage, file types, performance)
+
+### UI Improvements
+
+- **Updated navigation icons and layout**
+  - Changed System Stats icon from fa-chart-line to fa-server
+  - Added new Trends navigation item with fa-chart-line icon
+  - Both modals now accessible independently from sidebar
+
+### Bug Fixes
+
+- **Fixed Number coercion in trends rendering**
+  - Wrapped all numeric operations with Number() in renderTrendsSection()
+  - Fixed property name mismatches (type vs file_type, file_count vs count)
+  - Ensures all .toFixed() and numeric methods work correctly
+
+- **Files modified**
+  - static/js/app.js: Split system stats and trends methods, added Number() coercion
+  - templates/index.html: Added Trends modal HTML, updated navigation icons
+  - version.py: 2.4.169 → 2.4.170
+
+### Impact
+
+- System Stats and Trends are now separate, focused modals
+- Better user experience with dedicated analytics view
+- Improved modal performance by loading only requested data
+
 ## [2.4.169] - 2025-11-20
 
 ### Bug Fixes
