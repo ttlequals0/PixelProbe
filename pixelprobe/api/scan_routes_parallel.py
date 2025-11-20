@@ -12,6 +12,7 @@ import logging
 from pixelprobe.utils.security import validate_directory_path, AuditLogger, PathTraversalError, validate_json_input
 from pixelprobe.utils.rate_limiting import rate_limit
 from auth import auth_required
+from models import ScanState
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,19 @@ def scan_parallel():
     
     if not validated_dirs:
         return jsonify({'error': 'No valid directories to scan'}), 400
-    
+
+    # Check if a scan is already running
+    try:
+        scan_state = ScanState.get_or_create()
+        if scan_state.is_active and scan_state.phase in ['initializing', 'discovering', 'adding', 'scanning']:
+            return jsonify({
+                'error': 'A scan is already in progress',
+                'scan_id': scan_state.scan_id,
+                'phase': scan_state.phase
+            }), 409
+    except Exception as e:
+        logger.error(f"Error checking scan status: {e}")
+
     # Check if Celery is available
     if not check_celery_available():
         return jsonify({

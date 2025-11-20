@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.178] - 2025-11-20
+
+### Bug Fixes
+
+- **Fixed concurrent scan detection in parallel scan endpoint**
+  - `/api/scan-parallel` now properly checks for active scans before starting
+  - Returns 409 Conflict when a scan is already running (instead of 503)
+  - Prevents race conditions and multiple concurrent scans
+  - Matches behavior of other scan endpoints
+
+### Technical Details
+
+- Added ScanState check to `scan_parallel()` endpoint in `scan_routes_parallel.py`
+- Check runs before Celery availability check for correct error priority
+- Active scan phases checked: initializing, discovering, adding, scanning
+- Returns detailed error with scan_id and current phase
+
+### Files Modified
+
+- pixelprobe/api/scan_routes_parallel.py: Added concurrent scan detection
+- version.py: 2.4.177 → 2.4.178
+
 ## [2.4.177] - 2025-11-20
 
 ### Code Refactoring
