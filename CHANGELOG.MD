@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.168] - 2025-11-20
+
+### Bug Fixes
+
+- **Fixed Swagger /api/v1/stats/trends endpoint 500 error**
+  - Removed test_request_context approach that caused EnvironHeaders immutable error
+  - Duplicated trends logic directly in swagger_routes.py GetTrends Resource
+  - Endpoint now works properly from Swagger UI
+  - Error was: "'EnvironHeaders' objects are immutable"
+
+- **Fixed Scan Reports modal showing mobile UI on desktop**
+  - Added desktop-specific CSS rules for #scan-reports-modal
+  - Set modal width to 95% with 900px minimum on desktop
+  - Explicitly show table view and hide cards view on desktop
+  - Mobile CSS rules properly scoped to @media (max-width: 768px)
+
+- **Files modified**
+  - pixelprobe/api/swagger_routes.py: Replaced test_request_context with direct implementation
+  - static/css/desktop.css: Added scan-reports modal desktop styles
+  - version.py: 2.4.167 → 2.4.168
+
+### Impact
+
+- Swagger UI trends endpoint now fully functional
+- Desktop users see proper table layout in Scan Reports modal
+- Mobile users continue to see card-based layout
+
 ## [2.4.167] - 2025-11-20
 
 ### API Documentation - Trends Endpoint

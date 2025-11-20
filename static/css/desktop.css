@@ -586,6 +586,21 @@ body {
     width: 90%;
 }
 
+/* Scan Reports Modal - Desktop */
+#scan-reports-modal .modal-content {
+    max-width: 95%;
+    width: 95%;
+    min-width: 900px;
+}
+
+#scan-reports-modal .table-container {
+    display: block !important;
+}
+
+#scan-reports-modal #scan-reports-cards {
+    display: none !important;
+}
+
 .stats-columns {
     display: flex;
     gap: 2rem;

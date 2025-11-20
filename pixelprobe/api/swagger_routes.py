@@ -980,14 +980,177 @@ class GetTrends(Resource):
             return {'error': 'Authentication required'}, 401
 
         try:
-            from pixelprobe.api.stats_routes import get_trends
-            from flask import current_app
-            with current_app.test_request_context(
-                path='/api/trends',
-                headers=request.headers,
-                method='GET'
-            ):
-                return get_trends()
+            from datetime import datetime, timezone, timedelta
+            from models import db
+            from sqlalchemy import text
+
+            now = datetime.now(timezone.utc)
+            periods = {
+                '30d': now - timedelta(days=30),
+                '60d': now - timedelta(days=60),
+                '90d': now - timedelta(days=90),
+                '1y': now - timedelta(days=365)
+            }
+
+            trends = {}
+
+            for period_name, cutoff_date in periods.items():
+                # Corruption trends for this period
+                period_stats = db.session.execute(
+                    text("""
+                        SELECT
+                            COUNT(*) as total_scanned,
+                            SUM(CASE WHEN is_corrupted = TRUE THEN 1 ELSE 0 END) as corrupted,
+                            SUM(CASE WHEN has_warnings = TRUE THEN 1 ELSE 0 END) as warnings,
+                            COUNT(DISTINCT file_type) as file_types,
+                            AVG(scan_duration) as avg_scan_duration,
+                            SUM(file_size) as total_bytes,
+                            COUNT(DISTINCT DATE(discovered_date)) as discovery_days
+                        FROM scan_results
+                        WHERE scan_date >= :cutoff
+                    """),
+                    {'cutoff': cutoff_date}
+                ).fetchone()
+
+                total_scanned = period_stats[0] or 0
+                corrupted = period_stats[1] or 0
+                warnings = period_stats[2] or 0
+                file_types = period_stats[3] or 0
+                avg_duration = period_stats[4] or 0
+                total_bytes = period_stats[5] or 0
+                discovery_days = period_stats[6] or 0
+
+                # Calculate corruption rate
+                corruption_rate = round((corrupted / total_scanned * 100), 2) if total_scanned > 0 else 0
+
+                # Storage metrics
+                total_gb = round(total_bytes / (1024**3), 2) if total_bytes else 0
+
+                # Daily averages
+                days_in_period = (now - cutoff_date).days
+                files_per_day = round(total_scanned / days_in_period, 1) if days_in_period > 0 else 0
+                gb_per_day = round(total_gb / days_in_period, 2) if days_in_period > 0 else 0
+
+                # Storage growth projection (linear)
+                projected_30d_gb = round(gb_per_day * 30, 2) if gb_per_day > 0 else 0
+                projected_1y_gb = round(gb_per_day * 365, 2) if gb_per_day > 0 else 0
+
+                # Top corrupted file types in this period
+                top_corrupted_types = db.session.execute(
+                    text("""
+                        SELECT file_type, COUNT(*) as count
+                        FROM scan_results
+                        WHERE scan_date >= :cutoff
+                          AND is_corrupted = TRUE
+                          AND file_type IS NOT NULL
+                        GROUP BY file_type
+                        ORDER BY count DESC
+                        LIMIT 5
+                    """),
+                    {'cutoff': cutoff_date}
+                ).fetchall()
+
+                # Storage by file type in this period
+                storage_by_type = db.session.execute(
+                    text("""
+                        SELECT
+                            file_type,
+                            COUNT(*) as file_count,
+                            SUM(file_size) as total_bytes
+                        FROM scan_results
+                        WHERE discovered_date >= :cutoff
+                          AND file_type IS NOT NULL
+                          AND file_size IS NOT NULL
+                        GROUP BY file_type
+                        ORDER BY total_bytes DESC
+                        LIMIT 10
+                    """),
+                    {'cutoff': cutoff_date}
+                ).fetchall()
+
+                trends[period_name] = {
+                    'corruption': {
+                        'total_scanned': total_scanned,
+                        'corrupted': corrupted,
+                        'warnings': warnings,
+                        'corruption_rate': corruption_rate,
+                        'top_corrupted_types': [
+                            {'type': row[0], 'count': row[1]}
+                            for row in top_corrupted_types
+                        ]
+                    },
+                    'scanning': {
+                        'unique_file_types': file_types,
+                        'avg_scan_duration': round(avg_duration, 2) if avg_duration else 0,
+                        'files_per_day': files_per_day
+                    },
+                    'storage': {
+                        'total_gb': total_gb,
+                        'total_bytes': total_bytes,
+                        'gb_per_day': gb_per_day,
+                        'files_discovered': total_scanned,
+                        'discovery_days': discovery_days,
+                        'projections': {
+                            'next_30d_gb': projected_30d_gb,
+                            'next_1y_gb': projected_1y_gb
+                        },
+                        'by_file_type': [
+                            {
+                                'type': row[0],
+                                'file_count': row[1],
+                                'total_gb': round(row[2] / (1024**3), 2),
+                                'avg_size_mb': round(row[2] / row[1] / (1024**2), 2) if row[1] > 0 else 0
+                            }
+                            for row in storage_by_type
+                        ]
+                    }
+                }
+
+            # Overall storage summary (all-time)
+            total_storage = db.session.execute(
+                text("""
+                    SELECT
+                        SUM(file_size) as total_bytes,
+                        COUNT(*) as total_files,
+                        MIN(discovered_date) as oldest_file,
+                        MAX(discovered_date) as newest_file
+                    FROM scan_results
+                    WHERE file_size IS NOT NULL
+                """)
+            ).fetchone()
+
+            total_bytes = total_storage[0] or 0
+            total_files = total_storage[1] or 0
+            oldest_file = total_storage[2]
+            newest_file = total_storage[3]
+
+            # Calculate collection age in days
+            if oldest_file and newest_file:
+                if isinstance(oldest_file, str):
+                    oldest_dt = datetime.fromisoformat(oldest_file.replace('Z', '+00:00'))
+                else:
+                    oldest_dt = oldest_file
+                if oldest_dt.tzinfo is None:
+                    oldest_dt = oldest_dt.replace(tzinfo=timezone.utc)
+
+                collection_days = (now - oldest_dt).days
+            else:
+                collection_days = 0
+
+            overall_summary = {
+                'total_storage_gb': round(total_bytes / (1024**3), 2),
+                'total_storage_tb': round(total_bytes / (1024**4), 2),
+                'total_files': total_files,
+                'collection_age_days': collection_days,
+                'avg_gb_per_day': round(total_bytes / (1024**3) / collection_days, 2) if collection_days > 0 else 0
+            }
+
+            return {
+                'trends': trends,
+                'summary': overall_summary,
+                'generated_at': now.isoformat()
+            }
+
         except Exception as e:
             logger.error(f"Error getting trends: {e}")
             return {'error': str(e)}, 500
