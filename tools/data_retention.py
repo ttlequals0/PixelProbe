@@ -6,12 +6,15 @@ Automatically cleans up old data to prevent unbounded database growth.
 Runs daily via Celery Beat scheduler.
 
 Retention Policies:
-- scan_output: Archive after 30 days (truncate to 100 chars + "[archived]")
+- scan_output: DISABLED - keeps all scan_results data forever (including full scan_output)
 - reports: Delete after 90 days
 - scan_state: Delete completed/failed states after 7 days
 
+Note: scan_output archival is intentionally disabled to preserve all scan result
+details. The cleanup_scan_outputs() function remains in the code but is not called.
+
 Usage:
-    # Via Celery (automatic daily at 2 AM)
+    # Via Celery (automatic daily)
     Scheduled via celery beat
 
     # Manual execution
@@ -210,13 +213,16 @@ def run_all_retention_policies():
     """
     Execute all retention policies in sequence.
 
+    NOTE: scan_output archival is DISABLED to preserve all scan result details.
+    Only reports and scan states are cleaned up.
+
     Returns:
         dict: Results from each retention policy
     """
     logger.info("=" * 60)
     logger.info("Starting data retention cleanup")
     logger.info(f"Retention periods:")
-    logger.info(f"  - Scan outputs: {SCAN_OUTPUT_RETENTION_DAYS} days")
+    logger.info(f"  - Scan outputs: DISABLED (keeping all scan_output data)")
     logger.info(f"  - Reports: {REPORT_RETENTION_DAYS} days")
     logger.info(f"  - Scan states: {SCAN_STATE_RETENTION_DAYS} days")
     logger.info("=" * 60)
@@ -226,25 +232,23 @@ def run_all_retention_policies():
         logger.info("Getting retention statistics...")
         stats_before = get_retention_stats()
         logger.info(f"Before cleanup:")
-        logger.info(f"  - Scan outputs to archive: {stats_before['scan_outputs']['total_records']:,} records ({stats_before['scan_outputs']['total_bytes']:,} bytes)")
         logger.info(f"  - Reports to delete: {stats_before['reports']['total']:,}")
         logger.info(f"  - Scan states to delete: {stats_before['scan_states']['total']:,}")
 
-        # Run cleanup policies
-        outputs_archived = cleanup_scan_outputs()
+        # Run cleanup policies (scan_output archival DISABLED - keeps all scan results data)
+        # outputs_archived = cleanup_scan_outputs()  # DISABLED - keeps full scan_output forever
         reports_deleted = cleanup_old_reports()
         states_deleted = cleanup_old_scan_states()
 
         logger.info("=" * 60)
         logger.info(f"Retention cleanup complete:")
-        logger.info(f"  - {outputs_archived:,} scan outputs archived")
         logger.info(f"  - {reports_deleted:,} reports deleted")
         logger.info(f"  - {states_deleted:,} scan states deleted")
         logger.info("=" * 60)
 
         return {
             'success': True,
-            'outputs_archived': outputs_archived,
+            'outputs_archived': 0,  # Always 0 - scan_output archival disabled
             'reports_deleted': reports_deleted,
             'states_deleted': states_deleted,
             'stats_before': stats_before

@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.165] - 2025-11-20
+
+### Data Retention - Disable scan_output Archival
+
+- **Disabled scan_output archival to preserve all scan result details**
+  - scan_output field is no longer truncated after 30 days
+  - ALL scan_results data is now kept forever (including full scan_output text)
+  - Only reports and scan_state records are cleaned up
+  - cleanup_scan_outputs() function remains in code but is not called
+
+- **Updated retention policies**
+  - scan_output: DISABLED - keeps all scan_results data forever
+  - reports: Delete after 90 days (unchanged)
+  - scan_state: Delete completed/failed states after 7 days (unchanged)
+
+- **Files modified**
+  - tools/data_retention.py: Updated run_all_retention_policies() to skip scan_output archival
+  - config.py: Added comment that SCAN_OUTPUT_RETENTION_DAYS is not used
+  - pixelprobe/tasks.py: Updated logging to reflect scan_output archival is disabled
+  - version.py: 2.4.164 → 2.4.165
+
+### Rationale
+
+User requirement: Keep ALL scan result information for each item, including full scan_output text.
+The scan_output field contains valuable validation details that should be preserved indefinitely.
+
+### Impact
+
+- Database will grow larger over time (scan_output not truncated)
+- Complete audit trail maintained for all scanned files
+- Reports and scan states still cleaned up to manage growth
+- scan_output archival can be re-enabled in future if needed
+
 ## [2.4.164] - 2025-11-20
 
 ### P2 Optimization - Data Retention Implementation

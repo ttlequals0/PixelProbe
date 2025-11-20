@@ -892,9 +892,9 @@ def run_retention_cleanup(self):
         if result['success']:
             logger.info(
                 f"Data retention cleanup completed: "
-                f"{result['outputs_archived']} outputs archived, "
                 f"{result['reports_deleted']} reports deleted, "
-                f"{result['states_deleted']} scan states deleted"
+                f"{result['states_deleted']} scan states deleted "
+                f"(scan_output archival disabled - keeping all scan results)"
             )
 
             return {
