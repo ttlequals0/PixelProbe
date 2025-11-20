@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.179] - 2025-11-20
+
+### UI/UX Improvements
+
+- **Custom scrollbar styling that matches theme**
+  - Scrollbars now match dark mode color scheme (dark gray track, lighter thumb)
+  - Light mode scrollbars use subtle gray tones
+  - Smooth hover effects for better visual feedback
+  - Consistent styling across all browsers (WebKit and Firefox)
+
+- **Desktop-friendly Trends Analytics modal**
+  - Wider modal on desktop (1200px max-width vs 600px)
+  - Two-column grid layout for better use of horizontal space
+  - Corruption and Storage trends displayed side-by-side
+  - Scanning Performance spans full width
+  - Mobile remains single-column for optimal viewing
+  - Modal height increased to 80vh for more content visibility
+
+### Technical Details
+
+- Added CSS custom properties for scrollbar colors (theme-aware)
+- Implemented `::-webkit-scrollbar` styling for Chrome/Safari/Edge
+- Added `scrollbar-color` and `scrollbar-width` for Firefox
+- Created responsive grid layout with `@media` queries (769px breakpoint)
+- Updated Trends Analytics JavaScript to use grid-friendly class names
+
+### Files Modified
+
+- static/css/desktop.css: Added scrollbar styling and trends modal grid layout
+- static/js/app.js: Updated renderTrendsSection to use grid container classes
+- version.py: 2.4.178 → 2.4.179
+
 ## [2.4.178] - 2025-11-20
 
 ### Bug Fixes

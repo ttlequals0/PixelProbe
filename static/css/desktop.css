@@ -48,6 +48,45 @@ body.dark-mode {
     --border-color: #343a40;
     --shadow-sm: 0 0.125rem 0.25rem rgba(0,0,0,0.5);
     --shadow-md: 0 0.5rem 1rem rgba(0,0,0,0.7);
+
+    /* Scrollbar colors for dark mode */
+    --scrollbar-track: #1a1a1b;
+    --scrollbar-thumb: #3a3a3b;
+    --scrollbar-thumb-hover: #4a4a4b;
+}
+
+/* Light mode scrollbar colors */
+:root {
+    --scrollbar-track: #f1f1f1;
+    --scrollbar-thumb: #c1c1c1;
+    --scrollbar-thumb-hover: #a1a1a1;
+}
+
+/* Custom Scrollbar Styling - matches theme */
+::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 10px;
+    border: 2px solid var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+}
+
+/* Firefox scrollbar */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
 /* Reset and base styles */
@@ -600,6 +639,46 @@ body {
 
     #scan-reports-modal #scan-reports-cards {
         display: none;
+    }
+}
+
+/* Trends Analytics Modal - Desktop friendly layout */
+@media (min-width: 769px) {
+    #trends-analytics-modal .modal-content {
+        max-width: 1200px;
+        width: 90%;
+    }
+
+    #trends-analytics-modal .modal-body {
+        max-height: 80vh;
+    }
+
+    /* Two-column layout for desktop */
+    #trends-analytics-modal .trends-container {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1.5rem;
+        margin-top: 1rem;
+    }
+
+    /* Make single-column items span both columns */
+    #trends-analytics-modal .trends-container > .full-width {
+        grid-column: 1 / -1;
+    }
+
+    /* Corruption and Storage trends side by side */
+    #trends-analytics-modal .corruption-trends,
+    #trends-analytics-modal .storage-trends {
+        grid-column: span 1;
+    }
+}
+
+/* Mobile layout - single column */
+@media (max-width: 768px) {
+    #trends-analytics-modal .trends-container {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
     }
 }
 

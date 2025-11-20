@@ -2049,10 +2049,10 @@ class PixelProbeApp {
 
             const isActive = index === 0 ? 'active' : '';
             html += `<div class="trend-content ${isActive}" data-period="${period}">`;
-            html += '<div class="trend-columns">';
+            html += '<div class="trends-container">';
 
             // Corruption Trends Column
-            html += '<div class="trend-column">';
+            html += '<div class="trend-column corruption-trends">';
             html += '<h4>Corruption Trends</h4>';
             html += '<div class="stats-section">';
             html += `<p>Corruption Rate: ${Number(periodData.corruption.corruption_rate).toFixed(2)}%</p>`;
@@ -2071,7 +2071,7 @@ class PixelProbeApp {
             html += '</div>'; // End Corruption Column
 
             // Storage Trends Column
-            html += '<div class="trend-column">';
+            html += '<div class="trend-column storage-trends">';
             html += '<h4>Storage Trends</h4>';
             html += '<div class="stats-section">';
             html += `<p><strong>Total Storage:</strong> ${this.formatStorage(periodData.storage.total_gb)}</p>`;
@@ -2116,7 +2116,7 @@ class PixelProbeApp {
             html += '</div>'; // End Storage Column
 
             // Scanning Performance Column
-            html += '<div class="trend-column">';
+            html += '<div class="trend-column scanning-performance full-width">';
             html += '<h4>Scanning Performance</h4>';
             html += '<div class="stats-section">';
             html += `<p>File Types Scanned: ${periodData.scanning.unique_file_types}</p>`;
@@ -2125,7 +2125,7 @@ class PixelProbeApp {
             html += '</div>';
             html += '</div>'; // End Performance Column
 
-            html += '</div>'; // End trend-columns
+            html += '</div>'; // End trends-container
             html += '</div>'; // End trend-content
         });
 
