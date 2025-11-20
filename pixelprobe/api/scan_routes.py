@@ -901,11 +901,16 @@ def force_cleanup_scan():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-@scan_bp.route('/scan-parallel', methods=['POST'])
+@scan_bp.route('/scan-files-parallel', methods=['POST'])
 @rate_limit("2 per minute")
 @auth_required
-def scan_parallel():
-    """Start a parallel scan with multiple workers"""
+def scan_files_parallel():
+    """Start a parallel scan of specific files or directories (legacy endpoint)
+
+    Note: For directory scanning, prefer /api/scan-parallel which uses the enhanced
+    parallel orchestrator that better distributes work across all Celery workers.
+    This endpoint is primarily for scanning specific file lists.
+    """
     # Check if a scan is already running (thread or Celery)
     if is_scan_running():
         # Get current scan status for more informative error message

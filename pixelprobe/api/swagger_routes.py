@@ -1507,3 +1507,250 @@ class DownloadFile(Resource):
             method='GET'
         ):
             return download_file(result_id)
+
+
+# Additional Admin endpoints
+@admin_ns.route('/mark-as-good')
+class MarkAsGood(Resource):
+    @admin_ns.doc('mark_files_as_good')
+    @admin_ns.param('file_ids', 'Comma-separated list of file IDs to mark as good', type='string', required=True)
+    @admin_ns.response(200, 'Files marked as good successfully', success_model)
+    @admin_ns.response(400, 'Invalid request', error_model)
+    def post(self):
+        """Mark files as good (not corrupted)"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.admin_routes import mark_as_good
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            data=request.data,
+            headers=request.headers,
+            method='POST'
+        ):
+            return mark_as_good()
+
+
+@admin_ns.route('/ignored-patterns')
+class IgnoredPatterns(Resource):
+    @admin_ns.doc('get_ignored_patterns')
+    @admin_ns.response(200, 'List of ignored error patterns')
+    def get(self):
+        """Get list of ignored error patterns"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.admin_routes import ignored_patterns
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='GET'
+        ):
+            return ignored_patterns()
+
+    @admin_ns.doc('add_ignored_pattern')
+    @admin_ns.param('pattern', 'Error pattern to ignore (regex)', type='string', required=True)
+    @admin_ns.param('description', 'Description of the pattern', type='string')
+    @admin_ns.response(200, 'Pattern added successfully', success_model)
+    @admin_ns.response(400, 'Invalid pattern', error_model)
+    def post(self):
+        """Add a new ignored error pattern"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.admin_routes import ignored_patterns
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            data=request.data,
+            headers=request.headers,
+            method='POST'
+        ):
+            return ignored_patterns()
+
+
+@admin_ns.route('/ignored-patterns/<int:pattern_id>')
+class IgnoredPattern(Resource):
+    @admin_ns.doc('delete_ignored_pattern')
+    @admin_ns.response(200, 'Pattern deleted successfully', success_model)
+    @admin_ns.response(404, 'Pattern not found', error_model)
+    def delete(self, pattern_id):
+        """Delete an ignored error pattern"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.admin_routes import delete_ignored_pattern
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='DELETE'
+        ):
+            return delete_ignored_pattern(pattern_id)
+
+
+@admin_ns.route('/exclusions/<exclusion_type>')
+class ExclusionManagement(Resource):
+    @admin_ns.doc('add_exclusion')
+    @admin_ns.param('exclusion_type', 'Type of exclusion (path or extension)', type='string', enum=['path', 'extension'], required=True)
+    @admin_ns.param('value', 'Value to exclude', type='string', required=True)
+    @admin_ns.response(200, 'Exclusion added successfully', success_model)
+    @admin_ns.response(400, 'Invalid request', error_model)
+    def post(self, exclusion_type):
+        """Add a path or extension exclusion"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.admin_routes import add_exclusion
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            data=request.data,
+            headers=request.headers,
+            method='POST'
+        ):
+            return add_exclusion(exclusion_type)
+
+    @admin_ns.doc('delete_exclusion')
+    @admin_ns.param('exclusion_type', 'Type of exclusion (path or extension)', type='string', enum=['path', 'extension'], required=True)
+    @admin_ns.param('value', 'Value to remove from exclusions', type='string', required=True)
+    @admin_ns.response(200, 'Exclusion removed successfully', success_model)
+    @admin_ns.response(404, 'Exclusion not found', error_model)
+    def delete(self, exclusion_type):
+        """Remove a path or extension exclusion"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.admin_routes import delete_exclusion
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            data=request.data,
+            headers=request.headers,
+            method='DELETE'
+        ):
+            return delete_exclusion(exclusion_type)
+
+
+@admin_ns.route('/schedules/<int:schedule_id>')
+class ScheduleManagement(Resource):
+    @admin_ns.doc('update_schedule')
+    @admin_ns.expect(schedule_model)
+    @admin_ns.response(200, 'Schedule updated successfully', success_model)
+    @admin_ns.response(404, 'Schedule not found', error_model)
+    def put(self, schedule_id):
+        """Update an existing scan schedule"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.admin_routes import update_schedule
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            data=request.data,
+            headers=request.headers,
+            method='PUT'
+        ):
+            return update_schedule(schedule_id)
+
+    @admin_ns.doc('delete_schedule')
+    @admin_ns.response(200, 'Schedule deleted successfully', success_model)
+    @admin_ns.response(404, 'Schedule not found', error_model)
+    def delete(self, schedule_id):
+        """Delete a scan schedule"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.admin_routes import delete_schedule
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='DELETE'
+        ):
+            return delete_schedule(schedule_id)
+
+
+# Additional Maintenance endpoints
+@maintenance_ns.route('/test-cleanup')
+class TestCleanup(Resource):
+    @maintenance_ns.doc('test_cleanup')
+    @maintenance_ns.response(200, 'Cleanup preview generated')
+    def get(self):
+        """Preview what would be cleaned up without actually deleting"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.maintenance_routes import test_cleanup
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='GET'
+        ):
+            return test_cleanup()
+
+
+# Additional Scan endpoints
+@scan_ns.route('/diagnose-pending-files')
+class DiagnosePendingFiles(Resource):
+    @scan_ns.doc('diagnose_pending_files')
+    @scan_ns.response(200, 'Pending files diagnosed')
+    def get(self):
+        """Diagnose and report on files stuck in pending state"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.scan_routes import diagnose_pending_files
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='GET'
+        ):
+            return diagnose_pending_files()
+
+
+@scan_ns.route('/scan-output/<int:result_id>')
+class ScanOutput(Resource):
+    @scan_ns.doc('get_scan_output')
+    @scan_ns.response(200, 'Scan output retrieved')
+    @scan_ns.response(404, 'Result not found', error_model)
+    def get(self, result_id):
+        """Get detailed scan output for a specific result"""
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.scan_routes import get_scan_output
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            method='GET'
+        ):
+            return get_scan_output(result_id)
+
+
+@scan_ns.route('/scan-files-parallel')
+class ScanFilesParallel(Resource):
+    @scan_ns.doc('scan_files_parallel')
+    @scan_ns.param('file_paths', 'List of specific file paths to scan', type='array', items={'type': 'string'})
+    @scan_ns.param('directories', 'List of directories to scan', type='array', items={'type': 'string'})
+    @scan_ns.param('force_rescan', 'Force rescan of already scanned files', type='boolean', default=False)
+    @scan_ns.param('num_workers', 'Number of parallel workers', type='integer', default=4)
+    @scan_ns.response(200, 'Scan started successfully', success_model)
+    @scan_ns.response(409, 'Scan already in progress', error_model)
+    def post(self):
+        """Start parallel scan of specific files or directories (legacy endpoint)
+
+        Note: For directory scanning, prefer /api/scan-parallel which uses enhanced
+        parallel orchestrator that better distributes work across Celery workers.
+        """
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        from pixelprobe.api.scan_routes import scan_files_parallel
+        from flask import current_app
+        with current_app.test_request_context(
+            path=request.path,
+            data=request.data,
+            headers=request.headers,
+            method='POST'
+        ):
+            return scan_files_parallel()
