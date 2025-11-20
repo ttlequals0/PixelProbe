@@ -115,76 +115,14 @@ def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
 
 class PixelProbe:
     def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None, database_path=None, excluded_patterns=None):
-        # Video formats - including HEVC/H.265 and professional formats
-        self.supported_video_formats = [
-            '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
-            '.hevc', '.h265',  # HEVC/H.265 formats
-            '.mxf', '.prores',  # ProRes format
-            '.dnxhd', '.dnxhr',  # DNxHD/DNxHR formats
-            '.mts', '.m2ts', '.avchd',  # AVCHD formats
-            '.mpg', '.mpeg', '.vob',  # MPEG formats
-            '.3gp', '.3g2',  # Mobile formats
-            '.f4v', '.f4p',  # Flash formats
-            '.ogv', '.ogg',  # Ogg video
-            '.rm', '.rmvb',  # RealMedia
-            '.asf', '.amv',  # Other formats
-            '.m2v', '.svi', '.mpe', '.mpv', '.m4p'
-        ]
-        
-        # Image formats - including HEIC/HEIF and RAW formats
-        self.supported_image_formats = [
-            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
-            '.heic', '.heif',  # Apple HEIC/HEIF formats
-            '.cr2', '.cr3',  # Canon RAW
-            '.nef', '.nrw',  # Nikon RAW
-            '.arw', '.srf', '.sr2',  # Sony RAW
-            '.dng',  # Adobe Digital Negative
-            '.orf',  # Olympus RAW
-            '.rw2',  # Panasonic RAW
-            '.pef', '.ptx',  # Pentax RAW
-            '.raf',  # Fujifilm RAW
-            '.raw',  # Generic RAW
-            '.x3f',  # Sigma RAW
-            '.dcr', '.kdc',  # Kodak RAW
-            '.mos',  # Leaf RAW
-            '.psd',  # Photoshop
-            '.ico',  # Icon files
-            '.svg',  # Scalable Vector Graphics
-            '.exr',  # OpenEXR
-            '.pbm', '.pgm', '.ppm', '.pnm',  # Netpbm formats
-            '.hdr', '.pic',  # Radiance HDR
-            '.fts', '.fits',  # FITS (astronomy)
-        ]
-        
-        # Audio formats - NEW: Complete audio support
-        self.supported_audio_formats = [
-            '.mp3',  # MPEG Audio Layer 3
-            '.flac',  # Free Lossless Audio Codec
-            '.wav', '.wave',  # Waveform Audio
-            '.aac', '.m4a',  # Advanced Audio Coding
-            '.ogg', '.oga', '.opus',  # Ogg Vorbis/Opus
-            '.wma',  # Windows Media Audio
-            '.aiff', '.aif', '.aifc',  # Audio Interchange File Format
-            '.ape',  # Monkey's Audio
-            '.wv',  # WavPack
-            '.tta',  # True Audio
-            '.m4b',  # Audiobook format
-            '.mka',  # Matroska Audio
-            '.dsf', '.dff',  # DSD formats
-            '.au', '.snd',  # Sun/NeXT audio
-            '.voc',  # Creative Voice
-            '.amr',  # Adaptive Multi-Rate
-            '.ac3',  # Dolby Digital
-            '.dts',  # DTS audio
-            '.ra', '.ram',  # RealAudio
-            '.mid', '.midi',  # MIDI (if needed)
-            '.caf',  # Core Audio Format
-            '.gsm',  # GSM audio
-        ]
-        
-        self.supported_formats = (self.supported_video_formats + 
-                                self.supported_image_formats + 
-                                self.supported_audio_formats)
+        # Lazy import to avoid circular dependency (media_checker <- pixelprobe <- media_checker)
+        from pixelprobe.constants import VIDEO_EXTENSIONS, IMAGE_EXTENSIONS, AUDIO_EXTENSIONS, SUPPORTED_EXTENSIONS
+
+        # Use centralized file format constants
+        self.supported_video_formats = VIDEO_EXTENSIONS
+        self.supported_image_formats = IMAGE_EXTENSIONS
+        self.supported_audio_formats = AUDIO_EXTENSIONS
+        self.supported_formats = SUPPORTED_EXTENSIONS
         self.max_workers = max_workers or min(4, os.cpu_count() or 1)
         self.scan_lock = threading.Lock()
         self.current_scan_file = None
