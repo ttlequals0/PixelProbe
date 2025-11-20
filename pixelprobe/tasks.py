@@ -876,7 +876,7 @@ def run_retention_cleanup(self):
     Scheduled task to run data retention policies
 
     P2 Implementation: Automated data cleanup to prevent unbounded database growth
-    Runs every 2 hours via Celery Beat scheduler
+    Runs daily via Celery Beat scheduler
 
     Returns:
         dict: Retention cleanup results

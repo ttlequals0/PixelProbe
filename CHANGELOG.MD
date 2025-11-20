@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Implemented automated data retention policies**
   - Created tools/data_retention.py with comprehensive cleanup functions
   - Prevents unbounded database growth by archiving/deleting old data
-  - Integrated with Celery Beat scheduler (runs every 2 hours)
+  - Integrated with Celery Beat scheduler (runs daily)
   - Configurable retention periods via environment variables
   - Impact: Controlled database growth, better performance over time
 
@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Integration components**
   - Added run_retention_cleanup task to pixelprobe/tasks.py
-  - Added Celery Beat schedule to celery_config.py (every 2 hours, priority 9)
+  - Added Celery Beat schedule to celery_config.py (daily, priority 9)
   - Added retention configuration to config.py
   - Task includes retry logic with exponential backoff
   - Comprehensive logging and error handling
@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **celery_config.py**
   - Added beat_schedule for automated execution
-  - Runs every 2 hours (7200 seconds)
+  - Runs daily (86400 seconds)
   - Lowest priority to not interfere with scans
 
 ### Root Cause Analysis

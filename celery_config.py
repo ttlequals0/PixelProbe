@@ -93,7 +93,7 @@ def create_celery(app=None):
         'beat_schedule': {
             'data-retention-cleanup': {
                 'task': 'pixelprobe.tasks.run_retention_cleanup',
-                'schedule': 7200.0,  # Run every 2 hours (2 * 60 * 60 seconds)
+                'schedule': 86400.0,  # Run daily (24 * 60 * 60 seconds)
                 'options': {'priority': 9}  # Lowest priority - maintenance task
             },
         },
