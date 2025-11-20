@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.177] - 2025-11-20
+
+### Code Refactoring
+
+- **P2 Optimization #15: Code Refactoring (Partial Completion)**
+
+  **Phase 1-2: File Extension Constants** ✅
+  - Created `pixelprobe/constants.py` module as single source of truth
+  - Extracted VIDEO_EXTENSIONS (35 video formats)
+  - Extracted IMAGE_EXTENSIONS (40 image formats including RAW)
+  - Extracted AUDIO_EXTENSIONS (32 audio formats)
+  - Total: 107 supported file extensions
+  - Added SCAN_PHASES constants for standardization
+  - Added ACTIVE_SCAN_PHASES and TERMINAL_SCAN_PHASES
+
+  **Refactored media_checker.py**:
+  - Removed 72 lines of duplicate extension definitions
+  - Now imports from centralized constants module
+  - Uses lazy import to avoid circular dependency
+  - Maintains full backward compatibility
+
+  **Impact**:
+  - Single source of truth for all file extensions
+  - Easy to add new file formats in one place
+  - Consistent extension lists across all modules
+  - Reduced code duplication by 72 lines
+  - Established pattern for future constant extraction
+
+  **Deferred Work** (Low Priority):
+  - Wider timezone utility adoption (~50 instances)
+  - Scan status check consolidation (~96 lines)
+  - Rationale: Existing utilities work correctly; further refactoring carries risk vs. reward
+
+### Files Modified
+
+- pixelprobe/constants.py: NEW - Central constants module (105 lines)
+- media_checker.py: Use centralized constants (-72 lines of duplication)
+- audit_reports/P2_IMPLEMENTATION_TRACKER.md: Updated #15 status
+- version.py: 2.4.176 → 2.4.177
+
 ## [2.4.176] - 2025-11-20
 
 ### API Improvements
