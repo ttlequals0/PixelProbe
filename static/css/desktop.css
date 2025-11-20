@@ -1458,6 +1458,19 @@ textarea.form-control {
     line-height: 1.4;
 }
 
+.file-types-summary {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background-color: var(--bg-tertiary);
+    border-radius: var(--border-radius-sm);
+}
+
+.file-types-summary p {
+    margin: 0.4rem 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
 /* Utility class for margin-left */
 .ml-20 {
     margin-left: 20px;

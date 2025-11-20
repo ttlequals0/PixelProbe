@@ -2080,21 +2080,27 @@ class PixelProbeApp {
             html += `<p class="ml-20">Next 30 days: ${this.formatStorage(periodData.storage.projections.next_30d_gb)}</p>`;
             html += `<p class="ml-20">Next 1 year: ${this.formatStorage(periodData.storage.projections.next_1y_gb)}</p>`;
 
-            // Files by Type section with pie chart
+            // Files by Type section with bar chart
             if (periodData.storage.by_file_type && periodData.storage.by_file_type.length > 0) {
                 html += '<div class="file-types-section">';
-                html += '<h4 style="margin-top: 20px;">Files by Type</h4>';
+                html += '<h4 style="margin-top: 20px;">Files by Type (All Types)</h4>';
 
-                // Pie chart container
-                html += '<div class="chart-container" style="position: relative; height: 250px; width: 100%; margin: 15px 0;">';
+                // Calculate dynamic height based on number of file types (25px per bar)
+                const chartHeight = Math.max(300, periodData.storage.by_file_type.length * 25);
+
+                // Bar chart container with dynamic height
+                html += `<div class="chart-container" style="position: relative; height: ${chartHeight}px; width: 100%; margin: 15px 0;">`;
                 html += `<canvas id="fileTypeChart-${period}"></canvas>`;
                 html += '</div>';
 
-                // Legend/List
-                html += '<div class="file-types-list">';
-                periodData.storage.by_file_type.slice(0, 5).forEach(item => {
-                    html += `<p class="file-type-item">${item.type}: ${this.formatStorage(item.total_gb)} (${Number(item.file_count).toLocaleString()} files)</p>`;
-                });
+                // Summary stats
+                html += '<div class="file-types-summary">';
+                html += `<p><strong>Total Types:</strong> ${periodData.storage.by_file_type.length}</p>`;
+                html += `<p><strong>Largest:</strong> ${periodData.storage.by_file_type[0].type} - ${this.formatStorage(periodData.storage.by_file_type[0].total_gb)}</p>`;
+                if (periodData.storage.by_file_type.length > 1) {
+                    const last = periodData.storage.by_file_type[periodData.storage.by_file_type.length - 1];
+                    html += `<p><strong>Smallest:</strong> ${last.type} - ${this.formatStorage(last.total_gb)}</p>`;
+                }
                 html += '</div>';
                 html += '</div>';
             }
@@ -2162,14 +2168,28 @@ class PixelProbeApp {
         }
         this.fileTypeCharts = {};
 
-        // Color palette for charts - each file type gets its own color
-        const colors = [
+        // Color palette for charts - cycle through these colors for all file types
+        const baseColors = [
             '#00ff88',  // Primary green
             '#ff6b6b',  // Red
             '#4ecdc4',  // Cyan
             '#ffe66d',  // Yellow
-            '#a8dadc'   // Light blue
+            '#a8dadc',  // Light blue
+            '#95e1d3',  // Mint
+            '#f38181',  // Light red
+            '#aa96da',  // Purple
+            '#fcbad3',  // Pink
+            '#a8e6cf'   // Light green
         ];
+
+        // Helper function to generate colors for any number of items
+        const generateColors = (count) => {
+            const colors = [];
+            for (let i = 0; i < count; i++) {
+                colors.push(baseColors[i % baseColors.length]);
+            }
+            return colors;
+        };
 
         ['30d', '60d', '90d', '1y'].forEach(period => {
             const periodData = trends.trends[period];
@@ -2179,17 +2199,19 @@ class PixelProbeApp {
             if (!canvas) return;
 
             const ctx = canvas.getContext('2d');
-            const data = periodData.storage.by_file_type.slice(0, 5);
+            const data = periodData.storage.by_file_type; // Use ALL file types
+
+            const colors = generateColors(data.length);
 
             this.fileTypeCharts[period] = new Chart(ctx, {
                 type: 'bar',
                 data: {
                     labels: data.map(item => item.type),
                     datasets: [{
-                        label: 'Storage',
+                        label: 'Storage (GB)',
                         data: data.map(item => Number(item.total_gb)),
-                        backgroundColor: colors.slice(0, data.length),
-                        borderColor: colors.slice(0, data.length),
+                        backgroundColor: colors,
+                        borderColor: colors,
                         borderWidth: 1
                     }]
                 },
@@ -2205,27 +2227,37 @@ class PixelProbeApp {
                             callbacks: {
                                 label: (context) => {
                                     const value = context.parsed.x || 0;
-                                    return `${this.formatStorage(value)}`;
+                                    const fileType = data[context.dataIndex];
+                                    return [
+                                        `Storage: ${this.formatStorage(value)}`,
+                                        `Files: ${Number(fileType.file_count).toLocaleString()}`
+                                    ];
                                 }
                             }
                         }
                     },
                     scales: {
                         x: {
-                            beginAtZero: true,
+                            type: 'logarithmic',  // Logarithmic scale for better visualization
+                            beginAtZero: false,
                             ticks: {
                                 color: '#b0b0b0',
                                 callback: (value) => this.formatStorage(value)
                             },
                             grid: {
                                 color: '#333'
+                            },
+                            title: {
+                                display: true,
+                                text: 'Storage (Log Scale)',
+                                color: '#b0b0b0'
                             }
                         },
                         y: {
                             ticks: {
                                 color: '#b0b0b0',
                                 font: {
-                                    size: 11
+                                    size: 10
                                 }
                             },
                             grid: {

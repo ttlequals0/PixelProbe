@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.173] - 2025-11-20
+
+### Features
+
+- **Display ALL file types in storage chart instead of just top 5**
+  - Chart now shows complete picture of all file types in database
+  - Dynamic chart height based on number of file types (25px per bar)
+  - Color palette cycles through 10 colors for any number of file types
+
+- **Added logarithmic scale for better visualization**
+  - X-axis uses logarithmic scale to handle large disparities (10TB vs MB)
+  - All file types now clearly visible regardless of size differences
+  - Axis labeled "Storage (Log Scale)" for clarity
+
+- **Enhanced tooltips and summary statistics**
+  - Tooltips show both storage size and file count
+  - Added summary section showing total types, largest type, smallest type
+  - Better at-a-glance understanding of storage distribution
+
+### Files Modified
+
+- static/js/app.js: Removed .slice(0, 5), added logarithmic scale, dynamic height calculation
+- static/css/desktop.css: Added file-types-summary styling
+- version.py: 2.4.172 → 2.4.173
+
+### Impact
+
+- Complete visibility into all file types in the system
+- Better understanding of storage distribution across file types
+- Logarithmic scale makes all data points useful and visible
+
 ## [2.4.172] - 2025-11-20
 
 ### Improvements
