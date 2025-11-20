@@ -29,7 +29,7 @@ from pixelprobe.api.export_routes import export_bp
 from pixelprobe.api.maintenance_routes import maintenance_bp
 from pixelprobe.api.reports_routes import reports_bp
 from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
-from pixelprobe.api.auth_routes import auth_bp
+from pixelprobe.api.auth_routes import auth_api_bp, auth_ui_bp, auth_bp  # auth_bp for backward compat
 
 # Import authentication module
 from auth import init_auth, auth_required
@@ -140,7 +140,8 @@ csrf.exempt(admin_bp)
 csrf.exempt(export_bp)
 csrf.exempt(maintenance_bp)
 csrf.exempt(reports_bp)
-csrf.exempt(auth_bp)  # Exempt auth endpoints from CSRF
+csrf.exempt(auth_api_bp)  # Exempt API auth endpoints from CSRF
+# Note: auth_ui_bp (login/logout pages) should NOT be exempted from CSRF
 
 # Initialize scheduler
 scheduler = MediaScheduler()
@@ -166,7 +167,8 @@ def init_services():
     app.config_repository = ConfigurationRepository()
 
 # Register blueprints
-app.register_blueprint(auth_bp)  # Register auth blueprint first
+app.register_blueprint(auth_api_bp)  # Register API auth blueprint first
+app.register_blueprint(auth_ui_bp)   # Register UI auth blueprint (login/logout pages)
 
 # Import auth decorator wrapper
 from pixelprobe.api.auth_decorator import apply_auth_to_blueprint

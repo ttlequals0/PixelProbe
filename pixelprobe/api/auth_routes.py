@@ -1,6 +1,10 @@
 """
-Authentication API routes
+Authentication API and UI routes
 Handles login, logout, user management, and API token operations
+
+Note: Split into two blueprints for clarity:
+- auth_api_bp: API endpoints with /api prefix
+- auth_ui_bp: UI routes without prefix (login page, etc.)
 """
 
 import logging
@@ -12,10 +16,17 @@ from auth import authenticate_user, check_first_run, create_initial_admin, auth_
 
 logger = logging.getLogger(__name__)
 
-auth_bp = Blueprint('auth', __name__)
+# API routes blueprint - all authentication API endpoints
+auth_api_bp = Blueprint('auth_api', __name__, url_prefix='/api')
+
+# UI routes blueprint - login/logout pages
+auth_ui_bp = Blueprint('auth_ui', __name__)
+
+# Keep legacy name for backward compatibility
+auth_bp = auth_api_bp
 
 
-@auth_bp.route('/api/auth/status', methods=['GET'])
+@auth_api_bp.route('/auth/status', methods=['GET'])
 def auth_status():
     """Check authentication status and first-run status"""
     is_first_run = check_first_run()
@@ -28,7 +39,7 @@ def auth_status():
     })
 
 
-@auth_bp.route('/api/auth/setup', methods=['POST'])
+@auth_api_bp.route('/auth/setup', methods=['POST'])
 def first_run_setup():
     """Initial setup for the admin user on first run"""
     if not check_first_run():
@@ -54,7 +65,7 @@ def first_run_setup():
     })
 
 
-@auth_bp.route('/api/auth/login', methods=['POST'])
+@auth_api_bp.route('/auth/login', methods=['POST'])
 def api_login():
     """API endpoint for user login"""
     data = request.get_json()
@@ -78,7 +89,7 @@ def api_login():
     })
 
 
-@auth_bp.route('/api/auth/logout', methods=['POST'])
+@auth_api_bp.route('/auth/logout', methods=['POST'])
 @login_required
 def api_logout():
     """API endpoint for user logout"""
@@ -86,7 +97,7 @@ def api_logout():
     return jsonify({'success': True, 'message': 'Logged out successfully'})
 
 
-@auth_bp.route('/api/users', methods=['GET'])
+@auth_api_bp.route('/users', methods=['GET'])
 @admin_required
 def list_users():
     """List all users (admin only)"""
@@ -96,7 +107,7 @@ def list_users():
     })
 
 
-@auth_bp.route('/api/users', methods=['POST'])
+@auth_api_bp.route('/users', methods=['POST'])
 @admin_required
 def create_user():
     """Create a new user (admin only)"""
@@ -141,7 +152,7 @@ def create_user():
         return jsonify({'error': 'Failed to create user'}), 500
 
 
-@auth_bp.route('/api/users/<int:user_id>', methods=['DELETE'])
+@auth_api_bp.route('/users/<int:user_id>', methods=['DELETE'])
 @admin_required
 def delete_user(user_id):
     """Delete a user (admin only)"""
@@ -170,7 +181,7 @@ def delete_user(user_id):
         return jsonify({'error': 'Failed to delete user'}), 500
 
 
-@auth_bp.route('/api/users/<int:user_id>/password', methods=['PUT'])
+@auth_api_bp.route('/users/<int:user_id>/password', methods=['PUT'])
 @auth_required
 def change_password(user_id):
     """Change user password (users can change their own, admins can change any)"""
@@ -208,7 +219,7 @@ def change_password(user_id):
         return jsonify({'error': 'Failed to update password'}), 500
 
 
-@auth_bp.route('/api/tokens', methods=['GET'])
+@auth_api_bp.route('/tokens', methods=['GET'])
 @auth_required
 def list_tokens():
     """List API tokens for the current user"""
@@ -220,7 +231,7 @@ def list_tokens():
     })
 
 
-@auth_bp.route('/api/tokens', methods=['POST'])
+@auth_api_bp.route('/tokens', methods=['POST'])
 @auth_required
 def create_token():
     """Create a new API token for the current user"""
@@ -251,7 +262,7 @@ def create_token():
         return jsonify({'error': 'Failed to create token'}), 500
 
 
-@auth_bp.route('/api/tokens/<int:token_id>', methods=['DELETE'])
+@auth_api_bp.route('/tokens/<int:token_id>', methods=['DELETE'])
 @auth_required
 def delete_token(token_id):
     """Delete an API token"""
@@ -271,8 +282,8 @@ def delete_token(token_id):
         return jsonify({'error': 'Failed to delete token'}), 500
 
 
-# Web routes for login page
-@auth_bp.route('/login')
+# Web UI routes for login/logout pages
+@auth_ui_bp.route('/login')
 def login():
     """Render login page"""
     if current_user.is_authenticated:
@@ -280,9 +291,9 @@ def login():
     return render_template('login.html', first_run=check_first_run())
 
 
-@auth_bp.route('/logout')
+@auth_ui_bp.route('/logout')
 @login_required
 def logout():
     """Web logout route"""
     logout_user()
-    return redirect(url_for('auth.login'))
+    return redirect(url_for('auth_ui.login'))
