@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.174] - 2025-11-20
+
+### Features
+
+- **Added complete listing of all file types below chart**
+  - Numbered list showing all file types with storage and file counts
+  - Each entry shows: type name, storage size (with GB/TB formatting), file count
+  - Provides detailed view to complement the logarithmic chart
+  - Easy to scan and reference specific file types
+
+### Files Modified
+
+- static/js/app.js: Added complete file type listing with forEach loop
+- version.py: 2.4.173 → 2.4.174
+
+### Impact
+
+- Users can now see both visual (chart) and detailed (list) views of all file types
+- Better for finding specific file type information
+- Complete data transparency
+
 ## [2.4.173] - 2025-11-20
 
 ### Features

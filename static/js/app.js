@@ -2102,6 +2102,14 @@ class PixelProbeApp {
                     html += `<p><strong>Smallest:</strong> ${last.type} - ${this.formatStorage(last.total_gb)}</p>`;
                 }
                 html += '</div>';
+
+                // Complete listing of all file types
+                html += '<div class="file-types-list">';
+                html += '<h5 style="margin: 15px 0 10px 0; color: var(--text-primary);">Complete Listing:</h5>';
+                periodData.storage.by_file_type.forEach((item, index) => {
+                    html += `<p class="file-type-item"><strong>${index + 1}.</strong> ${item.type}: ${this.formatStorage(item.total_gb)} (${Number(item.file_count).toLocaleString()} files)</p>`;
+                });
+                html += '</div>';
                 html += '</div>';
             }
             html += '</div>';
