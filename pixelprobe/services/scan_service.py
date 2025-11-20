@@ -2347,9 +2347,6 @@ class ScanService:
                                 try:
                                     # CRITICAL FIX (v2.4.161): Use atomic SQL increment to prevent race conditions
                                     # Multiple workers can safely increment files_processed without overwriting each other
-                                    from sqlalchemy import text
-                                    from datetime import datetime, timezone
-
                                     # Calculate how many files we've scanned since last update
                                     increment = scanned - last_commit_count
 
@@ -2460,9 +2457,6 @@ class ScanService:
                             if scan_state and (scanned - last_commit_count) >= update_threshold:
                                 try:
                                     # CRITICAL FIX (v2.4.161): Use atomic SQL increment to prevent race conditions
-                                    from sqlalchemy import text
-                                    from datetime import datetime, timezone
-
                                     # Calculate how many files we've scanned since last update
                                     increment = scanned - last_commit_count
 

@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.162] - 2025-11-19
+
+### Critical Fixes
+
+- **Fixed variable scoping bug that broke all scans in v2.4.161**
+  - Scans were completely failing to complete
+  - Error: "cannot access local variable 'datetime' where it is not associated with a value"
+  - Root cause: Redundant import of datetime inside try block created local variable shadowing global import
+  - When code outside try block tried to use datetime, it referenced the local (undefined) variable
+  - Impact: ALL scans failed immediately when trying to update progress
+  - Fix: Removed redundant datetime/timezone imports from inside try blocks (lines 2351, 2461)
+  - datetime and timezone are already imported globally at top of file (line 10)
+
+### Technical Details
+
+- scan_service.py:2351
+  - Removed: `from datetime import datetime, timezone` inside try block
+  - Uses global import from line 10
+
+- scan_service.py:2461
+  - Removed: `from datetime import datetime, timezone` inside try block
+  - Uses global import from line 10
+
+### Root Cause Analysis
+
+**Variable Scoping Error**
+- v2.4.161 added atomic increment code with imports inside try blocks
+- `from datetime import datetime, timezone` on line 2351 created LOCAL variables
+- Local variables only exist within the try block scope
+- Line 2430: `chunk.end_time = datetime.now(timezone.utc)` is OUTSIDE try block
+- Python tried to access local datetime variable, but it's out of scope
+- Error: "cannot access local variable 'datetime' where it is not associated with a value"
+- Happened repeatedly on every chunk processing attempt
+- Result: No scans could complete
+
+**Why Tests Didn't Catch It**
+- Tests use simplified code paths
+- Production uses parallel ThreadPoolExecutor with different exception handling
+- Error only manifests in specific code paths with chunk cancellation
+
 ## [2.4.161] - 2025-11-19
 
 ### Critical Fixes
