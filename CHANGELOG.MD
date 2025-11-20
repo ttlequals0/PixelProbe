@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.172] - 2025-11-20
+
+### Improvements
+
+- **Changed Files by Type visualization from pie chart to horizontal bar chart**
+  - Pie charts were ineffective when one file type dominated storage (e.g., 10TB vs 700GB)
+  - Horizontal bar chart clearly shows all file types with proper proportions
+  - Each file type has its own color-coded bar
+  - X-axis automatically formats values using formatStorage (GB/TB)
+  - Y-axis shows file type labels
+  - Better handles large disparities in data values
+
+### Files Modified
+
+- static/js/app.js: Changed chart type from 'pie' to 'bar' with indexAxis: 'y'
+- version.py: 2.4.171 → 2.4.172
+
+### Impact
+
+- Much clearer visualization of storage distribution across file types
+- All file types are now clearly visible regardless of size differences
+- Better user experience for understanding storage allocation
+
 ## [2.4.171] - 2025-11-20
 
 ### Features

@@ -2162,7 +2162,7 @@ class PixelProbeApp {
         }
         this.fileTypeCharts = {};
 
-        // Color palette for pie chart
+        // Color palette for charts - each file type gets its own color
         const colors = [
             '#00ff88',  // Primary green
             '#ff6b6b',  // Red
@@ -2182,17 +2182,19 @@ class PixelProbeApp {
             const data = periodData.storage.by_file_type.slice(0, 5);
 
             this.fileTypeCharts[period] = new Chart(ctx, {
-                type: 'pie',
+                type: 'bar',
                 data: {
                     labels: data.map(item => item.type),
                     datasets: [{
+                        label: 'Storage',
                         data: data.map(item => Number(item.total_gb)),
                         backgroundColor: colors.slice(0, data.length),
-                        borderColor: '#1a1a1a',
-                        borderWidth: 2
+                        borderColor: colors.slice(0, data.length),
+                        borderWidth: 1
                     }]
                 },
                 options: {
+                    indexAxis: 'y',  // Horizontal bar chart
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
@@ -2202,10 +2204,32 @@ class PixelProbeApp {
                         tooltip: {
                             callbacks: {
                                 label: (context) => {
-                                    const label = context.label || '';
-                                    const value = context.parsed || 0;
-                                    return `${label}: ${this.formatStorage(value)}`;
+                                    const value = context.parsed.x || 0;
+                                    return `${this.formatStorage(value)}`;
                                 }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            beginAtZero: true,
+                            ticks: {
+                                color: '#b0b0b0',
+                                callback: (value) => this.formatStorage(value)
+                            },
+                            grid: {
+                                color: '#333'
+                            }
+                        },
+                        y: {
+                            ticks: {
+                                color: '#b0b0b0',
+                                font: {
+                                    size: 11
+                                }
+                            },
+                            grid: {
+                                display: false
                             }
                         }
                     }
