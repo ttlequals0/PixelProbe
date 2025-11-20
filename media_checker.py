@@ -1110,106 +1110,12 @@ class PixelProbe:
             scan_tool = "imagemagick"
             scan_output.append(f"ImageMagick error: {str(e)}")
             logger.warning(f"ImageMagick error for {file_path}: {str(e)}")
-        
-        try:
-            # No timeout for FFmpeg image validation - complete validation required
-            result = safe_subprocess_run(
-                ['ffmpeg', '-v', 'error', '-i', file_path, '-f', 'null', '-'],
-                capture_output=True,
-                text=True,
-                timeout=None  # No timeout - complete validation required
-            )
-            
-            if result.returncode != 0 and result.stderr:
-                # Check if this is a HEIC/HEIF file with known FFmpeg compatibility issues
-                file_ext = os.path.splitext(file_path)[1].lower()
-                stderr_lower = result.stderr.lower()
-                
-                # Check for known FFmpeg compatibility issues with certain formats
-                compatibility_issues = [
-                    'moov atom not found',
-                    'invalid data found when processing input',
-                    'could not find codec parameters',
-                    'no decoder found',
-                    'unrecognized file format',
-                    'error while decoding stream'
-                ]
-                
-                if file_ext in ['.heic', '.heif'] and any(msg in stderr_lower for msg in compatibility_issues):
-                    # Known FFmpeg HEIC compatibility issue - check with other tools first
-                    scan_output.append("FFmpeg image validation: SKIPPED (HEIC compatibility)")
-                    logger.info(f"FFmpeg HEIC compatibility issue for {file_path}, relying on PIL/ImageMagick")
-                elif 'invalid data found when processing input' in stderr_lower or 'error while decoding stream' in stderr_lower:
-                    # Common FFmpeg decoding issue that doesn't always mean corruption
-                    # Check if other tools passed
-                    if not pil_failed and not pil_load_failed:
-                        # PIL passed, so file is definitely OK - this is just an FFmpeg decoder quirk
-                        # DO NOT add to warning_details - file is verified good by PIL
-                        scan_output.append("FFmpeg image validation: PASSED (decoder warning ignored - PIL verified OK)")
-                        logger.info(f"FFmpeg decoding issue but PIL verified OK for {file_path} - treating as PASSED")
-                        # File is good, no warnings needed
-                    else:
-                        # Both PIL and FFmpeg failed - likely corrupted
-                        corruption_details.append("FFmpeg validation failed")
-                        is_corrupted = True
-                        scan_tool = "ffmpeg"
-                        scan_output.append(f"FFmpeg image validation: FAILED")
-                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
-                else:
-                    # Check if PIL passed before marking as corrupted
-                    if not pil_failed and not pil_load_failed:
-                        # PIL passed, so file is likely OK - FFmpeg issue
-                        warning_details.append("FFmpeg image validation failed (but PIL passed)")
-                        scan_output.append(f"FFmpeg image validation: FAILED")
-                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
-                        scan_output.append("Note: FFmpeg failed but PIL verified OK - file likely valid")
-                        # Don't mark as corrupted since PIL passed
-                    else:
-                        # Both PIL and FFmpeg failed - likely corrupted
-                        corruption_details.append("FFmpeg image validation failed")
-                        is_corrupted = True
-                        scan_tool = "ffmpeg"
-                        scan_output.append(f"FFmpeg image validation: FAILED")
-                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
-            elif result.stderr:
-                # Check if this is just an EXIF/metadata warning (not actual corruption)
-                stderr_lower = result.stderr.lower()
-                # List of metadata/EXIF related keywords that don't indicate corruption
-                metadata_keywords = [
-                    'exif', 'metadata', 'app fields', 'tiff header', 'iptc', 
-                    'xmp', 'icc', 'color profile', 'photoshop', 'adobe',
-                    'orientation', 'thumbnail', 'makernote', 'gps info',
-                    'comment', 'copyright', 'artist', 'datetime'
-                ]
-                
-                if any(keyword in stderr_lower for keyword in metadata_keywords):
-                    # Metadata/EXIF warnings don't indicate actual image corruption
-                    scan_output.append("FFmpeg image validation: PASSED (with metadata warnings)")
-                    logger.info(f"FFmpeg metadata warning (not corruption) for {file_path}: {result.stderr[:100]}")
-                else:
-                    # Check if PIL and/or ImageMagick passed
-                    if not pil_failed and not pil_load_failed:
-                        # PIL verified the file is OK, so these are codec compliance issues, not corruption
-                        # Report them but don't treat as corruption or warning
-                        scan_output.append("FFmpeg image validation: CODEC COMPLIANCE ISSUES")
-                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
-                        scan_output.append("Note: File verified OK by PIL - usable despite codec issues")
-                        logger.info(f"FFmpeg codec compliance issues for {file_path} but PIL verified OK")
-                        # Don't add to warning_details - file is functionally fine
-                    else:
-                        # PIL also failed, so these warnings might indicate real issues
-                        warning_details.append("FFmpeg image validation warnings")
-                        scan_output.append(f"FFmpeg image validation: WARNINGS")
-                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
-            else:
-                scan_output.append("FFmpeg image validation: PASSED")
-        
-        except FileNotFoundError:
-            scan_output.append("FFmpeg: NOT FOUND")
-        except Exception as e:
-            scan_output.append(f"FFmpeg image validation error: {str(e)}")
-            logger.debug(f"FFmpeg image validation error: {str(e)}")
-        
+
+        # P2 FIX: Removed FFmpeg image validation (lines 1114-1211)
+        # FFmpeg is designed for video/audio, not images
+        # Using FFmpeg for image validation caused false positives
+        # PIL and ImageMagick provide proper image validation
+
         # Check if this is a GIF with header issues that should be a warning instead
         if is_gif and is_corrupted:
             # Check if all failures are related to "cannot identify" or "improper header"
