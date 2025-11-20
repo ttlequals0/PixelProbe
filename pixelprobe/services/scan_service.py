@@ -2345,42 +2345,73 @@ class ScanService:
 
                             if scan_state and (scanned - last_commit_count) >= update_threshold:
                                 try:
+                                    # CRITICAL FIX (v2.4.161): Use atomic SQL increment to prevent race conditions
+                                    # Multiple workers can safely increment files_processed without overwriting each other
+                                    from sqlalchemy import text
+                                    from datetime import datetime, timezone
+
+                                    # Calculate how many files we've scanned since last update
+                                    increment = scanned - last_commit_count
+
                                     # Use a fresh session for progress updates to avoid conflicts with worker threads
                                     from sqlalchemy.orm import Session
                                     progress_session = Session(bind=db.engine)
                                     try:
-                                        # Merge the scan_state into the new session
-                                        progress_scan_state = progress_session.merge(scan_state)
-
-                                        # CRITICAL FIX (v2.4.161): For parallel scans, use the existing estimated_total
-                                        # from scan_state instead of the chunk's total_to_scan.
+                                        # For parallel scans, use the existing estimated_total from scan_state
                                         # The estimated_total was already set correctly at the beginning of parallel scan
-                                        # to the full count across ALL chunks. Each chunk worker should only update
-                                        # files_processed, not estimated_total.
-                                        aggregate_total = progress_scan_state.estimated_total if progress_scan_state.estimated_total > 0 else total_to_scan
+                                        aggregate_total = scan_state.estimated_total if scan_state.estimated_total > 0 else total_to_scan
 
-                                        # Only update estimated_total if we have a valid total_to_scan
-                                        # (0 means we're in a parallel chunk worker and shouldn't override the aggregate total)
                                         if total_to_scan > 0:
-                                            # Sequential mode: update both files_processed and estimated_total
-                                            progress_scan_state.files_processed = current_total
-                                            progress_scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
+                                            # Sequential mode: update both files_processed and estimated_total normally
+                                            progress_session.execute(
+                                                text("UPDATE scan_state SET files_processed = :total, "
+                                                     "estimated_total = :estimated, current_file = :file, "
+                                                     "last_update = :now WHERE id = :id"),
+                                                {
+                                                    'total': current_total,
+                                                    'estimated': total_to_scan,
+                                                    'file': file_result.file_path,
+                                                    'now': datetime.now(timezone.utc),
+                                                    'id': scan_state.id
+                                                }
+                                            )
                                         else:
-                                            # Parallel worker: DON'T update files_processed (main thread aggregates it)
-                                            # Only update current_file and last_update for real-time feedback
-                                            progress_scan_state.current_file = file_result.file_path
-                                            progress_scan_state.last_update = datetime.now(timezone.utc)
+                                            # Parallel mode: ATOMIC INCREMENT of files_processed
+                                            # This prevents race conditions - database handles the increment atomically
+                                            progress_session.execute(
+                                                text("UPDATE scan_state SET files_processed = files_processed + :increment, "
+                                                     "current_file = :file, last_update = :now WHERE id = :id"),
+                                                {
+                                                    'increment': increment,
+                                                    'file': file_result.file_path,
+                                                    'now': datetime.now(timezone.utc),
+                                                    'id': scan_state.id
+                                                }
+                                            )
 
+                                        # Get updated files_processed for progress message
+                                        result = progress_session.execute(
+                                            text("SELECT files_processed FROM scan_state WHERE id = :id"),
+                                            {'id': scan_state.id}
+                                        )
+                                        row = result.fetchone()
+                                        updated_files_processed = row[0] if row else current_total
+
+                                        # Update progress message
                                         from utils import ProgressTracker
                                         progress_tracker = ProgressTracker('scan')
-                                        # For parallel mode, use the aggregate files_processed from DB, not chunk's local count
-                                        display_current = progress_scan_state.files_processed if total_to_scan == 0 else current_total
-                                        progress_scan_state.progress_message = progress_tracker.get_progress_message(
+                                        progress_message = progress_tracker.get_progress_message(
                                             f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
-                                            display_current,
-                                            aggregate_total,  # Use aggregate total, not chunk total
+                                            updated_files_processed,
+                                            aggregate_total,
                                             os.path.basename(file_result.file_path)
                                         )
+
+                                        progress_session.execute(
+                                            text("UPDATE scan_state SET progress_message = :msg WHERE id = :id"),
+                                            {'msg': progress_message, 'id': scan_state.id}
+                                        )
+
                                         progress_session.commit()
                                         last_commit_count = scanned
 
@@ -2428,30 +2459,50 @@ class ScanService:
 
                             if scan_state and (scanned - last_commit_count) >= update_threshold:
                                 try:
-                                    # CRITICAL FIX (v2.4.161): For parallel scans, use the existing estimated_total
-                                    # from scan_state instead of the chunk's total_to_scan
+                                    # CRITICAL FIX (v2.4.161): Use atomic SQL increment to prevent race conditions
+                                    from sqlalchemy import text
+                                    from datetime import datetime, timezone
+
+                                    # Calculate how many files we've scanned since last update
+                                    increment = scanned - last_commit_count
+
+                                    # For parallel scans, use the existing estimated_total from scan_state
                                     aggregate_total = scan_state.estimated_total if scan_state.estimated_total > 0 else total_to_scan
 
-                                    # Only update estimated_total if we have a valid total_to_scan
                                     if total_to_scan > 0:
-                                        # Sequential mode: update both files_processed and estimated_total
+                                        # Sequential mode: update both files_processed and estimated_total normally
                                         scan_state.files_processed = current_total
-                                        scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
-                                    else:
-                                        # Parallel worker: DON'T update files_processed (main thread aggregates it)
-                                        # Only update current_file and last_update for real-time feedback
+                                        scan_state.estimated_total = total_to_scan
                                         scan_state.current_file = file_result.file_path
                                         scan_state.last_update = datetime.now(timezone.utc)
+                                    else:
+                                        # Parallel mode: ATOMIC INCREMENT of files_processed
+                                        # Use raw SQL to prevent race conditions
+                                        db.session.execute(
+                                            text("UPDATE scan_state SET files_processed = files_processed + :increment, "
+                                                 "current_file = :file, last_update = :now WHERE id = :id"),
+                                            {
+                                                'increment': increment,
+                                                'file': file_result.file_path,
+                                                'now': datetime.now(timezone.utc),
+                                                'id': scan_state.id
+                                            }
+                                        )
+                                        # Get updated files_processed for progress message
+                                        result = db.session.execute(
+                                            text("SELECT files_processed FROM scan_state WHERE id = :id"),
+                                            {'id': scan_state.id}
+                                        )
+                                        row = result.fetchone()
+                                        current_total = row[0] if row else current_total
 
                                     # Update progress message with current file info
                                     from utils import ProgressTracker
                                     progress_tracker = ProgressTracker('scan')
-                                    # For parallel mode, use the aggregate files_processed from DB, not chunk's local count
-                                    display_current = scan_state.files_processed if total_to_scan == 0 else current_total
                                     scan_state.progress_message = progress_tracker.get_progress_message(
                                         f'Phase 3 of 3: Scanning files',
-                                        display_current,
-                                        aggregate_total,  # Use aggregate total, not chunk total
+                                        current_total,
+                                        aggregate_total,
                                         os.path.basename(file_result.file_path)
                                     )
                                     db.session.commit()
@@ -2466,17 +2517,23 @@ class ScanService:
                                 # Try to recover the database session
                                 try:
                                     db.session.rollback()
-                                    # Re-get scan state and try again without aggressive session cleanup
+                                    # Re-get scan state and try again
                                     scan_state = db.session.query(ScanState).filter_by(id=scan_state.id).first()
                                     if scan_state:
+                                        increment = scanned - last_commit_count
                                         if total_to_scan > 0:
-                                            # Sequential mode: update files_processed
+                                            # Sequential mode: update files_processed normally
                                             scan_state.files_processed = current_total
-                                            scan_state.update_progress(current_total, total_to_scan, current_file=file_result.file_path)
-                                        else:
-                                            # Parallel mode: DON'T update files_processed
                                             scan_state.current_file = file_result.file_path
                                             scan_state.last_update = datetime.now(timezone.utc)
+                                        else:
+                                            # Parallel mode: atomic increment
+                                            db.session.execute(
+                                                text("UPDATE scan_state SET files_processed = files_processed + :increment, "
+                                                     "current_file = :file, last_update = :now WHERE id = :id"),
+                                                {'increment': increment, 'file': file_result.file_path,
+                                                 'now': datetime.now(timezone.utc), 'id': scan_state.id}
+                                            )
                                         db.session.commit()
                                         last_commit_count = scanned
                                 except Exception as e2:

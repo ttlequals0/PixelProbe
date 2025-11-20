@@ -18,64 +18,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Log evidence: "Hard time limit (7200s) exceeded for pixelprobe.tasks.scan_media_task"
 
 - **Fixed progress tracking showing individual chunk progress instead of total**
-  - Progress was showing "42 of 142 files" instead of "42 of 1,094,089 files"
+  - Progress was showing "4 of 738 files" (one chunk) instead of "44 of 738 files" (aggregate)
   - Root cause: Parallel chunk workers had race condition overwriting aggregate progress
-    - Multiple workers updated files_processed with their local chunk count (e.g., 10)
-    - This overwrote the aggregate count (e.g., 1050) that the main thread calculated
+    - Multiple workers updated files_processed with absolute values, not increments
+    - Worker A writes files_processed=10, Worker B writes files_processed=5
     - Last writer wins, so UI showed random chunk's progress instead of aggregate
-  - Each of 20 workers processes a chunk (e.g., 142 files), but UI should show aggregate progress
-  - Solution:
-    - Chunk workers NO LONGER update files_processed in parallel mode
-    - Only the main thread aggregates and updates files_processed
-    - Chunk workers only update current_file, last_update, progress_message for real-time feedback
-    - Progress message uses aggregate files_processed from database, not chunk's local count
-    - Chunk workers preserve estimated_total set at scan initialization
-  - Impact: UI now shows correct aggregate progress across all workers
-  - API log evidence: current=2, total=142 (should be total=1,094,089)
+  - Solution: **Atomic SQL increments** instead of absolute writes
+    - Workers use `UPDATE scan_state SET files_processed = files_processed + :increment`
+    - Database handles the increment atomically, preventing race conditions
+    - All workers contribute to the same counter in real-time
+    - Progress now shows aggregate across all workers: "44 of 738 files"
+  - Impact: Real-time aggregate progress tracking across all 20 workers
+  - Example: Scanning 738 files with 694 pending should show "44 of 738", not "4 of 738"
 
 ### Technical Details
 
 - celery_config.py:56-57
   - Changed task_soft_time_limit from 3600 to None
   - Changed task_time_limit from 7200 to None
-  - Comment clarifies: "No global timeouts - scan tasks with 1M+ files can take 3-4+ hours"
+  - Comment: "No global timeouts - scan tasks with 1M+ files can take 3-4+ hours"
 
-- scan_service.py:2355-2385 (parallel file processing)
-  - Added aggregate_total calculation using existing estimated_total from scan_state
-  - When total_to_scan=0 (parallel chunk worker):
-    - DO NOT update files_processed (prevents race condition)
-    - Only update current_file and last_update
-    - Use aggregate files_processed from DB for progress_message
-  - When total_to_scan>0 (sequential mode):
-    - Update both files_processed and estimated_total normally
-  - Use aggregate_total for progress message generation
+- scan_service.py:2348-2424 (parallel file processing - ThreadPoolExecutor)
+  - Calculate increment: `scanned - last_commit_count`
+  - Parallel mode (total_to_scan==0):
+    - Use atomic SQL: `files_processed = files_processed + :increment`
+    - Read back updated value for progress message
+  - Sequential mode (total_to_scan>0):
+    - Update files_processed with absolute value (no race condition)
+  - Both modes preserve aggregate estimated_total from scan initialization
 
-- scan_service.py:2431-2483 (sequential file processing)
-  - Applied same logic for consistency
-  - Parallel mode: skip files_processed update
-  - Sequential mode: update files_processed normally
-  - Error recovery also respects parallel vs sequential mode
+- scan_service.py:2462-2540 (sequential file processing - for loop)
+  - Applied same atomic increment logic for consistency
+  - Parallel mode: atomic SQL increment
+  - Sequential mode: normal ORM update
+  - Error recovery handles both modes
 
 ### Root Cause Analysis
 
 **Issue 1: Task Timeout**
 - v2.4.160 added global 2-hour (7200s) timeout as P0 fix
 - Timeout appropriate for individual media file validation
-- But parallel scans with 20 workers processing 1.09M files take 3-4+ hours total
+- But full scans processing 738 pending files across 20 workers take longer
 - Workers were killed at 2-hour mark, leaving files in pending state
+- Fix: Removed global timeouts, rely on per-media timeouts
 
 **Issue 2: Progress Tracking Race Condition**
-- At scan initialization, estimated_total correctly set to full count (1,094,089 files)
-- Main thread in _parallel_scan_chunks aggregates chunk results and updates files_processed
-- BUT: Each chunk worker ALSO tried to update files_processed with its local count
-- Race condition:
-  - Worker A scans 10 files locally, writes files_processed=10
-  - Worker B scans 5 files locally, writes files_processed=5
-  - Main thread aggregates: worker_A(10) + worker_B(5) = 15, writes files_processed=15
-  - Final value depends on write order (last writer wins)
-  - If worker B writes last: files_processed=5 (WRONG! Should be 15)
-- This caused UI to show random chunk's progress instead of aggregate
-- Fix: Chunk workers no longer update files_processed, only main thread does
+- Scanning 738 files with 20 parallel workers
+- Each worker processes ~37 files (738/20)
+- Workers update progress by writing absolute values:
+  - Worker 1: `files_processed = 4` (scanned 4 out of its 37)
+  - Worker 2: `files_processed = 10` (scanned 10 out of its 37)
+  - Worker 3: `files_processed = 3` (scanned 3 out of its 37)
+- Race condition: Last writer wins
+  - If Worker 3 writes last: `files_processed = 3` (WRONG!)
+  - Should be: `files_processed = 4 + 10 + 3 = 17`
+- UI showed "3 of 738 files" instead of "17 of 738 files"
+- Fix: Atomic increments
+  - Worker 1: `files_processed = files_processed + 4`
+  - Worker 2: `files_processed = files_processed + 10`
+  - Worker 3: `files_processed = files_processed + 3`
+  - Result: `files_processed = 17` (CORRECT!)
 
 ## [2.4.160] - 2025-11-18
 
