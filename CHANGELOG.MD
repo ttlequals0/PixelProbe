@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.164] - 2025-11-20
+
+### P2 Optimization - Data Retention Implementation
+
+- **Implemented automated data retention policies**
+  - Created tools/data_retention.py with comprehensive cleanup functions
+  - Prevents unbounded database growth by archiving/deleting old data
+  - Integrated with Celery Beat scheduler (runs every 2 hours)
+  - Configurable retention periods via environment variables
+  - Impact: Controlled database growth, better performance over time
+
+- **Retention policies**
+  - scan_output: Archive after 30 days (truncate to 100 chars + "[archived]")
+  - reports: Delete after 90 days
+  - scan_state: Delete completed/failed states after 7 days
+  - All periods configurable via environment variables
+
+- **Integration components**
+  - Added run_retention_cleanup task to pixelprobe/tasks.py
+  - Added Celery Beat schedule to celery_config.py (every 2 hours, priority 9)
+  - Added retention configuration to config.py
+  - Task includes retry logic with exponential backoff
+  - Comprehensive logging and error handling
+
+### Configuration Variables
+
+- `SCAN_OUTPUT_RETENTION_DAYS` (default: 30)
+- `REPORT_RETENTION_DAYS` (default: 90)
+- `SCAN_STATE_RETENTION_DAYS` (default: 7)
+
+### Technical Details
+
+- **tools/data_retention.py**
+  - cleanup_scan_outputs(): Archives old scan outputs (30 days)
+  - cleanup_old_reports(): Deletes old reports (90 days)
+  - cleanup_old_scan_states(): Deletes old scan states (7 days)
+  - get_retention_stats(): Preview cleanup impact
+  - run_all_retention_policies(): Execute all policies
+
+- **pixelprobe/tasks.py**
+  - run_retention_cleanup task with 10min soft/15min hard timeout
+  - Priority 9 (lowest) - maintenance task
+  - 3 retry attempts with exponential backoff (5min, 10min, 20min)
+
+- **celery_config.py**
+  - Added beat_schedule for automated execution
+  - Runs every 2 hours (7200 seconds)
+  - Lowest priority to not interfere with scans
+
+### Root Cause Analysis
+
+**Problem**:
+- Database was growing unbounded
+- scan_output stores full error logs (140MB currently)
+- Old reports accumulate indefinitely
+- No automated cleanup mechanism
+
+**Solution**:
+- Automated cleanup via Celery Beat scheduled task
+- Configurable retention periods for different data types
+- Safe archival (truncate) vs deletion based on data importance
+- Preserves error details for recent scans while cleaning old data
+
+**Impact**:
+- Prevents long-term database bloat
+- Maintains fast query performance
+- Reduces storage costs
+- Keeps important recent data while cleaning old data
+
 ## [2.4.163] - 2025-11-20
 
 ### P2 Optimization - Remove FFmpeg from Image Validation

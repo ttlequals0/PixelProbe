@@ -863,3 +863,70 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
 
 
 # update_scan_progress_redis is now imported from progress_utils to avoid circular imports
+
+
+@celery_app.task(name='pixelprobe.tasks.run_retention_cleanup',
+                 bind=True,
+                 max_retries=3,
+                 soft_time_limit=600,  # 10 minutes soft limit for retention cleanup
+                 time_limit=900,  # 15 minutes hard limit
+                 priority=9)  # Lowest priority - maintenance task
+def run_retention_cleanup(self):
+    """
+    Scheduled task to run data retention policies
+
+    P2 Implementation: Automated data cleanup to prevent unbounded database growth
+    Runs every 2 hours via Celery Beat scheduler
+
+    Returns:
+        dict: Retention cleanup results
+    """
+    logger.info(f"Starting data retention cleanup task {self.request.id}")
+
+    try:
+        from tools.data_retention import run_all_retention_policies
+
+        # Execute all retention policies
+        result = run_all_retention_policies()
+
+        if result['success']:
+            logger.info(
+                f"Data retention cleanup completed: "
+                f"{result['outputs_archived']} outputs archived, "
+                f"{result['reports_deleted']} reports deleted, "
+                f"{result['states_deleted']} scan states deleted"
+            )
+
+            return {
+                'status': 'SUCCESS',
+                'task_id': self.request.id,
+                'outputs_archived': result['outputs_archived'],
+                'reports_deleted': result['reports_deleted'],
+                'states_deleted': result['states_deleted'],
+                'stats_before': result['stats_before'],
+                'completed_at': datetime.now(timezone.utc).isoformat()
+            }
+        else:
+            # Retention policies failed
+            logger.error(f"Data retention cleanup failed: {result.get('error')}")
+
+            # Retry with exponential backoff
+            if self.request.retries < self.max_retries:
+                retry_delay = 2 ** self.request.retries * 300  # 5min, 10min, 20min
+                logger.info(f"Retrying retention cleanup in {retry_delay} seconds")
+                raise self.retry(exc=RuntimeError(result.get('error')), countdown=retry_delay)
+            else:
+                raise RuntimeError(result.get('error'))
+
+    except Exception as exc:
+        logger.error(f"Data retention cleanup task {self.request.id} failed: {str(exc)}")
+
+        # Retry with exponential backoff
+        if self.request.retries < self.max_retries:
+            retry_delay = 2 ** self.request.retries * 300  # 5min, 10min, 20min
+            logger.info(f"Retrying retention cleanup in {retry_delay} seconds (attempt {self.request.retries + 1})")
+            raise self.retry(exc=exc, countdown=retry_delay)
+        else:
+            # Max retries exceeded
+            logger.error(f"Retention cleanup task {self.request.id} failed permanently after {self.max_retries} retries")
+            raise exc
