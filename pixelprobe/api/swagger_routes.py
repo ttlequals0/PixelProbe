@@ -1012,13 +1012,13 @@ class GetTrends(Resource):
                     {'cutoff': cutoff_date}
                 ).fetchone()
 
-                total_scanned = period_stats[0] or 0
-                corrupted = period_stats[1] or 0
-                warnings = period_stats[2] or 0
-                file_types = period_stats[3] or 0
-                avg_duration = period_stats[4] or 0
-                total_bytes = period_stats[5] or 0
-                discovery_days = period_stats[6] or 0
+                total_scanned = int(period_stats[0] or 0)
+                corrupted = int(period_stats[1] or 0)
+                warnings = int(period_stats[2] or 0)
+                file_types = int(period_stats[3] or 0)
+                avg_duration = float(period_stats[4] or 0)
+                total_bytes = int(period_stats[5] or 0)
+                discovery_days = int(period_stats[6] or 0)
 
                 # Calculate corruption rate
                 corruption_rate = round((corrupted / total_scanned * 100), 2) if total_scanned > 0 else 0
@@ -1097,9 +1097,9 @@ class GetTrends(Resource):
                         'by_file_type': [
                             {
                                 'type': row[0],
-                                'file_count': row[1],
-                                'total_gb': round(row[2] / (1024**3), 2),
-                                'avg_size_mb': round(row[2] / row[1] / (1024**2), 2) if row[1] > 0 else 0
+                                'file_count': int(row[1]),
+                                'total_gb': round(float(row[2]) / (1024**3), 2),
+                                'avg_size_mb': round(float(row[2]) / int(row[1]) / (1024**2), 2) if row[1] > 0 else 0
                             }
                             for row in storage_by_type
                         ]
@@ -1119,8 +1119,8 @@ class GetTrends(Resource):
                 """)
             ).fetchone()
 
-            total_bytes = total_storage[0] or 0
-            total_files = total_storage[1] or 0
+            total_bytes = int(total_storage[0] or 0)
+            total_files = int(total_storage[1] or 0)
             oldest_file = total_storage[2]
             newest_file = total_storage[3]
 

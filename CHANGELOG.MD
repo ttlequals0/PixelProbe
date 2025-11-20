@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.169] - 2025-11-20
+
+### Bug Fixes
+
+- **Fixed Swagger /api/v1/stats/trends Decimal serialization error**
+  - Error: "TypeError: Object of type Decimal is not JSON serializable"
+  - Converted all database Decimal values to int/float before JSON serialization
+  - Fixed total_scanned, corrupted, warnings, file_types, avg_duration, total_bytes, discovery_days
+  - Fixed storage_by_type file_count and total_gb calculations
+  - Fixed overall summary total_bytes and total_files
+
+- **Fixed JavaScript toFixed error in System Stats trends**
+  - Error: "periodData.storage.total_gb.toFixed is not a function"
+  - Root cause was same Decimal serialization issue
+  - Now properly returns numeric values that support toFixed()
+
+- **Fixed mobile Scan Reports showing desktop table layout**
+  - Removed !important flags from desktop.css that overrode mobile styles
+  - Wrapped desktop scan-reports CSS in @media (min-width: 769px) query
+  - Mobile now correctly shows card-based layout
+  - Desktop shows table layout
+
+- **Files modified**
+  - pixelprobe/api/swagger_routes.py: Added int()/float() conversions for all Decimal values
+  - static/css/desktop.css: Wrapped scan-reports styles in desktop media query
+  - version.py: 2.4.168 → 2.4.169
+
+### Impact
+
+- Swagger trends endpoint now fully functional
+- System Stats modal trends section working correctly
+- Mobile users see proper card layout
+- Desktop users see proper table layout
+
 ## [2.4.168] - 2025-11-20
 
 ### Bug Fixes
