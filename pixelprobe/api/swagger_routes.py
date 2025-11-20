@@ -7,7 +7,7 @@ from flask_restx import Resource
 from auth import check_auth
 from pixelprobe.api.swagger import (
     api, scan_ns, stats_ns, maintenance_ns, admin_ns, export_ns,
-    scan_directories_model, scan_status_model, stats_summary_model,
+    scan_directories_model, scan_status_model, stats_summary_model, trends_model,
     file_changes_model, cleanup_status_model, export_request_model,
     config_model, schedule_model, error_model, success_model,
     reset_for_rescan_model, reset_result_model, reset_by_path_model,
@@ -956,6 +956,40 @@ class GetSystemInfo(Resource):
             return stats_service.get_system_info()
         except Exception as e:
             logger.error(f"Error getting system info: {e}")
+            return {'error': str(e)}, 500
+
+@stats_ns.route('/trends')
+class GetTrends(Resource):
+    @stats_ns.doc('get_trends')
+    @stats_ns.response(200, 'Trends data retrieved', trends_model)
+    @stats_ns.response(401, 'Authentication required', error_model)
+    @stats_ns.response(500, 'Internal server error', error_model)
+    def get(self):
+        """
+        Get corruption and storage trends over multiple time periods
+
+        Returns comprehensive analytics including:
+        - Corruption trends: rates, counts, top corrupted file types
+        - Storage trends: total GB, growth rate, capacity projections, breakdown by file type
+        - Scanning performance: file types scanned, average duration, throughput
+        - Overall summary: total storage, collection age, average growth rate
+
+        Time periods analyzed: 30 days, 60 days, 90 days, and 1 year
+        """
+        if not check_auth():
+            return {'error': 'Authentication required'}, 401
+
+        try:
+            from pixelprobe.api.stats_routes import get_trends
+            from flask import current_app
+            with current_app.test_request_context(
+                path='/api/trends',
+                headers=request.headers,
+                method='GET'
+            ):
+                return get_trends()
+        except Exception as e:
+            logger.error(f"Error getting trends: {e}")
             return {'error': str(e)}, 500
 
 # Maintenance endpoints

@@ -174,6 +174,12 @@ stats_summary_model = api.model('StatsSummary', {
     'version': fields.String(description='Application version')
 })
 
+trends_model = api.model('Trends', {
+    'trends': fields.Raw(description='Trend data by period (30d, 60d, 90d, 1y)'),
+    'summary': fields.Raw(description='Overall summary statistics'),
+    'generated_at': fields.DateTime(description='When trends were generated')
+})
+
 # Maintenance models
 cleanup_model = api.model('Cleanup', {
     'deleted_files': fields.Integer(description='Number of database entries removed'),

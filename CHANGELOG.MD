@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.167] - 2025-11-20
+
+### API Documentation - Trends Endpoint
+
+- **Added Swagger/OpenAPI documentation for trends endpoint**
+  - Created trends_model in swagger.py with comprehensive field descriptions
+  - Added GetTrends resource in swagger_routes.py with full API documentation
+  - Documented all response codes (200, 401, 500)
+  - Comprehensive docstring explaining returned data:
+    - Corruption trends: rates, counts, top corrupted file types
+    - Storage trends: total GB, growth rate, capacity projections, breakdown
+    - Scanning performance: file types, duration, throughput
+    - Overall summary: total storage, collection age, growth rate
+    - Time periods: 30d, 60d, 90d, 1y
+
+- **Files modified**
+  - pixelprobe/api/swagger.py: Added trends_model
+  - pixelprobe/api/swagger_routes.py: Added GetTrends Resource with full documentation
+  - version.py: 2.4.166 → 2.4.167
+
+### Impact
+
+- Trends endpoint now properly documented in Swagger UI at /api/v1/docs
+- API consumers can see full schema and response examples
+- Better developer experience for integrations
+
 ## [2.4.166] - 2025-11-20
 
 ### Trends Analytics Feature
