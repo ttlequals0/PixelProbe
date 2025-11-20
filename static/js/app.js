@@ -2021,6 +2021,15 @@ class PixelProbeApp {
         };
     }
 
+    formatStorage(gb) {
+        // Convert GB to TB if >= 1024 GB
+        const value = Number(gb);
+        if (value >= 1024) {
+            return `${(value / 1024).toFixed(2)} TB`;
+        }
+        return `${value.toFixed(2)} GB`;
+    }
+
     renderTrendsSection(trends) {
         let html = '<div class="trends-section">';
         html += '<h3>Trends Analysis</h3>';
@@ -2065,18 +2074,29 @@ class PixelProbeApp {
             html += '<div class="trend-column">';
             html += '<h4>Storage Trends</h4>';
             html += '<div class="stats-section">';
-            html += `<p>Total Storage: ${Number(periodData.storage.total_gb).toFixed(2)} GB</p>`;
-            html += `<p>Growth Rate: ${Number(periodData.storage.gb_per_day).toFixed(2)} GB/day</p>`;
+            html += `<p><strong>Total Storage:</strong> ${this.formatStorage(periodData.storage.total_gb)}</p>`;
+            html += `<p><strong>Growth Rate:</strong> ${this.formatStorage(periodData.storage.gb_per_day)}/day</p>`;
             html += '<p><strong>Projections:</strong></p>';
-            html += `<p>Next 30 days: ${Number(periodData.storage.projections.next_30d_gb).toFixed(2)} GB</p>`;
-            html += `<p>Next 1 year: ${Number(periodData.storage.projections.next_1y_gb).toFixed(2)} GB</p>`;
+            html += `<p class="ml-20">Next 30 days: ${this.formatStorage(periodData.storage.projections.next_30d_gb)}</p>`;
+            html += `<p class="ml-20">Next 1 year: ${this.formatStorage(periodData.storage.projections.next_1y_gb)}</p>`;
+
+            // Files by Type section with pie chart
             if (periodData.storage.by_file_type && periodData.storage.by_file_type.length > 0) {
-                html += '<p><strong>Top Types by Storage:</strong></p>';
-                html += '<ul style="margin-left: 20px;">';
+                html += '<div class="file-types-section">';
+                html += '<h4 style="margin-top: 20px;">Files by Type</h4>';
+
+                // Pie chart container
+                html += '<div class="chart-container" style="position: relative; height: 250px; width: 100%; margin: 15px 0;">';
+                html += `<canvas id="fileTypeChart-${period}"></canvas>`;
+                html += '</div>';
+
+                // Legend/List
+                html += '<div class="file-types-list">';
                 periodData.storage.by_file_type.slice(0, 5).forEach(item => {
-                    html += `<li>${item.type}: ${Number(item.total_gb).toFixed(2)} GB (${item.file_count} files)</li>`;
+                    html += `<p class="file-type-item">${item.type}: ${this.formatStorage(item.total_gb)} (${Number(item.file_count).toLocaleString()} files)</p>`;
                 });
-                html += '</ul>';
+                html += '</div>';
+                html += '</div>';
             }
             html += '</div>';
             html += '</div>'; // End Storage Column
@@ -2100,10 +2120,10 @@ class PixelProbeApp {
             html += '<div class="trend-summary">';
             html += '<h4>Overall Summary</h4>';
             html += '<div class="stats-section">';
-            html += `<p>Total Storage: ${Number(trends.summary.total_storage_gb).toFixed(2)} GB (${Number(trends.summary.total_storage_tb).toFixed(2)} TB)</p>`;
-            html += `<p>Total Files: ${Number(trends.summary.total_files).toLocaleString()}</p>`;
-            html += `<p>Collection Age: ${trends.summary.collection_age_days} days</p>`;
-            html += `<p>Average Growth: ${Number(trends.summary.avg_gb_per_day).toFixed(2)} GB/day</p>`;
+            html += `<p><strong>Total Storage:</strong> ${this.formatStorage(trends.summary.total_storage_gb)}</p>`;
+            html += `<p><strong>Total Files:</strong> ${Number(trends.summary.total_files).toLocaleString()}</p>`;
+            html += `<p><strong>Collection Age:</strong> ${trends.summary.collection_age_days} days</p>`;
+            html += `<p><strong>Average Growth:</strong> ${this.formatStorage(trends.summary.avg_gb_per_day)}/day</p>`;
             html += '</div>';
             html += '</div>';
         }
@@ -2119,14 +2139,79 @@ class PixelProbeApp {
         const modalBody = modal.querySelector('.modal-body');
         if (!modalBody) return;
 
+        // Store trends data for chart recreation
+        this.trendsData = trends;
+
         // Render trends content
         modalBody.innerHTML = this.renderTrendsSection(trends);
 
         // Setup tab switching
         this.setupTrendTabs();
 
+        // Create pie charts for all periods
+        this.createFileTypeCharts(trends);
+
         // Show modal
         modal.style.display = 'flex';
+    }
+
+    createFileTypeCharts(trends) {
+        // Destroy existing charts if any
+        if (this.fileTypeCharts) {
+            Object.values(this.fileTypeCharts).forEach(chart => chart.destroy());
+        }
+        this.fileTypeCharts = {};
+
+        // Color palette for pie chart
+        const colors = [
+            '#00ff88',  // Primary green
+            '#ff6b6b',  // Red
+            '#4ecdc4',  // Cyan
+            '#ffe66d',  // Yellow
+            '#a8dadc'   // Light blue
+        ];
+
+        ['30d', '60d', '90d', '1y'].forEach(period => {
+            const periodData = trends.trends[period];
+            if (!periodData || !periodData.storage.by_file_type) return;
+
+            const canvas = document.getElementById(`fileTypeChart-${period}`);
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            const data = periodData.storage.by_file_type.slice(0, 5);
+
+            this.fileTypeCharts[period] = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: data.map(item => item.type),
+                    datasets: [{
+                        data: data.map(item => Number(item.total_gb)),
+                        backgroundColor: colors.slice(0, data.length),
+                        borderColor: '#1a1a1a',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => {
+                                    const label = context.label || '';
+                                    const value = context.parsed || 0;
+                                    return `${label}: ${this.formatStorage(value)}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        });
     }
 
     setupTrendTabs() {

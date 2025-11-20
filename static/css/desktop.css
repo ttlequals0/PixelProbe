@@ -1429,6 +1429,40 @@ textarea.form-control {
     color: var(--text-primary);
 }
 
+/* File Types Chart Section */
+.file-types-section {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.file-types-section h4 {
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.chart-container {
+    margin: 1rem 0;
+}
+
+.file-types-list {
+    margin-top: 1rem;
+}
+
+.file-type-item {
+    margin: 0.4rem 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+/* Utility class for margin-left */
+.ml-20 {
+    margin-left: 20px;
+}
+
 /* Responsive adjustments for trends */
 @media (max-width: 768px) {
     .trend-columns {
@@ -1436,12 +1470,15 @@ textarea.form-control {
     }
 
     .period-tabs {
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        gap: 0.3rem;
     }
 
     .period-tab {
         flex: 1;
-        min-width: 80px;
+        min-width: 60px;
+        padding: 0.5rem 0.5rem;
+        font-size: 13px;
         text-align: center;
     }
 }

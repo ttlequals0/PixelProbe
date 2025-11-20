@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.171] - 2025-11-20
+
+### Features
+
+- **Added pie chart visualization for Files by Type**
+  - Integrated Chart.js library for data visualization
+  - Added interactive pie charts showing storage distribution by file type
+  - Charts display in all period views (30d, 60d, 90d, 1y)
+  - Color-coded segments with hover tooltips showing formatted storage values
+
+- **Smart storage unit formatting**
+  - Added formatStorage() helper function
+  - Automatically converts GB to TB when values exceed 1024 GB
+  - Applied throughout Trends modal for consistent formatting
+  - Example: 14958.92 GB displays as 14.61 TB
+
+### UI Improvements
+
+- **Reorganized Trends modal layout**
+  - Improved visual hierarchy with better spacing
+  - Added section separators for file type data
+  - Enhanced readability with bold labels for key metrics
+  - Added margin indentation for projection values
+
+- **Fixed mobile period selector buttons**
+  - All 4 time period buttons now display in single row on mobile
+  - Changed flex-wrap from wrap to nowrap
+  - Reduced button padding and font size for better fit
+  - Improved touch targets with flex sizing
+
+### Files Modified
+
+- templates/index.html: Added Chart.js CDN library
+- static/js/app.js: Added formatStorage(), createFileTypeCharts(), updated renderTrendsSection()
+- static/css/desktop.css: Added chart styles, file-types-section, mobile button fixes
+- version.py: 2.4.170 → 2.4.171
+
+### Impact
+
+- More intuitive data visualization with pie charts
+- Better readability with automatic TB conversion
+- Improved mobile UX with single-row button layout
+- Professional, organized trends presentation
+
 ## [2.4.170] - 2025-11-20
 
 ### Features
