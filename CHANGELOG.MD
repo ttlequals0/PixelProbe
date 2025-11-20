@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - PIL (Pillow) and ImageMagick already provide proper image validation
   - Impact: Fewer false positives, 5-10% faster image scans, simpler codebase
 
+- **Added HEIC/HEIF support to Pillow**
+  - Added pillow-heif==0.13.1 to requirements.txt
+  - Enables Pillow to read HEIC/HEIF files directly
+  - Works with existing libheif system library in Dockerfile
+  - Improves HEIC/HEIF validation (no more PIL failures on HEIC files)
+  - Note: ImageMagick already had HEIC/HEIF support via libheif
+
 ### Technical Details
 
 - media_checker.py:1114-1211

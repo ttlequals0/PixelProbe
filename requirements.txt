@@ -5,6 +5,7 @@ Flask-Limiter==3.5.0
 Flask-WTF==1.2.1
 flask-restx==1.3.0
 Pillow==10.0.0
+pillow-heif==0.13.1  # HEIC/HEIF support for Pillow (requires libheif system library)
 python-magic==0.4.27
 ffmpeg-python==0.2.0
 SQLAlchemy==2.0.21
