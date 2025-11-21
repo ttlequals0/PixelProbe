@@ -39,6 +39,11 @@ def run_index_optimizations(db):
             'name': 'idx_scan_date_desc',
             'sql': 'CREATE INDEX IF NOT EXISTS idx_scan_date_desc ON scan_results(scan_date DESC)',
             'description': 'Descending index for recent scan lookups'
+        },
+        {
+            'name': 'idx_scan_state_celery_task_id',
+            'sql': 'CREATE INDEX IF NOT EXISTS idx_scan_state_celery_task_id ON scan_state(celery_task_id)',
+            'description': 'Index for Celery task ID lookups (v2.4.196)'
         }
     ]
 
@@ -108,6 +113,39 @@ def run_startup_migrations(db):
             'check_sql': "SELECT last_crash_time FROM scan_state LIMIT 0",
             'migration_sql': "ALTER TABLE scan_state ADD COLUMN last_crash_time TIMESTAMP",
             'description': 'Adding last_crash_time to scan_state'
+        },
+        # Add celery_task_id to scan_state (v2.4.196)
+        {
+            'table': 'scan_state',
+            'check_sql': "SELECT celery_task_id FROM scan_state LIMIT 0",
+            'migration_sql': "ALTER TABLE scan_state ADD COLUMN celery_task_id VARCHAR(36)",
+            'description': 'Adding celery_task_id to scan_state'
+        },
+        # Add resumable scan fields to scan_state (v2.4.196)
+        {
+            'table': 'scan_state',
+            'check_sql': "SELECT current_chunk_index FROM scan_state LIMIT 0",
+            'migration_sql': "ALTER TABLE scan_state ADD COLUMN current_chunk_index INTEGER NOT NULL DEFAULT 0",
+            'description': 'Adding current_chunk_index to scan_state'
+        },
+        {
+            'table': 'scan_state',
+            'check_sql': "SELECT total_chunks FROM scan_state LIMIT 0",
+            'migration_sql': "ALTER TABLE scan_state ADD COLUMN total_chunks INTEGER NOT NULL DEFAULT 0",
+            'description': 'Adding total_chunks to scan_state'
+        },
+        {
+            'table': 'scan_state',
+            'check_sql': "SELECT chunks_completed FROM scan_state LIMIT 0",
+            'migration_sql': "ALTER TABLE scan_state ADD COLUMN chunks_completed TEXT",
+            'description': 'Adding chunks_completed to scan_state'
+        },
+        # Add last_update to scan_state (v2.4.196)
+        {
+            'table': 'scan_state',
+            'check_sql': "SELECT last_update FROM scan_state LIMIT 0",
+            'migration_sql': "ALTER TABLE scan_state ADD COLUMN last_update TIMESTAMP",
+            'description': 'Adding last_update to scan_state'
         }
     ]
 

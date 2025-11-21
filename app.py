@@ -135,6 +135,7 @@ limiter = Limiter(
 csrf = CSRFProtect(app)
 # Exempt API endpoints from CSRF for now (will need to implement token-based auth)
 csrf.exempt(scan_bp)
+csrf.exempt(parallel_scan_bp)  # Added: parallel scan endpoint was missing CSRF exemption
 csrf.exempt(stats_bp)
 csrf.exempt(admin_bp)
 csrf.exempt(export_bp)
@@ -296,6 +297,7 @@ def cleanup_stuck_operations():
 
 def create_tables():
     """Initialize database tables and run migrations"""
+    logger.info(f"Starting PixelProbe v{__version__}")
     with app.app_context():
         try:
             # Use inspector to check existing tables

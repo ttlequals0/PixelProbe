@@ -381,6 +381,8 @@ class ScanState(db.Model):
         try:
             db.session.add(scan_state)
             db.session.commit()
+            # Refresh the object to reattach it to the session after commit
+            db.session.refresh(scan_state)
             logger.info(f"Created new scan state with ID: {scan_state.id}, scan_id: {scan_state.scan_id}")
         except Exception as e:
             logger.error(f"Failed to create new scan state: {e}")

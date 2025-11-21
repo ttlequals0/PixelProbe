@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, send_file, Response, make_response
+from flask import Blueprint, request, send_file, Response, make_response
 import os
 import csv
 import io
@@ -19,7 +19,7 @@ def view_file(result_id):
     """View/stream a media file"""
     # Handle OPTIONS request for CORS preflight
     if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
+        response = make_response({'status': 'ok'})
         response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Range, Content-Type'
@@ -32,7 +32,7 @@ def view_file(result_id):
     
     if not os.path.exists(result.file_path):
         logger.error(f"View failed - file not found: {result.file_path}")
-        return jsonify({'error': 'File not found'}), 404
+        return {'error': 'File not found'}, 404
     
     # Get file stats
     file_size = os.path.getsize(result.file_path)
@@ -110,7 +110,7 @@ def download_file(result_id):
     
     if not os.path.exists(result.file_path):
         logger.error(f"Download failed - file not found: {result.file_path}")
-        return jsonify({'error': 'File not found'}), 404
+        return {'error': 'File not found'}, 404
     
     logger.info(f"Starting download of file: {result.file_path}")
     return send_file(result.file_path, as_attachment=True)
@@ -402,7 +402,7 @@ def export_scan_results():
                 
             except ImportError:
                 logger.error("reportlab not installed for PDF export")
-                return jsonify({'error': 'PDF export requires reportlab package'}), 500
+                return {'error': 'PDF export requires reportlab package'}, 500
                 
         else:
             # Default to CSV export
@@ -472,4 +472,4 @@ def export_scan_results():
         
     except Exception as e:
         logger.error(f"Error exporting: {str(e)}")
-        return jsonify({'error': f'Export failed: {str(e)}'}), 500
+        return {'error': f'Export failed: {str(e)}'}, 500

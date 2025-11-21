@@ -642,19 +642,19 @@ body {
     }
 }
 
-/* Trends Analytics Modal - Desktop friendly layout */
+/* Trend Analytics Modal - Desktop friendly layout */
 @media (min-width: 769px) {
-    #trends-analytics-modal .modal-content {
+    #trends-modal .modal-content {
         max-width: 1200px;
         width: 90%;
     }
 
-    #trends-analytics-modal .modal-body {
+    #trends-modal .modal-body {
         max-height: 80vh;
     }
 
     /* Two-column layout for desktop */
-    #trends-analytics-modal .trends-container {
+    #trends-modal .trends-container {
         display: grid;
         grid-template-columns: repeat(2, 1fr);
         gap: 1.5rem;
@@ -662,23 +662,61 @@ body {
     }
 
     /* Make single-column items span both columns */
-    #trends-analytics-modal .trends-container > .full-width {
+    #trends-modal .trends-container > .full-width {
         grid-column: 1 / -1;
     }
 
     /* Corruption and Storage trends side by side */
-    #trends-analytics-modal .corruption-trends,
-    #trends-analytics-modal .storage-trends {
+    #trends-modal .corruption-trends,
+    #trends-modal .storage-trends {
         grid-column: span 1;
     }
 }
 
 /* Mobile layout - single column */
 @media (max-width: 768px) {
-    #trends-analytics-modal .trends-container {
+    #trends-modal .trends-container {
         display: flex;
         flex-direction: column;
         gap: 1rem;
+    }
+}
+
+/* System Statistics Modal - Cleaner grid layout */
+@media (min-width: 1024px) {
+    #system-stats-modal .modal-content {
+        max-width: 1400px;
+        width: 95%;
+    }
+
+    #system-stats-modal .modal-body {
+        max-height: 80vh;
+    }
+
+    #system-stats-modal .stats-columns {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 2rem;
+    }
+
+    #system-stats-modal .stats-column {
+        min-width: 0;
+    }
+}
+
+@media (min-width: 769px) and (max-width: 1023px) {
+    #system-stats-modal .stats-columns {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1.5rem;
+    }
+}
+
+@media (max-width: 768px) {
+    .stats-columns {
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
     }
 }
 
@@ -1497,7 +1535,7 @@ textarea.form-control {
 
 .trend-summary h4 {
     margin-bottom: 0.75rem;
-    color: var(--primary-green);
+    color: var(--text-primary);
     font-size: 16px;
     font-weight: 600;
 }

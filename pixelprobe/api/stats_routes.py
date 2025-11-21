@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, current_app
+from flask import Blueprint, current_app
 from sqlalchemy import text
 import os
 import time
@@ -64,9 +64,9 @@ def get_stats():
             'marked_as_good': stats[7] or 0,
             'warning_files': stats[8] or 0
         }
-        
-        return jsonify(result)
-        
+
+        return result
+
     except Exception as e:
         logger.error(f"Error getting stats: {str(e)}")
         # Fallback to individual queries if the optimized query fails
@@ -108,7 +108,7 @@ def get_stats():
                 (ScanResult.scan_status == 'completed')
             ).count()
             
-            return jsonify({
+            return {
                 'total_files': total_files,
                 'completed_files': completed_files,
                 'pending_files': pending_files,
@@ -118,10 +118,10 @@ def get_stats():
                 'healthy_files': healthy_files,
                 'marked_as_good': marked_as_good,
                 'warning_files': warning_files
-            })
+            }
         except Exception as e2:
             logger.error(f"Fallback stats query also failed: {str(e2)}")
-            return jsonify({'error': 'Database query failed'}), 500
+            return {'error': 'Database query failed'}, 500
 
 @stats_bp.route('/trends')
 @exempt_from_rate_limit
@@ -292,15 +292,15 @@ def get_trends():
             'avg_gb_per_day': round(total_bytes / (1024**3) / collection_days, 2) if collection_days > 0 else 0
         }
 
-        return jsonify({
+        return {
             'trends': trends,
             'summary': overall_summary,
             'generated_at': now.isoformat()
-        })
+        }
 
     except Exception as e:
         logger.error(f"Error getting trends: {str(e)}")
-        return jsonify({'error': 'Failed to get trends data'}), 500
+        return {'error': 'Failed to get trends data'}, 500
 
 @stats_bp.route('/system-info')
 @auth_required
@@ -549,9 +549,9 @@ def get_system_info():
         elapsed_time = time.time() - start_time
         if elapsed_time > 5:
             logger.warning(f"System info endpoint took {elapsed_time:.2f} seconds")
-        
-        return jsonify(system_info)
-        
+
+        return system_info
+
     except Exception as e:
         logger.error(f"Error getting system info: {str(e)}")
-        return jsonify({'error': 'Failed to get system info'}), 500
+        return {'error': 'Failed to get system info'}, 500

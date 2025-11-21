@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, current_app
 import os
 import threading
 import logging
@@ -281,13 +281,13 @@ def get_scan_results():
         
         results.append(result_dict)
     
-    return jsonify({
+    return {
         'results': results,
         'total': pagination.total,
         'page': page,
         'per_page': per_page,
         'pages': pagination.pages
-    })
+    }
 
 @scan_bp.route('/scan-results/<int:result_id>')
 @auth_required
@@ -313,7 +313,7 @@ def get_scan_result(result_id):
         display_dt = from_utc_to_configured(result.last_modified)
         result_dict['last_modified'] = display_dt.isoformat() if display_dt else None
     
-    return jsonify(result_dict)
+    return result_dict
 
 @scan_bp.route('/scan-file', methods=['POST'])
 @rate_limit("5 per minute")
@@ -325,14 +325,25 @@ def scan_file():
     """Scan a single file for corruption"""
     data = request.get_json()
     file_path = data['file_path']
-    
-    # Validate file path for security
-    try:
-        validated_path = validate_file_path(file_path)
-        AuditLogger.log_action('scan_file', {'file_path': validated_path})
-    except PathTraversalError as e:
-        AuditLogger.log_security_event('path_traversal_attempt', str(e), 'warning')
-        return jsonify({'error': 'Invalid file path'}), 400
+
+    # Normalize path
+    normalized_path = os.path.normpath(os.path.abspath(file_path))
+
+    # For rescan operations: if file already exists in database, skip path validation
+    # since it was already validated during initial scan
+    existing_result = ScanResult.query.filter_by(file_path=normalized_path).first()
+    if existing_result:
+        # File already in database from previous scan - trust it
+        validated_path = normalized_path
+        AuditLogger.log_action('rescan_file', {'file_path': validated_path})
+    else:
+        # New file - must validate against allowed paths
+        try:
+            validated_path = validate_file_path(file_path)
+            AuditLogger.log_action('scan_file', {'file_path': validated_path})
+        except PathTraversalError as e:
+            AuditLogger.log_security_event('path_traversal_attempt', str(e), 'warning')
+            return {'error': 'Invalid file path'}, 400
     
     # P1 Implementation: Use Celery task queue for single file scans
     try:
@@ -369,28 +380,28 @@ def scan_file():
 
             logger.info(f"Queued single file scan task {task.id} for {validated_path}")
 
-            return jsonify({
+            return {
                 'status': 'queued',
                 'scan_id': scan_id,
                 'task_id': task.id,
                 'file_path': validated_path,
                 'message': 'Single file scan queued successfully using Celery task queue',
                 'celery_enabled': True
-            })
+            }
         else:
             # Fallback to direct scan service
             result = current_app.scan_service.scan_single_file(validated_path, force_rescan=True)
             result['celery_enabled'] = False
-            return jsonify(result)
+            return result
             
     except RuntimeError as e:
         error_msg = str(e)
         # Provide more context for common errors
         if 'already running' in error_msg.lower():
             error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
-        return jsonify({'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}), 409
+        return {'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}, 409
     except FileNotFoundError as e:
-        return jsonify({'error': str(e)}), 404
+        return {'error': str(e)}, 404
 
 @scan_bp.route('/scan', methods=['POST', 'OPTIONS'])  # Main scan endpoint
 @rate_limit("2 per minute")
@@ -418,9 +429,9 @@ def scan():
         if scan_state.is_active and scan_state.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
             phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
             db.session.rollback()
-            return jsonify({
+            return {
                 'error': f'A scan is already in progress{phase_info}. Please wait for it to complete or use /api/cancel-scan to stop it.'
-            }), 409
+            }, 409
 
         # If we got here, no scan is running - we can proceed with the lock held
         # Mark as starting immediately while we hold the lock
@@ -432,9 +443,9 @@ def scan():
         # If we can't acquire the lock, another scan is starting
         db.session.rollback()
         logger.warning(f"Could not acquire scan lock: {lock_error}")
-        return jsonify({
+        return {
             'error': 'A scan is already starting. Please wait a moment and try again.'
-        }), 409
+        }, 409
 
     # Get scan configuration
     data = request.get_json() or {}
@@ -454,7 +465,7 @@ def scan():
             logger.info(f"Using SCAN_PATHS from environment: {scan_dirs}")
     
     if not scan_dirs:
-        return jsonify({'error': 'No directories configured for scanning. Set SCAN_PATHS environment variable or configure paths in the admin interface.'}), 400
+        return {'error': 'No directories configured for scanning. Set SCAN_PATHS environment variable or configure paths in the admin interface.'}, 400
     
     # Validate directories
     validated_dirs = []
@@ -464,7 +475,7 @@ def scan():
             validated_dirs.append(validated_path)
         except Exception as e:
             AuditLogger.log_security_event('invalid_scan_directory', str(e), 'warning')
-            return jsonify({'error': f'Invalid directory path: {dir_path}'}), 400
+            return {'error': f'Invalid directory path: {dir_path}'}, 400
     
     AuditLogger.log_action('scan_all', {'directories': validated_dirs, 'force_rescan': force_rescan})
     
@@ -491,13 +502,13 @@ def scan():
             
             logger.info(f"Queued full scan task {task.id} for scan_id {scan_id}")
             
-            return jsonify({
+            return {
                 'status': 'queued',
                 'scan_id': scan_id,
                 'task_id': task.id,
                 'message': 'Scan queued successfully using Celery task queue',
                 'celery_enabled': True
-            })
+            }
         else:
             # Fallback to direct scan service (backward compatibility)
             logger.info("Celery not available, using direct scan service")
@@ -508,16 +519,16 @@ def scan():
                 num_workers=Config.MAX_WORKERS  # Use configured MAX_WORKERS instead of hardcoded 1
             )
             result['celery_enabled'] = False
-            return jsonify(result)
+            return result
             
     except RuntimeError as e:
         error_msg = str(e)
         # Provide more context for common errors
         if 'already running' in error_msg.lower():
             error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
-        return jsonify({'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}), 409
+        return {'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}, 409
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return {'error': str(e)}, 400
 
 @scan_bp.route('/scan-status')
 @exempt_from_rate_limit
@@ -839,8 +850,8 @@ def get_scan_status():
     logger.info(f"API scan-status response: progress_message='{status['progress_message']}', "
                 f"file='{status['file']}', eta='{status['eta']}', "
                 f"current={status['current']}, total={status['total']}")
-    
-    return jsonify(status)
+
+    return status
 
 @scan_bp.route('/cancel-scan', methods=['POST'])
 @rate_limit("10 per minute")
@@ -851,10 +862,10 @@ def cancel_scan():
     try:
         result = current_app.scan_service.cancel_scan()
         logger.info(f"Cancel scan successful: {result}")
-        return jsonify(result)
+        return result
     except RuntimeError as e:
         logger.error(f"Cancel scan failed: {str(e)}")
-        return jsonify({'error': str(e)}), 400
+        return {'error': str(e)}, 400
 
 @scan_bp.route('/force-cleanup-scan', methods=['POST'])
 @scan_bp.route('/scan/recovery', methods=['POST'])  # New consolidated endpoint
@@ -891,15 +902,15 @@ def force_cleanup_scan():
         
         message = f"Force cleaned up {cleaned_count} stuck scan(s)"
         logger.warning(message)
-        return jsonify({
+        return {
             'status': 'success',
             'message': message,
             'cleaned_count': cleaned_count
-        })
+        }
     except Exception as e:
         logger.error(f"Force cleanup failed: {str(e)}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @scan_bp.route('/scan-files-parallel', methods=['POST'])
 @rate_limit("2 per minute")
@@ -919,9 +930,9 @@ def scan_files_parallel():
             phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
         else:
             phase_info = ""
-        return jsonify({
+        return {
             'error': f'A scan is already in progress{phase_info}. Please wait for it to complete or use /api/cancel-scan to stop it.'
-        }), 409
+        }, 409
     
     data = request.get_json() or {}
     force_rescan = data.get('force_rescan', False)
@@ -955,28 +966,28 @@ def scan_files_parallel():
 
                 logger.info(f"Queued file scan task {task.id} for {len(file_paths)} files with {num_workers} workers")
                 
-                return jsonify({
+                return {
                     'status': 'queued',
                     'scan_id': scan_id,
                     'task_id': task.id,
                     'file_count': len(file_paths),
                     'message': 'File scan queued successfully using Celery task queue',
                     'celery_enabled': True
-                })
+                }
             else:
                 # Fallback to direct scan service
                 result = current_app.scan_service.scan_files(
-                    file_paths, 
+                    file_paths,
                     force_rescan=force_rescan,
                     num_workers=num_workers
                 )
                 result['celery_enabled'] = False
-                return jsonify(result)
+                return result
                 
         except RuntimeError as e:
-            return jsonify({'error': str(e)}), 409
+            return {'error': str(e)}, 409
         except ValueError as e:
-            return jsonify({'error': str(e)}), 400
+            return {'error': str(e)}, 400
     
     # Otherwise scan directories
     # If no directories provided, use configured ones
@@ -992,7 +1003,7 @@ def scan_files_parallel():
             logger.info(f"Using SCAN_PATHS from environment: {scan_dirs}")
     
     if not scan_dirs:
-        return jsonify({'error': 'No directories configured for scanning. Set SCAN_PATHS environment variable or configure paths in the admin interface.'}), 400
+        return {'error': 'No directories configured for scanning. Set SCAN_PATHS environment variable or configure paths in the admin interface.'}, 400
     
     # Validate directories
     validated_dirs = []
@@ -1002,7 +1013,7 @@ def scan_files_parallel():
             validated_dirs.append(validated_path)
         except Exception as e:
             AuditLogger.log_security_event('invalid_scan_directory', str(e), 'warning')
-            return jsonify({'error': f'Invalid directory path: {dir_path}'}), 400
+            return {'error': f'Invalid directory path: {dir_path}'}, 400
     
     AuditLogger.log_action('scan_parallel', {'directories': validated_dirs, 'force_rescan': force_rescan, 'num_workers': num_workers})
     
@@ -1032,7 +1043,7 @@ def scan_files_parallel():
             
             logger.info(f"Queued parallel scan task {task.id} for scan_id {scan_id}")
             
-            return jsonify({
+            return {
                 'status': 'queued',
                 'scan_id': scan_id,
                 'task_id': task.id,
@@ -1040,25 +1051,25 @@ def scan_files_parallel():
                 'directories': validated_dirs,
                 'message': 'Parallel scan queued successfully using Celery task queue',
                 'celery_enabled': True
-            })
+            }
         else:
             # Fallback to direct scan service with parallel workers
             result = current_app.scan_service.scan_directories(
-                validated_dirs, 
-                force_rescan=force_rescan, 
+                validated_dirs,
+                force_rescan=force_rescan,
                 num_workers=num_workers
             )
             result['celery_enabled'] = False
-            return jsonify(result)
+            return result
             
     except RuntimeError as e:
         error_msg = str(e)
         # Provide more context for common errors
         if 'already running' in error_msg.lower():
             error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
-        return jsonify({'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}), 409
+        return {'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}, 409
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return {'error': str(e)}, 400
 
 @scan_bp.route('/reset-stuck-scans', methods=['POST'])
 @rate_limit("5 per minute")
@@ -1092,15 +1103,15 @@ def reset_stuck_scans():
         # Also ensure the scan service knows no scan is running
         if hasattr(current_app, 'scan_service'):
             current_app.scan_service.current_scan_id = None
-        
-        return jsonify({
+
+        return {
             'message': f'Reset {count} stuck files and {scan_state_count} active scans',
             'count': count,
             'scan_states_reset': scan_state_count
-        })
+        }
     except Exception as e:
         logger.error(f"Error resetting stuck scans: {e}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @scan_bp.route('/reset-for-rescan', methods=['POST'])
 @rate_limit("5 per minute")
@@ -1155,16 +1166,16 @@ def reset_for_rescan():
                 result.scan_output = None
         
         db.session.commit()
-        
-        return jsonify({
+
+        return {
             'message': f'Reset {count} files for rescanning',
             'count': count,
             'type': reset_type
-        })
-        
+        }
+
     except Exception as e:
         logger.error(f"Error resetting files for rescan: {e}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @scan_bp.route('/recover-stuck-scan', methods=['POST'])
 @rate_limit("5 per minute")
@@ -1184,12 +1195,12 @@ def recover_stuck_scan():
                    scan_state.files_processed > 0)
         
         if not is_stuck:
-            return jsonify({
+            return {
                 'message': 'No stuck scan detected',
                 'is_active': scan_state.is_active,
                 'is_running': is_running,
                 'phase': scan_state.phase
-            })
+            }
         
         logger.warning(f"Recovering stuck scan: phase={scan_state.phase}, files_processed={scan_state.files_processed}")
         
@@ -1212,16 +1223,16 @@ def recover_stuck_scan():
         current_app.scan_service.scan_cancelled = False
         current_app.scan_service.current_scan_thread = None
         
-        return jsonify({
+        return {
             'message': 'Scan state recovered successfully',
             'stuck_files_reset': stuck_count,
             'previous_phase': scan_state.phase,
             'files_processed': scan_state.files_processed
-        })
+        }
         
     except Exception as e:
         logger.error(f"Error recovering stuck scan: {e}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @scan_bp.route('/force-scan-pending', methods=['POST'])
 @rate_limit("2 per minute")
@@ -1233,14 +1244,14 @@ def force_scan_pending():
         pending_count = ScanResult.query.filter_by(scan_status='pending').count()
         
         if pending_count == 0:
-            return jsonify({
+            return {
                 'message': 'No pending files to scan',
                 'pending_count': 0
-            })
+            }
         
         # Check if a scan is already running (thread or Celery)
         if is_scan_running():
-            return jsonify({'error': 'A scan is already in progress'}), 409
+            return {'error': 'A scan is already in progress'}, 409
         
         # P1 Implementation: Use Celery task queue for pending files scan
         celery_enabled = check_celery_available()
@@ -1262,15 +1273,15 @@ def force_scan_pending():
             )
             
             logger.info(f"Queued pending files scan task {task.id} for {pending_count} files")
-            
-            return jsonify({
+
+            return {
                 'status': 'queued',
                 'scan_id': scan_id,
                 'task_id': task.id,
                 'message': f'Pending files scan queued for {pending_count} files using Celery task queue',
                 'pending_count': pending_count,
                 'celery_enabled': True
-            })
+            }
         else:
             # Fallback to direct scan service
             from config import Config
@@ -1279,18 +1290,18 @@ def force_scan_pending():
                 force_rescan=False,
                 num_workers=Config.MAX_WORKERS  # Use configured MAX_WORKERS instead of hardcoded 1
             )
-            
+
             result['celery_enabled'] = False
             result['pending_count'] = pending_count
-            return jsonify({
+            return {
                 'message': f'Started scan for {pending_count} pending files',
                 'pending_count': pending_count,
                 'status': result.get('status', 'started')
-            })
+            }
         
     except Exception as e:
         logger.error(f"Error starting pending files scan: {e}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @scan_bp.route('/reset-files-by-path', methods=['POST'])
 @rate_limit("5 per minute")
@@ -1305,7 +1316,7 @@ def reset_files_by_path():
         file_paths = [file_path]
     
     if not file_paths:
-        return jsonify({'error': 'No file paths provided'}), 400
+        return {'error': 'No file paths provided'}, 400
     
     try:
         # Reset files by path
@@ -1319,15 +1330,15 @@ def reset_files_by_path():
             result.scan_output = None
         
         db.session.commit()
-        
-        return jsonify({
+
+        return {
             'message': f'Reset {count} files for rescanning',
             'reset_count': count
-        })
-        
+        }
+
     except Exception as e:
         logger.error(f"Error resetting files by path: {e}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @scan_bp.route('/reset-incomplete-scans', methods=['POST'])
 @rate_limit("2 per minute")
@@ -1367,10 +1378,10 @@ def reset_incomplete_scans():
         count = len(incomplete_files)
         
         if count == 0:
-            return jsonify({
+            return {
                 'message': 'No incomplete scans found',
                 'reset_count': 0
-            })
+            }
         
         # Reset these files to pending
         for result in incomplete_files:
@@ -1382,18 +1393,18 @@ def reset_incomplete_scans():
             # Keep discovered_date as is
         
         db.session.commit()
-        
+
         logger.info(f"Reset {count} files with incomplete scan data to pending status")
-        
-        return jsonify({
+
+        return {
             'message': f'Reset {count} files with incomplete scan data for rescanning',
             'reset_count': count,
             'description': 'These files were marked as completed but had no actual scan results'
-        })
-        
+        }
+
     except Exception as e:
         logger.error(f"Error resetting incomplete scans: {e}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @scan_bp.route('/diagnose-incomplete-scans', methods=['GET'])
 @rate_limit("5 per minute")
@@ -1445,12 +1456,12 @@ def diagnose_incomplete_scans():
             })
         
         diagnostics['sample_problematic_files'] = sample_files
-        
-        return jsonify(diagnostics)
-        
+
+        return diagnostics
+
     except Exception as e:
         logger.error(f"Error diagnosing incomplete scans: {e}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @scan_bp.route('/diagnose-pending-files', methods=['GET'])
 @rate_limit("5 per minute")
@@ -1513,11 +1524,11 @@ def diagnose_pending_files():
 
         diagnostics['pending_files'] = pending_details
 
-        return jsonify(diagnostics)
+        return diagnostics
 
     except Exception as e:
         logger.error(f"Error diagnosing pending files: {e}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @scan_bp.route('/error-files', methods=['GET'])
 @rate_limit("10 per minute")
@@ -1609,16 +1620,16 @@ def get_error_files():
 
             results.append(error_file)
 
-        return jsonify({
+        return {
             'error_files': results,
             'total': pagination.total,
             'pages': pagination.pages,
             'current_page': page
-        })
+        }
 
     except Exception as e:
         logger.error(f"Error retrieving error files: {e}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @scan_bp.route('/worker-status')
 @exempt_from_rate_limit
@@ -1627,22 +1638,22 @@ def get_worker_status():
     """Get Celery worker status and information"""
     try:
         if not check_celery_available():
-            return jsonify({
+            return {
                 'status': 'disabled',
                 'message': 'Celery is not configured',
                 'workers': []
-            })
+            }
         
         # Get worker stats from Celery
         stats = current_app.celery.control.inspect().stats()
         active_tasks = current_app.celery.control.inspect().active()
         
         if not stats:
-            return jsonify({
+            return {
                 'status': 'offline',
                 'message': 'No workers are currently connected',
                 'workers': []
-            })
+            }
         
         workers = []
         for worker_name, worker_stats in stats.items():
@@ -1656,18 +1667,18 @@ def get_worker_status():
             }
             workers.append(worker_info)
         
-        return jsonify({
+        return {
             'status': 'online',
             'message': f'{len(workers)} worker(s) connected',
             'workers': workers
-        })
+        }
     except Exception as e:
         logger.error(f"Error getting worker status: {e}")
-        return jsonify({
+        return {
             'status': 'error',
             'message': f'Could not retrieve worker status: {str(e)}',
             'workers': []
-        })
+        }
 
 @scan_bp.route('/scan-output/<int:result_id>')
 @auth_required
@@ -1675,11 +1686,11 @@ def get_scan_output(result_id):
     """Get the detailed scan output for a specific result"""
     result = ScanResult.query.get_or_404(result_id)
     
-    return jsonify({
+    return {
         'id': result.id,
         'file_path': result.file_path,
         'scan_output': result.scan_output,
         'error_message': result.error_message,
         'is_corrupted': result.is_corrupted,
         'scan_status': result.scan_status
-    })
+    }

@@ -1695,12 +1695,11 @@ class PixelProbeApp {
             const response = await fetch(`/api/scan-results/${fileId}`);
             if (response.ok) {
                 const file = await response.json();
-                // Use scan-parallel which will mark as pending and start full scan
-                const scanResponse = await this.api.request('/scan-parallel', {
+                // Use scan-file endpoint for single file rescanning
+                const scanResponse = await this.api.request('/scan-file', {
                     method: 'POST',
                     body: JSON.stringify({
-                        file_paths: [file.file_path],
-                        force_rescan: true  // Force rescan to actually re-scan the file
+                        file_path: file.file_path  // Single file endpoint expects 'file_path'
                     })
                 });
                 this.showNotification(scanResponse.message || 'File rescan started', 'success');
@@ -2032,7 +2031,7 @@ class PixelProbeApp {
 
     renderTrendsSection(trends) {
         let html = '<div class="trends-section">';
-        html += '<h3>Trends Analysis</h3>';
+        html += '<h3>Trend Analytics</h3>';
 
         // Period selector tabs
         html += '<div class="period-tabs">';
@@ -2051,8 +2050,10 @@ class PixelProbeApp {
             html += `<div class="trend-content ${isActive}" data-period="${period}">`;
             html += '<div class="trends-container">';
 
-            // Corruption Trends Column
-            html += '<div class="trend-column corruption-trends">';
+            // Column 1: Corruption Trends, Scanning Performance, Overall Summary
+            html += '<div class="trend-column column-1">';
+
+            // Corruption Trends
             html += '<h4>Corruption Trends</h4>';
             html += '<div class="stats-section">';
             html += `<p>Corruption Rate: ${Number(periodData.corruption.corruption_rate).toFixed(2)}%</p>`;
@@ -2068,7 +2069,27 @@ class PixelProbeApp {
                 html += '</ul>';
             }
             html += '</div>';
-            html += '</div>'; // End Corruption Column
+
+            // Scanning Performance (in same column)
+            html += '<h4 style="margin-top: 2rem;">Scanning Performance</h4>';
+            html += '<div class="stats-section">';
+            html += `<p>File Types Scanned: ${periodData.scanning.unique_file_types}</p>`;
+            html += `<p>Avg Scan Duration: ${Number(periodData.scanning.avg_scan_duration).toFixed(2)}s</p>`;
+            html += `<p>Files per Day: ${Number(periodData.scanning.files_per_day).toFixed(1)}</p>`;
+            html += '</div>';
+
+            // Overall Summary (appears in all period tabs)
+            if (trends.summary) {
+                html += '<h4 style="margin-top: 2rem;">Overall Summary</h4>';
+                html += '<div class="stats-section">';
+                html += `<p><strong>Total Storage:</strong> ${this.formatStorage(trends.summary.total_storage_gb)}</p>`;
+                html += `<p><strong>Total Files:</strong> ${Number(trends.summary.total_files).toLocaleString()}</p>`;
+                html += `<p><strong>Collection Age:</strong> ${trends.summary.collection_age_days} days</p>`;
+                html += `<p><strong>Average Growth:</strong> ${this.formatStorage(trends.summary.avg_gb_per_day)}/day</p>`;
+                html += '</div>';
+            }
+
+            html += '</div>'; // End Column 1
 
             // Storage Trends Column
             html += '<div class="trend-column storage-trends">';
@@ -2115,32 +2136,9 @@ class PixelProbeApp {
             html += '</div>';
             html += '</div>'; // End Storage Column
 
-            // Scanning Performance Column
-            html += '<div class="trend-column scanning-performance full-width">';
-            html += '<h4>Scanning Performance</h4>';
-            html += '<div class="stats-section">';
-            html += `<p>File Types Scanned: ${periodData.scanning.unique_file_types}</p>`;
-            html += `<p>Avg Scan Duration: ${Number(periodData.scanning.avg_scan_duration).toFixed(2)}s</p>`;
-            html += `<p>Files per Day: ${Number(periodData.scanning.files_per_day).toFixed(1)}</p>`;
-            html += '</div>';
-            html += '</div>'; // End Performance Column
-
             html += '</div>'; // End trends-container
             html += '</div>'; // End trend-content
         });
-
-        // Overall Summary
-        if (trends.summary) {
-            html += '<div class="trend-summary">';
-            html += '<h4>Overall Summary</h4>';
-            html += '<div class="stats-section">';
-            html += `<p><strong>Total Storage:</strong> ${this.formatStorage(trends.summary.total_storage_gb)}</p>`;
-            html += `<p><strong>Total Files:</strong> ${Number(trends.summary.total_files).toLocaleString()}</p>`;
-            html += `<p><strong>Collection Age:</strong> ${trends.summary.collection_age_days} days</p>`;
-            html += `<p><strong>Average Growth:</strong> ${this.formatStorage(trends.summary.avg_gb_per_day)}/day</p>`;
-            html += '</div>';
-            html += '</div>';
-        }
 
         html += '</div>'; // End trends-section
         return html;
@@ -3004,21 +3002,21 @@ class PixelProbeApp {
                 }
             }
 
-            // Start scan on only the selected files
-            const scanResponse = await fetch('/api/scan-parallel', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    file_paths: filePaths,
-                    force_rescan: true  // Force rescan to actually re-scan the files
-                })
-            });
+            // Rescan each file using the single-file endpoint
+            // /scan-parallel only accepts directories, not file paths
+            let successCount = 0;
+            for (const filePath of filePaths) {
+                const scanResponse = await this.api.request('/scan-file', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        file_path: filePath
+                    })
+                });
+                if (scanResponse) successCount++;
+            }
 
-            if (scanResponse.ok) {
-                this.showNotification(`Rescan started for ${fileIds.length} files`, 'success');
-                // Start monitoring with 'scan' operation type to ensure auto-refresh
+            if (successCount > 0) {
+                this.showNotification(`Rescan started for ${successCount} files`, 'success');
                 this.progress.startMonitoring('scan');
             } else {
                 throw new Error('Rescan failed');

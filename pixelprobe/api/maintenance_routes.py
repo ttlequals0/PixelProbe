@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 import os
 import logging
 import threading
@@ -97,16 +97,16 @@ def test_cleanup():
     """Test endpoint to check cleanup state from database"""
     cleanup_record = CleanupState.query.order_by(CleanupState.id.desc()).first()
     if cleanup_record:
-        return jsonify({
+        return {
             'current_state': cleanup_record.to_dict(),
             'timestamp': datetime.now(timezone.utc).isoformat()
-        })
+        }
     else:
-        return jsonify({
+        return {
             'current_state': None,
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'message': 'No cleanup operations found'
-        })
+        }
 
 @maintenance_bp.route('/cleanup-status')
 @exempt_from_rate_limit
@@ -175,16 +175,16 @@ def get_cleanup_status():
                     cleanup_record.phase_total,
                     total_phases=3
                 )
-        
-        return jsonify(response)
-        
+
+        return response
+
     except Exception as e:
         logger.error(f"Error getting cleanup status: {str(e)}")
-        return jsonify({
+        return {
             'is_running': False,
             'phase': 'error',
             'error': str(e)
-        })
+        }
 
 @maintenance_bp.route('/file-changes-status')
 @exempt_from_rate_limit
@@ -255,16 +255,16 @@ def get_file_changes_status():
                     file_changes_record.phase_total,
                     total_phases=3
                 )
-        
-        return jsonify(response)
-        
+
+        return response
+
     except Exception as e:
         logger.error(f"Error getting file changes status: {str(e)}")
-        return jsonify({
+        return {
             'is_running': False,
             'phase': 'error',
             'error': str(e)
-        })
+        }
 
 @maintenance_bp.route('/cancel-cleanup', methods=['POST'])
 @auth_required
@@ -284,13 +284,13 @@ def cancel_cleanup():
                 cleanup_state['cancel_requested'] = True
             
             logger.info("Cleanup cancellation requested")
-            return jsonify({'message': 'Cleanup cancellation requested'})
+            return {'message': 'Cleanup cancellation requested'}
         else:
-            return jsonify({'error': 'No active cleanup operation to cancel'}), 400
+            return {'error': 'No active cleanup operation to cancel'}, 400
             
     except Exception as e:
         logger.error(f"Error cancelling cleanup: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @maintenance_bp.route('/reset-cleanup-state', methods=['POST'])
 @auth_required
@@ -323,11 +323,11 @@ def reset_cleanup_state():
             })
         
         logger.info("Cleanup state force reset")
-        return jsonify({'message': 'Cleanup state reset successfully'})
+        return {'message': 'Cleanup state reset successfully'}
         
     except Exception as e:
         logger.error(f"Error resetting cleanup state: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @maintenance_bp.route('/cancel-file-changes', methods=['POST'])
 @auth_required
@@ -347,13 +347,13 @@ def cancel_file_changes():
                 file_changes_state['cancel_requested'] = True
             
             logger.info("File changes check cancellation requested")
-            return jsonify({'message': 'File changes check cancellation requested'})
+            return {'message': 'File changes check cancellation requested'}
         else:
-            return jsonify({'error': 'No active file changes check to cancel'}), 400
+            return {'error': 'No active file changes check to cancel'}, 400
             
     except Exception as e:
         logger.error(f"Error cancelling file changes check: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @maintenance_bp.route('/reset-file-changes-state', methods=['POST'])
 @auth_required
@@ -387,11 +387,11 @@ def reset_file_changes_state():
             })
         
         logger.info("File changes state force reset")
-        return jsonify({'message': 'File changes state reset successfully'})
+        return {'message': 'File changes state reset successfully'}
         
     except Exception as e:
         logger.error(f"Error resetting file changes state: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @maintenance_bp.route('/cleanup-orphaned', methods=['POST'])
 @auth_required
@@ -401,7 +401,7 @@ def cleanup_orphaned_files():
 
     # Check if cleanup is already running
     if current_cleanup_thread and current_cleanup_thread.is_alive():
-        return jsonify({'error': 'Cleanup operation already in progress'}), 409
+        return {'error': 'Cleanup operation already in progress'}, 409
 
     # Get optional file_paths parameter for scoped orphan checking
     data = request.get_json(silent=True) or {}
@@ -444,12 +444,12 @@ def cleanup_orphaned_files():
     else:
         message = 'Cleanup operation started for all files'
 
-    return jsonify({
+    return {
         'status': 'started',
         'message': message,
         'cleanup_id': cleanup_record.id,
         'file_count': len(file_paths) if file_paths else None
-    })
+    }
 
 @maintenance_bp.route('/file-changes', methods=['GET', 'POST'])
 @auth_required
@@ -459,7 +459,7 @@ def check_file_changes():
 
     # Check if file changes check is already running
     if current_file_changes_thread and current_file_changes_thread.is_alive():
-        return jsonify({'error': 'File changes check already in progress'}), 409
+        return {'error': 'File changes check already in progress'}, 409
 
     # Get optional file_paths parameter for scoped file changes checking
     data = request.get_json(silent=True) or {}
@@ -523,12 +523,12 @@ def check_file_changes():
     else:
         message = 'File changes check started for all files'
 
-    return jsonify({
+    return {
         'status': 'started',
         'message': message,
         'check_id': check_id,
         'file_count': len(file_paths) if file_paths else None
-    })
+    }
 
 def cleanup_orphaned_async(app, cleanup_id, file_paths=None):
     """Async function to cleanup orphaned database entries
@@ -616,38 +616,38 @@ def vacuum_database():
         # Only works with SQLite databases
         database_url = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
         if not database_url.startswith('sqlite:'):
-            return jsonify({'error': 'VACUUM operation only supported for SQLite databases'}), 400
-        
+            return {'error': 'VACUUM operation only supported for SQLite databases'}, 400
+
         # Get database size before vacuum
         db_file_path = database_url.replace('sqlite:///', '')
         if os.path.exists(db_file_path):
             size_before = os.path.getsize(db_file_path)
         else:
             size_before = 0
-        
+
         # Execute VACUUM command
         from sqlalchemy import text
         result = db.session.execute(text('VACUUM;'))
         db.session.commit()
-        
+
         # Get database size after vacuum
         if os.path.exists(db_file_path):
             size_after = os.path.getsize(db_file_path)
         else:
             size_after = 0
-        
+
         bytes_freed = size_before - size_after
-        
+
         logger.info(f"Database vacuum completed. Size before: {size_before} bytes, after: {size_after} bytes, freed: {bytes_freed} bytes")
-        
-        return jsonify({
+
+        return {
             'message': 'Database vacuum completed successfully',
             'size_before_bytes': size_before,
             'size_after_bytes': size_after,
             'bytes_freed': bytes_freed,
             'percentage_reduction': round((bytes_freed / size_before * 100), 2) if size_before > 0 else 0
-        })
-        
+        }
+
     except Exception as e:
         logger.error(f"Error vacuuming database: {str(e)}")
-        return jsonify({'error': f'Failed to vacuum database: {str(e)}'}), 500
+        return {'error': f'Failed to vacuum database: {str(e)}'}, 500

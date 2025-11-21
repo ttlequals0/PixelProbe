@@ -115,8 +115,25 @@ def create_celery(app=None):
     return celery
 
 
-# Create standalone Celery instance for worker processes
-celery_app = create_celery()
+# Create standalone Celery instance for worker processes with Flask app context
+# Workers need Flask app context to access db object
+def _create_worker_celery():
+    """Create Celery instance for workers with Flask app context support"""
+    celery = create_celery()
+
+    # Import Flask app and set up context task for workers
+    from app import app
+
+    class ContextTask(celery.Task):
+        """Make celery tasks work with Flask app context"""
+        def __call__(self, *args, **kwargs):
+            with app.app_context():
+                return self.run(*args, **kwargs)
+
+    celery.Task = ContextTask
+    return celery
+
+celery_app = _create_worker_celery()
 
 
 def init_celery(app, celery):

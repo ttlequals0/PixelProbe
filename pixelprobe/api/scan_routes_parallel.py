@@ -5,7 +5,7 @@ This module provides an improved scan endpoint that properly utilizes all
 available Celery workers instead of creating a single monolithic task.
 """
 
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, current_app
 from uuid import uuid4
 import logging
 
@@ -73,29 +73,29 @@ def scan_parallel():
             AuditLogger.log_action('scan_directory', {'directory': validated_path})
         except PathTraversalError as e:
             AuditLogger.log_security_event('path_traversal_attempt', str(e), 'warning')
-            return jsonify({'error': f'Invalid directory path: {directory}'}), 400
-    
+            return {'error': f'Invalid directory path: {directory}'}, 400
+
     if not validated_dirs:
-        return jsonify({'error': 'No valid directories to scan'}), 400
+        return {'error': 'No valid directories to scan'}, 400
 
     # Check if a scan is already running
     try:
         scan_state = ScanState.get_or_create()
         if scan_state.is_active and scan_state.phase in ['initializing', 'discovering', 'adding', 'scanning']:
-            return jsonify({
+            return {
                 'error': 'A scan is already in progress',
                 'scan_id': scan_state.scan_id,
                 'phase': scan_state.phase
-            }), 409
+            }, 409
     except Exception as e:
         logger.error(f"Error checking scan status: {e}")
 
     # Check if Celery is available
     if not check_celery_available():
-        return jsonify({
+        return {
             'error': 'Celery workers not available',
             'message': 'Parallel scanning requires Celery workers to be running'
-        }), 503
+        }, 503
     
     try:
         from pixelprobe.tasks_parallel import parallel_scan_orchestrator
@@ -115,10 +115,10 @@ def scan_parallel():
         # Get worker count for informational purposes
         from celery import current_app as celery_app
         stats = celery_app.control.inspect().stats()
-        total_workers = sum(len(worker_stats.get('pool', {}).get('processes', [])) 
+        total_workers = sum(len(worker_stats.get('pool', {}).get('processes', []))
                            for worker_stats in stats.values()) if stats else 0
-        
-        return jsonify({
+
+        return {
             'status': 'launched',
             'scan_id': scan_id,
             'task_id': task.id,
@@ -127,20 +127,20 @@ def scan_parallel():
             'scan_type': 'parallel_v2',
             'force_rescan': force_rescan,
             'directories': validated_dirs
-        })
-        
+        }
+
     except ImportError as e:
         logger.error(f"Failed to import parallel tasks: {e}")
-        return jsonify({
+        return {
             'error': 'Parallel scanning module not available',
             'details': str(e)
-        }), 500
+        }, 500
     except Exception as e:
         logger.error(f"Failed to launch parallel scan: {e}")
-        return jsonify({
+        return {
             'error': 'Failed to launch parallel scan',
             'details': str(e)
-        }), 500
+        }, 500
 
 
 @parallel_scan_bp.route('/scan-parallel/status/<scan_id>', methods=['GET'])
@@ -162,7 +162,7 @@ def get_parallel_scan_status(scan_id):
         # Get scan state
         scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
         if not scan_state:
-            return jsonify({'error': 'Scan not found'}), 404
+            return {'error': 'Scan not found'}, 404
         
         # Get chunk statistics
         total_chunks = ScanChunk.query.filter_by(scan_id=scan_id).count()
@@ -190,8 +190,8 @@ def get_parallel_scan_status(scan_id):
         
         # Calculate progress
         progress_percent = (complete_chunks / total_chunks * 100) if total_chunks > 0 else 0
-        
-        return jsonify({
+
+        return {
             'scan_id': scan_id,
             'phase': scan_state.phase,
             'is_active': scan_state.is_active,
@@ -207,14 +207,14 @@ def get_parallel_scan_status(scan_id):
             'estimated_total': scan_state.estimated_total or 0,
             'start_time': scan_state.start_time.isoformat() if scan_state.start_time else None,
             'message': scan_state.progress_message or f'Processing {complete_chunks}/{total_chunks} chunks'
-        })
-        
+        }
+
     except Exception as e:
         logger.error(f"Error getting parallel scan status: {e}")
-        return jsonify({
+        return {
             'error': 'Failed to get scan status',
             'details': str(e)
-        }), 500
+        }, 500
 
 
 @parallel_scan_bp.route('/scan-parallel/workers', methods=['GET'])
@@ -239,22 +239,22 @@ def get_worker_status():
         registered = inspect.registered()
         
         if not stats:
-            return jsonify({
+            return {
                 'status': 'offline',
                 'message': 'No Celery workers available'
-            })
-        
+            }
+
         worker_info = []
         total_processes = 0
-        
+
         for worker_name, worker_stats in stats.items():
             pool_info = worker_stats.get('pool', {})
             processes = pool_info.get('max-concurrency', 0)
             total_processes += processes
-            
+
             # Get active tasks for this worker
             active_tasks = active.get(worker_name, [])
-            
+
             worker_info.append({
                 'name': worker_name,
                 'processes': processes,
@@ -263,18 +263,18 @@ def get_worker_status():
                 'pool_type': pool_info.get('implementation', 'unknown'),
                 'tasks': [task['name'] for task in active_tasks]
             })
-        
-        return jsonify({
+
+        return {
             'status': 'online',
             'total_workers': total_processes,
             'worker_nodes': len(stats),
             'workers': worker_info,
             'registered_tasks': registered.get(list(stats.keys())[0], []) if stats else []
-        })
-        
+        }
+
     except Exception as e:
         logger.error(f"Error getting worker status: {e}")
-        return jsonify({
+        return {
             'error': 'Failed to get worker status',
             'details': str(e)
-        }), 500
+        }, 500

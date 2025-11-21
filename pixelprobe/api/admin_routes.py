@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 import os
 import json
 import logging
@@ -58,10 +58,10 @@ def mark_as_good():
     try:
         file_ids = [int(fid) for fid in file_ids]
     except (ValueError, TypeError):
-        return jsonify({'error': 'Invalid file ID format'}), 400
+        return {'error': 'Invalid file ID format'}, 400
     
     if len(file_ids) > 1000:  # Prevent excessive updates
-        return jsonify({'error': 'Too many file IDs (max 1000)'}), 400
+        return {'error': 'Too many file IDs (max 1000)'}, 400
     
     try:
         for file_id in file_ids:
@@ -75,27 +75,27 @@ def mark_as_good():
         db.session.commit()
         logger.info(f"Successfully marked {len(file_ids)} files as good")
         
-        return jsonify({
+        return {
             'message': f'Successfully marked {len(file_ids)} files as good',
             'marked_files': len(file_ids)
-        })
+        }
         
     except Exception as e:
         logger.error(f"Error marking files as good: {str(e)}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @admin_bp.route('/ignored-patterns')
 @auth_required
 def get_ignored_patterns():
     """Get all ignored error patterns"""
     patterns = IgnoredErrorPattern.query.filter_by(is_active=True).all()
-    return jsonify([{
+    return [{
         'id': p.id,
         'pattern': p.pattern,
         'description': p.description,
         'created_at': p.created_at.isoformat() if p.created_at else None
-    } for p in patterns])
+    } for p in patterns]
 
 @admin_bp.route('/ignored-patterns', methods=['POST'])
 @auth_required
@@ -113,13 +113,13 @@ def add_ignored_pattern():
     dangerous_patterns = [r'\(\?[imsxXU]', r'\(\?P<', r'\(\?#']
     for dp in dangerous_patterns:
         if dp in pattern:
-            return jsonify({'error': 'Pattern contains potentially dangerous regex syntax'}), 400
+            return {'error': 'Pattern contains potentially dangerous regex syntax'}, 400
     
     try:
         # Check for duplicate pattern
         existing = IgnoredErrorPattern.query.filter_by(pattern=pattern, is_active=True).first()
         if existing:
-            return jsonify({'error': f'Pattern "{pattern}" already exists'}), 400
+            return {'error': f'Pattern "{pattern}" already exists'}, 400
         
         new_pattern = IgnoredErrorPattern(
             pattern=pattern,
@@ -132,16 +132,16 @@ def add_ignored_pattern():
         
         AuditLogger.log_action('add_ignored_pattern', {'pattern': pattern})
         
-        return jsonify({
+        return {
             'id': new_pattern.id,
             'pattern': new_pattern.pattern,
             'description': new_pattern.description,
             'message': 'Pattern added successfully'
-        }), 201
+        }, 201
     except Exception as e:
         logger.error(f"Error adding ignored pattern: {e}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @admin_bp.route('/ignored-patterns/<int:pattern_id>', methods=['DELETE'])
 @auth_required
@@ -149,7 +149,7 @@ def delete_ignored_pattern(pattern_id):
     """Delete an ignored error pattern"""
     pattern = IgnoredErrorPattern.query.get(pattern_id)
     if not pattern:
-        return jsonify({'error': 'Pattern not found'}), 404
+        return {'error': 'Pattern not found'}, 404
     
     try:
         pattern_text = pattern.pattern
@@ -158,23 +158,23 @@ def delete_ignored_pattern(pattern_id):
         
         AuditLogger.log_action('delete_ignored_pattern', {'pattern_id': pattern_id, 'pattern': pattern_text})
         
-        return jsonify({'message': 'Pattern deleted successfully'})
+        return {'message': 'Pattern deleted successfully'}
     except Exception as e:
         logger.error(f"Error deleting ignored pattern: {e}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @admin_bp.route('/configurations')
 @auth_required
 def get_configurations():
     """Get all scan configurations"""
     configs = ScanConfiguration.query.all()
-    return jsonify([{
+    return [{
         'id': c.id,
         'path': c.path,
         'is_active': c.is_active,
         'created_at': c.created_at.isoformat() if c.created_at else None
-    } for c in configs])
+    } for c in configs]
 
 @admin_bp.route('/configurations', methods=['POST'])
 @auth_required
@@ -192,7 +192,7 @@ def add_configuration():
         AuditLogger.log_action('add_configuration', {'path': path})
     except Exception as e:
         AuditLogger.log_security_event('invalid_directory_path', str(e), 'warning')
-        return jsonify({'error': 'Invalid directory path'}), 400
+        return {'error': 'Invalid directory path'}, 400
     
     try:
         # Check if configuration already exists
@@ -218,14 +218,14 @@ def add_configuration():
         
         db.session.commit()
         
-        return jsonify({
+        return {
             'path': path,
             'message': message
-        })
+        }
     except Exception as e:
         logger.error(f"Error adding configuration: {e}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @admin_bp.route('/schedules', methods=['GET'])
 @auth_required
@@ -234,7 +234,7 @@ def get_schedules():
     # Return all schedules (active and inactive) so they can be toggled
     # DELETE endpoint does hard delete, so truly deleted ones won't appear
     schedules = ScanSchedule.query.all()
-    return jsonify({'schedules': [schedule.to_dict() for schedule in schedules]})
+    return {'schedules': [schedule.to_dict() for schedule in schedules]}
 
 @admin_bp.route('/schedules', methods=['POST'])
 @auth_required
@@ -247,7 +247,7 @@ def create_schedule():
         name = data.get('name', 'Unnamed Schedule')
         existing = ScanSchedule.query.filter_by(name=name, is_active=True).first()
         if existing:
-            return jsonify({'error': f'Schedule with name "{name}" already exists'}), 400
+            return {'error': f'Schedule with name "{name}" already exists'}, 400
         
         schedule = ScanSchedule(
             name=name,
@@ -264,12 +264,12 @@ def create_schedule():
         # Update scheduler
         if scheduler:
             scheduler.update_schedules()
-        
-        return jsonify(schedule.to_dict()), 201
+
+        return schedule.to_dict(), 201
     except Exception as e:
         logger.error(f"Error creating schedule: {e}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @admin_bp.route('/schedules/<int:schedule_id>', methods=['PUT'])
 @auth_required
@@ -292,12 +292,12 @@ def update_schedule(schedule_id):
         # Update scheduler
         if scheduler:
             scheduler.update_schedules()
-        
-        return jsonify(schedule.to_dict())
+
+        return schedule.to_dict()
     except Exception as e:
         logger.error(f"Error updating schedule: {e}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @admin_bp.route('/schedules/<int:schedule_id>', methods=['DELETE'])
 @auth_required
@@ -318,7 +318,7 @@ def delete_schedule(schedule_id):
     except Exception as e:
         logger.error(f"Error deleting schedule: {e}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @admin_bp.route('/exclusions', methods=['GET'])
 @auth_required
@@ -338,13 +338,13 @@ def get_exclusions():
             is_active=True
         ).all()
         
-        return jsonify({
+        return {
             'paths': [e.value for e in path_exclusions],
             'extensions': [e.value for e in extension_exclusions]
-        })
+        }
     except Exception as e:
         logger.error(f"Error reading exclusions: {e}")
-        return jsonify({'paths': [], 'extensions': []})
+        return {'paths': [], 'extensions': []}
 
 @admin_bp.route('/exclusions', methods=['PUT'])
 @auth_required
@@ -357,7 +357,7 @@ def update_exclusions():
         
         # Validate data structure
         if not isinstance(data.get('paths', []), list) or not isinstance(data.get('extensions', []), list):
-            return jsonify({'error': 'Invalid data format'}), 400
+            return {'error': 'Invalid data format'}, 400
         
         # Clear existing exclusions
         Exclusion.query.update({'is_active': False})
@@ -372,11 +372,11 @@ def update_exclusions():
             db.session.add(exclusion)
         
         db.session.commit()
-        return jsonify({'message': 'Exclusions updated successfully'})
+        return {'message': 'Exclusions updated successfully'}
     except Exception as e:
         logger.error(f"Error updating exclusions: {e}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['POST'])
 @auth_required
@@ -384,13 +384,13 @@ def add_exclusion(exclusion_type):
     """Add a single exclusion (path or extension) to database"""
     # Validate exclusion type
     if exclusion_type not in ['path', 'extension']:
-        return jsonify({'error': 'Invalid exclusion type'}), 400
+        return {'error': 'Invalid exclusion type'}, 400
     
     data = request.get_json()
     value = data.get('item') or data.get('value')  # Support both 'item' and 'value'
     
     if not value:
-        return jsonify({'error': 'Value is required'}), 400
+        return {'error': 'Value is required'}, 400
     
     try:
         from models import Exclusion
@@ -403,8 +403,8 @@ def add_exclusion(exclusion_type):
         ).first()
         
         if existing:
-            return jsonify({'error': f'{exclusion_type.capitalize()} already exists'}), 400
-        
+            return {'error': f'{exclusion_type.capitalize()} already exists'}, 400
+
         # Add new exclusion
         exclusion = Exclusion(
             exclusion_type=exclusion_type,
@@ -413,15 +413,15 @@ def add_exclusion(exclusion_type):
         )
         db.session.add(exclusion)
         db.session.commit()
-        
+
         AuditLogger.log_action('add_exclusion', {'type': exclusion_type, 'value': value})
-        
-        return jsonify({'message': f'{exclusion_type.capitalize()} added successfully'})
+
+        return {'message': f'{exclusion_type.capitalize()} added successfully'}
             
     except Exception as e:
         logger.error(f"Error adding exclusion: {e}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500
 
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['DELETE'])
 @auth_required
@@ -429,13 +429,13 @@ def remove_exclusion(exclusion_type):
     """Remove a single exclusion (path or extension) from database"""
     # Validate exclusion type
     if exclusion_type not in ['path', 'extension']:
-        return jsonify({'error': 'Invalid exclusion type'}), 400
+        return {'error': 'Invalid exclusion type'}, 400
     
     data = request.get_json()
     value = data.get('item') or data.get('value')  # Support both 'item' and 'value'
     
     if not value:
-        return jsonify({'error': 'Value is required'}), 400
+        return {'error': 'Value is required'}, 400
     
     try:
         from models import Exclusion
@@ -446,19 +446,19 @@ def remove_exclusion(exclusion_type):
             value=value,
             is_active=True
         ).first()
-        
+
         if not exclusion:
-            return jsonify({'error': f'{exclusion_type.capitalize()} not found'}), 404
-        
+            return {'error': f'{exclusion_type.capitalize()} not found'}, 404
+
         # Soft delete
         exclusion.is_active = False
         db.session.commit()
-        
+
         AuditLogger.log_action('remove_exclusion', {'type': exclusion_type, 'value': value})
-        
-        return jsonify({'message': f'{exclusion_type.capitalize()} removed successfully'})
+
+        return {'message': f'{exclusion_type.capitalize()} removed successfully'}
             
     except Exception as e:
         logger.error(f"Error removing exclusion: {e}")
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, 500

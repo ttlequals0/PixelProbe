@@ -1462,7 +1462,9 @@ class ScanService:
                 # to avoid double parallelism (chunks × files = too many threads/connections)
                 # Use sequential file processing (num_workers=1) when chunk_workers > 1
                 chunk_file_workers = 1 if chunk_workers > 1 else num_workers
-                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, thread_scan_state, num_workers=chunk_file_workers)
+                # CRITICAL: Pass use_atomic_increment=True for parallel chunk processing to prevent progress resets
+                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, thread_scan_state,
+                                      num_workers=chunk_file_workers, use_atomic_increment=True)
                 return chunk, chunk.files_scanned or 0
 
         chunk_workers = min(num_workers, len(chunks))
@@ -1517,7 +1519,10 @@ class ScanService:
                     with files_scanned_lock:
                         total_files_scanned += files_in_chunk
                         current_files_scanned = total_files_scanned
-                    
+
+                    # DEBUG: Log chunk completion and accumulated progress
+                    logger.info(f"[CHUNK COMPLETE] Chunk {chunk.chunk_id}: scanned {files_in_chunk} files, total_accumulated={current_files_scanned}/{total_files_to_scan}")
+
                     self.update_progress(current_files_scanned, total_files_to_scan, chunk.directory_path, 'scanning')
                     
                     # Update progress using Redis for the UI worker to read
@@ -1534,7 +1539,10 @@ class ScanService:
 
                         # Only update non-critical fields in memory (no commit)
                         scan_state.current_chunk_index = completed_chunks
-                        scan_state.files_processed = current_files_scanned
+                        # CRITICAL: DO NOT update scan_state.files_processed here in parallel mode!
+                        # The atomic SQL increments in _scan_chunk_files already handle this.
+                        # Setting it here overwrites the database value with the local thread count,
+                        # causing the progress counter to reset. See v2.4.188 fix.
 
                         # Update progress message in memory
                         scan_state.progress_message = progress_tracker.get_progress_message(
@@ -2127,11 +2135,12 @@ class ScanService:
     
     def _scan_chunk_files(self, chunk: ScanChunk, checker: PixelProbe, force_rescan: bool = False,
                           total_scanned_so_far: int = 0, total_to_scan: int = 0, scan_state: ScanState = None,
-                          num_workers: int = 1):
+                          num_workers: int = 1, use_atomic_increment: bool = False):
         """Scan files in a chunk that are already in the database
 
         Args:
             num_workers: Number of parallel workers to use for scanning files within this chunk
+            use_atomic_increment: If True, always use atomic SQL increment for progress (for parallel chunk processing)
         """
         chunk.status = 'processing'
         chunk.phase = 'scanning'
@@ -2358,7 +2367,22 @@ class ScanService:
                                         # The estimated_total was already set correctly at the beginning of parallel scan
                                         aggregate_total = scan_state.estimated_total if scan_state.estimated_total > 0 else total_to_scan
 
-                                        if total_to_scan > 0:
+                                        # Use atomic increment if explicitly requested OR if total_to_scan is 0 (parallel chunk mode)
+                                        if use_atomic_increment or total_to_scan == 0:
+                                            # Parallel mode: ATOMIC INCREMENT of files_processed
+                                            # This prevents race conditions - database handles the increment atomically
+                                            logger.debug(f"[ATOMIC INCREMENT parallel] Using atomic increment: +{increment}")
+                                            progress_session.execute(
+                                                text("UPDATE scan_state SET files_processed = files_processed + :increment, "
+                                                     "current_file = :file, last_update = :now WHERE id = :id"),
+                                                {
+                                                    'increment': increment,
+                                                    'file': file_result.file_path,
+                                                    'now': datetime.now(timezone.utc),
+                                                    'id': scan_state.id
+                                                }
+                                            )
+                                        else:
                                             # Sequential mode: update both files_processed and estimated_total normally
                                             progress_session.execute(
                                                 text("UPDATE scan_state SET files_processed = :total, "
@@ -2367,19 +2391,6 @@ class ScanService:
                                                 {
                                                     'total': current_total,
                                                     'estimated': total_to_scan,
-                                                    'file': file_result.file_path,
-                                                    'now': datetime.now(timezone.utc),
-                                                    'id': scan_state.id
-                                                }
-                                            )
-                                        else:
-                                            # Parallel mode: ATOMIC INCREMENT of files_processed
-                                            # This prevents race conditions - database handles the increment atomically
-                                            progress_session.execute(
-                                                text("UPDATE scan_state SET files_processed = files_processed + :increment, "
-                                                     "current_file = :file, last_update = :now WHERE id = :id"),
-                                                {
-                                                    'increment': increment,
                                                     'file': file_result.file_path,
                                                     'now': datetime.now(timezone.utc),
                                                     'id': scan_state.id
@@ -2463,15 +2474,14 @@ class ScanService:
                                     # For parallel scans, use the existing estimated_total from scan_state
                                     aggregate_total = scan_state.estimated_total if scan_state.estimated_total > 0 else total_to_scan
 
-                                    if total_to_scan > 0:
-                                        # Sequential mode: update both files_processed and estimated_total normally
-                                        scan_state.files_processed = current_total
-                                        scan_state.estimated_total = total_to_scan
-                                        scan_state.current_file = file_result.file_path
-                                        scan_state.last_update = datetime.now(timezone.utc)
-                                    else:
+                                    # DEBUG: Log the total_to_scan value to verify parallel mode detection
+                                    logger.debug(f"[PROGRESS DEBUG] total_to_scan={total_to_scan}, use_atomic_increment={use_atomic_increment}, increment={increment}, current_total={total_scanned_so_far + scanned}")
+
+                                    # Use atomic increment if explicitly requested OR if total_to_scan is 0 (parallel chunk mode)
+                                    if use_atomic_increment or total_to_scan == 0:
                                         # Parallel mode: ATOMIC INCREMENT of files_processed
                                         # Use raw SQL to prevent race conditions
+                                        logger.debug(f"[ATOMIC INCREMENT] Using atomic increment: +{increment}")
                                         db.session.execute(
                                             text("UPDATE scan_state SET files_processed = files_processed + :increment, "
                                                  "current_file = :file, last_update = :now WHERE id = :id"),
@@ -2489,6 +2499,13 @@ class ScanService:
                                         )
                                         row = result.fetchone()
                                         current_total = row[0] if row else current_total
+                                        logger.debug(f"[ATOMIC INCREMENT] After increment, files_processed={current_total}")
+                                    else:
+                                        # Sequential mode: update both files_processed and estimated_total normally
+                                        scan_state.files_processed = current_total
+                                        scan_state.estimated_total = total_to_scan
+                                        scan_state.current_file = file_result.file_path
+                                        scan_state.last_update = datetime.now(timezone.utc)
 
                                     # Update progress message with current file info
                                     from utils import ProgressTracker
@@ -2515,19 +2532,21 @@ class ScanService:
                                     scan_state = db.session.query(ScanState).filter_by(id=scan_state.id).first()
                                     if scan_state:
                                         increment = scanned - last_commit_count
-                                        if total_to_scan > 0:
-                                            # Sequential mode: update files_processed normally
-                                            scan_state.files_processed = current_total
-                                            scan_state.current_file = file_result.file_path
-                                            scan_state.last_update = datetime.now(timezone.utc)
-                                        else:
+                                        # Use atomic increment if explicitly requested OR if total_to_scan is 0 (parallel chunk mode)
+                                        if use_atomic_increment or total_to_scan == 0:
                                             # Parallel mode: atomic increment
+                                            logger.debug(f"[ATOMIC INCREMENT recovery] Using atomic increment: +{increment}")
                                             db.session.execute(
                                                 text("UPDATE scan_state SET files_processed = files_processed + :increment, "
                                                      "current_file = :file, last_update = :now WHERE id = :id"),
                                                 {'increment': increment, 'file': file_result.file_path,
                                                  'now': datetime.now(timezone.utc), 'id': scan_state.id}
                                             )
+                                        else:
+                                            # Sequential mode: update files_processed normally
+                                            scan_state.files_processed = current_total
+                                            scan_state.current_file = file_result.file_path
+                                            scan_state.last_update = datetime.now(timezone.utc)
                                         db.session.commit()
                                         last_commit_count = scanned
                                 except Exception as e2:

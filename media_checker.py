@@ -1245,9 +1245,15 @@ class PixelProbe:
         file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
         file_size_gb = file_size / (1024 * 1024 * 1024)
 
-        # Scale timeout with file size to prevent worker hangs: 5 min base + 60s per GB, max 2 hours
-        timeout_seconds = min(300 + int(file_size_gb * 60), 7200)
-        logger.info(f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (timeout: {timeout_seconds}s)")
+        # Calculate timeout based on BOTH file size AND video duration for better accuracy
+        # NAS I/O and 4K HEVC processing can be slower than expected, so be VERY generous
+        # Base: 5 min + 180s per GB + video duration * 0.5 (process at 2x realtime) + 20% buffer
+        # This accounts for: NAS latency, parallel I/O contention, complex codec processing, subtitle streams
+        size_timeout = int(file_size_gb * 180)  # 3 minutes per GB (up from 150s)
+        duration_timeout = int(duration * 0.5) if duration and duration > 0 else 0  # ~2x realtime (up from 0.4)
+        base_timeout = 300 + max(size_timeout, duration_timeout)
+        timeout_seconds = min(int(base_timeout * 1.2), 7200)  # Add 20% buffer, cap at 2 hours
+        logger.info(f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (timeout: {timeout_seconds}s, duration: {duration:.1f}s)" if duration else f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (timeout: {timeout_seconds}s)")
         
         # Enhanced FFmpeg validation with best practices for thorough file checking
         try:
@@ -1286,8 +1292,9 @@ class PixelProbe:
                 significant_errors = []
                 has_nal_errors = False
                 has_reference_frame_warnings = False
+                has_dts_pts_warnings = False
                 has_other_errors = False
-                
+
                 for line in error_lines:
                     line_lower = line.lower()
                     if 'invalid nal unit' in line_lower:
@@ -1296,6 +1303,9 @@ class PixelProbe:
                     elif 'number of reference frames' in line_lower and 'exceeds max' in line_lower:
                         has_reference_frame_warnings = True
                         # This is a common encoding issue that doesn't affect playback
+                    elif any(pattern in line_lower for pattern in ['non monotonically increasing dts', 'application provided invalid', 'dts to muxer', 'pts to muxer']):
+                        has_dts_pts_warnings = True
+                        # DTS/PTS warnings are null muxer artifacts, not actual corruption
                     elif 'invalid data found when processing input' in line_lower or 'error while decoding stream' in line_lower:
                         # These are common FFmpeg decoder issues that don't always mean corruption
                         # Only mark as error if FFmpeg actually fails (returncode != 0)
@@ -1320,16 +1330,18 @@ class PixelProbe:
                 if significant_errors:
                     corruption_details.append(f"FFmpeg errors: {'; '.join(significant_errors[:3])}")
                     is_corrupted = True
-                elif (has_nal_errors or has_reference_frame_warnings) and result.returncode == 0:
-                    # NAL errors or reference frame warnings only - mark as warning instead of corrupted
+                elif (has_nal_errors or has_reference_frame_warnings or has_dts_pts_warnings) and result.returncode == 0:
+                    # NAL errors, reference frame warnings, or DTS/PTS warnings only - mark as warning instead of corrupted
                     warnings = []
                     if has_nal_errors:
                         warnings.append("NAL unit errors detected")
                     if has_reference_frame_warnings:
                         warnings.append("H.264 reference frame count exceeds profile limit")
-                    
-                    warning_msg = " and ".join(warnings) + " (video may have minor playback issues)"
-                    logger.info(f"FFmpeg found only minor warnings for {file_path}: {warning_msg}")
+                    if has_dts_pts_warnings:
+                        warnings.append("DTS/PTS timestamp warnings (null muxer artifacts)")
+
+                    warning_msg = " and ".join(warnings) + " (benign warnings, not actual corruption)"
+                    logger.info(f"FFmpeg found only benign warnings for {file_path}: {warning_msg}")
                     warning_details = [warning_msg]
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
@@ -1674,12 +1686,15 @@ class PixelProbe:
         
         # Stage 3: Multi-point sampling for large files
         if file_size_gb > 5.0:
-            sampling_corrupted, sampling_details = self._check_multipoint_sampling(file_path)
+            sampling_corrupted, sampling_details, sampling_warnings = self._check_multipoint_sampling(file_path)
             enhanced_output.append("Stage 3: Multi-point sampling")
             if sampling_corrupted:
                 is_corrupted = True
                 corruption_details.extend(sampling_details)
                 enhanced_output.append(f"  Result: FAILED - {'; '.join(sampling_details)}")
+            elif sampling_warnings:
+                warning_details.extend([f"Stage 3: {detail}" for detail in sampling_warnings])
+                enhanced_output.append(f"  Result: WARNING - {'; '.join(sampling_warnings)}")
             else:
                 enhanced_output.append("  Result: PASSED")
         else:
@@ -1824,10 +1839,14 @@ class PixelProbe:
         return is_corrupted, corruption_details
     
     def _check_multipoint_sampling(self, file_path):
-        """Check beginning, middle, and end of large files for corruption"""
+        """Check beginning, middle, and end of large files for corruption
+
+        Returns: (is_corrupted, corruption_details, warning_details)
+        """
         corruption_details = []
+        warning_details = []
         is_corrupted = False
-        
+
         try:
             # Get video duration first - try stream level, then container level
             probe = ffmpeg.probe(file_path)
@@ -1850,7 +1869,7 @@ class PixelProbe:
             
             # If we still don't have duration, skip multipoint sampling
             if duration is None or duration <= 0:
-                return is_corrupted, corruption_details
+                return is_corrupted, corruption_details, warning_details
             
             duration = float(duration)
             sample_points = [
@@ -1873,19 +1892,42 @@ class PixelProbe:
                         '-f', 'null',
                         '-'
                     ], capture_output=True, text=True, timeout=30)
-                    
-                    if result.returncode != 0 or result.stderr:
-                        corruption_details.append(f"Corruption detected in {location} section")
-                        is_corrupted = True
-                        logger.warning(f"Corruption found in {location} of {file_path}")
+
+                    # Filter out benign warnings that don't indicate actual corruption
+                    if result.stderr:
+                        stderr_lower = result.stderr.lower()
+                        # Benign warnings that don't indicate actual corruption:
+                        # - DTS warnings from null muxer (muxing artifacts, not corruption)
+                        # - PTS warnings (timestamp ordering issues in muxer, not corruption)
+                        # - Subtitle warnings (cosmetic issues)
+                        benign_patterns = [
+                            'non monotonically increasing dts',
+                            'application provided invalid',
+                            'dts to muxer',
+                            'pts to muxer',
+                            'subtitle'
+                        ]
+                        # Check if stderr only contains benign warnings
+                        is_benign = all(any(pattern in line.lower() for pattern in benign_patterns)
+                                       for line in result.stderr.splitlines() if line.strip())
+
+                        if is_benign and result.returncode == 0:
+                            # Benign warning only - not corruption
+                            warning_details.append(f"Benign FFmpeg warnings in {location} section")
+                            logger.warning(f"BENIGN WARNING in {location} of {file_path}:\n{result.stderr}")
+                        else:
+                            # Real corruption detected
+                            corruption_details.append(f"Corruption detected in {location} section")
+                            is_corrupted = True
+                            logger.warning(f"CORRUPTION DETECTED in {location} of {file_path}:\n{result.stderr}")
                         
                 except subprocess.TimeoutExpired:
                     corruption_details.append(f"Timeout checking {location} section")
                     
         except Exception as e:
             logger.debug(f"Multi-point sampling error: {str(e)}")
-        
-        return is_corrupted, corruption_details
+
+        return is_corrupted, corruption_details, warning_details
     
     def _check_strict_error_detection(self, file_path):
         """Enhanced error detection with strict flags - returns warnings only, not corruption

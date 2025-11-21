@@ -1303,16 +1303,54 @@ class ResetCleanupState(Resource):
 class Vacuum(Resource):
     @maintenance_ns.doc('vacuum_database')
     @maintenance_ns.response(200, 'Vacuum completed', success_model)
+    @maintenance_ns.response(400, 'Unsupported database type', error_model)
     @maintenance_ns.response(401, 'Authentication required', error_model)
+    @maintenance_ns.response(500, 'Vacuum failed', error_model)
     def post(self):
-        """Run VACUUM on the PostgreSQL database to reclaim space"""
+        """Run VACUUM on the SQLite database to reclaim space"""
         # Check authentication
         if not check_auth():
             return {'error': 'Authentication required'}, 401
 
-        # Call the actual route function
-        from pixelprobe.api.maintenance_routes import vacuum_database
-        return vacuum_database()
+        try:
+            import os
+            from models import db
+            from sqlalchemy import text
+
+            # Only works with SQLite databases
+            database_url = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
+            if not database_url.startswith('sqlite:'):
+                return {'error': 'VACUUM operation only supported for SQLite databases'}, 400
+
+            # Get database size before vacuum
+            db_file_path = database_url.replace('sqlite:///', '')
+            if os.path.exists(db_file_path):
+                size_before = os.path.getsize(db_file_path)
+            else:
+                size_before = 0
+
+            # Execute VACUUM command
+            db.session.execute(text('VACUUM;'))
+            db.session.commit()
+
+            # Get database size after vacuum
+            if os.path.exists(db_file_path):
+                size_after = os.path.getsize(db_file_path)
+            else:
+                size_after = 0
+
+            bytes_freed = size_before - size_after
+
+            return {
+                'message': 'Database vacuum completed successfully',
+                'size_before_bytes': size_before,
+                'size_after_bytes': size_after,
+                'bytes_freed': bytes_freed,
+                'percentage_reduction': round((bytes_freed / size_before * 100), 2) if size_before > 0 else 0
+            }
+
+        except Exception as e:
+            return {'error': f'Failed to vacuum database: {str(e)}'}, 500
 
 @maintenance_ns.route('/test-cleanup')
 class TestCleanup(Resource):

@@ -5,6 +5,661 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.203] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed database connection pool corruption causing PGRES_TUPLES_OK errors**
+  - Removed harmful `db.session.remove()` calls from tasks that were corrupting the connection pool
+  - These calls were added in v2.4.199 as a workaround but became harmful after v2.4.201 fixed Flask app context
+  - The ContextTask wrapper now properly handles session management
+  - Fixed errors: "error with status PGRES_TUPLES_OK and no message from the libpq" and NotImplementedError
+
+### Technical Details
+
+- **pixelprobe/tasks.py**: Removed all `db.session.remove()` calls that were corrupting the database connection pool
+- With proper Flask app context from ContextTask wrapper, manual session removal is unnecessary and harmful
+- The database connection pool is now stable and properly managed by SQLAlchemy and the ContextTask wrapper
+
+## [2.4.202] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed SQLAlchemy detached instance errors preventing all scans (CRITICAL)**
+  - Fixed "Deferred loader for attribute 'id' failed to populate correctly" error in ScanState.create_new_scan()
+  - Fixed "Deferred loader for attribute 'estimated_total' failed to populate correctly" error in ui_progress_update_task
+  - Root cause: SQLAlchemy objects become detached after commit() and expire() operations
+  - Solution: Added db.session.refresh(scan_state) after commit in models.py to reattach object
+  - Store attribute values before commit/expire in ui_progress_update_task to avoid accessing detached objects
+
+### Technical Details
+
+- **models.py**: Added db.session.refresh(scan_state) after commit to reattach objects to session
+- **pixelprobe/tasks.py**: Store estimated_total and current_phase values before commit/expire operations
+- This ensures all attribute access happens before objects are detached from the session
+
+## [2.4.201] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed "Popped wrong app context" error (FINAL FIX)**
+  - v2.4.200 manually pushed app contexts which conflicted with Celery retry mechanism
+  - When self.retry() raises exception, Flask auto-pops context but gets wrong one
+  - Root cause: celery_app created WITHOUT Flask app context support
+  - celery_config.py line 119 created standalone celery_app without ContextTask wrapper
+  - Workers were running tasks WITHOUT automatic Flask app context
+
+### The Proper Solution
+
+Instead of manually pushing contexts in each task, configure the Celery worker itself to provide app context automatically:
+
+1. **celery_config.py**: Modified standalone celery_app initialization to include ContextTask wrapper
+2. **pixelprobe/tasks.py**: Removed manual app_context.push() from all tasks
+3. Now ContextTask automatically wraps ALL task calls with `with app.app_context():`
+4. This works correctly with Celery's retry mechanism (no context conflicts)
+
+### Technical Details
+
+- celery_config.py: Created `_create_worker_celery()` function that:
+  - Calls `create_celery()` to create base Celery instance
+  - Imports Flask app
+  - Sets up ContextTask wrapper to provide automatic app context
+  - Returns properly configured celery_app for workers
+- pixelprobe/tasks.py: Removed manual app context management from 5 tasks:
+  - scan_media_task
+  - cleanup_orphaned_task
+  - scan_files_task
+  - check_file_exists_task
+  - calculate_file_hash_task
+- ui_progress_update_task: Left unchanged (manages own context properly)
+
+### Why This Works
+
+The ContextTask wrapper's `__call__` method wraps the task execution:
+```python
+def __call__(self, *args, **kwargs):
+    with app.app_context():  # Automatic context management
+        return self.run(*args, **kwargs)
+```
+
+This ensures:
+1. App context is created at task start
+2. Task code runs with context
+3. Context is properly cleaned up even if task raises exception (retry)
+4. No conflicts between manual and automatic context management
+
+### Files Modified
+
+- celery_config.py: Added _create_worker_celery() function for proper context support
+- pixelprobe/tasks.py: Removed manual app_context.push() from 5 tasks
+- version.py: 2.4.200 to 2.4.201
+
+## [2.4.200] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed Flask app context missing in Celery tasks (TRUE ROOT CAUSE)**
+  - v2.4.199 added db.session.remove() calls but without Flask app context
+  - Flask-SQLAlchemy requires app context before accessing db object
+  - Calling db.session.remove() without app context corrupts database connection state
+  - This caused: DatabaseError "error with status PGRES_TUPLES_OK and no message from the libpq"
+  - This also caused: NotImplementedError when SQLAlchemy tried to parse corrupted results
+
+### Root Cause of Regression Since v2.4.157
+
+The regression was introduced in v2.4.199 when I added session cleanup WITHOUT app context:
+1. v2.4.199 added `db.session.remove()` at start of all Celery tasks
+2. But Flask-SQLAlchemy's `db` object requires Flask app context to function
+3. Calling `db.session.remove()` without app context corrupts the connection pool
+4. Subsequent database queries fail with cryptic PostgreSQL errors
+5. This broke rescan functionality that worked perfectly in v2.4.157
+
+### Technical Details
+
+- Added `app.app_context().push()` BEFORE `db.session.remove()` in all Celery tasks:
+  - scan_media_task (lines 92-95)
+  - cleanup_orphaned_task (lines 345-348)
+  - scan_files_task (lines 418-421)
+  - check_file_exists_task (lines 587-590)
+  - calculate_file_hash_task (lines 651-654)
+- Fixed ui_progress_update_task to call session.remove() AFTER app context push (lines 810-814)
+- Ensures Flask-SQLAlchemy has proper application context before session management
+
+### Why This Matters
+
+Flask-SQLAlchemy is NOT thread-safe or process-safe without app context. Celery workers run in separate processes and need explicit app context management. The pattern is:
+1. Push Flask app context first
+2. Then manage database sessions
+3. This ensures connection pool integrity
+
+### Files Modified
+
+- pixelprobe/tasks.py: Added app context management to 6 Celery tasks
+- version.py: 2.4.199 to 2.4.200
+
+## [2.4.199] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed ResourceClosedError on Celery task retries (ROOT CAUSE FIX)**
+  - Celery tasks were reusing corrupted database sessions from previous failed attempts
+  - When a task retries after failure, the SQLAlchemy session persists in the worker process
+  - Added db.session.remove() at the start of ALL Celery tasks to ensure clean session state
+  - Prevents "This result object does not return rows. It has been closed automatically" errors
+  - This was the root cause of rescan failures - task would fail, retry, then hit corrupted session
+
+### Technical Details
+
+- Added session cleanup to 6 Celery tasks at task initialization:
+  - scan_media_task (line 92-97): Main scanning task
+  - cleanup_orphaned_task (line 340-345): Orphan cleanup
+  - scan_files_task (line 408-413): File scanning
+  - check_file_exists_task (line 572-577): File existence check
+  - calculate_file_hash_task (line 631-636): Hash calculation
+  - ui_progress_update_task (line 763-768): UI progress updates
+- Each task now calls db.session.remove() before starting work
+- Ensures fresh database session for every task attempt, including retries
+
+### Root Cause Analysis
+
+The ResourceClosedError occurred because:
+1. Celery task attempts database query
+2. Task fails and calls self.retry() which raises exception
+3. Exception exits function BUT database session remains in worker process
+4. Task retries on same worker with corrupted session from previous attempt
+5. SQLAlchemy query fails with ResourceClosedError
+
+Solution: Clean session state at task start, before any database operations.
+
+### Files Modified
+
+- pixelprobe/tasks.py: Added db.session.remove() to 6 task functions
+- version.py: 2.4.198 to 2.4.199
+
+## [2.4.198] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed StringDataRightTruncation error**
+  - Error messages were exceeding VARCHAR(1000) column limit causing database save failures
+  - Added truncation to 950 characters for all error_message assignments
+  - Prevents "value too long for type character varying(1000)" errors
+  - Fixes issue where PostgreSQL errors couldn't be saved because error message was too long
+
+### Technical Details
+
+- pixelprobe/tasks.py:132-133: Truncate stuck scan error messages to 950 chars
+- pixelprobe/tasks.py:277-278: Truncate Celery task failure error messages to 950 chars
+- Leaves 50 character buffer within VARCHAR(1000) limit for safety
+
+### Files Modified
+
+- pixelprobe/tasks.py: Added error message truncation at two locations
+- version.py: 2.4.197 to 2.4.198
+
+## [2.4.197] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed StaleDataError on task retry**
+  - Celery tasks retrying after initial failure were trying to update inactive scan_state records
+  - Added `is_active=True` filter when querying scan_state before update
+  - Added graceful handling when scan is no longer active during retry
+  - Prevents UPDATE failures when scan has been superseded by new scan
+
+### Technical Details
+
+- pixelprobe/tasks.py:152: Added `is_active=True` to scan_state query
+- pixelprobe/tasks.py:162-163: Added log message when scan is no longer active
+- Fixes issue where retried tasks fail with "expected to update 1 row(s); -1 were matched"
+
+### Files Modified
+
+- pixelprobe/tasks.py: Added active check before updating scan_state
+- version.py: 2.4.196 to 2.4.197
+
+## [2.4.196] - 2025-11-21
+
+### Fixes - PROPER DATABASE MIGRATION SOLUTION
+
+- **Implemented automatic database migration for scan_state table**
+  - Added missing scan_state columns to automatic startup migrations
+  - Migration runs automatically on app startup via tools/app_startup_migration.py
+  - Reverted workarounds from v2.4.194 and v2.4.195
+  - Restored proper ORM queries in tasks.py
+  - This is the REAL FIX using the established migration pattern
+
+### Automatic Migration Details
+
+- Migrations run automatically on first app startup after deployment
+- Adds celery_task_id column with index for task tracking
+- Adds resumable scan fields: current_chunk_index, total_chunks, chunks_completed
+- Adds progress tracking: last_update timestamp
+- Migration is idempotent - safe to run multiple times
+
+### Files Modified
+
+- tools/app_startup_migration.py: Added 5 new column migrations for scan_state
+- tools/app_startup_migration.py: Added idx_scan_state_celery_task_id index
+- pixelprobe/tasks.py:114: Reverted IndexError workaround, restored ORM query
+- pixelprobe/tasks.py:151-156: Reverted StaleDataError workaround, restored ORM update
+- version.py: 2.4.195 to 2.4.196
+
+### Deployment Notes
+
+- Migration runs automatically on app startup
+- No manual intervention required
+- After startup, rescan functionality will work without workarounds
+
+## [2.4.195] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed StaleDataError when updating scan_state - CRITICAL**
+  - Celery task was failing with "StaleDataError: UPDATE expected to update 1 row(s); -1 were matched"
+  - Root cause: ORM loading ScanState object with missing database columns, then trying to UPDATE
+  - Changed scan_state UPDATE to use raw SQL instead of ORM
+  - Replaced lines 166-170 in tasks.py with direct SQL UPDATE
+  - Only updates columns that exist: progress_message
+  - This was blocking all rescans after v2.4.194 fix
+
+### Technical Details
+
+- pixelprobe/tasks.py:166-174: Replaced ORM UPDATE with raw SQL
+- Uses `db.text("UPDATE scan_state SET progress_message = :msg WHERE scan_id = :scan_id")`
+- Wrapped in try/except to gracefully handle failures
+- Logs warning instead of crashing if UPDATE fails
+
+### Files Modified
+
+- pixelprobe/tasks.py: Changed scan_state UPDATE from ORM to raw SQL
+- version.py: 2.4.194 to 2.4.195
+
+### Notes
+
+- This is another symptom of database schema mismatch
+- Long-term solution: Run database migration to add missing columns
+- Short-term: All ScanState operations now use raw SQL to avoid ORM issues
+
+## [2.4.194] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed IndexError when scanning - database schema mismatch**
+  - Celery scan task was failing with "IndexError: tuple index out of range"
+  - Root cause: ScanState model has `last_update` column but live database doesn't
+  - Database schema is out of date - missing columns added in recent releases
+  - Added try/except to handle schema mismatch gracefully
+  - Falls back to raw SQL query when ORM fails
+  - This fixes rescan hanging/failing after endpoint accepted the request
+
+### Technical Details
+
+- pixelprobe/tasks.py:114-128: Wrapped ScanState query in try/except
+- pixelprobe/tasks.py:119-128: Added raw SQL fallback for schema mismatch
+- Falls back to: `SELECT id, scan_id FROM scan_state WHERE is_active = true`
+- Creates compatible object with scan_id, start_time=None, last_update=None
+
+### Files Modified
+
+- pixelprobe/tasks.py: Added schema mismatch handler
+- version.py: 2.4.193 to 2.4.194
+
+### Notes
+
+- Long-term fix: Run database migration to add `last_update` column
+- Short-term: This workaround allows rescans to complete successfully
+
+## [2.4.193] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed rescan functionality - CRITICAL regression**
+  - Rescan was failing with 400 error: "No allowed scan paths configured"
+  - Root cause: security.py was looking for wrong environment variable
+  - Was looking for `ALLOWED_SCAN_PATHS` split on `:` (colon)
+  - Should have been `SCAN_PATHS` split on `,` (comma)
+  - Added fallback: files already in database are trusted for rescans
+  - This was a major regression preventing any file rescans
+
+### Technical Details
+
+- pixelprobe/utils/security.py:31: Changed `ALLOWED_SCAN_PATHS` to `SCAN_PATHS`
+- pixelprobe/utils/security.py:31: Changed split delimiter from `:` to `,`
+- pixelprobe/utils/security.py:33: Added `.strip()` to remove whitespace from paths
+- pixelprobe/utils/security.py:78-86: Added database check fallback for rescan operations
+- pixelprobe/api/scan_routes.py:329-346: Added early database check to skip validation for existing files
+
+### Files Modified
+
+- pixelprobe/utils/security.py: Fixed environment variable name and delimiter, added rescan fallback
+- pixelprobe/api/scan_routes.py: Added database check before path validation
+- version.py: 2.4.192 to 2.4.193
+
+## [2.4.192] - 2025-11-21
+
+### Improvements
+
+- **Enhanced FFmpeg stderr logging in multi-point sampling**
+  - Now logs complete FFmpeg stderr output (was truncated to 100-200 chars)
+  - Changed benign warnings to WARNING level (was INFO) for easier log searching
+  - Added clear labels: "BENIGN WARNING" vs "CORRUPTION DETECTED"
+  - Added newline before stderr output for better readability
+  - Makes it easier to verify if corruption detections are false positives
+
+### Technical Details
+
+- media_checker.py:1917: Benign warnings now log complete stderr at WARNING level
+- media_checker.py:1922: Corruption detection now logs complete stderr with clearer label
+
+### Files Modified
+
+- media_checker.py: Enhanced logging for multi-point sampling stderr output
+- version.py: 2.4.191 to 2.4.192
+
+## [2.4.191] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed FFmpeg timeout calculation - made it more dynamic and generous**
+  - Foundation S03E08 (8.1GB, 45 subtitle streams) timed out at 1269s with calculated timeout of 1272s (only 3s buffer!)
+  - Increased timeout multiplier from 120s/GB to 180s/GB (3 min/GB)
+  - Increased duration multiplier from 0.3x to 0.5x (2x realtime)
+  - Added 20% buffer on top of calculated timeout
+  - Now: 8.1GB file gets 2110s timeout instead of 1272s (66% increase)
+  - Example: 5GB 45min file went from 1243s to 1836s timeout
+
+- **Fixed false positive corruption detection from benign FFmpeg warnings**
+  - Multi-point sampling was marking ANY stderr output as corruption
+  - Main FFmpeg validation also needed DTS/PTS warning handling
+  - House S07E03 marked corrupted due to harmless "non monotonically increasing dts" warnings
+  - These are null muxer artifacts, NOT actual corruption (file validates in 3s locally)
+  - Files with benign warnings now marked with `has_warnings=True` instead of `is_corrupted=True`
+  - Benign warning patterns: DTS/PTS muxer warnings, NAL unit errors (when no other errors), subtitle warnings
+
+### Technical Details
+
+- media_checker.py:1252-1255: Dynamic timeout with 20% buffer
+  - Base: 5 min + 180s/GB + duration * 0.5, then multiply by 1.2
+- media_checker.py:1306-1308: Added DTS/PTS warning detection in main FFmpeg validation
+- media_checker.py:1333-1345: Mark DTS/PTS warnings as benign, not corruption
+- media_checker.py:1886-1912: Added benign warning filter in multi-point sampling
+- `_check_multipoint_sampling()` now returns 3 values: (is_corrupted, corruption_details, warning_details)
+
+### Files Modified
+
+- media_checker.py: Fixed timeout calculation and benign warning handling in both main validation and multi-point sampling
+- version.py: 2.4.190 to 2.4.191
+
+## [2.4.190] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed rescan functionality for individual files**
+  - Rescan was using `/scan-parallel` which only accepts directories, not file paths
+  - `validate_directory_path()` in security.py rejects file paths (line 116-117)
+  - Changed `rescanFile()` and `rescanSelected()` to use `/scan-file` endpoint
+  - This bug existed since rescan was implemented - was masked by CSRF error until v2.4.189
+
+### Files Modified
+
+- static/js/app.js: Fixed rescanFile() and rescanSelected() to use /scan-file endpoint
+- version.py: 2.4.189 to 2.4.190
+
+## [2.4.189] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed CSRF token missing error on rescan** (400 Bad Request)
+  - `/api/scan-parallel` endpoint was not exempt from CSRF protection
+  - Added `csrf.exempt(parallel_scan_bp)` to app.py
+  - Rescan from corrupted files view now works correctly
+
+- **Fixed FFmpeg timeout false positives on 4K content**
+  - Large 4K HEVC files (Billions S06, Brooklyn Nine-Nine, etc.) were timing out and being marked as corrupted
+  - Increased timeout multiplier from 60s to 120s per GB
+  - Added video duration-based timeout calculation (duration * 0.3) as alternative
+  - Example: 5GB file now gets 15+ minutes instead of 10 minutes timeout
+  - Accounts for NAS I/O latency and parallel scanning contention
+
+### Files Modified
+
+- app.py: Added parallel_scan_bp CSRF exemption (line 138)
+- media_checker.py: Improved FFmpeg timeout calculation (lines 1248-1255)
+- version.py: 2.4.188 to 2.4.189
+
+## [2.4.188] - 2025-11-20
+
+### CRITICAL Bug Fixes
+
+- **Fixed the REAL cause of progress counter reset bug in parallel chunk scanning**
+  - v2.4.187 added atomic SQL increments but the bug still occurred in production
+  - Root cause: chunk completion code was setting scan_state.files_processed = local_count
+  - This ORM update overwrote the database atomic increments with the per-chunk count
+  - Example: Chunk 1 completes with 100 files, sets files_processed=100, overwriting actual count of 136
+  - Progress showed: 2→59→101→136→100 (reset when chunk 1 completed)
+  - REMOVED the scan_state.files_processed assignment in chunk completion (line 1542)
+  - Atomic SQL increments in _scan_chunk_files now work correctly without being overwritten
+
+### Technical Details
+
+- The v2.4.187 fix added atomic increments but line 1542 was still doing: scan_state.files_processed = current_files_scanned
+- This ORM assignment persisted in memory and overwrote the database on next commit
+- Even though comment said "NO COMMIT HERE", the ORM change was included in subsequent commits
+- Solution: Don't touch scan_state.files_processed in parallel mode - let atomic increments handle it
+- Added detailed comment explaining why this line must NOT be present
+
+### Files Modified
+
+- pixelprobe/services/scan_service.py: Removed ORM update that was overwriting atomic increments (line 1542)
+- version.py: 2.4.187 to 2.4.188
+
+## [2.4.187] - 2025-11-20
+
+### CRITICAL Bug Fixes
+
+- **Fixed progress counter reset bug in parallel chunk scanning**
+  - Progress counter was resetting to ~100 after each chunk completed instead of accumulating
+  - Example: With 665 files, counter showed 150→100→108→100 (resetting repeatedly)
+  - UI displayed misleading "150 of 665 files" but only "239 PENDING FILES" (actual: ~426 completed)
+  - Added explicit use_atomic_increment parameter to _scan_chunk_files
+  - Now uses atomic SQL INCREMENT for all parallel chunk operations
+  - Ensures progress counter only moves forward, never backwards
+  - Added debug logging to track chunk completion and atomic increments
+
+### Technical Details
+
+- Modified _scan_chunk_files to accept use_atomic_increment: bool = False parameter
+- Updated _parallel_scan_chunks to pass use_atomic_increment=True (line 1467)
+- Fixed 3 progress update locations to check: if use_atomic_increment or total_to_scan == 0
+- All parallel chunk workers now use atomic SQL: UPDATE scan_state SET files_processed = files_processed + :increment
+- Prevents race conditions where chunks overwrite each other's progress with local counts
+
+### Files Modified
+
+- pixelprobe/services/scan_service.py: Fixed progress counter logic (lines 1467, 2133, 2368-2381, 2476-2497, 2533-2541)
+- version.py: 2.4.186 to 2.4.187
+
+## [2.4.186] - 2025-11-20
+
+### Bug Fixes
+
+- **Fixed Flask-Login endpoint mismatch error**
+  - Changed login_view from 'auth.login' to 'auth_ui.login' in auth.py
+  - Fixes BuildError: "Could not build url for endpoint 'auth.login'"
+  - Login redirects now work correctly
+
+### Files Modified
+
+- auth.py: Fixed login_view endpoint (line 22)
+- version.py: 2.4.185 to 2.4.186
+
+## [2.4.185] - 2025-11-20
+
+### CRITICAL Bug Fixes
+
+- **Fixed vacuum endpoint import error**
+  - Changed `from pixelprobe import db` to `from models import db` in swagger_routes.py
+  - Vacuum endpoint was returning 500 error: "cannot import name 'db' from 'pixelprobe'"
+  - Now correctly imports db from models module
+
+- **Fixed file permission errors in Docker container**
+  - Scans were failing with PermissionError on /app/pixelprobe/constants.py
+  - Added chmod commands to Dockerfile to ensure all Python files readable
+  - Set proper permissions: 755 for directories, 644 for .py files
+  - Fixes scan crashes caused by permission denied errors
+
+### Files Modified
+
+- pixelprobe/api/swagger_routes.py: Fixed db import (line 1317)
+- Dockerfile: Added chmod -R 755 /app and find command to set .py file permissions
+- version.py: 2.4.184 to 2.4.185
+
+## [2.4.184] - 2025-11-20
+
+### Major Fixes
+
+- **Fixed ALL Swagger API endpoints (comprehensive refactor)**
+  - Removed all jsonify() calls from route functions - Flask-RESTX requires dict/tuple returns
+  - Fixed 23 functions across 6 route files that were causing 500 errors when called from Swagger
+  - Both /api and /api/v1 Swagger endpoints now work correctly with same codebase
+  - Eliminated code duplication by modifying source functions instead of duplicating logic
+  - All tests passing (177 passed, 4 skipped, 0 failures)
+
+### Technical Details
+
+- **Root Cause**: Flask-RESTX Resource methods require dictionary or tuple `(dict, status_code)` returns
+- When Swagger endpoints call @auth_required decorated functions that return `jsonify()` Response objects, Flask-RESTX cannot serialize them, causing 500 errors
+- **Solution**: Changed all route return statements:
+  - `return jsonify({...})` to `return {...}`
+  - `return jsonify({...}), 400` to `return {...}, 400`
+  - `return jsonify([...])` to `return [...]`
+  - Removed `jsonify` from imports
+- Flask automatically converts dict/tuple returns to JSON responses with proper headers
+- **Note**: `send_file()` Response objects preserved in export endpoints (these are correct)
+
+### Files Modified
+
+- pixelprobe/api/scan_routes_parallel.py: Removed 3 jsonify() calls
+- pixelprobe/api/scan_routes.py: Removed 15 jsonify() calls
+- pixelprobe/api/admin_routes.py: Removed 7 jsonify() calls, fixed syntax error (extra parenthesis)
+- pixelprobe/api/maintenance_routes.py: Removed 2 jsonify() calls
+- pixelprobe/api/stats_routes.py: Removed 2 jsonify() calls
+- pixelprobe/api/export_routes.py: Removed 1 jsonify() call
+- version.py: 2.4.183 to 2.4.184
+
+### Testing
+
+- 177 tests passed, 4 skipped
+- All integration tests for Swagger endpoints passing
+- No functionality broken by refactor
+
+## [2.4.183] - 2025-11-20
+
+### Bug Fixes
+
+- **Fixed vacuum endpoint 500 error in Swagger API**
+  - Vacuum endpoint now properly returns dictionary instead of jsonify() response
+  - Implemented vacuum logic directly in Swagger endpoint
+  - Fixed authentication flow - no longer calls @auth_required decorated function
+  - Added proper error responses (400, 401, 500) to Swagger documentation
+  - Corrected description from PostgreSQL to SQLite
+
+### Technical Details
+
+- Moved vacuum implementation from calling maintenance_routes.vacuum_database() to inline implementation
+- Flask-RESTX requires dict returns, not Flask Response objects
+- Calling @auth_required decorated functions from within Resource methods causes context issues
+- Pattern now matches other maintenance endpoints (cleanup, file-changes)
+
+### Files Modified
+
+- pixelprobe/api/swagger_routes.py: Implemented vacuum logic directly in Vacuum Resource class
+- version.py: 2.4.182 → 2.4.183
+
+## [2.4.182] - 2025-11-20
+
+### Bug Fixes
+
+- **Fixed Overall Summary visibility in Trend Analytics modal**
+  - Overall Summary now appears in all period tabs (30 Days, 60 Days, 90 Days, 1 Year)
+  - Previously only appeared in 30-day view
+  - Provides consistent context across all time periods
+
+### Technical Details
+
+- Removed index check that limited Overall Summary to first period only
+- Changed condition from `if (index === 0 && trends.summary)` to `if (trends.summary)`
+
+### Files Modified
+
+- static/js/app.js: Updated Overall Summary rendering condition
+- version.py: 2.4.181 → 2.4.182
+
+## [2.4.181] - 2025-11-20
+
+### UI/UX Improvements
+
+- **Improved Trend Analytics modal layout**
+  - Reorganized to 2-column layout with better information grouping
+  - Column 1 (left): Corruption Trends, Scanning Performance, Overall Summary (all stacked)
+  - Column 2 (right): Storage Trends with charts and file type breakdowns
+  - Better utilization of vertical space - related metrics now stack nicely
+  - Overall Summary now appears only in 30-day tab (since it's overall data)
+
+- **Fixed heading color inconsistency**
+  - All h4 headings now use consistent white color
+  - Previously "Overall Summary" was green while others were white
+  - Provides cleaner, more professional appearance
+
+### Technical Details
+
+- Moved Scanning Performance and Overall Summary sections into column 1 of trends-container
+- Removed full-width span for Scanning Performance section
+- Changed `.trend-summary h4` color from `var(--primary-green)` to `var(--text-primary)`
+- Overall Summary now conditionally rendered only in first period tab
+
+### Files Modified
+
+- static/js/app.js: Reorganized trend section HTML structure
+- static/css/desktop.css: Updated .trend-summary h4 color
+- version.py: 2.4.180 → 2.4.181
+
+## [2.4.180] - 2025-11-20
+
+### UI/UX Improvements
+
+- **Fixed Trend Analytics modal title** (removed 's' from 'Trends')
+  - Changed "Trends Analytics" to "Trend Analytics" for consistency
+  - Updated both HTML template and JavaScript rendering
+
+- **Fixed desktop 2-column layout not applying**
+  - Corrected CSS selector from `#trends-analytics-modal` to `#trends-modal`
+  - Desktop grid layout now properly displays on screens 769px and wider
+  - Corruption and Storage trends display side-by-side as intended
+  - Scanning Performance section spans full width
+
+- **Improved System Statistics modal layout**
+  - Added clean 3-column grid layout for desktop (1024px+)
+  - 2-column layout for tablets (769px-1023px)
+  - Wider modal (1400px max-width) for better desktop space utilization
+  - Removed scattered flex-wrap behavior
+  - Maintains single-column layout on mobile devices
+
+### Technical Details
+
+- Fixed CSS selector mismatch between HTML ID and CSS targeting
+- Added responsive grid layouts with multiple breakpoints
+- System Statistics modal now uses CSS Grid instead of flex-wrap
+- Consistent max-height (80vh) for better content visibility
+
+### Files Modified
+
+- templates/index.html: Updated modal title
+- static/js/app.js: Updated renderTrendsSection title
+- static/css/desktop.css: Fixed Trend Analytics selectors, added System Statistics grid layout
+- version.py: 2.4.179 → 2.4.180
+
 ## [2.4.179] - 2025-11-20
 
 ### UI/UX Improvements
