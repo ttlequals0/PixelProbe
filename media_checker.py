@@ -94,24 +94,14 @@ def load_exclusions_with_patterns():
     
     return paths, extensions, excluded_patterns
 
-def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
-    """Truncate scan output to prevent memory issues"""
+def truncate_scan_output(output_lines, max_lines=None, max_chars=None):
+    """Return scan output without truncation - users need full output for debugging"""
     if not output_lines:
         return []
-    
-    # Join output lines into single string
-    full_output = '\n'.join(output_lines)
-    
-    # Truncate by character count first
-    if len(full_output) > max_chars:
-        full_output = full_output[:max_chars] + '\n... [Output truncated due to length]'
-    
-    # Split back into lines and limit line count
-    lines = full_output.split('\n')
-    if len(lines) > max_lines:
-        lines = lines[:max_lines] + ['... [Output truncated due to line count]']
-    
-    return lines
+
+    # No truncation - return full output
+    # Users need complete ffmpeg output to diagnose issues
+    return output_lines
 
 class PixelProbe:
     def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None, database_path=None, excluded_patterns=None):
@@ -1332,17 +1322,11 @@ class PixelProbe:
                     is_corrupted = True
                 elif (has_nal_errors or has_reference_frame_warnings or has_dts_pts_warnings) and result.returncode == 0:
                     # NAL errors, reference frame warnings, or DTS/PTS warnings only - mark as warning instead of corrupted
-                    warnings = []
-                    if has_nal_errors:
-                        warnings.append("NAL unit errors detected")
-                    if has_reference_frame_warnings:
-                        warnings.append("H.264 reference frame count exceeds profile limit")
-                    if has_dts_pts_warnings:
-                        warnings.append("DTS/PTS timestamp warnings (null muxer artifacts)")
-
-                    warning_msg = " and ".join(warnings) + " (benign warnings, not actual corruption)"
-                    logger.info(f"FFmpeg found only benign warnings for {file_path}: {warning_msg}")
-                    warning_details = [warning_msg]
+                    # Store the ACTUAL ffmpeg output, not a generic summary
+                    logger.info(f"BENIGN WARNING in middle of {file_path}:")
+                    for line in error_lines:
+                        logger.warning(line)
+                    warning_details = error_lines  # Pass through actual ffmpeg stderr
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         

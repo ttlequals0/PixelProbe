@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.208] - 2025-11-22
+
+### Critical Fixes
+
+- **Fixed UI showing "0 of 0 files" for 3+ minutes during file rescans**
+  - Rescan was working in background but UI appeared frozen
+  - Root cause 1: Database transaction isolation - Flask API not seeing Celery worker commits
+  - Root cause 2: Progress total set to number of chunks instead of number of files
+  - Solution: Force fresh database reads with commit/expire_all/close/remove in get_scan_status()
+  - Solution: Use total_files instead of len(chunks) when calling update_progress()
+  - UI now updates within 5 seconds showing correct file counts (e.g., "0 of 33 files")
+
+### Technical Details
+
+- **pixelprobe/api/scan_routes.py (lines 544-551)**: Enhanced session freshness for cross-process visibility
+  - Added db.session.commit() to flush pending transactions
+  - Added db.session.expire_all() to clear SQLAlchemy session cache
+  - Ensures Flask API sees progress updates committed by Celery worker process
+
+- **pixelprobe/services/scan_service.py (line 876)**: Fixed progress calculation
+  - Changed update_progress(0, len(chunks), '', 'scanning') to update_progress(0, total_files, '', 'scanning')
+  - Now sets estimated_total to actual file count instead of directory chunk count
+
+## [2.4.207] - 2025-11-22
+
+### Critical Fixes
+
+- **Fixed 20 files failing to scan with undefined variable error**
+  - Files with DTS/PTS warnings were causing crashes: `name 'warning_details' is not defined`
+  - Root cause: warning_details only set conditionally, not initialized in all code paths
+  - Solution: Properly initialize and set warning_details in all execution paths
+
+- **Fixed 12 broken Swagger API endpoints returning 500 errors**
+  - Endpoints like `/api/v1/stats/stats` were failing with TypeError
+  - Root cause: `request.headers` (EnvironHeaders) is immutable in Werkzeug 2.3.7
+  - Solution: Convert to mutable dict with `dict(request.headers)` before passing to `test_request_context()`
+
+### Improvements
+
+- **Removed ffmpeg output truncation and summarization**
+  - Users now see FULL raw ffmpeg stderr output, not generic summaries
+  - Previous limit: 100 lines / 5000 chars - now unlimited
+  - Previous: "DTS/PTS timestamp warnings (null muxer artifacts) (benign warnings, not actual corruption)"
+  - Now: Shows actual ffmpeg output lines for debugging
+
+### Technical Details
+
+- **media_checker.py**: Fixed warning_details variable scoping and removed output summarization
+  - Set `warning_details = error_lines` to pass through raw ffmpeg stderr
+  - Removed `truncate_scan_output()` limits (now returns full output)
+  - Log actual ffmpeg warnings instead of creating generic summaries
+
+- **pixelprobe/api/swagger_routes.py**: Fixed immutable EnvironHeaders issue
+  - Changed `headers=request.headers` to `headers=dict(request.headers)` in 12 locations
+  - Affected endpoints: /api/v1/stats/stats and 11 others
+
 ## [2.4.206] - 2025-11-21
 
 ### Bug Fixes

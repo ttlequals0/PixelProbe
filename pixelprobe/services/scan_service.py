@@ -870,9 +870,10 @@ class ScanService:
                         db.session.commit()
                         
                         logger.info(f"Created {len(chunks)} chunks for {total_files} files")
-                        
+
                         # Update scan state
-                        self.update_progress(0, len(chunks), '', 'scanning')
+                        # IMPORTANT: Use total_files (not len(chunks)) so UI shows correct file count
+                        self.update_progress(0, total_files, '', 'scanning')
                         scan_state.phase = 'scanning'
                         scan_state.phase_number = 3
                         scan_state.phase_current = 0

@@ -541,10 +541,14 @@ def get_scan_status():
     # Force fresh database read - bypass session cache for Celery workers
     # This ensures we see updates made by Celery worker processes
     try:
-        # CRITICAL: For Celery workers in separate processes, we need to close and recreate session
-        # to ensure we see committed changes from other processes
+        # CRITICAL: For Celery workers in separate processes, we need to ensure we see committed changes
+        # 1. Commit any pending changes in this session
+        db.session.commit()
+        # 2. Expire all cached objects to force re-read from database
+        db.session.expire_all()
+        # 3. Close and remove session to get a completely fresh connection
         db.session.close()
-        db.session.remove()  # Remove session completely to force new connection
+        db.session.remove()
 
         # First try to get active scan with fresh session
         scan_state = db.session.query(ScanState).filter_by(is_active=True).first()

@@ -273,7 +273,7 @@ class ScanMain(Resource):
         from flask import current_app
         with current_app.test_request_context(
             path='/api/scan',
-            headers=request.headers,
+            headers=dict(request.headers),
             method='POST',
             json=request.get_json()
         ):
@@ -645,7 +645,7 @@ class ScanSingleFile(Resource):
         from flask import current_app
         with current_app.test_request_context(
             path='/api/scan-file',
-            headers=request.headers,
+            headers=dict(request.headers),
             method='POST',
             json=request.get_json()
         ):
@@ -666,7 +666,7 @@ class MarkAsGood(Resource):
         from flask import current_app
         with current_app.test_request_context(
             path='/api/mark-as-good',
-            headers=request.headers,
+            headers=dict(request.headers),
             method='POST',
             json=request.get_json()
         ):
@@ -687,7 +687,7 @@ class ResetForRescan(Resource):
         from flask import current_app
         with current_app.test_request_context(
             path='/api/reset-for-rescan',
-            headers=request.headers,
+            headers=dict(request.headers),
             method='POST',
             json=request.get_json()
         ):
@@ -937,7 +937,7 @@ class GetStats(Resource):
         from flask import current_app
         with current_app.test_request_context(
             path='/api/stats',
-            headers=request.headers,
+            headers=dict(request.headers),
             method='GET'
         ):
             return get_stats()
@@ -1522,7 +1522,7 @@ class ViewFile(Resource):
         from flask import current_app
         with current_app.test_request_context(
             path=request.path,
-            headers=request.headers,
+            headers=dict(request.headers),
             method='GET'
         ):
             return view_file(result_id)
@@ -1564,7 +1564,7 @@ class MarkAsGood(Resource):
         with current_app.test_request_context(
             path=request.path,
             data=request.data,
-            headers=request.headers,
+            headers=dict(request.headers),
             method='POST'
         ):
             return mark_as_good()
@@ -1602,7 +1602,7 @@ class IgnoredPatterns(Resource):
         with current_app.test_request_context(
             path=request.path,
             data=request.data,
-            headers=request.headers,
+            headers=dict(request.headers),
             method='POST'
         ):
             return ignored_patterns()
@@ -1644,7 +1644,7 @@ class ExclusionManagement(Resource):
         with current_app.test_request_context(
             path=request.path,
             data=request.data,
-            headers=request.headers,
+            headers=dict(request.headers),
             method='POST'
         ):
             return add_exclusion(exclusion_type)
@@ -1664,7 +1664,7 @@ class ExclusionManagement(Resource):
         with current_app.test_request_context(
             path=request.path,
             data=request.data,
-            headers=request.headers,
+            headers=dict(request.headers),
             method='DELETE'
         ):
             return delete_exclusion(exclusion_type)
@@ -1686,7 +1686,7 @@ class ScheduleManagement(Resource):
         with current_app.test_request_context(
             path=request.path,
             data=request.data,
-            headers=request.headers,
+            headers=dict(request.headers),
             method='PUT'
         ):
             return update_schedule(schedule_id)
@@ -1788,7 +1788,7 @@ class ScanFilesParallel(Resource):
         with current_app.test_request_context(
             path=request.path,
             data=request.data,
-            headers=request.headers,
+            headers=dict(request.headers),
             method='POST'
         ):
             return scan_files_parallel()
