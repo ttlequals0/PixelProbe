@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.206] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed multi-select rescan triggering full discovery scan instead of direct file scan**
+  - v2.4.205 used wrong endpoint (`/api/scan`) which started full directory discovery
+  - Correct endpoint is `/api/scan-files-parallel` which scans specific files without discovery
+  - Multiple selected files now get scanned directly as a bulk job without discovery phase
+
+### Technical Details
+
+- **static/js/app.js**: Modified `rescanSelected()` to use `/scan-files-parallel` endpoint
+  - Sends: `POST /api/scan-files-parallel` with `{"file_paths": [...], "force_rescan": true}`
+  - This endpoint calls `scan_files_task` which skips discovery and scans the provided files directly
+  - No unnecessary directory scanning or file discovery phase
+
 ## [2.4.205] - 2025-11-21
 
 ### Bug Fixes
@@ -13,14 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multiple selected files for rescan now all get processed as a single bulk job
   - Root cause: UI was calling `/scan-file` individually for each file instead of using bulk rescan
   - Each individual call created separate scan states that conflicted with each other
-  - Solution: Changed UI to send all file paths in one POST to `/api/scan` with `file_paths` array
+  - Solution: Changed UI to send all file paths in one POST (initially to wrong endpoint)
 
 ### Technical Details
 
-- **static/js/app.js**: Modified `rescanSelected()` to use bulk rescan endpoint
-  - Now sends all file paths in a single request: `POST /api/scan` with `{"file_paths": [...], "force_rescan": true}`
-  - Backend already supported this via `/api/scan` endpoint which calls `scan_files_task`
-  - This creates a single scan job that processes all files, same as other bulk operations
+- **static/js/app.js**: Modified `rescanSelected()` to use bulk endpoint (initially incorrect)
+  - Changed from individual `/scan-file` calls to bulk request
+  - Note: Used `/api/scan` which was wrong - fixed in v2.4.206
 
 ## [2.4.204] - 2025-11-21
 

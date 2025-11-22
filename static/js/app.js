@@ -2986,8 +2986,9 @@ class PixelProbeApp {
                 }
             }
 
-            // Send all files as one bulk rescan request to the /scan endpoint
-            const scanResponse = await this.api.request('/scan', {
+            // Send all files as one bulk rescan request to /scan-files-parallel
+            // This scans the specific files directly without discovery phase
+            const scanResponse = await this.api.request('/scan-files-parallel', {
                 method: 'POST',
                 body: JSON.stringify({
                     file_paths: filePaths,
