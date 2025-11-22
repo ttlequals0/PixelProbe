@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.205] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed multi-select rescan only processing one file**
+  - Multiple selected files for rescan now all get processed as a single bulk job
+  - Root cause: UI was calling `/scan-file` individually for each file instead of using bulk rescan
+  - Each individual call created separate scan states that conflicted with each other
+  - Solution: Changed UI to send all file paths in one POST to `/api/scan` with `file_paths` array
+
+### Technical Details
+
+- **static/js/app.js**: Modified `rescanSelected()` to use bulk rescan endpoint
+  - Now sends all file paths in a single request: `POST /api/scan` with `{"file_paths": [...], "force_rescan": true}`
+  - Backend already supported this via `/api/scan` endpoint which calls `scan_files_task`
+  - This creates a single scan job that processes all files, same as other bulk operations
+
+## [2.4.204] - 2025-11-21
+
+### Bug Fixes
+
+- **Fixed rescan functionality blocking issues**
+  - Single file rescans now work independently without checking for other running scans
+  - Bulk rescan now scans files immediately instead of just marking them as pending
+  - Fixed error "Another scan is already in progress" when attempting to rescan files
+
+### Technical Details
+
+- **pixelprobe/services/scan_service.py**: Removed `is_scan_running()` check from `scan_single_file()` to allow independent single-file rescans
+- **static/js/app.js**: Removed unnecessary `reset-for-rescan` API call from bulk rescan - files are now scanned directly
+- **media_checker.py**: Fixed inconsistent return values in `_check_multipoint_sampling` causing NameError
+
 ## [2.4.203] - 2025-11-21
 
 ### Bug Fixes

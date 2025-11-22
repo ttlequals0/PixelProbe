@@ -97,8 +97,8 @@ class ScanService:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        if self.is_scan_running():
-            raise RuntimeError("Another scan is already in progress")
+        # Single file rescans are allowed to run independently
+        # They don't check for other running scans since they're quick operations
 
         # Initialize progress
         self.update_progress(0, 1, file_path, 'scanning')

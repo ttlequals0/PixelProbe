@@ -2976,22 +2976,6 @@ class PixelProbeApp {
         try {
             const fileIds = Array.from(this.table.selectedFiles);
 
-            // First, reset the selected files for rescanning
-            const resetResponse = await fetch('/api/reset-for-rescan', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    type: 'selected',
-                    file_ids: fileIds
-                })
-            });
-
-            if (!resetResponse.ok) {
-                throw new Error('Failed to reset files for rescan');
-            }
-
             // Get file paths for the selected files
             const filePaths = [];
             for (const fileId of fileIds) {
@@ -3002,21 +2986,17 @@ class PixelProbeApp {
                 }
             }
 
-            // Rescan each file using the single-file endpoint
-            // /scan-parallel only accepts directories, not file paths
-            let successCount = 0;
-            for (const filePath of filePaths) {
-                const scanResponse = await this.api.request('/scan-file', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        file_path: filePath
-                    })
-                });
-                if (scanResponse) successCount++;
-            }
+            // Send all files as one bulk rescan request to the /scan endpoint
+            const scanResponse = await this.api.request('/scan', {
+                method: 'POST',
+                body: JSON.stringify({
+                    file_paths: filePaths,
+                    force_rescan: true
+                })
+            });
 
-            if (successCount > 0) {
-                this.showNotification(`Rescan started for ${successCount} files`, 'success');
+            if (scanResponse) {
+                this.showNotification(`Rescan started for ${filePaths.length} files`, 'success');
                 this.progress.startMonitoring('scan');
             } else {
                 throw new Error('Rescan failed');
