@@ -1,0 +1,974 @@
+openapi: 3.0.3
+info:
+  title: PixelProbe API
+  description: REST API for PixelProbe media file corruption detection system
+  version: 2.4.208
+  contact:
+    name: PixelProbe
+    url: https://github.com/ttlequals0/pixelprobe
+
+servers:
+  - url: /api
+    description: Main API endpoint
+
+security:
+  - bearerAuth: []
+  - sessionAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Bearer token authentication using API tokens
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: session
+      description: Session-based authentication via login
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+
+    ScanResult:
+      type: object
+      properties:
+        id:
+          type: integer
+        file_path:
+          type: string
+        file_name:
+          type: string
+        file_size:
+          type: integer
+        file_type:
+          type: string
+        scan_status:
+          type: string
+          enum: [pending, scanning, completed, error]
+        is_corrupted:
+          type: boolean
+        marked_as_good:
+          type: boolean
+        has_warnings:
+          type: boolean
+        scan_date:
+          type: string
+          format: date-time
+        discovered_date:
+          type: string
+          format: date-time
+        scan_output:
+          type: string
+        error_message:
+          type: string
+        scan_tool:
+          type: string
+        scan_duration:
+          type: number
+
+    ScanStatus:
+      type: object
+      properties:
+        current:
+          type: integer
+          description: Current files processed
+        total:
+          type: integer
+          description: Total files to scan
+        file:
+          type: string
+          description: Current file being scanned
+        status:
+          type: string
+          description: Current scan status
+        is_running:
+          type: boolean
+        is_active:
+          type: boolean
+        scan_id:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+        phase:
+          type: string
+          enum: [idle, discovering, adding, scanning, completed, error, crashed, cancelled]
+        phase_number:
+          type: integer
+        total_phases:
+          type: integer
+        progress_message:
+          type: string
+        eta:
+          type: string
+          format: date-time
+        files_per_second:
+          type: number
+
+paths:
+  # Authentication Endpoints
+  /auth/status:
+    get:
+      summary: Check authentication status
+      tags: [Authentication]
+      security: []
+      responses:
+        '200':
+          description: Authentication status retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authenticated:
+                    type: boolean
+                  first_run:
+                    type: boolean
+                  user:
+                    type: object
+
+  /auth/login:
+    post:
+      summary: User login
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                remember:
+                  type: boolean
+      responses:
+        '200':
+          description: Login successful
+        '401':
+          description: Invalid credentials
+
+  /auth/logout:
+    post:
+      summary: User logout
+      tags: [Authentication]
+      responses:
+        '200':
+          description: Logout successful
+
+  /auth/setup:
+    post:
+      summary: First-run setup
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Setup completed
+
+  /auth/users:
+    get:
+      summary: List all users
+      tags: [Authentication]
+      responses:
+        '200':
+          description: List of users
+    post:
+      summary: Create new user
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password]
+              properties:
+                username:
+                  type: string
+                email:
+                  type: string
+                password:
+                  type: string
+                is_admin:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: User created
+
+  /auth/users/{user_id}:
+    delete:
+      summary: Delete user
+      tags: [Authentication]
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: User deleted
+
+  /auth/users/{user_id}/password:
+    put:
+      summary: Change user password
+      tags: [Authentication]
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        '200':
+          description: Password changed
+
+  /auth/tokens:
+    get:
+      summary: List API tokens
+      tags: [Authentication]
+      responses:
+        '200':
+          description: List of API tokens
+    post:
+      summary: Create API token
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [description]
+              properties:
+                description:
+                  type: string
+                expires_in_days:
+                  type: integer
+      responses:
+        '200':
+          description: Token created
+
+  /auth/tokens/{token_id}:
+    delete:
+      summary: Delete API token
+      tags: [Authentication]
+      parameters:
+        - name: token_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Token deleted
+
+  # Scan Endpoints
+  /scan-results:
+    get:
+      summary: Get paginated scan results
+      tags: [Scan]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: scan_status
+          in: query
+          schema:
+            type: string
+            enum: [all, pending, scanning, completed, error]
+        - name: is_corrupted
+          in: query
+          schema:
+            type: string
+            enum: [all, true, false]
+        - name: has_warnings
+          in: query
+          schema:
+            type: string
+            enum: [all, true, false]
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: sort_field
+          in: query
+          schema:
+            type: string
+        - name: sort_order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+      responses:
+        '200':
+          description: Scan results retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ScanResult'
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  per_page:
+                    type: integer
+                  pages:
+                    type: integer
+
+  /scan-results/{result_id}:
+    get:
+      summary: Get single scan result
+      tags: [Scan]
+      parameters:
+        - name: result_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scan result retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanResult'
+        '404':
+          description: Result not found
+
+  /scan-file:
+    post:
+      summary: Scan a single file
+      tags: [Scan]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_path]
+              properties:
+                file_path:
+                  type: string
+      responses:
+        '200':
+          description: File scan initiated
+        '400':
+          description: Invalid file path
+        '404':
+          description: File not found
+        '409':
+          description: Scan already in progress
+
+  /scan:
+    post:
+      summary: Start full media scan
+      tags: [Scan]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force_rescan:
+                  type: boolean
+                  default: false
+                directories:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Scan started
+        '400':
+          description: Invalid request
+        '409':
+          description: Scan already in progress
+
+  /scan-status:
+    get:
+      summary: Get current scan status and progress
+      tags: [Scan]
+      responses:
+        '200':
+          description: Scan status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanStatus'
+
+  /cancel-scan:
+    post:
+      summary: Cancel current scan
+      tags: [Scan]
+      responses:
+        '200':
+          description: Scan cancelled
+        '400':
+          description: No active scan to cancel
+
+  /force-cleanup-scan:
+    post:
+      summary: Force cleanup of stuck scan states
+      tags: [Scan]
+      description: Emergency recovery endpoint to forcefully clean up all active scans
+      responses:
+        '200':
+          description: Scans cleaned up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
+                  cleaned_count:
+                    type: integer
+
+  /scan/recovery:
+    post:
+      summary: Scan recovery (alias for force-cleanup-scan)
+      tags: [Scan]
+      responses:
+        '200':
+          description: Recovery completed
+
+  /scan-files-parallel:
+    post:
+      summary: Start parallel scan of files or directories (legacy)
+      tags: [Scan]
+      description: For directory scanning, prefer /scan-parallel which uses enhanced parallel orchestrator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force_rescan:
+                  type: boolean
+                num_workers:
+                  type: integer
+                  default: 4
+                directories:
+                  type: array
+                  items:
+                    type: string
+                file_paths:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Scan started
+        '409':
+          description: Scan already in progress
+
+  /scan-parallel:
+    post:
+      summary: Start enhanced parallel scan
+      tags: [Scan]
+      description: Enhanced parallel scan that distributes work across all Celery workers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [directories]
+              properties:
+                directories:
+                  type: array
+                  items:
+                    type: string
+                force_rescan:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Parallel scan started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  scan_id:
+                    type: string
+                  task_id:
+                    type: string
+                  message:
+                    type: string
+                  celery_workers:
+                    type: integer
+                  scan_type:
+                    type: string
+                  directories:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: Invalid request
+        '503':
+          description: Celery workers not available
+
+  /rescan-corrupted:
+    post:
+      summary: Rescan all corrupted files
+      tags: [Scan]
+      responses:
+        '200':
+          description: Rescan initiated
+        '409':
+          description: Scan already in progress
+
+  /reset-stuck-scans:
+    post:
+      summary: Reset stuck scans (deprecated, use /scan/recovery)
+      tags: [Scan]
+      deprecated: true
+      responses:
+        '200':
+          description: Stuck scans reset
+
+  /reset-for-rescan:
+    post:
+      summary: Reset files for rescanning
+      tags: [Scan]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  enum: [all, selected, corrupted, error]
+                file_ids:
+                  type: array
+                  items:
+                    type: integer
+      responses:
+        '200':
+          description: Files reset
+
+  /recover-stuck-scan:
+    post:
+      summary: Recover from stuck scan (deprecated, use /scan/recovery)
+      tags: [Scan]
+      deprecated: true
+      responses:
+        '200':
+          description: Scan recovered
+
+  /force-scan-pending:
+    post:
+      summary: Force scan all pending files
+      tags: [Scan]
+      responses:
+        '200':
+          description: Pending files scan started
+        '409':
+          description: Scan already in progress
+
+  /reset-files-by-path:
+    post:
+      summary: Reset specific files by their paths
+      tags: [Scan]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                file_path:
+                  type: string
+                file_paths:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Files reset
+
+  /reset-incomplete-scans:
+    post:
+      summary: Reset files with incomplete scan data
+      tags: [Scan]
+      description: Finds and resets files that show 'N/A' for Tool Details and Scan Date
+      responses:
+        '200':
+          description: Incomplete scans reset
+
+  /diagnose-incomplete-scans:
+    get:
+      summary: Diagnose files with incomplete scan data
+      tags: [Scan]
+      responses:
+        '200':
+          description: Diagnosis results
+
+  /diagnose-pending-files:
+    get:
+      summary: Diagnose files stuck in pending state
+      tags: [Scan]
+      responses:
+        '200':
+          description: Pending files diagnosed
+
+  /error-files:
+    get:
+      summary: Get list of files that failed to scan
+      tags: [Scan]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: sort_field
+          in: query
+          schema:
+            type: string
+            enum: [scan_date, file_path, file_size, file_type, scan_duration]
+        - name: sort_order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Error files retrieved
+
+  /worker-status:
+    get:
+      summary: Get Celery worker status
+      tags: [Scan]
+      responses:
+        '200':
+          description: Worker status retrieved
+
+  /scan-output/{result_id}:
+    get:
+      summary: Get detailed scan output for a result
+      tags: [Scan]
+      parameters:
+        - name: result_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scan output retrieved
+        '404':
+          description: Result not found
+
+  # Statistics Endpoints
+  /stats:
+    get:
+      summary: Get statistics summary
+      tags: [Statistics]
+      responses:
+        '200':
+          description: Statistics retrieved
+
+  /stats/trends:
+    get:
+      summary: Get corruption and storage trends
+      tags: [Statistics]
+      description: Returns comprehensive analytics over 30d, 60d, 90d, and 1y periods
+      responses:
+        '200':
+          description: Trends data retrieved
+
+  # Admin Endpoints
+  /admin/settings:
+    get:
+      summary: Get application settings
+      tags: [Admin]
+      responses:
+        '200':
+          description: Settings retrieved
+    put:
+      summary: Update application settings
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Settings updated
+
+  /admin/scan-config:
+    get:
+      summary: Get scan configurations
+      tags: [Admin]
+      responses:
+        '200':
+          description: Scan configurations retrieved
+    post:
+      summary: Add scan configuration
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                is_active:
+                  type: boolean
+      responses:
+        '200':
+          description: Configuration added
+
+  /admin/scan-config/{config_id}:
+    delete:
+      summary: Delete scan configuration
+      tags: [Admin]
+      parameters:
+        - name: config_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Configuration deleted
+    put:
+      summary: Update scan configuration
+      tags: [Admin]
+      parameters:
+        - name: config_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Configuration updated
+
+  /admin/scan-config/test:
+    post:
+      summary: Test scan configuration
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+      responses:
+        '200':
+          description: Configuration test results
+
+  /admin/db-backup:
+    post:
+      summary: Backup database
+      tags: [Admin]
+      responses:
+        '200':
+          description: Backup created
+
+  /admin/db-backups:
+    get:
+      summary: List database backups
+      tags: [Admin]
+      responses:
+        '200':
+          description: Backups listed
+
+  /admin/db-restore:
+    post:
+      summary: Restore database backup
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [backup_file]
+              properties:
+                backup_file:
+                  type: string
+      responses:
+        '200':
+          description: Database restored
+
+  /admin/logs:
+    get:
+      summary: Get application logs
+      tags: [Admin]
+      parameters:
+        - name: lines
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: Logs retrieved
+
+  # Export Endpoints
+  /export:
+    post:
+      summary: Export scan results
+      tags: [Export]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [format]
+              properties:
+                format:
+                  type: string
+                  enum: [csv, json, excel]
+                include_all:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Export file generated
+
+  # Maintenance Endpoints
+  /maintenance/cleanup:
+    post:
+      summary: Cleanup deleted files from database
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: Cleanup completed
+
+  /maintenance/file-changes:
+    post:
+      summary: Check for file changes
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: File changes check started
+        '409':
+          description: Check already in progress
+
+  /scan-results/{result_id}/mark-good:
+    post:
+      summary: Mark file as good (not corrupted)
+      tags: [Maintenance]
+      parameters:
+        - name: result_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: File marked as good
+
+  # Reports Endpoints
+  /reports/corrupted:
+    post:
+      summary: Generate corrupted files report
+      tags: [Reports]
+      responses:
+        '200':
+          description: Report generated
+
+tags:
+  - name: Authentication
+    description: User authentication and authorization
+  - name: Scan
+    description: Media file scanning operations
+  - name: Statistics
+    description: Statistics and analytics
+  - name: Admin
+    description: Administrative functions
+  - name: Export
+    description: Data export operations
+  - name: Maintenance
+    description: Maintenance and cleanup operations
+  - name: Reports
+    description: Report generation

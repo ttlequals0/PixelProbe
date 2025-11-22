@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.4.208] - 2025-11-22
+## [2.4.209] - 2025-11-22
 
 ### Critical Fixes
 
@@ -17,6 +17,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Solution: Use total_files instead of len(chunks) when calling update_progress()
   - UI now updates within 5 seconds showing correct file counts (e.g., "0 of 33 files")
 
+### API Documentation Overhaul
+
+- **Replaced broken Swagger implementation with OpenAPI 3.0.3 specification**
+  - Removed non-functional `/api/v1/*` Swagger endpoints
+  - Deleted `pixelprobe/api/swagger.py` and `pixelprobe/api/swagger_routes.py`
+  - Created comprehensive `openapi.yaml` with 46+ documented endpoints
+
+- **Added dynamic version injection**
+  - New endpoints: `/api/openapi.yaml` and `/api/openapi.json`
+  - Version automatically syncs with `version.py` - no manual updates needed
+  - API spec version always matches application version
+
+- **Fixed UI navigation**
+  - Updated `static/js/app.js` to navigate to `/api-docs` instead of broken `/api/v1/docs`
+  - API Documentation button now works correctly
+
+- **Dependencies**
+  - Added `PyYAML==6.0.1` to `requirements.txt` for OpenAPI spec parsing
+
 ### Technical Details
 
 - **pixelprobe/api/scan_routes.py (lines 544-551)**: Enhanced session freshness for cross-process visibility
@@ -27,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **pixelprobe/services/scan_service.py (line 876)**: Fixed progress calculation
   - Changed update_progress(0, len(chunks), '', 'scanning') to update_progress(0, total_files, '', 'scanning')
   - Now sets estimated_total to actual file count instead of directory chunk count
+
+- **app.py (lines 237-283)**: Added OpenAPI dynamic endpoints
+  - Loads `openapi.yaml`, injects current version from `version.py`
+  - Serves in both YAML and JSON formats for maximum compatibility
 
 ## [2.4.207] - 2025-11-22
 

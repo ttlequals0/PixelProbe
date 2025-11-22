@@ -2301,8 +2301,8 @@ class PixelProbeApp {
     }
 
     async showApiDocs() {
-        // Navigate to Swagger UI in the current tab
-        window.location.href = '/api/v1/docs';
+        // Navigate to API documentation page
+        window.location.href = '/api-docs';
     }
 
     async showScanReports() {

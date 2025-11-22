@@ -34,13 +34,7 @@ from pixelprobe.api.auth_routes import auth_api_bp, auth_ui_bp, auth_bp  # auth_
 # Import authentication module
 from auth import init_auth, auth_required
 
-# Import OpenAPI/Swagger documentation
-try:
-    from pixelprobe.api.swagger import api_bp as swagger_bp
-    SWAGGER_AVAILABLE = True
-except ImportError:
-    SWAGGER_AVAILABLE = False
-    logger.warning("flask-restx not installed, Swagger documentation unavailable")
+# OpenAPI documentation is available as openapi.yaml in the project root
 
 # Import services
 from pixelprobe.services import ScanService, StatsService, ExportService, MaintenanceService
@@ -196,14 +190,7 @@ apply_auth_to_blueprint(reports_bp)
 app.register_blueprint(parallel_scan_bp)
 apply_auth_to_blueprint(parallel_scan_bp)
 
-# Register Swagger blueprint if available
-if SWAGGER_AVAILABLE:
-    app.register_blueprint(swagger_bp)
-    # Exempt swagger blueprint from CSRF
-    csrf.exempt(swagger_bp)
-    # Import swagger routes after blueprint registration to avoid circular imports
-    import pixelprobe.api.swagger_routes
-    logger.info("Swagger API documentation available at /api/v1/docs")
+# API documentation is now provided via openapi.yaml specification file
 
 # Rate limiting exemptions are handled by the key_func returning None for internal IPs
 
@@ -222,12 +209,8 @@ def index():
 @app.route('/api-docs')
 @login_required
 def api_docs():
-    """Redirect to Swagger UI documentation"""
-    if SWAGGER_AVAILABLE:
-        return redirect('/api/v1/docs')
-    else:
-        # Fallback to old documentation if Swagger not available
-        return render_template('api_docs.html', version=__version__)
+    """Serve API documentation page"""
+    return render_template('api_docs.html', version=__version__)
 
 @app.route('/health')
 @limiter.exempt
@@ -250,6 +233,54 @@ def get_version():
         'github_url': __github_url__,
         'api_version': '1.0'
     })
+
+@app.route('/api/openapi.yaml')
+@limiter.exempt
+def get_openapi_yaml():
+    """Serve OpenAPI specification in YAML format with dynamic version"""
+    import yaml
+    import os
+
+    # Read the openapi.yaml file
+    openapi_path = os.path.join(os.path.dirname(__file__), 'openapi.yaml')
+
+    try:
+        with open(openapi_path, 'r') as f:
+            spec = yaml.safe_load(f)
+
+        # Update version dynamically from version.py
+        spec['info']['version'] = __version__
+
+        # Convert back to YAML
+        yaml_content = yaml.dump(spec, default_flow_style=False, sort_keys=False)
+
+        from flask import Response
+        return Response(yaml_content, mimetype='application/x-yaml')
+    except Exception as e:
+        logger.error(f"Error serving OpenAPI spec: {e}")
+        return jsonify({'error': 'OpenAPI specification not available'}), 404
+
+@app.route('/api/openapi.json')
+@limiter.exempt
+def get_openapi_json():
+    """Serve OpenAPI specification in JSON format with dynamic version"""
+    import yaml
+    import os
+
+    # Read the openapi.yaml file
+    openapi_path = os.path.join(os.path.dirname(__file__), 'openapi.yaml')
+
+    try:
+        with open(openapi_path, 'r') as f:
+            spec = yaml.safe_load(f)
+
+        # Update version dynamically from version.py
+        spec['info']['version'] = __version__
+
+        return jsonify(spec)
+    except Exception as e:
+        logger.error(f"Error serving OpenAPI spec: {e}")
+        return jsonify({'error': 'OpenAPI specification not available'}), 404
 
 # Static file routes
 @app.route('/favicon.ico')
