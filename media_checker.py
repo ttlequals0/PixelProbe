@@ -1132,16 +1132,17 @@ class PixelProbe:
         warning_details = []
         codec_name = None
         codec_profile = None
-        
+        duration = None  # Initialize duration to prevent UnboundLocalError
+
         logger.info(f"Starting FFmpeg probe for: {file_path}")
-        
+
         # First check if file exists to avoid marking missing files as corrupted
         if not os.path.exists(file_path):
             error_msg = f"File not found: {file_path}"
             logger.warning(error_msg)
             # Return as error, not corruption
             return False, [], scan_tool, [error_msg], []
-        
+
         try:
             # Enhanced probe with additional validation parameters
             # Note: ffmpeg-python probe doesn't accept boolean kwargs directly

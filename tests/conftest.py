@@ -38,6 +38,7 @@ def create_test_app():
     test_app.config['SECRET_KEY'] = 'test-secret-key'
     test_app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
     test_app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    test_app.config['SQLALCHEMY_EXPIRE_ON_COMMIT'] = False  # Prevent detached instance errors in tests
     test_app.config['WTF_CSRF_ENABLED'] = False
     
     # Initialize extensions
@@ -154,9 +155,9 @@ def authenticated_client(app, client):
         db.session.add(test_user)
         db.session.commit()
 
-        # Login the user
-        client.post('/api/auth/login',
-                   json={'username': 'testadmin', 'password': 'testpass123'})
+    # Login happens outside app context to properly initialize session
+    client.post('/api/auth/login',
+               json={'username': 'testadmin', 'password': 'testpass123'})
 
     return client
 
