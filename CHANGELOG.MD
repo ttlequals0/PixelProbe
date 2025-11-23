@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.220] - 2025-11-23
+
+### Bug Fixes
+
+- **Fix backend handling of has_warnings filter**
+  - Added backend support for has_warnings=false parameter
+  - Backend API now properly filters out warning files when requested
+  - Previously only handled has_warnings=true, ignored has_warnings=false
+  - Completes the Healthy Only filter fix from v2.4.219
+  - Frontend was sending correct parameters but backend was ignoring them
+  - Files: `pixelprobe/api/scan_routes.py`
+
 ## [2.4.219] - 2025-11-23
 
 ### Bug Fixes
