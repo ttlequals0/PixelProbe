@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.211] - 2025-11-22
+
+### Fixed
+
+- **Fixed /api-docs endpoint displaying outdated hardcoded documentation**
+  - Replaced hardcoded HTML template with Swagger UI renderer
+  - /api-docs now properly displays complete OpenAPI 3.0.3 specification from openapi.yaml
+  - Fixed issue where production showed old docs despite openapi.yaml being updated
+  - templates/api_docs.html now uses Swagger UI to dynamically render the spec
+
+### Technical Details
+
+- **templates/api_docs.html**: Complete rewrite from 1,109 lines to 42 lines
+  - Removed hardcoded API endpoint documentation (was showing only basic endpoints)
+  - Implemented Swagger UI 5.10.3 to render /api/openapi.yaml dynamically
+  - Swagger UI is the standard viewer for OpenAPI 3.0 specifications (not related to removed Flask-RESTX)
+
+## [2.4.210] - 2025-11-22
+
+### Critical Fixes
+
+- **Fixed NameError: 'warning_details' is not defined in parallel scan tasks**
+  - Error occurred in `pixelprobe/tasks_parallel.py` when scanning files with warnings
+  - 28+ files were failing to scan properly (Billions, Succession, Foundation, etc.)
+  - Root cause: Variables `warning_details` and `corruption_details` were not initialized before potential exception handlers
+  - Solution: Initialize both variables at start of try block to prevent NameError in exception paths
+  - Fixed in `tasks_parallel.py:194-196`
+
+### API Documentation Overhaul
+
+- **Comprehensive OpenAPI 3.0.3 documentation with working curl examples**
+  - Expanded from 975 lines to 1,682 lines of detailed documentation
+  - Added complete authentication workflow guide (setup, login, token creation)
+  - Added 4 common workflow examples (scan, export, configure, ignore patterns)
+  - Every endpoint now has properly formatted JSON examples (multi-line, readable)
+  - Every endpoint now has working curl commands that can be copy/pasted
+  - All parameters now have detailed descriptions and example values
+
+- **Clarified confusing endpoints**
+  - `/api/ignored-patterns`: NOW CLEARLY DOCUMENTED as scan output error patterns (not file type patterns)
+  - `/api/configurations`: Documented as scan directory paths configuration
+  - `/api/exclusions`: Explained path vs extension exclusions with examples
+  - Added detailed use cases and when to use each endpoint
+
+- **Authentication guide**
+  - Step-by-step first-time setup instructions
+  - Complete token creation workflow with curl examples
+  - Token format explained (pp_ prefix + 64-char hex)
+  - Bearer token usage in all subsequent requests
+
+- **Response examples**
+  - Every endpoint has realistic example responses
+  - Multiple response examples where applicable (success/error cases)
+  - Properly formatted JSON (not single-line unreadable format)
+
+### Technical Details
+
+- **pixelprobe/tasks_parallel.py (lines 194-196)**: Initialize variables before scan
+  - Added `warning_details = ''` and `corruption_details = ''` at start of try block
+  - Prevents NameError when exceptions occur before variable assignment
+  - Ensures variables are always defined for downstream code
+
+- **openapi.yaml**: Complete rewrite with comprehensive documentation
+  - Authentication section: 400+ lines documenting auth workflows
+  - Common workflows: 70+ lines of practical examples
+  - All endpoints: Detailed descriptions, examples, and curl commands
+  - Security schemes: Documented both Bearer token and session-based auth
+  - All request/response schemas: Fully documented with examples
+
 ## [2.4.209] - 2025-11-22
 
 ### Critical Fixes

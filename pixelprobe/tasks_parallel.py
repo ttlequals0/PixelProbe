@@ -191,6 +191,10 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                     }
                 
                 try:
+                    # Initialize variables to prevent NameError in exception handlers
+                    warning_details = ''
+                    corruption_details = ''
+
                     # Update task state
                     current_task.update_state(
                         state='PROGRESS',
@@ -203,7 +207,7 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                             'scan_type': scan_type
                         }
                     )
-                    
+
                     # Scan the file
                     scan_result = checker.scan_file(file_path, force_rescan=force_rescan)
                     
