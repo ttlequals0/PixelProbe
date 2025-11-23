@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.217] - 2025-11-23
+
+### Testing
+
+- **Webpack build test suite**
+  - Added comprehensive test suite for webpack build process in tests/test_frontend_build.py
+  - 19 tests covering build process, manifest generation, minification, and template integration
+  - Tests verify webpack build succeeds and creates properly hashed assets
+  - Tests confirm minification achieves at least 30% size reduction
+  - Tests validate manifest.json structure and content hash format
+  - Tests ensure templates use asset_url() helper correctly
+  - Tests verify .gitignore excludes build artifacts
+  - Files: `tests/test_frontend_build.py`
+
 ## [2.4.216] - 2025-11-23
 
 ### P2-11: Frontend Build Process (COMPLETED)
