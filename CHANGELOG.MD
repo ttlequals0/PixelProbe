@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.216] - 2025-11-23
+
+### P2-11: Frontend Build Process (COMPLETED)
+
+- **Production-ready webpack build system**
+  - Created package.json without hardcoded version (version from version.py)
+  - Created webpack.config.js with minification and code splitting
+  - JavaScript bundle with content hash for cache busting
+  - CSS bundle combining all stylesheets
+  - Production builds use Terser for JS minification
+  - Production builds use CSS Minimizer for CSS optimization
+  - Development builds include source maps
+  - Files: `package.json`, `webpack.config.js`
+
+- **Asset manifest system**
+  - Webpack generates manifest.json mapping original to hashed filenames
+  - Added asset_url() template helper function in app.py
+  - Loads webpack manifest on startup
+  - Fallback to version query params if manifest missing (development mode)
+  - Global context processor provides asset_url, version, github_url to all templates
+  - Files: `app.py`
+
+- **Template updates**
+  - Updated index.html to use asset_url() for all CSS and JS references
+  - Single bundled CSS file (styles.css) instead of 3 separate files
+  - All JS files referenced through webpack bundles
+  - Removed hardcoded version query parameters
+  - Files: `templates/index.html`
+
+- **Docker build integration**
+  - Added Node.js and npm to Dockerfile
+  - npm install runs before copying source files
+  - npm run build executes after copying source files
+  - Production builds create optimized bundles automatically
+  - Files: `Dockerfile`
+
+- **Build configuration**
+  - Added node_modules/, package-lock.json, static/dist/ to .gitignore
+  - Build output goes to static/dist/ directory
+  - Separate dev and production build modes
+  - Files: `.gitignore`
+
+### Expected Results
+
+- 60% smaller JavaScript bundle (143KB → ~57KB minified)
+- Proper cache busting with content hashes
+- Faster page load times
+- Professional build process
+- Single source of truth for version in version.py
+
+### P2 Progress
+
+- P2-11: Frontend Build Process - COMPLETED
+- P2-12: Documentation Updates - COMPLETED (v2.4.215)
+- Overall P2 Progress: 100% (6 of 6 items complete)
+- ALL P2 ITEMS COMPLETED
+
 ## [2.4.215] - 2025-11-23
 
 ### P2-12: Documentation Updates (COMPLETED)

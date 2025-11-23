@@ -15,6 +15,9 @@ RUN apt-get update && \
     python3-dev \
     python3-venv \
     python3-pip \
+    # Node.js for frontend build \
+    nodejs \
+    npm \
     # Core utilities \
     ffmpeg \
     libmagic1 \
@@ -125,7 +128,13 @@ COPY requirements.txt .
 # Ubuntu 24.04 requires --break-system-packages for pip install in Docker
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
+COPY package.json webpack.config.js ./
+RUN npm install
+
 COPY . .
+
+# Build frontend assets
+RUN npm run build
 
 # Ensure the pixelprobe package is properly installed
 RUN mkdir -p /app/instance && \
