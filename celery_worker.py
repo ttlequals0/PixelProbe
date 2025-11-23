@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Celery Worker Script for PixelProbe
-P1 Implementation per 2.1_AUDIT_IMPLEMENTATION_PLAN.md
 
 This script starts a Celery worker for processing PixelProbe tasks.
 It can be run standalone or as part of the Docker deployment.
@@ -60,12 +59,7 @@ def main():
             '--queues', 'pixelprobe',
             '--hostname', f'pixelprobe-worker@%h',
             '--max-tasks-per-child', '50',
-            '--max-memory-per-child', '500000',  # 500MB limit per child
-            # Timeouts removed for scan tasks - they can run as long as needed
-            # Individual tasks can set their own timeouts if needed
-            '--without-gossip',
-            '--without-mingle',
-            '--without-heartbeat'
+            '--max-memory-per-child', '2000000',  # 2GB limit per child for media processing
         ])
     except KeyboardInterrupt:
         logger.info("Worker stopped by user")

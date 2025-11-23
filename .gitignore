@@ -138,6 +138,7 @@ logs/
 sample_media/
 *.log
 
+
 # Sensitive files
 .env
 .env.local
@@ -148,6 +149,7 @@ sample_media/
 *.pfx
 *secret*
 *password*
+cookies.txt
 
 # Personal data
 personal/
@@ -166,3 +168,4 @@ pixelprobe.db
 docs/development/
 docker-compose.local.yml
 CLAUDE.md
+audit_reports/

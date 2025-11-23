@@ -94,97 +94,25 @@ def load_exclusions_with_patterns():
     
     return paths, extensions, excluded_patterns
 
-def truncate_scan_output(output_lines, max_lines=100, max_chars=5000):
-    """Truncate scan output to prevent memory issues"""
+def truncate_scan_output(output_lines, max_lines=None, max_chars=None):
+    """Return scan output without truncation - users need full output for debugging"""
     if not output_lines:
         return []
-    
-    # Join output lines into single string
-    full_output = '\n'.join(output_lines)
-    
-    # Truncate by character count first
-    if len(full_output) > max_chars:
-        full_output = full_output[:max_chars] + '\n... [Output truncated due to length]'
-    
-    # Split back into lines and limit line count
-    lines = full_output.split('\n')
-    if len(lines) > max_lines:
-        lines = lines[:max_lines] + ['... [Output truncated due to line count]']
-    
-    return lines
+
+    # No truncation - return full output
+    # Users need complete ffmpeg output to diagnose issues
+    return output_lines
 
 class PixelProbe:
     def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None, database_path=None, excluded_patterns=None):
-        # Video formats - including HEVC/H.265 and professional formats
-        self.supported_video_formats = [
-            '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
-            '.hevc', '.h265',  # HEVC/H.265 formats
-            '.mxf', '.prores',  # ProRes format
-            '.dnxhd', '.dnxhr',  # DNxHD/DNxHR formats
-            '.mts', '.m2ts', '.avchd',  # AVCHD formats
-            '.mpg', '.mpeg', '.vob',  # MPEG formats
-            '.3gp', '.3g2',  # Mobile formats
-            '.f4v', '.f4p',  # Flash formats
-            '.ogv', '.ogg',  # Ogg video
-            '.rm', '.rmvb',  # RealMedia
-            '.asf', '.amv',  # Other formats
-            '.m2v', '.svi', '.mpe', '.mpv', '.m4p'
-        ]
-        
-        # Image formats - including HEIC/HEIF and RAW formats
-        self.supported_image_formats = [
-            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
-            '.heic', '.heif',  # Apple HEIC/HEIF formats
-            '.cr2', '.cr3',  # Canon RAW
-            '.nef', '.nrw',  # Nikon RAW
-            '.arw', '.srf', '.sr2',  # Sony RAW
-            '.dng',  # Adobe Digital Negative
-            '.orf',  # Olympus RAW
-            '.rw2',  # Panasonic RAW
-            '.pef', '.ptx',  # Pentax RAW
-            '.raf',  # Fujifilm RAW
-            '.raw',  # Generic RAW
-            '.x3f',  # Sigma RAW
-            '.dcr', '.kdc',  # Kodak RAW
-            '.mos',  # Leaf RAW
-            '.psd',  # Photoshop
-            '.ico',  # Icon files
-            '.svg',  # Scalable Vector Graphics
-            '.exr',  # OpenEXR
-            '.pbm', '.pgm', '.ppm', '.pnm',  # Netpbm formats
-            '.hdr', '.pic',  # Radiance HDR
-            '.fts', '.fits',  # FITS (astronomy)
-        ]
-        
-        # Audio formats - NEW: Complete audio support
-        self.supported_audio_formats = [
-            '.mp3',  # MPEG Audio Layer 3
-            '.flac',  # Free Lossless Audio Codec
-            '.wav', '.wave',  # Waveform Audio
-            '.aac', '.m4a',  # Advanced Audio Coding
-            '.ogg', '.oga', '.opus',  # Ogg Vorbis/Opus
-            '.wma',  # Windows Media Audio
-            '.aiff', '.aif', '.aifc',  # Audio Interchange File Format
-            '.ape',  # Monkey's Audio
-            '.wv',  # WavPack
-            '.tta',  # True Audio
-            '.m4b',  # Audiobook format
-            '.mka',  # Matroska Audio
-            '.dsf', '.dff',  # DSD formats
-            '.au', '.snd',  # Sun/NeXT audio
-            '.voc',  # Creative Voice
-            '.amr',  # Adaptive Multi-Rate
-            '.ac3',  # Dolby Digital
-            '.dts',  # DTS audio
-            '.ra', '.ram',  # RealAudio
-            '.mid', '.midi',  # MIDI (if needed)
-            '.caf',  # Core Audio Format
-            '.gsm',  # GSM audio
-        ]
-        
-        self.supported_formats = (self.supported_video_formats + 
-                                self.supported_image_formats + 
-                                self.supported_audio_formats)
+        # Lazy import to avoid circular dependency (media_checker <- pixelprobe <- media_checker)
+        from pixelprobe.constants import VIDEO_EXTENSIONS, IMAGE_EXTENSIONS, AUDIO_EXTENSIONS, SUPPORTED_EXTENSIONS
+
+        # Use centralized file format constants
+        self.supported_video_formats = VIDEO_EXTENSIONS
+        self.supported_image_formats = IMAGE_EXTENSIONS
+        self.supported_audio_formats = AUDIO_EXTENSIONS
+        self.supported_formats = SUPPORTED_EXTENSIONS
         self.max_workers = max_workers or min(4, os.cpu_count() or 1)
         self.scan_lock = threading.Lock()
         self.current_scan_file = None
@@ -1005,12 +933,13 @@ class PixelProbe:
         
         try:
             # Enhanced ImageMagick validation with comprehensive checks
-            # We validate the ENTIRE image file, not just metadata/headers
-            # Simplified command to avoid parsing issues
+            # Using 'convert' instead of 'identify' to validate PIXEL DATA, not just headers
+            # This forces ImageMagick to decode the entire image, detecting deeper corruption
             result = safe_subprocess_run(
-                ['identify', 
-                 '-quiet',                # Suppress benign warnings like PNG sBIT
-                 file_path],              # Check full file integrity
+                ['convert',
+                 file_path,               # Input file
+                 '-regard-warnings',      # Treat warnings as errors for strict validation
+                 'null:'],                # Null output (discard result, we only check for errors)
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -1019,7 +948,7 @@ class PixelProbe:
             )
             
             if result.returncode != 0:
-                scan_output.append(f"ImageMagick identify: FAILED (exit code {result.returncode})")
+                scan_output.append(f"ImageMagick convert: FAILED (exit code {result.returncode})")
                 if result.stderr:
                     scan_output.append(f"ImageMagick stderr: {result.stderr[:200]}")
                     stderr_lower = result.stderr.lower()
@@ -1028,7 +957,7 @@ class PixelProbe:
                         # This is a common false positive for GIFs that still work
                         logger.info(f"GIF header warning (not corruption) for {file_path}")
                     else:
-                        corruption_details.append("ImageMagick identify failed")
+                        corruption_details.append("ImageMagick pixel validation failed")
                         is_corrupted = True
                         scan_tool = "imagemagick"
                 else:
@@ -1036,15 +965,15 @@ class PixelProbe:
                     # ImageMagick might fail due to missing delegates/decoders
                     if not pil_failed and not pil_load_failed:
                         # PIL passed, so file is likely OK - ImageMagick issue
-                        warning_details.append("ImageMagick identify failed (but PIL passed - likely decoder issue)")
+                        warning_details.append("ImageMagick convert failed (but PIL passed - likely decoder issue)")
                         scan_output.append("Note: ImageMagick failed but PIL verified OK")
                         scan_tool = "pil"  # Use PIL as the authoritative tool
                     else:
                         # Both PIL and ImageMagick failed - likely corrupted
-                        corruption_details.append("ImageMagick identify failed")
+                        corruption_details.append("ImageMagick pixel validation failed")
                         is_corrupted = True
                         scan_tool = "imagemagick"
-                logger.warning(f"ImageMagick identify failed for {file_path}")
+                logger.warning(f"ImageMagick convert failed for {file_path}")
             elif result.stderr:
                 # Check if this is just a metadata/profile warning (not actual corruption)
                 stderr_lower = result.stderr.lower()
@@ -1064,12 +993,12 @@ class PixelProbe:
                 
                 if is_profile_warning:
                     # Profile warnings (like XMP) don't indicate actual image corruption
-                    scan_output.append("ImageMagick identify: PASSED (with profile warnings)")
+                    scan_output.append("ImageMagick convert: PASSED (with profile warnings)")
                     logger.info(f"ImageMagick profile warning (not corruption) for {file_path}: {result.stderr[:100]}")
                 elif is_png_warning:
                     # PNG chunk warnings don't indicate actual image corruption
                     warning_details.append("PNG metadata warning")
-                    scan_output.append("ImageMagick identify: PASSED (with PNG metadata warnings)")
+                    scan_output.append("ImageMagick convert: PASSED (with PNG metadata warnings)")
                     logger.info(f"ImageMagick PNG warning (not corruption) for {file_path}: {result.stderr[:100]}")
                 elif any(keyword in stderr_lower for keyword in ['error', 'corrupt', 'truncated', 'damaged']):
                     corruption_details.append(f"ImageMagick warnings: {result.stderr[:100]}")
@@ -1078,15 +1007,15 @@ class PixelProbe:
                     scan_output.append(f"ImageMagick warnings: {result.stderr[:200]}")
                     logger.warning(f"ImageMagick warnings for {file_path}: {result.stderr[:100]}")
                 else:
-                    scan_output.append("ImageMagick identify: PASSED (with warnings)")
+                    scan_output.append("ImageMagick convert: PASSED (with warnings)")
             else:
-                scan_output.append("ImageMagick identify: PASSED")
-                logger.info(f"ImageMagick verification passed for: {file_path}")
+                scan_output.append("ImageMagick convert: PASSED")
+                logger.info(f"ImageMagick pixel validation passed for: {file_path}")
         
         except subprocess.TimeoutExpired:
             # ImageMagick timeout should be a warning, not corruption
             # Only mark as corrupted if other tools also failed
-            timeout_msg = f"ImageMagick identify timeout ({imagemagick_timeout}s) - file may be very complex"
+            timeout_msg = f"ImageMagick convert timeout ({imagemagick_timeout}s) - file may be very complex"
             
             # If PIL passed, treat timeout as warning rather than corruption
             if not pil_failed and not pil_load_failed:
@@ -1109,106 +1038,12 @@ class PixelProbe:
             scan_tool = "imagemagick"
             scan_output.append(f"ImageMagick error: {str(e)}")
             logger.warning(f"ImageMagick error for {file_path}: {str(e)}")
-        
-        try:
-            # No timeout for FFmpeg image validation - complete validation required
-            result = safe_subprocess_run(
-                ['ffmpeg', '-v', 'error', '-i', file_path, '-f', 'null', '-'],
-                capture_output=True,
-                text=True,
-                timeout=None  # No timeout - complete validation required
-            )
-            
-            if result.returncode != 0 and result.stderr:
-                # Check if this is a HEIC/HEIF file with known FFmpeg compatibility issues
-                file_ext = os.path.splitext(file_path)[1].lower()
-                stderr_lower = result.stderr.lower()
-                
-                # Check for known FFmpeg compatibility issues with certain formats
-                compatibility_issues = [
-                    'moov atom not found',
-                    'invalid data found when processing input',
-                    'could not find codec parameters',
-                    'no decoder found',
-                    'unrecognized file format',
-                    'error while decoding stream'
-                ]
-                
-                if file_ext in ['.heic', '.heif'] and any(msg in stderr_lower for msg in compatibility_issues):
-                    # Known FFmpeg HEIC compatibility issue - check with other tools first
-                    scan_output.append("FFmpeg image validation: SKIPPED (HEIC compatibility)")
-                    logger.info(f"FFmpeg HEIC compatibility issue for {file_path}, relying on PIL/ImageMagick")
-                elif 'invalid data found when processing input' in stderr_lower or 'error while decoding stream' in stderr_lower:
-                    # Common FFmpeg decoding issue that doesn't always mean corruption
-                    # Check if other tools passed
-                    if not pil_failed and not pil_load_failed:
-                        # PIL passed, so file is definitely OK - this is just an FFmpeg decoder quirk
-                        # DO NOT add to warning_details - file is verified good by PIL
-                        scan_output.append("FFmpeg image validation: PASSED (decoder warning ignored - PIL verified OK)")
-                        logger.info(f"FFmpeg decoding issue but PIL verified OK for {file_path} - treating as PASSED")
-                        # File is good, no warnings needed
-                    else:
-                        # Both PIL and FFmpeg failed - likely corrupted
-                        corruption_details.append("FFmpeg validation failed")
-                        is_corrupted = True
-                        scan_tool = "ffmpeg"
-                        scan_output.append(f"FFmpeg image validation: FAILED")
-                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
-                else:
-                    # Check if PIL passed before marking as corrupted
-                    if not pil_failed and not pil_load_failed:
-                        # PIL passed, so file is likely OK - FFmpeg issue
-                        warning_details.append("FFmpeg image validation failed (but PIL passed)")
-                        scan_output.append(f"FFmpeg image validation: FAILED")
-                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
-                        scan_output.append("Note: FFmpeg failed but PIL verified OK - file likely valid")
-                        # Don't mark as corrupted since PIL passed
-                    else:
-                        # Both PIL and FFmpeg failed - likely corrupted
-                        corruption_details.append("FFmpeg image validation failed")
-                        is_corrupted = True
-                        scan_tool = "ffmpeg"
-                        scan_output.append(f"FFmpeg image validation: FAILED")
-                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
-            elif result.stderr:
-                # Check if this is just an EXIF/metadata warning (not actual corruption)
-                stderr_lower = result.stderr.lower()
-                # List of metadata/EXIF related keywords that don't indicate corruption
-                metadata_keywords = [
-                    'exif', 'metadata', 'app fields', 'tiff header', 'iptc', 
-                    'xmp', 'icc', 'color profile', 'photoshop', 'adobe',
-                    'orientation', 'thumbnail', 'makernote', 'gps info',
-                    'comment', 'copyright', 'artist', 'datetime'
-                ]
-                
-                if any(keyword in stderr_lower for keyword in metadata_keywords):
-                    # Metadata/EXIF warnings don't indicate actual image corruption
-                    scan_output.append("FFmpeg image validation: PASSED (with metadata warnings)")
-                    logger.info(f"FFmpeg metadata warning (not corruption) for {file_path}: {result.stderr[:100]}")
-                else:
-                    # Check if PIL and/or ImageMagick passed
-                    if not pil_failed and not pil_load_failed:
-                        # PIL verified the file is OK, so these are codec compliance issues, not corruption
-                        # Report them but don't treat as corruption or warning
-                        scan_output.append("FFmpeg image validation: CODEC COMPLIANCE ISSUES")
-                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
-                        scan_output.append("Note: File verified OK by PIL - usable despite codec issues")
-                        logger.info(f"FFmpeg codec compliance issues for {file_path} but PIL verified OK")
-                        # Don't add to warning_details - file is functionally fine
-                    else:
-                        # PIL also failed, so these warnings might indicate real issues
-                        warning_details.append("FFmpeg image validation warnings")
-                        scan_output.append(f"FFmpeg image validation: WARNINGS")
-                        scan_output.append(f"FFmpeg stderr: {result.stderr[:200]}")
-            else:
-                scan_output.append("FFmpeg image validation: PASSED")
-        
-        except FileNotFoundError:
-            scan_output.append("FFmpeg: NOT FOUND")
-        except Exception as e:
-            scan_output.append(f"FFmpeg image validation error: {str(e)}")
-            logger.debug(f"FFmpeg image validation error: {str(e)}")
-        
+
+        # P2 FIX: Removed FFmpeg image validation (lines 1114-1211)
+        # FFmpeg is designed for video/audio, not images
+        # Using FFmpeg for image validation caused false positives
+        # PIL and ImageMagick provide proper image validation
+
         # Check if this is a GIF with header issues that should be a warning instead
         if is_gif and is_corrupted:
             # Check if all failures are related to "cannot identify" or "improper header"
@@ -1297,16 +1132,17 @@ class PixelProbe:
         warning_details = []
         codec_name = None
         codec_profile = None
-        
+        duration = None  # Initialize duration to prevent UnboundLocalError
+
         logger.info(f"Starting FFmpeg probe for: {file_path}")
-        
+
         # First check if file exists to avoid marking missing files as corrupted
         if not os.path.exists(file_path):
             error_msg = f"File not found: {file_path}"
             logger.warning(error_msg)
             # Return as error, not corruption
             return False, [], scan_tool, [error_msg], []
-        
+
         try:
             # Enhanced probe with additional validation parameters
             # Note: ffmpeg-python probe doesn't accept boolean kwargs directly
@@ -1400,10 +1236,15 @@ class PixelProbe:
         file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
         file_size_gb = file_size / (1024 * 1024 * 1024)
 
-        # No timeout for FFmpeg validation - we must scan the entire file regardless of size
-        # This ensures complete validation even for very large files
-        timeout_seconds = None
-        logger.info(f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (no timeout - complete validation required)")
+        # Calculate timeout based on BOTH file size AND video duration for better accuracy
+        # NAS I/O and 4K HEVC processing can be slower than expected, so be VERY generous
+        # Base: 5 min + 180s per GB + video duration * 0.5 (process at 2x realtime) + 20% buffer
+        # This accounts for: NAS latency, parallel I/O contention, complex codec processing, subtitle streams
+        size_timeout = int(file_size_gb * 180)  # 3 minutes per GB (up from 150s)
+        duration_timeout = int(duration * 0.5) if duration and duration > 0 else 0  # ~2x realtime (up from 0.4)
+        base_timeout = 300 + max(size_timeout, duration_timeout)
+        timeout_seconds = min(int(base_timeout * 1.2), 7200)  # Add 20% buffer, cap at 2 hours
+        logger.info(f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (timeout: {timeout_seconds}s, duration: {duration:.1f}s)" if duration else f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (timeout: {timeout_seconds}s)")
         
         # Enhanced FFmpeg validation with best practices for thorough file checking
         try:
@@ -1442,8 +1283,9 @@ class PixelProbe:
                 significant_errors = []
                 has_nal_errors = False
                 has_reference_frame_warnings = False
+                has_dts_pts_warnings = False
                 has_other_errors = False
-                
+
                 for line in error_lines:
                     line_lower = line.lower()
                     if 'invalid nal unit' in line_lower:
@@ -1452,6 +1294,9 @@ class PixelProbe:
                     elif 'number of reference frames' in line_lower and 'exceeds max' in line_lower:
                         has_reference_frame_warnings = True
                         # This is a common encoding issue that doesn't affect playback
+                    elif any(pattern in line_lower for pattern in ['non monotonically increasing dts', 'application provided invalid', 'dts to muxer', 'pts to muxer']):
+                        has_dts_pts_warnings = True
+                        # DTS/PTS warnings are null muxer artifacts, not actual corruption
                     elif 'invalid data found when processing input' in line_lower or 'error while decoding stream' in line_lower:
                         # These are common FFmpeg decoder issues that don't always mean corruption
                         # Only mark as error if FFmpeg actually fails (returncode != 0)
@@ -1476,17 +1321,26 @@ class PixelProbe:
                 if significant_errors:
                     corruption_details.append(f"FFmpeg errors: {'; '.join(significant_errors[:3])}")
                     is_corrupted = True
-                elif (has_nal_errors or has_reference_frame_warnings) and result.returncode == 0:
-                    # NAL errors or reference frame warnings only - mark as warning instead of corrupted
-                    warnings = []
-                    if has_nal_errors:
-                        warnings.append("NAL unit errors detected")
-                    if has_reference_frame_warnings:
-                        warnings.append("H.264 reference frame count exceeds profile limit")
-                    
-                    warning_msg = " and ".join(warnings) + " (video may have minor playback issues)"
-                    logger.info(f"FFmpeg found only minor warnings for {file_path}: {warning_msg}")
-                    warning_details = [warning_msg]
+                elif (has_nal_errors or has_reference_frame_warnings or has_dts_pts_warnings) and result.returncode == 0:
+                    # NAL errors, reference frame warnings, or DTS/PTS warnings only - mark as warning instead of corrupted
+                    # For DTS warnings, only log once with count to avoid log flooding
+                    warning_count = len(error_lines)
+
+                    # Determine warning type for concise logging
+                    if has_dts_pts_warnings:
+                        warning_type = "DTS/PTS timestamp warnings"
+                    elif has_nal_errors:
+                        warning_type = "NAL unit errors"
+                    elif has_reference_frame_warnings:
+                        warning_type = "reference frame warnings"
+                    else:
+                        warning_type = "warnings"
+
+                    # Log once with count only - no individual warning lines
+                    logger.info(f"BENIGN WARNING in {file_path}: {warning_count} {warning_type} detected (common in H.264/HEVC files)")
+
+                    # Store minimal summary for database
+                    warning_details = [f"{warning_count} {warning_type}"]
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         
@@ -1524,11 +1378,13 @@ class PixelProbe:
         # Always run enhanced checks for comprehensive validation (merge deep scan into regular)
         # Since we're checking entire files anyway, might as well be thorough
         logger.info(f"Running comprehensive validation for {file_path}")
-        enhanced_corrupted, enhanced_details, enhanced_output = self._enhanced_corruption_check(file_path, file_size_gb)
+        enhanced_corrupted, enhanced_details, enhanced_output, enhanced_warnings = self._enhanced_corruption_check(file_path, file_size_gb)
         if enhanced_corrupted:
             is_corrupted = True
             corruption_details.extend(enhanced_details)
             scan_output.extend(enhanced_output)
+        if enhanced_warnings:
+            warning_details.extend(enhanced_warnings)
         
         # Additional HEVC Main 10 specific checks
         if not is_corrupted and codec_name == 'hevc' and codec_profile and 'Main 10' in codec_profile:
@@ -1801,6 +1657,7 @@ class PixelProbe:
         corruption_details = []
         is_corrupted = False
         enhanced_output = []
+        warning_details = []
         
         logger.info(f"Starting enhanced corruption analysis for {file_path}")
         enhanced_output.append(f"=== Enhanced Corruption Analysis for {file_size_gb:.2f}GB file ===")
@@ -1830,12 +1687,15 @@ class PixelProbe:
         
         # Stage 3: Multi-point sampling for large files
         if file_size_gb > 5.0:
-            sampling_corrupted, sampling_details = self._check_multipoint_sampling(file_path)
+            sampling_corrupted, sampling_details, sampling_warnings = self._check_multipoint_sampling(file_path)
             enhanced_output.append("Stage 3: Multi-point sampling")
             if sampling_corrupted:
                 is_corrupted = True
                 corruption_details.extend(sampling_details)
                 enhanced_output.append(f"  Result: FAILED - {'; '.join(sampling_details)}")
+            elif sampling_warnings:
+                warning_details.extend([f"Stage 3: {detail}" for detail in sampling_warnings])
+                enhanced_output.append(f"  Result: WARNING - {'; '.join(sampling_warnings)}")
             else:
                 enhanced_output.append("  Result: PASSED")
         else:
@@ -1852,7 +1712,7 @@ class PixelProbe:
             enhanced_output.append("  Result: PASSED")
         
         enhanced_output.append(f"=== Enhanced Analysis Complete: {'CORRUPTED' if is_corrupted else 'CLEAN'} ===")
-        return is_corrupted, corruption_details, enhanced_output
+        return is_corrupted, corruption_details, enhanced_output, warning_details
     
     def _check_frame_integrity(self, file_path):
         """Verify frame count matches expected count based on duration and framerate"""
@@ -1980,10 +1840,14 @@ class PixelProbe:
         return is_corrupted, corruption_details
     
     def _check_multipoint_sampling(self, file_path):
-        """Check beginning, middle, and end of large files for corruption"""
+        """Check beginning, middle, and end of large files for corruption
+
+        Returns: (is_corrupted, corruption_details, warning_details)
+        """
         corruption_details = []
+        warning_details = []
         is_corrupted = False
-        
+
         try:
             # Get video duration first - try stream level, then container level
             probe = ffmpeg.probe(file_path)
@@ -2006,7 +1870,7 @@ class PixelProbe:
             
             # If we still don't have duration, skip multipoint sampling
             if duration is None or duration <= 0:
-                return is_corrupted, corruption_details
+                return is_corrupted, corruption_details, warning_details
             
             duration = float(duration)
             sample_points = [
@@ -2029,19 +1893,42 @@ class PixelProbe:
                         '-f', 'null',
                         '-'
                     ], capture_output=True, text=True, timeout=30)
-                    
-                    if result.returncode != 0 or result.stderr:
-                        corruption_details.append(f"Corruption detected in {location} section")
-                        is_corrupted = True
-                        logger.warning(f"Corruption found in {location} of {file_path}")
+
+                    # Filter out benign warnings that don't indicate actual corruption
+                    if result.stderr:
+                        stderr_lower = result.stderr.lower()
+                        # Benign warnings that don't indicate actual corruption:
+                        # - DTS warnings from null muxer (muxing artifacts, not corruption)
+                        # - PTS warnings (timestamp ordering issues in muxer, not corruption)
+                        # - Subtitle warnings (cosmetic issues)
+                        benign_patterns = [
+                            'non monotonically increasing dts',
+                            'application provided invalid',
+                            'dts to muxer',
+                            'pts to muxer',
+                            'subtitle'
+                        ]
+                        # Check if stderr only contains benign warnings
+                        is_benign = all(any(pattern in line.lower() for pattern in benign_patterns)
+                                       for line in result.stderr.splitlines() if line.strip())
+
+                        if is_benign and result.returncode == 0:
+                            # Benign warning only - not corruption
+                            warning_details.append(f"Benign FFmpeg warnings in {location} section")
+                            logger.warning(f"BENIGN WARNING in {location} of {file_path}:\n{result.stderr}")
+                        else:
+                            # Real corruption detected
+                            corruption_details.append(f"Corruption detected in {location} section")
+                            is_corrupted = True
+                            logger.warning(f"CORRUPTION DETECTED in {location} of {file_path}:\n{result.stderr}")
                         
                 except subprocess.TimeoutExpired:
                     corruption_details.append(f"Timeout checking {location} section")
                     
         except Exception as e:
             logger.debug(f"Multi-point sampling error: {str(e)}")
-        
-        return is_corrupted, corruption_details
+
+        return is_corrupted, corruption_details, warning_details
     
     def _check_strict_error_detection(self, file_path):
         """Enhanced error detection with strict flags - returns warnings only, not corruption
@@ -2228,24 +2115,42 @@ class PixelProbe:
         """Save scan result to database cache"""
         if not self.database_path:
             return
-            
+
         session = None
         try:
             from models import ScanResult
-            from datetime import datetime, timezone, timezone
-            
+            from datetime import datetime, timezone
+            import traceback
+
             session = self._get_db_session()
             if not session:
                 logger.warning(f"No database session available for caching {file_path}")
                 return
-            
-            # Check for existing record
+
+            # Only rollback if session is in a failed/invalid state
+            # Don't rollback unconditionally as it disrupts concurrent operations on shared sessions
+            try:
+                # Check if session is in a bad state by attempting a simple operation
+                # If it fails, we'll catch it and rollback
+                session.expire_all()
+            except Exception as e:
+                # Session is in bad state, rollback and retry
+                logger.debug(f"Session in bad state, rolling back: {e}")
+                try:
+                    session.rollback()
+                    session.expire_all()
+                except:
+                    pass
+
             db_result = session.query(ScanResult).filter_by(file_path=file_path).first()
-            
+
             if not db_result:
+                # Record doesn't exist - this shouldn't happen as records are created during discovery
+                # Log a warning but continue to create the record
+                logger.warning(f"Record not found for {file_path} during save - creating new record")
                 db_result = ScanResult(file_path=file_path)
                 session.add(db_result)
-            
+
             # Update with scan results
             db_result.file_size = scan_result.get('file_size')
             db_result.file_type = scan_result.get('file_type')
@@ -2262,19 +2167,28 @@ class PixelProbe:
             db_result.scan_date = datetime.now(timezone.utc)
             db_result.scan_status = 'completed'
             db_result.file_exists = True
-            
+
+            # Flush first to catch any database errors before commit
+            session.flush()
             session.commit()
-            logger.info(f"Saved scan result to cache for {file_path}")
+
+            # Only log success AFTER commit succeeds
+            logger.info(f"Successfully saved scan result for {file_path}")
         except Exception as e:
+            import traceback
             logger.error(f"Error saving to cache for {file_path}: {e}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             if session:
                 try:
                     session.rollback()
-                except:
-                    pass
+                except Exception as rollback_error:
+                    logger.error(f"Error during rollback: {rollback_error}")
         finally:
             if session:
-                session.close()
+                try:
+                    session.close()
+                except Exception as close_error:
+                    logger.error(f"Error closing session: {close_error}")
     
     def _check_ignored_patterns(self, error_output):
         """Check if error output contains any ignored patterns"""

@@ -41,8 +41,8 @@ def distributed_lock(lock_name, timeout=300, blocking_timeout=10):
     acquired = False
 
     if redis_client:
+        # Try to acquire lock (separate try block to not catch exceptions from yield context)
         try:
-            # Create Redis lock with auto-release timeout
             lock = redis_client.lock(
                 lock_name,
                 timeout=timeout,
@@ -50,13 +50,16 @@ def distributed_lock(lock_name, timeout=300, blocking_timeout=10):
             )
             acquired = lock.acquire(blocking=True, blocking_timeout=blocking_timeout)
             logger.info(f"Distributed lock '{lock_name}' acquired: {acquired}")
-            yield acquired
         except redis.exceptions.LockError as e:
             logger.warning(f"Failed to acquire lock '{lock_name}': {e}")
-            yield False
+            acquired = False
         except Exception as e:
             logger.error(f"Redis lock error for '{lock_name}': {e}")
-            yield False
+            acquired = False
+
+        # Yield and cleanup (don't catch exceptions from user code)
+        try:
+            yield acquired
         finally:
             if lock and acquired:
                 try:
@@ -86,6 +89,10 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
     Returns:
         dict: Task completion status and results
     """
+    # ContextTask wrapper in celery_config.py automatically provides Flask app context
+    # NOTE: Do NOT call db.session.remove() here - it corrupts the connection pool
+    # The ContextTask wrapper handles session management properly
+
     logger.info(f"Starting Celery scan task {self.request.id} for scan_id: {scan_id}")
 
     try:
@@ -109,6 +116,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             # Lock acquired - now check if another scan is actually running
             # This double-check pattern ensures we don't have stale database state
             active_scan = ScanState.query.filter_by(is_active=True).first()
+
             if active_scan and active_scan.scan_id != scan_id:
                 # Check if the active scan is actually stuck (no update for 5+ minutes)
                 check_time = active_scan.last_update or active_scan.start_time
@@ -125,7 +133,8 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                         logger.warning(f"Found stuck scan {active_scan.scan_id} (no update for {time_since_update}), marking as crashed")
                         active_scan.is_active = False
                         active_scan.phase = 'crashed'
-                        active_scan.error_message = f'Scan stuck - no progress for {time_since_update}'
+                        error_msg = f'Scan stuck - no progress for {time_since_update}'
+                        active_scan.error_message = error_msg[:950]  # Truncate to fit VARCHAR(1000)
                         db.session.commit()
                         # Now we can proceed with our scan
                     else:
@@ -145,11 +154,18 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                             raise RuntimeError(error_msg)
         
         # Update scan state with Celery task ID
-        scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
-        if scan_state:
-            scan_state.celery_task_id = self.request.id
-            scan_state.progress_message = f"Starting {scan_type} scan via Celery task queue"
-            db.session.commit()
+        scan_state_record = ScanState.query.filter_by(scan_id=scan_id, is_active=True).first()
+        if scan_state_record:
+            try:
+                scan_state_record.celery_task_id = self.request.id
+                scan_state_record.progress_message = f"Starting {scan_type} scan via Celery task queue"
+                db.session.commit()
+            except Exception as e:
+                # Record may have been updated/deleted by another process during retry
+                db.session.rollback()
+                logger.warning(f"Could not update scan_state for {scan_id}: {e}")
+        else:
+            logger.info(f"Scan {scan_id} is no longer active, skipping scan_state update")
         
         # Create scan service instance with database URI from Flask config
         from flask import current_app
@@ -262,7 +278,8 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
 
             scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
             if scan_state:
-                scan_state.error_message = f"Celery task failed: {str(exc)}"
+                error_msg = f"Celery task failed: {str(exc)}"
+                scan_state.error_message = error_msg[:950]  # Truncate to fit VARCHAR(1000)
                 scan_state.is_active = False
                 scan_state.phase = 'failed'
                 db.session.commit()
@@ -309,16 +326,20 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
 def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
     """
     Background task for cleaning up orphaned database records
-    
+
     Args:
         cleanup_id (str): Unique cleanup operation identifier
         batch_size (int): Number of records to process per batch
-        
+
     Returns:
         dict: Cleanup results
     """
+    # ContextTask wrapper in celery_config.py automatically provides Flask app context
+    # NOTE: Do NOT call db.session.remove() here - it corrupts the connection pool
+    # The ContextTask wrapper handles session management properly
+
     logger.info(f"Starting Celery cleanup task {self.request.id} for cleanup_id: {cleanup_id}")
-    
+
     try:
         # MaintenanceService not yet implemented - placeholder for future functionality
         logger.warning(f"Cleanup task {self.request.id} skipped - MaintenanceService not yet implemented")
@@ -379,6 +400,10 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
     Returns:
         dict: File scan results
     """
+    # ContextTask wrapper in celery_config.py automatically provides Flask app context
+    # NOTE: Do NOT call db.session.remove() here - it corrupts the connection pool
+    # The ContextTask wrapper handles session management properly
+
     logger.info(f"Starting Celery file scan task {self.request.id} for scan_id: {scan_id}")
 
     try:
@@ -537,6 +562,10 @@ def check_file_exists_task(self, file_id, file_path):
     Returns:
         dict: {file_id, file_path, exists: bool}
     """
+    # ContextTask wrapper in celery_config.py automatically provides Flask app context
+    # NOTE: Do NOT call db.session.remove() here - it corrupts the connection pool
+    # The ContextTask wrapper handles session management properly
+
     import os
 
     try:
@@ -590,6 +619,10 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
     Returns:
         dict: Hash comparison result with change information
     """
+    # ContextTask wrapper in celery_config.py automatically provides Flask app context
+    # NOTE: Do NOT call db.session.remove() here - it corrupts the connection pool
+    # The ContextTask wrapper handles session management properly
+
     import hashlib
     import os
     from datetime import datetime, timezone
@@ -738,6 +771,12 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
         app_context = app.app_context()
         app_context.push()
 
+        # Clean up database session after app context is pushed
+        try:
+            flask_db.session.remove()
+        except Exception as e:
+            logger.warning(f"Failed to remove db session at task start: {e}")
+
         # Create a separate session for the UI worker to avoid conflicts with scan workers
         ui_session_factory = sessionmaker(bind=flask_db.engine)
         UiSession = scoped_session(ui_session_factory)
@@ -774,19 +813,21 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                         logger.info(f"Scan {scan_id} is no longer active, stopping UI worker")
                         break
 
-                    # Get current values
+                    # Get current values - store all needed attributes before commit/expire
                     files_processed = scan_state.files_processed or 0
                     phase_total = scan_state.phase_total or 0
+                    estimated_total = scan_state.estimated_total or 0  # Store this before commit
+                    current_phase = scan_state.phase  # Store phase before commit
                     current_db_update = scan_state.last_update
 
                     # Update last_update timestamp to prevent stuck scan detection
                     scan_state.last_update = datetime.now(timezone.utc)
 
                     # Debug logging for the "x of 0 files" issue - only log once and only after discovery phase
-                    if (scan_state.estimated_total == 0 or phase_total == 0) and scan_state.phase not in ['discovering', 'idle', 'pending']:
+                    if (estimated_total == 0 or phase_total == 0) and current_phase not in ['discovering', 'idle', 'pending']:
                         # Only log warning once to avoid spam
                         if not getattr(scan_state, '_zero_total_logged', False):
-                            logger.warning(f"Zero total detected in phase '{scan_state.phase}' - estimated_total={scan_state.estimated_total}, phase_total={phase_total}, files_processed={files_processed}")
+                            logger.warning(f"Zero total detected in phase '{current_phase}' - estimated_total={estimated_total}, phase_total={phase_total}, files_processed={files_processed}")
                             scan_state._zero_total_logged = True
 
                     # IMPORTANT: Do NOT sync estimated_total and phase_total in the UI worker!
@@ -813,7 +854,7 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
                         consecutive_no_change = 0
                         last_files_processed = files_processed
                         last_db_update = current_db_update
-                        logger.debug(f"Scan {scan_id} progress: {files_processed}/{scan_state.estimated_total}")
+                        logger.debug(f"Scan {scan_id} progress: {files_processed}/{estimated_total}")
                     else:
                         # No activity detected
                         consecutive_no_change += 1
@@ -863,3 +904,70 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
 
 
 # update_scan_progress_redis is now imported from progress_utils to avoid circular imports
+
+
+@celery_app.task(name='pixelprobe.tasks.run_retention_cleanup',
+                 bind=True,
+                 max_retries=3,
+                 soft_time_limit=600,  # 10 minutes soft limit for retention cleanup
+                 time_limit=900,  # 15 minutes hard limit
+                 priority=9)  # Lowest priority - maintenance task
+def run_retention_cleanup(self):
+    """
+    Scheduled task to run data retention policies
+
+    P2 Implementation: Automated data cleanup to prevent unbounded database growth
+    Runs daily via Celery Beat scheduler
+
+    Returns:
+        dict: Retention cleanup results
+    """
+    logger.info(f"Starting data retention cleanup task {self.request.id}")
+
+    try:
+        from tools.data_retention import run_all_retention_policies
+
+        # Execute all retention policies
+        result = run_all_retention_policies()
+
+        if result['success']:
+            logger.info(
+                f"Data retention cleanup completed: "
+                f"{result['reports_deleted']} reports deleted, "
+                f"{result['states_deleted']} scan states deleted "
+                f"(scan_output archival disabled - keeping all scan results)"
+            )
+
+            return {
+                'status': 'SUCCESS',
+                'task_id': self.request.id,
+                'outputs_archived': result['outputs_archived'],
+                'reports_deleted': result['reports_deleted'],
+                'states_deleted': result['states_deleted'],
+                'stats_before': result['stats_before'],
+                'completed_at': datetime.now(timezone.utc).isoformat()
+            }
+        else:
+            # Retention policies failed
+            logger.error(f"Data retention cleanup failed: {result.get('error')}")
+
+            # Retry with exponential backoff
+            if self.request.retries < self.max_retries:
+                retry_delay = 2 ** self.request.retries * 300  # 5min, 10min, 20min
+                logger.info(f"Retrying retention cleanup in {retry_delay} seconds")
+                raise self.retry(exc=RuntimeError(result.get('error')), countdown=retry_delay)
+            else:
+                raise RuntimeError(result.get('error'))
+
+    except Exception as exc:
+        logger.error(f"Data retention cleanup task {self.request.id} failed: {str(exc)}")
+
+        # Retry with exponential backoff
+        if self.request.retries < self.max_retries:
+            retry_delay = 2 ** self.request.retries * 300  # 5min, 10min, 20min
+            logger.info(f"Retrying retention cleanup in {retry_delay} seconds (attempt {self.request.retries + 1})")
+            raise self.retry(exc=exc, countdown=retry_delay)
+        else:
+            # Max retries exceeded
+            logger.error(f"Retention cleanup task {self.request.id} failed permanently after {self.max_retries} retries")
+            raise exc

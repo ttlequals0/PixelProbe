@@ -195,3 +195,122 @@ class TestScanCancellationEndpoint:
                 app.scan_service = original_service
             elif hasattr(app, 'scan_service'):
                 delattr(app, 'scan_service')
+
+
+class TestErrorFilesEndpoint:
+    """Test error files endpoint"""
+
+    def test_get_error_files_empty(self, authenticated_client, db):
+        """Test getting error files when none exist"""
+        response = authenticated_client.get('/api/error-files')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert 'error_files' in data
+        assert data['total'] == 0
+        assert len(data['error_files']) == 0
+
+    def test_get_error_files_with_errors(self, authenticated_client, app, db):
+        """Test getting error files when some exist"""
+        with app.app_context():
+            # Create error files
+            for i in range(5):
+                result = ScanResult(
+                    file_path=f'/test/error{i}.mp4',
+                    scan_status='error',
+                    error_message=f'Error scanning file {i}',
+                    scan_date=datetime.now(timezone.utc)
+                )
+                db.session.add(result)
+
+            # Create non-error files to ensure filtering works
+            result = ScanResult(
+                file_path='/test/completed.mp4',
+                scan_status='completed',
+                scan_date=datetime.now(timezone.utc)
+            )
+            db.session.add(result)
+            db.session.commit()
+
+        response = authenticated_client.get('/api/error-files')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['total'] == 5
+        assert len(data['error_files']) == 5
+        assert all(f['error_message'] is not None for f in data['error_files'])
+
+    def test_get_error_files_pagination(self, authenticated_client, app, db):
+        """Test error files pagination"""
+        with app.app_context():
+            # Create 10 error files
+            for i in range(10):
+                result = ScanResult(
+                    file_path=f'/test/error{i}.mp4',
+                    scan_status='error',
+                    error_message=f'Error {i}',
+                    scan_date=datetime.now(timezone.utc)
+                )
+                db.session.add(result)
+            db.session.commit()
+
+        # Get first page with 5 per page
+        response = authenticated_client.get('/api/error-files?page=1&per_page=5')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['total'] == 10
+        assert len(data['error_files']) == 5
+        assert data['pages'] == 2
+        assert data['current_page'] == 1
+
+    def test_get_error_files_search(self, authenticated_client, app, db):
+        """Test error files search filter"""
+        with app.app_context():
+            # Create error files with different paths
+            result1 = ScanResult(
+                file_path='/test/videos/error1.mp4',
+                scan_status='error',
+                error_message='Error 1',
+                scan_date=datetime.now(timezone.utc)
+            )
+            result2 = ScanResult(
+                file_path='/test/images/error2.jpg',
+                scan_status='error',
+                error_message='Error 2',
+                scan_date=datetime.now(timezone.utc)
+            )
+            db.session.add(result1)
+            db.session.add(result2)
+            db.session.commit()
+
+        # Search for videos
+        response = authenticated_client.get('/api/error-files?search=videos')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['total'] == 1
+        assert 'videos' in data['error_files'][0]['file_path']
+
+    def test_get_error_files_sorting(self, authenticated_client, app, db):
+        """Test error files sorting"""
+        with app.app_context():
+            # Create error files
+            result1 = ScanResult(
+                file_path='/test/a.mp4',
+                scan_status='error',
+                error_message='Error A',
+                scan_date=datetime.now(timezone.utc)
+            )
+            result2 = ScanResult(
+                file_path='/test/z.mp4',
+                scan_status='error',
+                error_message='Error Z',
+                scan_date=datetime.now(timezone.utc)
+            )
+            db.session.add(result1)
+            db.session.add(result2)
+            db.session.commit()
+
+        # Sort by file_path ascending
+        response = authenticated_client.get('/api/error-files?sort_field=file_path&sort_order=asc')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['error_files'][0]['file_path'] == '/test/a.mp4'
+        assert data['error_files'][1]['file_path'] == '/test/z.mp4'

@@ -16,7 +16,10 @@
     
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/static/css/desktop.css?v={{ version }}">
     <link rel="stylesheet" href="/static/css/mobile.css?v={{ version }}">
@@ -74,8 +77,12 @@
                 <div class="nav-section">
                     <div class="nav-section-title">System</div>
                     <a href="#" class="nav-item" onclick="app.showSystemStats(); return false;" title="System Stats">
-                        <i class="fas fa-chart-line"></i>
+                        <i class="fas fa-server"></i>
                         <span>System Stats</span>
+                    </a>
+                    <a href="#" class="nav-item" onclick="app.showTrends(); return false;" title="Trends">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Trends</span>
                     </a>
                     <a href="#" class="nav-item" onclick="app.showScanReports(); return false;" title="Scan Reports">
                         <i class="fas fa-file-alt"></i>
@@ -338,7 +345,20 @@
             </div>
         </div>
     </div>
-    
+
+    <!-- Trends Modal -->
+    <div id="trends-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Trend Analytics</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Trends content will be loaded here -->
+            </div>
+        </div>
+    </div>
+
     <!-- Scan Reports Modal -->
     <div id="scan-reports-modal" class="modal">
         <div class="modal-content">

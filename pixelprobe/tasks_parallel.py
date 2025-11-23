@@ -72,35 +72,37 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
         
         if chunk.directory_path == 'PENDING_FILES':
             # Special handling for pending files
+            # CRITICAL: Only get 'pending' files, NOT 'scanning' (which are claimed by other chunks)
             pending_files = ScanResult.query.filter_by(
                 scan_status='pending'
             ).limit(1000).all()  # Process 1000 pending files per chunk
-            
+
             files_to_scan = [f.file_path for f in pending_files]
-            logger.info(f"Processing {len(files_to_scan)} pending files in chunk {chunk_id}")
+            logger.info(f"Processing {len(files_to_scan)} pending files in chunk {chunk_id} (excluding files already being scanned)")
         else:
             # Regular directory chunk - get files from database
+            # CRITICAL: Only get 'pending' files, NOT 'scanning' (which are claimed by other chunks)
             files_in_chunk = ScanResult.query.filter(
                 ScanResult.file_path.like(f"{chunk.directory_path}%")
             ).filter(
                 db.or_(
-                    ScanResult.scan_status == 'pending',
+                    ScanResult.scan_status == 'pending',  # New files to scan
                     db.and_(
                         force_rescan == True,
-                        ScanResult.scan_status == 'completed'
+                        ScanResult.scan_status == 'completed'  # Rescan completed files if force_rescan
                     )
                 )
             ).limit(1000).all()  # Process up to 1000 files per chunk
-            
+
             files_to_scan = [f.file_path for f in files_in_chunk]
-            logger.info(f"Chunk {chunk.chunk_id}: Found {len(files_to_scan)} files to scan in {chunk.directory_path}")
+            logger.info(f"Chunk {chunk.chunk_id}: Found {len(files_to_scan)} files to scan in {chunk.directory_path} (excluding files already being scanned)")
         
         # Skip empty chunks
         if not files_to_scan:
             logger.info(f"Chunk {chunk_id} is empty, marking as complete")
             chunk.is_complete = True
             chunk.files_processed = 0
-            
+
             # IMPORTANT: Clear the current_file in scan_state when skipping empty chunks
             # Otherwise the UI will show stale directory paths
             scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
@@ -109,7 +111,7 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                 scan_state.current_file = ''
                 # Update the message to reflect we're skipping empty directories
                 scan_state.progress_message = f'Scanning: skipping empty directory {chunk.directory_path}'
-            
+
             db.session.commit()
             return {
                 'status': 'SKIPPED',
@@ -118,6 +120,19 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                 'files_processed': 0,
                 'reason': 'No files to scan in chunk'
             }
+
+        # CRITICAL FIX: Claim these files by marking them as 'scanning' to prevent other chunks from processing them
+        # This prevents race conditions where multiple chunks process the same files
+        if scan_type != 'orphan_cleanup':
+            logger.info(f"Chunk {chunk_id}: Claiming {len(files_to_scan)} files by marking as 'scanning'")
+            claimed_count = 0
+            for file_path in files_to_scan:
+                db_result = ScanResult.query.filter_by(file_path=file_path).first()
+                if db_result and db_result.scan_status in ['pending', 'completed']:
+                    db_result.scan_status = 'scanning'
+                    claimed_count += 1
+            db.session.commit()
+            logger.info(f"Chunk {chunk_id}: Successfully claimed {claimed_count} files")
         
         # Process files based on scan type
         files_processed = 0
@@ -155,6 +170,8 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                     
                 except Exception as e:
                     logger.error(f"Error removing orphan {file_path}: {e}")
+                    # Rollback the session to prevent "prepared state" errors
+                    db.session.rollback()
                     continue
         else:
             # Regular file scanning
@@ -174,6 +191,10 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                     }
                 
                 try:
+                    # Initialize variables to prevent NameError in exception handlers
+                    warning_details = ''
+                    corruption_details = ''
+
                     # Update task state
                     current_task.update_state(
                         state='PROGRESS',
@@ -186,7 +207,7 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                             'scan_type': scan_type
                         }
                     )
-                    
+
                     # Scan the file
                     scan_result = checker.scan_file(file_path, force_rescan=force_rescan)
                     
@@ -261,6 +282,18 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
                     
                 except Exception as e:
                     logger.error(f"Error scanning file {file_path} in chunk {chunk_id}: {e}")
+                    # Rollback the session to prevent "prepared state" errors
+                    db.session.rollback()
+                    # Mark file as error in database
+                    try:
+                        db_result = ScanResult.query.filter_by(file_path=file_path).first()
+                        if db_result:
+                            db_result.scan_status = 'error'
+                            db_result.error_message = str(e)[:500]
+                            db.session.commit()
+                    except Exception as db_error:
+                        logger.error(f"Failed to mark file as error: {db_error}")
+                        db.session.rollback()
                     continue
         
         # Final commit
@@ -277,15 +310,31 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
             if scan_state:
                 # Update last_update to show recent activity
                 scan_state.last_update = datetime.now(timezone.utc)
-                
-                # Recalculate total progress from all chunks
+
+                # Recalculate total progress from ALL chunks (including in-progress ones)
+                # This ensures we don't lose progress when chunks complete out of order
                 total_processed = db.session.query(
                     db.func.sum(ScanChunk.files_processed)
                 ).filter_by(scan_id=scan_id).scalar() or 0
-                
-                scan_state.files_processed = total_processed
+
+                # Count completed chunks for debugging
+                completed_chunks = db.session.query(
+                    db.func.count(ScanChunk.id)
+                ).filter_by(scan_id=scan_id, is_complete=True).scalar() or 0
+
+                # CRITICAL FIX: Never decrease the progress counter
+                # When chunks complete out of order in parallel, ensure we only move forward
+                # This prevents the counter from appearing to reset when processing large files
+                if total_processed > scan_state.files_processed:
+                    logger.info(f"Chunk {chunk_id} complete ({files_processed} files). Total progress: {scan_state.files_processed} -> {total_processed}/{scan_state.estimated_total} ({completed_chunks} chunks done)")
+                    scan_state.files_processed = total_processed
+                elif total_processed < scan_state.files_processed:
+                    # This shouldn't happen, but log it if it does for debugging
+                    logger.warning(f"Chunk {chunk_id} complete, but sum of chunks ({total_processed}) < current progress ({scan_state.files_processed})! Not updating. ({completed_chunks} chunks done)")
+                else:
+                    logger.debug(f"Chunk {chunk_id} complete ({files_processed} files), progress unchanged at {total_processed}/{scan_state.estimated_total}")
+
                 db.session.commit()
-                logger.info(f"Chunk {chunk_id} complete. Total scan progress: {total_processed}/{scan_state.estimated_total} files")
         except Exception as e:
             logger.error(f"Failed to update scan state on chunk completion: {e}")
             db.session.rollback()
@@ -697,41 +746,31 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         files_by_dir = {}
         
         # Get all pending files in one query
-        if scan_type in ['full', 'file_changes']:
-            # SIMPLIFIED: Just get files that need scanning directly from database
-            # No need to iterate through discovered_files if we can query directly
-            
-            if force_rescan:
-                # Get all files (new, pending, and completed for rescan)
-                files_to_scan = ScanResult.query.filter(
-                    db.or_(
-                        ScanResult.scan_status == 'pending',
-                        ScanResult.scan_status == 'completed'
-                    )
-                ).with_entities(ScanResult.file_path).all()
-                files_needing_scan = [f[0] for f in files_to_scan]
-            else:
-                # Just get pending files (new and never scanned)
-                files_to_scan = ScanResult.query.filter_by(
-                    scan_status='pending'
-                ).with_entities(ScanResult.file_path).all()
-                files_needing_scan = [f[0] for f in files_to_scan]
-            
-            logger.info(f"Found {len(files_needing_scan)} files that need scanning (pending or force rescan)")
-            
-            # Group by directory for chunk creation
-            for file_path in files_needing_scan:
-                dir_path = '/'.join(file_path.split('/')[:-1])
-                if dir_path not in files_by_dir:
-                    files_by_dir[dir_path] = []
-                files_by_dir[dir_path].append(file_path)
+        # ALWAYS filter to only files that need scanning, regardless of scan_type
+        if force_rescan:
+            # Get all files (new, pending, and completed for rescan)
+            files_to_scan = ScanResult.query.filter(
+                db.or_(
+                    ScanResult.scan_status == 'pending',
+                    ScanResult.scan_status == 'completed'
+                )
+            ).with_entities(ScanResult.file_path).all()
+            files_needing_scan = [f[0] for f in files_to_scan]
         else:
-            # For other scan types, use all discovered files
-            for file_path in discovered_files:
-                dir_path = '/'.join(file_path.split('/')[:-1])
-                if dir_path not in files_by_dir:
-                    files_by_dir[dir_path] = []
-                files_by_dir[dir_path].append(file_path)
+            # Just get pending files (new and never scanned)
+            files_to_scan = ScanResult.query.filter_by(
+                scan_status='pending'
+            ).with_entities(ScanResult.file_path).all()
+            files_needing_scan = [f[0] for f in files_to_scan]
+
+        logger.info(f"Found {len(files_needing_scan)} files that need scanning (pending or force rescan) out of {len(discovered_files)} discovered")
+
+        # Group by directory for chunk creation
+        for file_path in files_needing_scan:
+            dir_path = '/'.join(file_path.split('/')[:-1])
+            if dir_path not in files_by_dir:
+                files_by_dir[dir_path] = []
+            files_by_dir[dir_path].append(file_path)
         
         # Log how many files actually need scanning
         total_files_to_scan = sum(len(files) for files in files_by_dir.values())

@@ -19,7 +19,7 @@ login_manager = LoginManager()
 def init_auth(app):
     """Initialize authentication for the Flask app"""
     login_manager.init_app(app)
-    login_manager.login_view = 'auth.login'
+    login_manager.login_view = 'auth_ui.login'
     login_manager.login_message = 'Please log in to access this page.'
 
     # Session configuration for security
@@ -32,7 +32,11 @@ def init_auth(app):
 
     @login_manager.user_loader
     def load_user(user_id):
-        return User.query.get(int(user_id))
+        user = User.query.get(int(user_id))
+        if user:
+            # Force load all attributes to prevent lazy loading issues
+            _ = user.is_active
+        return user
 
     @login_manager.request_loader
     def load_user_from_request(request):
@@ -58,13 +62,10 @@ def init_auth(app):
             except Exception as e:
                 logger.error(f"Error loading user from API token: {e}")
 
-        # Check for API token in query parameter (for backward compatibility)
-        token = request.args.get('api_token')
-        if token:
-            api_token = APIToken.query.filter_by(token=token, is_active=True).first()
-            if api_token and api_token.is_valid():
-                api_token.update_last_used()
-                return api_token.user
+        # SECURITY: API tokens in query parameters removed per P0 security audit
+        # Tokens in URLs are logged and exposed in browser history
+        # API tokens MUST be sent via Authorization header only
+        # If you need to authenticate, use: Authorization: Bearer <token>
 
         return None
 

@@ -31,7 +31,8 @@ def apply_rate_limits(app: Flask, limiter: Limiter):
         scan_bp = app.blueprints.get('scan')
         admin_bp = app.blueprints.get('admin')
         maintenance_bp = app.blueprints.get('maintenance')
-        
+        auth_bp = app.blueprints.get('auth')
+
         if scan_bp:
             # Apply rate limits to scan endpoints
             if 'scan.scan_file' in app.view_functions:
@@ -40,19 +41,26 @@ def apply_rate_limits(app: Flask, limiter: Limiter):
                 limiter.limit("2 per minute")(app.view_functions['scan.scan_all'])
             if 'scan.scan_parallel' in app.view_functions:
                 limiter.limit("2 per minute")(app.view_functions['scan.scan_parallel'])
-        
+
         if admin_bp:
             # Apply rate limits to admin endpoints
             if 'admin.cleanup_files' in app.view_functions:
                 limiter.limit("10 per minute")(app.view_functions['admin.cleanup_files'])
             if 'admin.mark_as_good' in app.view_functions:
                 limiter.limit("10 per minute")(app.view_functions['admin.mark_as_good'])
-        
+
         if maintenance_bp:
             # Apply rate limits to maintenance endpoints
             if 'maintenance.vacuum_database' in app.view_functions:
                 limiter.limit("5 per minute")(app.view_functions['maintenance.vacuum_database'])
-        
+
+        if auth_bp:
+            # Apply rate limits to authentication endpoints (P1 security hardening)
+            if 'auth.api_login' in app.view_functions:
+                limiter.limit("5 per minute")(app.view_functions['auth.api_login'])
+            if 'auth.first_run_setup' in app.view_functions:
+                limiter.limit("3 per hour")(app.view_functions['auth.first_run_setup'])
+
         logger.info("Rate limits applied successfully")
     except Exception as e:
         logger.error(f"Error applying rate limits: {e}")

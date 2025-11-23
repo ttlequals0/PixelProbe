@@ -1,6 +1,5 @@
 """
 Celery Configuration Module for PixelProbe
-P1 Implementation per 2.1_AUDIT_IMPLEMENTATION_PLAN.md
 """
 
 from celery import Celery
@@ -50,12 +49,12 @@ def create_celery(app=None):
         'task_default_routing_key': 'pixelprobe',
         
         # Retry and timeout settings
-        'task_acks_late': False,  # Acknowledge immediately to prevent redelivery
+        'task_acks_late': True,  # Acknowledge only after successful completion to prevent task loss
         'task_reject_on_worker_lost': True,
-        # Note: Timeouts disabled for scan tasks to allow processing large datasets
-        # Individual tasks can override these if needed
-        'task_soft_time_limit': None,  # No soft limit by default
-        'task_time_limit': None,        # No hard limit by default
+        # No global timeouts - scan tasks with 1M+ files can take 3-4+ hours
+        # Individual media validation has its own timeouts (video: dynamic based on size)
+        'task_soft_time_limit': None,  # No soft limit - scans need unlimited time
+        'task_time_limit': None,        # No hard limit - scans need unlimited time
         
         # Worker settings
         'worker_prefetch_multiplier': 1,  # One task per worker at a time
@@ -89,8 +88,17 @@ def create_celery(app=None):
         
         # Connection retry settings (Celery 6.0 compatibility)
         'broker_connection_retry_on_startup': True,  # Fix deprecation warning
+
+        # Celery Beat scheduled tasks (P2 Data Retention Implementation)
+        'beat_schedule': {
+            'data-retention-cleanup': {
+                'task': 'pixelprobe.tasks.run_retention_cleanup',
+                'schedule': 86400.0,  # Run daily (24 * 60 * 60 seconds)
+                'options': {'priority': 9}  # Lowest priority - maintenance task
+            },
+        },
     })
-    
+
     # Flask app context integration
     if app:
         class ContextTask(celery.Task):
@@ -107,8 +115,25 @@ def create_celery(app=None):
     return celery
 
 
-# Create standalone Celery instance for worker processes
-celery_app = create_celery()
+# Create standalone Celery instance for worker processes with Flask app context
+# Workers need Flask app context to access db object
+def _create_worker_celery():
+    """Create Celery instance for workers with Flask app context support"""
+    celery = create_celery()
+
+    # Import Flask app and set up context task for workers
+    from app import app
+
+    class ContextTask(celery.Task):
+        """Make celery tasks work with Flask app context"""
+        def __call__(self, *args, **kwargs):
+            with app.app_context():
+                return self.run(*args, **kwargs)
+
+    celery.Task = ContextTask
+    return celery
+
+celery_app = _create_worker_celery()
 
 
 def init_celery(app, celery):

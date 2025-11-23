@@ -491,6 +491,121 @@ Add a new directory to scan.
 }
 ```
 
+### Error Management Endpoints
+
+#### Get Error Files
+```http
+GET /api/error-files
+```
+
+Retrieve a list of all files that failed to scan, with detailed error information. Rate limited to 10 requests per minute.
+
+**Why use this endpoint:**
+- Monitor and track files that encountered errors during scanning
+- Identify patterns in scan failures (e.g., specific file types, corrupted metadata)
+- Bulk retry or investigate problematic files
+- Generate error reports for troubleshooting
+- Clean up or move files that consistently fail to scan
+
+**When to use this endpoint:**
+- After a scan completes, to review any failures
+- During troubleshooting to identify which files are causing issues
+- When implementing automated error handling workflows
+- To monitor scan health over time
+
+**Query Parameters:**
+- `page` (integer): Page number (default: 1)
+- `per_page` (integer): Results per page (default: 100, use -1 for all)
+- `sort_field` (string): Field to sort by - `scan_date`, `file_path`, `file_size`, `file_type`, `scan_duration` (default: scan_date)
+- `sort_order` (string): Sort order - `asc` or `desc` (default: desc)
+- `search` (string): Filter by file path (optional, case-insensitive)
+
+**Response:**
+```json
+{
+  "error_files": [
+    {
+      "id": 123,
+      "file_path": "/media/videos/corrupted.mp4",
+      "file_name": "corrupted.mp4",
+      "file_size": 15728640,
+      "file_type": "video/mp4",
+      "scan_status": "error",
+      "error_message": "SQLAlchemy session error: This Session's transaction has been rolled back",
+      "scan_date": "2025-01-20T15:30:00Z",
+      "scan_duration": 2.5,
+      "tool_name": "ffmpeg",
+      "discovered_date": "2025-01-19T10:00:00Z",
+      "last_modified": "2025-01-18T08:00:00Z"
+    }
+  ],
+  "total": 32,
+  "pages": 1,
+  "current_page": 1,
+  "per_page": 100
+}
+```
+
+**Usage Examples:**
+
+Get all error files:
+```bash
+curl -H "Authorization: Bearer your-token" \
+  http://localhost:5000/api/error-files
+```
+
+Search for specific errors:
+```bash
+curl -H "Authorization: Bearer your-token" \
+  "http://localhost:5000/api/error-files?search=videos&sort_field=file_size&sort_order=desc"
+```
+
+Get paginated results:
+```bash
+curl -H "Authorization: Bearer your-token" \
+  "http://localhost:5000/api/error-files?page=1&per_page=50"
+```
+
+Python example:
+```python
+import requests
+
+headers = {'Authorization': 'Bearer your-token'}
+response = requests.get(
+    'http://localhost:5000/api/error-files',
+    headers=headers,
+    params={
+        'search': 'mp4',
+        'sort_field': 'scan_date',
+        'sort_order': 'desc',
+        'per_page': 100
+    }
+)
+
+error_files = response.json()
+print(f"Found {error_files['total']} files with errors")
+
+for file in error_files['error_files']:
+    print(f"{file['file_path']}: {file['error_message']}")
+```
+
+**Common Use Cases:**
+
+1. **Monitoring scan health**: Check for errors after each scan run
+2. **Bulk retry**: Get list of error files, reset them, and rescan
+3. **Error pattern analysis**: Group by error_message to identify common failures
+4. **Storage cleanup**: Identify and remove files that can't be processed
+5. **Troubleshooting**: Investigate specific file types or paths that fail consistently
+
+**Note**: Files with scan_status='error' indicate the scanning process failed, not that the file is corrupted. These errors may be due to:
+- Database connection issues (temporary)
+- Unsupported file formats
+- Permission issues
+- Corrupted file metadata
+- Tool failures (ffmpeg, exiftool, etc.)
+
+After fixing underlying issues (e.g., database problems), use the `/api/reset-files-by-path` endpoint to reset error files to 'pending' status for rescanning.
+
 ### Export Endpoints
 
 #### Export Scan Results (Enhanced)

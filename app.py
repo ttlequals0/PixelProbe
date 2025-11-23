@@ -29,18 +29,12 @@ from pixelprobe.api.export_routes import export_bp
 from pixelprobe.api.maintenance_routes import maintenance_bp
 from pixelprobe.api.reports_routes import reports_bp
 from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
-from pixelprobe.api.auth_routes import auth_bp
+from pixelprobe.api.auth_routes import auth_api_bp, auth_ui_bp, auth_bp  # auth_bp for backward compat
 
 # Import authentication module
 from auth import init_auth, auth_required
 
-# Import OpenAPI/Swagger documentation
-try:
-    from pixelprobe.api.swagger import api_bp as swagger_bp
-    SWAGGER_AVAILABLE = True
-except ImportError:
-    SWAGGER_AVAILABLE = False
-    logger.warning("flask-restx not installed, Swagger documentation unavailable")
+# OpenAPI documentation is available as openapi.yaml in the project root
 
 # Import services
 from pixelprobe.services import ScanService, StatsService, ExportService, MaintenanceService
@@ -135,12 +129,14 @@ limiter = Limiter(
 csrf = CSRFProtect(app)
 # Exempt API endpoints from CSRF for now (will need to implement token-based auth)
 csrf.exempt(scan_bp)
+csrf.exempt(parallel_scan_bp)  # Added: parallel scan endpoint was missing CSRF exemption
 csrf.exempt(stats_bp)
 csrf.exempt(admin_bp)
 csrf.exempt(export_bp)
 csrf.exempt(maintenance_bp)
 csrf.exempt(reports_bp)
-csrf.exempt(auth_bp)  # Exempt auth endpoints from CSRF
+csrf.exempt(auth_api_bp)  # Exempt API auth endpoints from CSRF
+# Note: auth_ui_bp (login/logout pages) should NOT be exempted from CSRF
 
 # Initialize scheduler
 scheduler = MediaScheduler()
@@ -166,7 +162,8 @@ def init_services():
     app.config_repository = ConfigurationRepository()
 
 # Register blueprints
-app.register_blueprint(auth_bp)  # Register auth blueprint first
+app.register_blueprint(auth_api_bp)  # Register API auth blueprint first
+app.register_blueprint(auth_ui_bp)   # Register UI auth blueprint (login/logout pages)
 
 # Import auth decorator wrapper
 from pixelprobe.api.auth_decorator import apply_auth_to_blueprint
@@ -193,14 +190,7 @@ apply_auth_to_blueprint(reports_bp)
 app.register_blueprint(parallel_scan_bp)
 apply_auth_to_blueprint(parallel_scan_bp)
 
-# Register Swagger blueprint if available
-if SWAGGER_AVAILABLE:
-    app.register_blueprint(swagger_bp)
-    # Exempt swagger blueprint from CSRF
-    csrf.exempt(swagger_bp)
-    # Import swagger routes after blueprint registration to avoid circular imports
-    import pixelprobe.api.swagger_routes
-    logger.info("Swagger API documentation available at /api/v1/docs")
+# API documentation is now provided via openapi.yaml specification file
 
 # Rate limiting exemptions are handled by the key_func returning None for internal IPs
 
@@ -219,12 +209,8 @@ def index():
 @app.route('/api-docs')
 @login_required
 def api_docs():
-    """Redirect to Swagger UI documentation"""
-    if SWAGGER_AVAILABLE:
-        return redirect('/api/v1/docs')
-    else:
-        # Fallback to old documentation if Swagger not available
-        return render_template('api_docs.html', version=__version__)
+    """Serve API documentation page"""
+    return render_template('api_docs.html', version=__version__)
 
 @app.route('/health')
 @limiter.exempt
@@ -247,6 +233,54 @@ def get_version():
         'github_url': __github_url__,
         'api_version': '1.0'
     })
+
+@app.route('/api/openapi.yaml')
+@limiter.exempt
+def get_openapi_yaml():
+    """Serve OpenAPI specification in YAML format with dynamic version"""
+    import yaml
+    import os
+
+    # Read the openapi.yaml file
+    openapi_path = os.path.join(os.path.dirname(__file__), 'openapi.yaml')
+
+    try:
+        with open(openapi_path, 'r') as f:
+            spec = yaml.safe_load(f)
+
+        # Update version dynamically from version.py
+        spec['info']['version'] = __version__
+
+        # Convert back to YAML
+        yaml_content = yaml.dump(spec, default_flow_style=False, sort_keys=False)
+
+        from flask import Response
+        return Response(yaml_content, mimetype='application/x-yaml')
+    except Exception as e:
+        logger.error(f"Error serving OpenAPI spec: {e}")
+        return jsonify({'error': 'OpenAPI specification not available'}), 404
+
+@app.route('/api/openapi.json')
+@limiter.exempt
+def get_openapi_json():
+    """Serve OpenAPI specification in JSON format with dynamic version"""
+    import yaml
+    import os
+
+    # Read the openapi.yaml file
+    openapi_path = os.path.join(os.path.dirname(__file__), 'openapi.yaml')
+
+    try:
+        with open(openapi_path, 'r') as f:
+            spec = yaml.safe_load(f)
+
+        # Update version dynamically from version.py
+        spec['info']['version'] = __version__
+
+        return jsonify(spec)
+    except Exception as e:
+        logger.error(f"Error serving OpenAPI spec: {e}")
+        return jsonify({'error': 'OpenAPI specification not available'}), 404
 
 # Static file routes
 @app.route('/favicon.ico')
@@ -294,6 +328,7 @@ def cleanup_stuck_operations():
 
 def create_tables():
     """Initialize database tables and run migrations"""
+    logger.info(f"Starting PixelProbe v{__version__}")
     with app.app_context():
         try:
             # Use inspector to check existing tables
@@ -683,6 +718,34 @@ with app.app_context():
         # If the query fails (e.g., column doesn't exist yet), log but don't crash
         logger.warning(f"Could not clean up stuck scans on startup: {e}")
         # This is not critical for app startup, so we continue
+
+    # Clean up bloated scan results from pre-v2.4.213 (when warning_details stored thousands of lines)
+    # Files with large scan_output or warning_details will be marked for rescan
+    try:
+        from models import ScanResult
+        # Find records with large text fields (>50KB indicates old bloated format)
+        # Using SQL length() function for efficiency
+        bloated_results = db.session.query(ScanResult).filter(
+            db.or_(
+                db.func.length(ScanResult.scan_output) > 50000,
+                db.func.length(ScanResult.warning_details) > 50000
+            )
+        ).all()
+
+        if bloated_results:
+            logger.info(f"Found {len(bloated_results)} scan results with bloated output fields (pre-v2.4.213 format)")
+            logger.info("Deleting bloated records to trigger efficient rescan with v2.4.213+ format")
+
+            for result in bloated_results:
+                db.session.delete(result)
+
+            db.session.commit()
+            logger.info(f"Deleted {len(bloated_results)} bloated scan results - they will be rescanned with efficient storage")
+        else:
+            logger.debug("No bloated scan results found - database is clean")
+    except Exception as e:
+        logger.warning(f"Could not clean up bloated scan results on startup: {e}")
+        # Not critical for app startup
 
 if __name__ == '__main__':
     # Start the application (initialization already done above)

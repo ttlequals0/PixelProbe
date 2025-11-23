@@ -1,0 +1,2199 @@
+openapi: 3.0.3
+info:
+  title: PixelProbe API
+  version: 2.4.211
+  description: |
+    # PixelProbe REST API
+
+    PixelProbe is a comprehensive media file corruption detection system that uses FFmpeg and other tools to scan and validate media files.
+
+    ## Getting Started
+
+    ### First-Time Setup
+
+    1. Check if setup is required:
+       ```bash
+       curl -X GET http://your-server/api/auth/status
+       ```
+
+    2. If `first_run: true`, create admin account:
+       ```bash
+       curl -X POST http://your-server/api/auth/setup \
+         -H "Content-Type: application/json" \
+         -d '{"password": "your-secure-password"}'
+       ```
+
+    3. Login to get session cookie:
+       ```bash
+       curl -X POST http://your-server/api/auth/login \
+         -H "Content-Type: application/json" \
+         -d '{"username": "admin", "password": "your-secure-password"}' \
+         -c cookies.txt
+       ```
+
+    ### Authentication Overview
+
+    PixelProbe supports two authentication methods:
+
+    #### Session-Based Authentication
+    Used by the web interface. Login via `/auth/login` to receive a session cookie.
+
+    #### API Token Authentication
+    Recommended for programmatic access:
+
+    1. Create an API token:
+       ```bash
+       curl -X POST http://your-server/api/tokens \
+         -H "Content-Type: application/json" \
+         -b cookies.txt \
+         -d '{
+           "description": "My automation script",
+           "expires_in_days": 365
+         }'
+       ```
+
+    2. Use the token in subsequent requests:
+       ```bash
+       curl -X GET http://your-server/api/scan-status \
+         -H "Authorization: Bearer YOUR_TOKEN_HERE"
+       ```
+
+    ## Common Workflows
+
+    ### Starting a Media Scan
+
+    1. Configure scan directories (one-time setup):
+       ```bash
+       curl -X POST http://your-server/api/admin/scan-config \
+         -H "Authorization: Bearer YOUR_TOKEN" \
+         -H "Content-Type: application/json" \
+         -d '{
+           "path": "/mnt/media",
+           "is_active": true
+         }'
+       ```
+
+    2. Start a full scan:
+       ```bash
+       curl -X POST http://your-server/api/scan \
+         -H "Authorization: Bearer YOUR_TOKEN" \
+         -H "Content-Type: application/json" \
+         -d '{"force_rescan": false}'
+       ```
+
+    3. Monitor scan progress:
+       ```bash
+       curl -X GET http://your-server/api/scan-status \
+         -H "Authorization: Bearer YOUR_TOKEN"
+       ```
+
+    ### Retrieving Scan Results
+
+    1. Get corrupted files:
+       ```bash
+       curl -X GET "http://your-server/api/scan-results?is_corrupted=true&page=1&per_page=50" \
+         -H "Authorization: Bearer YOUR_TOKEN"
+       ```
+
+    2. Search for specific files:
+       ```bash
+       curl -X GET "http://your-server/api/scan-results?search=movie.mp4" \
+         -H "Authorization: Bearer YOUR_TOKEN"
+       ```
+
+    3. Export results to CSV:
+       ```bash
+       curl -X POST http://your-server/api/export \
+         -H "Authorization: Bearer YOUR_TOKEN" \
+         -H "Content-Type: application/json" \
+         -d '{"format": "csv", "include_all": false}'
+       ```
+
+    ### Handling Scan Issues
+
+    If a scan gets stuck:
+
+    1. Check worker status:
+       ```bash
+       curl -X GET http://your-server/api/worker-status \
+         -H "Authorization: Bearer YOUR_TOKEN"
+       ```
+
+    2. Force cleanup:
+       ```bash
+       curl -X POST http://your-server/api/scan/recovery \
+         -H "Authorization: Bearer YOUR_TOKEN"
+       ```
+
+    3. Restart the scan:
+       ```bash
+       curl -X POST http://your-server/api/scan \
+         -H "Authorization: Bearer YOUR_TOKEN"
+       ```
+
+  contact:
+    name: PixelProbe
+    url: https://github.com/ttlequals0/pixelprobe
+
+servers:
+  - url: /api
+    description: Main API endpoint
+
+security:
+  - bearerAuth: []
+  - sessionAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Bearer token authentication using API tokens
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: session
+      description: Session-based authentication via login
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+
+    ScanResult:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Unique identifier for the scan result
+        file_path:
+          type: string
+          description: Full path to the scanned file
+        file_name:
+          type: string
+          description: Name of the file
+        file_size:
+          type: integer
+          description: File size in bytes
+        file_type:
+          type: string
+          description: File MIME type or extension
+        scan_status:
+          type: string
+          enum: [pending, scanning, completed, error]
+          description: Current status of the scan
+        is_corrupted:
+          type: boolean
+          description: Whether the file is corrupted
+        marked_as_good:
+          type: boolean
+          description: User-marked as not corrupted (false positive)
+        has_warnings:
+          type: boolean
+          description: Whether scan produced warnings
+        scan_date:
+          type: string
+          format: date-time
+          description: When the file was last scanned
+        discovered_date:
+          type: string
+          format: date-time
+          description: When the file was first discovered
+        scan_output:
+          type: string
+          description: Full output from the scanning tool
+        error_message:
+          type: string
+          description: Error message if scan failed
+        scan_tool:
+          type: string
+          description: Tool used for scanning (e.g., FFmpeg)
+        scan_duration:
+          type: number
+          description: How long the scan took in seconds
+
+    ScanStatus:
+      type: object
+      properties:
+        current:
+          type: integer
+          description: Current files processed
+        total:
+          type: integer
+          description: Total files to scan
+        file:
+          type: string
+          description: Current file being scanned
+        status:
+          type: string
+          description: Current scan status message
+        is_running:
+          type: boolean
+          description: Whether a scan is actively running
+        is_active:
+          type: boolean
+          description: Whether scan is active
+        scan_id:
+          type: string
+          description: Unique identifier for this scan
+        start_time:
+          type: string
+          format: date-time
+          description: When the scan started
+        end_time:
+          type: string
+          format: date-time
+          description: When the scan ended
+        phase:
+          type: string
+          enum: [idle, discovering, adding, scanning, completed, error, crashed, cancelled]
+          description: Current phase of the scan
+        phase_number:
+          type: integer
+          description: Current phase number
+        total_phases:
+          type: integer
+          description: Total number of phases
+        progress_message:
+          type: string
+          description: Human-readable progress message
+        eta:
+          type: string
+          format: date-time
+          description: Estimated time of completion
+        files_per_second:
+          type: number
+          description: Current scanning speed
+
+paths:
+  # Authentication Endpoints
+  /auth/status:
+    get:
+      summary: Check authentication status
+      description: |
+        Returns the current authentication status and whether this is the first run requiring setup.
+
+        **Use this endpoint to:**
+        - Check if the user is authenticated
+        - Determine if first-time setup is needed
+        - Get current user information
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/auth/status
+        ```
+
+        **Response:**
+        ```json
+        {
+          "authenticated": false,
+          "first_run": true,
+          "user": null
+        }
+        ```
+      tags: [Authentication]
+      security: []
+      responses:
+        '200':
+          description: Authentication status retrieved successfully
+
+  /auth/login:
+    post:
+      summary: User login
+      description: |
+        Authenticate with username and password to receive a session cookie.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/auth/login \
+          -H "Content-Type: application/json" \
+          -c cookies.txt \
+          -d '{
+            "username": "admin",
+            "password": "your-password",
+            "remember": true
+          }'
+        ```
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                remember:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Login successful
+        '401':
+          description: Invalid credentials
+
+  /auth/logout:
+    post:
+      summary: User logout
+      description: |
+        Logout and invalidate the current session.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/auth/logout \
+          -b cookies.txt
+        ```
+      tags: [Authentication]
+      responses:
+        '200':
+          description: Logout successful
+
+  /auth/setup:
+    post:
+      summary: First-run setup
+      description: |
+        Initialize PixelProbe with the admin password on first run.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/auth/setup \
+          -H "Content-Type: application/json" \
+          -d '{"password": "your-secure-password"}'
+        ```
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Setup completed successfully
+        '400':
+          description: Invalid request or setup already completed
+
+  /users:
+    get:
+      summary: List all users
+      description: |
+        Retrieve a list of all user accounts (admin only).
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/users \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Authentication]
+      responses:
+        '200':
+          description: List of users retrieved successfully
+
+    post:
+      summary: Create new user
+      description: |
+        Create a new user account with specified credentials and permissions (admin only).
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/users \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "username": "newuser",
+            "email": "newuser@example.com",
+            "password": "secure-password",
+            "is_admin": false
+          }'
+        ```
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password]
+              properties:
+                username:
+                  type: string
+                email:
+                  type: string
+                password:
+                  type: string
+                is_admin:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: User created successfully
+        '400':
+          description: Invalid request or username already exists
+
+  /users/{user_id}:
+    delete:
+      summary: Delete user
+      description: |
+        Delete a user account by ID (admin only).
+
+        **Example:**
+        ```bash
+        curl -X DELETE http://your-server/api/users/2 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Authentication]
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: User deleted successfully
+        '400':
+          description: Cannot delete user
+        '404':
+          description: User not found
+
+  /users/{user_id}/password:
+    put:
+      summary: Change user password
+      description: |
+        Change the password for a specific user account.
+
+        **Example:**
+        ```bash
+        curl -X PUT http://your-server/api/users/1/password \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "current_password": "old-password",
+            "new_password": "new-secure-password"
+          }'
+        ```
+      tags: [Authentication]
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        '200':
+          description: Password changed successfully
+        '401':
+          description: Invalid current password
+
+  /tokens:
+    get:
+      summary: List API tokens
+      description: |
+        Retrieve all API tokens for the current user.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/tokens \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Authentication]
+      responses:
+        '200':
+          description: List of API tokens retrieved successfully
+
+    post:
+      summary: Create API token
+      description: |
+        Generate a new API token for programmatic access.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/tokens \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "description": "Monitoring script",
+            "expires_in_days": 365
+          }'
+        ```
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [description]
+              properties:
+                description:
+                  type: string
+                expires_in_days:
+                  type: integer
+      responses:
+        '200':
+          description: Token created successfully
+
+  /tokens/{token_id}:
+    delete:
+      summary: Revoke API token
+      description: |
+        Delete and revoke an API token by ID.
+
+        **Example:**
+        ```bash
+        curl -X DELETE http://your-server/api/tokens/2 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Authentication]
+      parameters:
+        - name: token_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Token revoked successfully
+        '404':
+          description: Token not found
+
+  # Scan Endpoints
+  /scan-results:
+    get:
+      summary: Get paginated scan results
+      description: |
+        Retrieve scan results with pagination, filtering, and sorting.
+
+        **Example:**
+        ```bash
+        curl -X GET "http://your-server/api/scan-results?is_corrupted=true&page=1&per_page=50" \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: scan_status
+          in: query
+          schema:
+            type: string
+            enum: [all, pending, scanning, completed, error]
+            default: all
+        - name: is_corrupted
+          in: query
+          schema:
+            type: string
+            enum: [all, 'true', 'false']
+            default: all
+        - name: has_warnings
+          in: query
+          schema:
+            type: string
+            enum: [all, 'true', 'false']
+            default: all
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: sort_field
+          in: query
+          schema:
+            type: string
+            enum: [scan_date, file_path, file_size, file_type, scan_duration]
+        - name: sort_order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        '200':
+          description: Scan results retrieved successfully
+
+  /scan-results/{result_id}:
+    get:
+      summary: Get single scan result
+      description: |
+        Retrieve detailed information about a specific scan result.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/scan-results/123 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      parameters:
+        - name: result_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scan result retrieved successfully
+        '404':
+          description: Result not found
+
+  /scan-file:
+    post:
+      summary: Scan a single file
+      description: |
+        Initiate a scan of a single specific file.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/scan-file \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"file_path": "/media/movies/example.mp4"}'
+        ```
+      tags: [Scan]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_path]
+              properties:
+                file_path:
+                  type: string
+      responses:
+        '200':
+          description: File scan initiated successfully
+        '400':
+          description: Invalid file path
+        '404':
+          description: File not found
+        '409':
+          description: Scan already in progress
+
+  /scan:
+    post:
+      summary: Start full media scan
+      description: |
+        Initiate a full scan of all configured media directories.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/scan \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "force_rescan": false,
+            "directories": ["/media/movies", "/media/tv"]
+          }'
+        ```
+      tags: [Scan]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force_rescan:
+                  type: boolean
+                  default: false
+                directories:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Scan started successfully
+        '400':
+          description: Invalid request
+        '409':
+          description: Scan already in progress
+
+  /scan-status:
+    get:
+      summary: Get current scan status
+      description: |
+        Retrieve real-time status and progress of the current scan.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/scan-status \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      responses:
+        '200':
+          description: Scan status retrieved successfully
+
+  /cancel-scan:
+    post:
+      summary: Cancel current scan
+      description: |
+        Cancel the currently running scan gracefully.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/cancel-scan \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      responses:
+        '200':
+          description: Scan cancellation initiated
+        '400':
+          description: No active scan to cancel
+
+  /force-cleanup-scan:
+    post:
+      summary: Force cleanup stuck scans
+      description: |
+        Emergency recovery endpoint to forcefully clean up stuck or crashed scan states.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/force-cleanup-scan \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      responses:
+        '200':
+          description: Scan states cleaned up successfully
+
+  /scan/recovery:
+    post:
+      summary: Scan recovery
+      description: |
+        Recovers from stuck scan states. Alias for `/force-cleanup-scan`.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/scan/recovery \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      responses:
+        '200':
+          description: Recovery completed successfully
+
+  /scan-files-parallel:
+    post:
+      summary: Start parallel file scan (legacy)
+      description: |
+        Legacy parallel scanning endpoint. For directory scanning, prefer `/scan-parallel`.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/scan-files-parallel \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "file_paths": ["/media/file1.mp4", "/media/file2.mkv"],
+            "force_rescan": false,
+            "num_workers": 4
+          }'
+        ```
+      tags: [Scan]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force_rescan:
+                  type: boolean
+                  default: false
+                num_workers:
+                  type: integer
+                  default: 4
+                directories:
+                  type: array
+                  items:
+                    type: string
+                file_paths:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Parallel scan started
+        '409':
+          description: Scan already in progress
+
+  /scan-parallel:
+    post:
+      summary: Start enhanced parallel scan
+      description: |
+        Enhanced parallel scanning that distributes work across all available Celery workers.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/scan-parallel \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "directories": ["/media/movies", "/media/tv"],
+            "force_rescan": false
+          }'
+        ```
+      tags: [Scan]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [directories]
+              properties:
+                directories:
+                  type: array
+                  items:
+                    type: string
+                force_rescan:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Parallel scan started successfully
+        '400':
+          description: Invalid request
+        '503':
+          description: Celery workers not available
+
+  /reset-for-rescan:
+    post:
+      summary: Reset files for rescanning
+      description: |
+        Reset files for rescanning based on criteria.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/reset-for-rescan \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "type": "corrupted"
+          }'
+        ```
+      tags: [Scan]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  enum: [all, selected, corrupted, error]
+                file_ids:
+                  type: array
+                  items:
+                    type: integer
+      responses:
+        '200':
+          description: Files reset successfully
+
+  /force-scan-pending:
+    post:
+      summary: Force scan all pending files
+      description: |
+        Force a scan of all files currently in pending state.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/force-scan-pending \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      responses:
+        '200':
+          description: Pending files scan started
+        '409':
+          description: Scan already in progress
+
+  /reset-files-by-path:
+    post:
+      summary: Reset specific files by path
+      description: |
+        Reset one or more files to pending state using their file paths.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/reset-files-by-path \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "file_paths": [
+              "/media/movies/file1.mp4",
+              "/media/movies/file2.mkv"
+            ]
+          }'
+        ```
+      tags: [Scan]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                file_path:
+                  type: string
+                file_paths:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Files reset successfully
+
+  /reset-incomplete-scans:
+    post:
+      summary: Reset incomplete scans
+      description: |
+        Find and reset files with incomplete scan data (showing 'N/A' for Tool Details and Scan Date).
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/reset-incomplete-scans \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      responses:
+        '200':
+          description: Incomplete scans reset successfully
+
+  /diagnose-incomplete-scans:
+    get:
+      summary: Diagnose incomplete scans
+      description: |
+        Diagnose and report on files with incomplete scan data without modifying them.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/diagnose-incomplete-scans \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      responses:
+        '200':
+          description: Diagnosis completed successfully
+
+  /diagnose-pending-files:
+    get:
+      summary: Diagnose pending files
+      description: |
+        Diagnose files stuck in pending state and identify potential issues.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/diagnose-pending-files \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      responses:
+        '200':
+          description: Diagnosis completed successfully
+
+  /error-files:
+    get:
+      summary: Get files that failed to scan
+      description: |
+        Retrieve paginated list of files that encountered errors during scanning.
+
+        **Example:**
+        ```bash
+        curl -X GET "http://your-server/api/error-files?page=1&per_page=50" \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: sort_field
+          in: query
+          schema:
+            type: string
+        - name: sort_order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Error files retrieved successfully
+
+  /worker-status:
+    get:
+      summary: Get Celery worker status
+      description: |
+        Check the status and availability of Celery workers for parallel scanning.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/worker-status \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      responses:
+        '200':
+          description: Worker status retrieved successfully
+
+  /scan-output/{result_id}:
+    get:
+      summary: Get detailed scan output
+      description: |
+        Retrieve the full raw output from the scanning tool for a specific result.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/scan-output/123 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      parameters:
+        - name: result_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scan output retrieved successfully
+        '404':
+          description: Result not found
+
+  # Statistics Endpoints
+  /stats:
+    get:
+      summary: Get statistics summary
+      description: |
+        Retrieve comprehensive statistics about scanned files and corruption.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/stats \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Statistics]
+      responses:
+        '200':
+          description: Statistics retrieved successfully
+
+  /trends:
+    get:
+      summary: Get corruption and storage trends
+      description: |
+        Returns comprehensive analytics and trends over multiple time periods (30d, 60d, 90d, 1y).
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/trends \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Statistics]
+      responses:
+        '200':
+          description: Trends data retrieved successfully
+
+  /system-info:
+    get:
+      summary: Get comprehensive system information
+      description: |
+        Get comprehensive system information including version, database stats, and monitored paths.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/system-info \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Statistics]
+      responses:
+        '200':
+          description: System information retrieved successfully
+
+  # Admin Endpoints
+  /configurations:
+    get:
+      summary: Get scan configurations
+      description: |
+        Retrieve all configured scan directories and their settings.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/configurations \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Admin]
+      responses:
+        '200':
+          description: Scan configurations retrieved successfully
+
+    post:
+      summary: Add scan configuration
+      description: |
+        Add a new directory to the scan configuration.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/configurations \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "path": "/mnt/media/music",
+            "is_active": true
+          }'
+        ```
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                is_active:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: Configuration added successfully
+
+  /mark-as-good:
+    post:
+      summary: Mark files as good (healthy)
+      description: |
+        Mark multiple files as good/healthy (batch operation).
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/mark-as-good \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"file_ids": [123, 456, 789]}'
+        ```
+      tags: [Maintenance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_ids]
+              properties:
+                file_ids:
+                  type: array
+                  items:
+                    type: integer
+      responses:
+        '200':
+          description: Files marked as good successfully
+
+  /schedules:
+    get:
+      summary: List scheduled scans
+      description: |
+        Get all scan schedules.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/schedules \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Admin]
+      responses:
+        '200':
+          description: Schedules retrieved successfully
+
+    post:
+      summary: Create schedule
+      description: |
+        Create a new scan schedule.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/schedules \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "name": "Nightly Scan",
+            "cron_expression": "0 2 * * *",
+            "scan_paths": ["/media"],
+            "scan_type": "full",
+            "force_rescan": false
+          }'
+        ```
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, cron_expression]
+              properties:
+                name:
+                  type: string
+                cron_expression:
+                  type: string
+                scan_paths:
+                  type: array
+                  items:
+                    type: string
+                scan_type:
+                  type: string
+                  enum: [full, parallel]
+                  default: full
+                force_rescan:
+                  type: boolean
+                  default: false
+      responses:
+        '201':
+          description: Schedule created successfully
+
+  /schedules/{schedule_id}:
+    put:
+      summary: Update schedule
+      description: |
+        Update an existing scan schedule.
+
+        **Example:**
+        ```bash
+        curl -X PUT http://your-server/api/schedules/1 \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"is_active": false}'
+        ```
+      tags: [Admin]
+      parameters:
+        - name: schedule_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                cron_expression:
+                  type: string
+                scan_paths:
+                  type: array
+                  items:
+                    type: string
+                scan_type:
+                  type: string
+                force_rescan:
+                  type: boolean
+                is_active:
+                  type: boolean
+      responses:
+        '200':
+          description: Schedule updated successfully
+
+    delete:
+      summary: Delete schedule
+      description: |
+        Delete a scan schedule.
+
+        **Example:**
+        ```bash
+        curl -X DELETE http://your-server/api/schedules/1 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Admin]
+      parameters:
+        - name: schedule_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: Schedule deleted successfully
+
+  /ignored-patterns:
+    get:
+      summary: Get ignored error patterns
+      description: |
+        Get all ignored error patterns.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/ignored-patterns \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Configuration]
+      responses:
+        '200':
+          description: Patterns retrieved successfully
+
+    post:
+      summary: Add ignored error pattern
+      description: |
+        Add a new ignored error pattern.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/ignored-patterns \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "pattern": ".*corrupt header.*",
+            "description": "Ignore corrupt header warnings"
+          }'
+        ```
+      tags: [Configuration]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pattern]
+              properties:
+                pattern:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Pattern added successfully
+
+  /ignored-patterns/{pattern_id}:
+    delete:
+      summary: Delete ignored pattern
+      description: |
+        Remove a file pattern from the ignore list.
+
+        **Example:**
+        ```bash
+        curl -X DELETE http://your-server/api/ignored-patterns/5 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Configuration]
+      parameters:
+        - name: pattern_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Pattern deleted successfully
+        '404':
+          description: Pattern not found
+
+  /configurations:
+    get:
+      summary: Get all configurations
+      description: |
+        Get all scan configurations.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/configurations \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Configuration]
+      responses:
+        '200':
+          description: Configurations retrieved successfully
+
+    post:
+      summary: Add configuration
+      description: |
+        Add a new configuration.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/configurations \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"path": "/media/music"}'
+        ```
+      tags: [Configuration]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+      responses:
+        '200':
+          description: Configuration added successfully
+
+  /configurations/{config_id}:
+    delete:
+      summary: Delete configuration
+      description: |
+        Delete a configuration entry by ID.
+
+        **Example:**
+        ```bash
+        curl -X DELETE http://your-server/api/configurations/3 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Configuration]
+      parameters:
+        - name: config_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Configuration deleted successfully
+        '404':
+          description: Configuration not found
+
+  /exclusions:
+    get:
+      summary: Get exclusion settings
+      description: |
+        Get current exclusion settings from database.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/exclusions \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Configuration]
+      responses:
+        '200':
+          description: Exclusions retrieved successfully
+
+    put:
+      summary: Update all exclusion settings
+      description: |
+        Update all exclusion settings in database.
+
+        **Example:**
+        ```bash
+        curl -X PUT http://your-server/api/exclusions \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "paths": ["/tmp", "/var"],
+            "extensions": [".tmp", ".bak"]
+          }'
+        ```
+      tags: [Configuration]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                paths:
+                  type: array
+                  items:
+                    type: string
+                extensions:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Exclusions updated successfully
+
+  /exclusions/{type}:
+    post:
+      summary: Add exclusion
+      description: |
+        Add a file or directory exclusion pattern.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/exclusions/extension \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"value": ".tmp"}'
+        ```
+      tags: [Configuration]
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [path, extension]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: string
+      responses:
+        '200':
+          description: Exclusion added successfully
+
+    delete:
+      summary: Remove exclusion
+      description: |
+        Remove an exclusion pattern.
+
+        **Example:**
+        ```bash
+        curl -X DELETE http://your-server/api/exclusions/extension \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"value": ".tmp"}'
+        ```
+      tags: [Configuration]
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [path, extension]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: string
+      responses:
+        '200':
+          description: Exclusion removed successfully
+
+  # Export Endpoints
+  /view/{result_id}:
+    get:
+      summary: View/stream file
+      description: |
+        Stream a media file for viewing. Supports range requests for video streaming.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/view/123 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Export]
+      parameters:
+        - name: result_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: File served successfully
+        '206':
+          description: Partial content (range request)
+        '404':
+          description: File not found
+
+  /download/{result_id}:
+    get:
+      summary: Download file
+      description: |
+        Download a media file.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/download/123 \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          --output file.mp4
+        ```
+      tags: [Export]
+      parameters:
+        - name: result_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: File download started
+        '404':
+          description: File not found
+
+  /export:
+    get:
+      summary: Export scan results (GET)
+      description: |
+        Export scan results to CSV, JSON, or PDF via GET request.
+
+        **Example:**
+        ```bash
+        curl -X GET "http://your-server/api/export?format=csv&filter=corrupted" \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          --output results.csv
+        ```
+      tags: [Export]
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, json, pdf]
+            default: csv
+        - name: filter
+          in: query
+          schema:
+            type: string
+            enum: [all, corrupted, healthy, pending, error]
+            default: all
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Export file generated and returned
+
+    post:
+      summary: Export scan results (POST)
+      description: |
+        Export scan results to various formats (CSV, JSON, Excel, PDF).
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/export \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "format": "csv",
+            "filter": "corrupted"
+          }' \
+          --output results.csv
+        ```
+      tags: [Export]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [format]
+              properties:
+                format:
+                  type: string
+                  enum: [csv, json, excel, pdf]
+                filter:
+                  type: string
+                  enum: [all, corrupted, healthy, pending, warning]
+                search:
+                  type: string
+                file_ids:
+                  type: array
+                  items:
+                    type: integer
+      responses:
+        '200':
+          description: Export file generated and returned
+
+  # Maintenance Endpoints
+  /cleanup-orphaned:
+    post:
+      summary: Cleanup orphaned database entries
+      description: |
+        Start cleanup of orphaned database entries.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/cleanup-orphaned \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Maintenance]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                file_paths:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Cleanup started successfully
+        '409':
+          description: Cleanup already in progress
+
+  /cleanup-status:
+    get:
+      summary: Get cleanup operation status
+      description: |
+        Get current cleanup operation status.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/cleanup-status \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: Cleanup status retrieved successfully
+
+  /cancel-cleanup:
+    post:
+      summary: Cancel cleanup operation
+      description: |
+        Cancel the current cleanup operation.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/cancel-cleanup \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: Cleanup cancellation requested
+        '400':
+          description: No active cleanup to cancel
+
+  /reset-cleanup-state:
+    post:
+      summary: Force reset cleanup state
+      description: |
+        Force reset cleanup state in case of stuck operation.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/reset-cleanup-state \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: Cleanup state reset successfully
+
+  /file-changes:
+    get:
+      summary: Check for file changes (GET)
+      description: |
+        Check for file changes since last scan (GET request).
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/file-changes \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: File changes check started
+
+    post:
+      summary: Check for file changes (POST)
+      description: |
+        Check for file changes since last scan (POST request).
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/file-changes \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"file_paths": ["/media/movie.mp4"]}'
+        ```
+      tags: [Maintenance]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                file_paths:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: File changes check started
+        '409':
+          description: Check already in progress
+
+  /file-changes-status:
+    get:
+      summary: Get file changes check status
+      description: |
+        Get current file changes check operation status.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/file-changes-status \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: File changes status retrieved successfully
+
+  /cancel-file-changes:
+    post:
+      summary: Cancel file changes check
+      description: |
+        Cancel the current file changes check operation.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/cancel-file-changes \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: File changes check cancellation requested
+        '400':
+          description: No active check to cancel
+
+  /reset-file-changes-state:
+    post:
+      summary: Force reset file changes state
+      description: |
+        Force reset file changes state in case of stuck operation.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/reset-file-changes-state \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: File changes state reset successfully
+
+  /vacuum:
+    post:
+      summary: Vacuum database
+      description: |
+        Vacuum the SQLite database to optimize storage.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/vacuum \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: Database vacuum completed successfully
+        '400':
+          description: Not supported for this database type
+
+  # Reports Endpoints
+  /scan-reports:
+    get:
+      summary: List scan reports
+      description: |
+        Get paginated scan reports with optional filters.
+
+        **Example:**
+        ```bash
+        curl -X GET "http://your-server/api/scan-reports?page=1&per_page=20&status=completed" \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Reports]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: scan_type
+          in: query
+          schema:
+            type: string
+            enum: [all, full_scan, rescan, cleanup, file_changes]
+            default: all
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [all, completed, failed, running]
+            default: all
+        - name: sort_order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        '200':
+          description: Reports retrieved successfully
+
+  /scan-reports/{report_id}:
+    get:
+      summary: Get scan report details
+      description: |
+        Get detailed information about a specific scan report.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/scan-reports/abc-123-def \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Reports]
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Report retrieved successfully
+        '404':
+          description: Report not found
+
+    delete:
+      summary: Delete scan report
+      description: |
+        Delete a scan report by ID.
+
+        **Example:**
+        ```bash
+        curl -X DELETE http://your-server/api/scan-reports/abc-123-def \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Reports]
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Report deleted successfully
+        '404':
+          description: Report not found
+
+  /scan-reports/{report_id}/export:
+    get:
+      summary: Export scan report as JSON
+      description: |
+        Export scan report as JSON with full scan results.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/scan-reports/abc-123-def/export \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          --output report.json
+        ```
+      tags: [Reports]
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Report exported successfully
+        '404':
+          description: Report not found
+
+  /generate-pdf-report/{scan_type}/{scan_id}:
+    get:
+      summary: Generate PDF report
+      description: |
+        Generate PDF report for scan results.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/generate-pdf-report/full_scan/abc-123 \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          --output report.pdf
+        ```
+      tags: [Reports]
+      parameters:
+        - name: scan_type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [full_scan, rescan, cleanup]
+        - name: scan_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: PDF report generated successfully
+        '500':
+          description: PDF generation failed
+
+  /scan-reports/{report_id}/pdf:
+    get:
+      summary: Download scan report as PDF
+      description: |
+        Download scan report as PDF for compliance.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/scan-reports/abc-123-def/pdf \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          --output report.pdf
+        ```
+      tags: [Reports]
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: PDF report generated successfully
+        '404':
+          description: Report not found
+        '500':
+          description: PDF generation failed
+
+  /scan-reports/latest:
+    get:
+      summary: Get latest reports
+      description: |
+        Get the latest report for each scan type.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/scan-reports/latest \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Reports]
+      responses:
+        '200':
+          description: Latest reports retrieved successfully
+
+  /reports/download-multiple:
+    post:
+      summary: Download multiple reports
+      description: |
+        Download multiple reports as a zip file or combined PDF.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/reports/download-multiple \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "report_ids": ["abc-123", "def-456"],
+            "format": "zip"
+          }' \
+          --output reports.zip
+        ```
+      tags: [Reports]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [report_ids]
+              properties:
+                report_ids:
+                  type: array
+                  items:
+                    type: string
+                format:
+                  type: string
+                  enum: [zip, pdf]
+                  default: zip
+      responses:
+        '200':
+          description: Multiple reports downloaded successfully
+        '400':
+          description: No report IDs provided
+        '404':
+          description: No valid reports found
+
+tags:
+  - name: Authentication
+    description: User authentication, authorization, and API token management
+  - name: Scan
+    description: Media file scanning operations, status monitoring, and scan management
+  - name: Statistics
+    description: Statistics, analytics, and trend data
+  - name: Admin
+    description: Administrative functions, settings, and system configuration
+  - name: Export
+    description: Data export operations and file download/streaming
+  - name: Maintenance
+    description: Maintenance, cleanup, and file change detection operations
+  - name: Reports
+    description: Scan report generation, management, and PDF export
+  - name: Configuration
+    description: Exclusions, patterns, and advanced configuration

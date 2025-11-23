@@ -1,5 +1,13 @@
 // PixelProbe Modern UI JavaScript
 
+// HTML Escaping Utility to prevent XSS attacks
+function escapeHtml(text) {
+    if (text == null) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML;
+}
+
 // Theme Management
 class ThemeManager {
     constructor() {
@@ -180,6 +188,10 @@ class APIClient {
 
     async getSystemInfo() {
         return this.request('/system-info');
+    }
+
+    async getTrends() {
+        return this.request('/trends');
     }
 
     // Scan methods
@@ -416,7 +428,7 @@ class ProgressManager {
             // Add recovery button if scan is stuck
             if (isStuck && this.operationType === 'scan') {
                 progressDetails.innerHTML = `
-                    <div>${detailsText}</div>
+                    <div>${escapeHtml(detailsText)}</div>
                     <div style="margin-top: 10px;">
                         <button class="btn btn-warning" onclick="app.recoverStuckScan()">
                             <i class="fas fa-wrench"></i> Recover Stuck Scan
@@ -485,6 +497,9 @@ class ProgressManager {
                         file: status.file
                     };
                 }
+
+                // Track progress value for exponential backoff polling
+                this.lastProgressValue = status.current || 0;
             } else if (this.operationType === 'cleanup') {
                 status = await this.api.getCleanupStatus();
                 isRunning = status.is_running;
@@ -529,10 +544,30 @@ class ProgressManager {
         
         // Immediately check status once
         await this.checkProgress();
-        
-        this.checkInterval = setInterval(async () => {
+
+        // Implement exponential backoff polling (P1 performance optimization)
+        // Start at 1 second, backoff to max 5 seconds if no changes
+        this.pollDelay = 1000;
+        this.lastProgressValue = null;
+
+        const pollWithBackoff = async () => {
+            const previousProgress = this.lastProgressValue;
             await this.checkProgress();
-        }, 1000); // Poll every 1 second
+
+            // If progress changed, reset to fast polling
+            // Otherwise, increase delay with exponential backoff
+            const currentProgress = this.lastProgressValue;
+            if (currentProgress !== previousProgress && currentProgress !== null) {
+                this.pollDelay = 1000; // Reset to 1 second on change
+            } else {
+                // Exponential backoff: increase by 1.5x, max 5 seconds
+                this.pollDelay = Math.min(this.pollDelay * 1.5, 5000);
+            }
+
+            this.checkInterval = setTimeout(pollWithBackoff, this.pollDelay);
+        };
+
+        this.checkInterval = setTimeout(pollWithBackoff, this.pollDelay);
     }
     
     updateCleanupButton(isRunning) {
@@ -1660,12 +1695,11 @@ class PixelProbeApp {
             const response = await fetch(`/api/scan-results/${fileId}`);
             if (response.ok) {
                 const file = await response.json();
-                // Use scan-parallel which will mark as pending and start full scan
-                const scanResponse = await this.api.request('/scan-parallel', {
+                // Use scan-file endpoint for single file rescanning
+                const scanResponse = await this.api.request('/scan-file', {
                     method: 'POST',
                     body: JSON.stringify({
-                        file_paths: [file.file_path],
-                        force_rescan: true  // Force rescan to actually re-scan the file
+                        file_path: file.file_path  // Single file endpoint expects 'file_path'
                     })
                 });
                 this.showNotification(scanResponse.message || 'File rescan started', 'success');
@@ -1846,20 +1880,30 @@ class PixelProbeApp {
         }
     }
 
+    async showTrends() {
+        try {
+            const trends = await this.api.getTrends();
+            this.showTrendsModal(trends);
+        } catch (error) {
+            console.error('Trends error:', error);
+            this.showNotification('Failed to load trends data', 'error');
+        }
+    }
+
     showSystemStatsModal(info) {
         const modal = document.querySelector('#system-stats-modal');
         if (!modal) return;
-        
+
         const modalBody = modal.querySelector('.modal-body');
         if (!modalBody) return;
-        
+
         // Format the system info with columns layout
         let html = '<div class="system-stats-content">';
         html += '<div class="stats-columns">';
-        
+
         // Column 1
         html += '<div class="stats-column">';
-        
+
         // Database Stats
         if (info.database) {
             html += '<h4>Database Statistics</h4>';
@@ -1872,7 +1916,7 @@ class PixelProbeApp {
             html += `<p>Error Files: ${info.database.error_files?.toLocaleString() || 0}</p>`;
             html += '</div>';
         }
-        
+
         // Scan Performance Stats
         if (info.database && info.database.performance) {
             const perf = info.database.performance;
@@ -1888,12 +1932,12 @@ class PixelProbeApp {
             }
             html += '</div>';
         }
-        
+
         html += '</div>'; // End Column 1
-        
+
         // Column 2
         html += '<div class="stats-column">';
-        
+
         // System Information
         if (info.version || info.timezone || info.features) {
             html += '<h4>System Information</h4>';
@@ -1909,7 +1953,7 @@ class PixelProbeApp {
             }
             html += '</div>';
         }
-        
+
         // File System Statistics
         if (info.filesystem || info.database) {
             html += '<h4>File System Statistics</h4>';
@@ -1925,7 +1969,7 @@ class PixelProbeApp {
             html += `<p>Percentage Checked: ${percentageChecked}%</p>`;
             html += '</div>';
         }
-        
+
         // Features
         if (info.features) {
             html += '<h4>Features</h4>';
@@ -1936,9 +1980,9 @@ class PixelProbeApp {
             });
             html += '</div>';
         }
-        
+
         html += '</div>'; // End Column 2
-        
+
         // Column 3 - Monitored Paths (if they exist)
         if (info.monitored_paths && info.monitored_paths.length > 0) {
             html += '<div class="stats-column">';
@@ -1952,19 +1996,22 @@ class PixelProbeApp {
             html += '</div>';
             html += '</div>'; // End Column 3
         }
-        
+
         html += '</div>'; // End stats-columns
         html += '</div>';
-        
+
         modalBody.innerHTML = html;
         modal.style.display = 'block';
-        
+
+        // Setup period tab switchers
+        this.setupTrendTabs();
+
         // Setup close handlers
         const closeBtn = modal.querySelector('.modal-close');
         if (closeBtn) {
             closeBtn.onclick = () => modal.style.display = 'none';
         }
-        
+
         // Close on outside click
         modal.onclick = (e) => {
             if (e.target === modal) {
@@ -1973,9 +2020,289 @@ class PixelProbeApp {
         };
     }
 
+    formatStorage(gb) {
+        // Convert GB to TB if >= 1024 GB
+        const value = Number(gb);
+        if (value >= 1024) {
+            return `${(value / 1024).toFixed(2)} TB`;
+        }
+        return `${value.toFixed(2)} GB`;
+    }
+
+    renderTrendsSection(trends) {
+        let html = '<div class="trends-section">';
+        html += '<h3>Trend Analytics</h3>';
+
+        // Period selector tabs
+        html += '<div class="period-tabs">';
+        html += '<button class="period-tab active" data-period="30d">30 Days</button>';
+        html += '<button class="period-tab" data-period="60d">60 Days</button>';
+        html += '<button class="period-tab" data-period="90d">90 Days</button>';
+        html += '<button class="period-tab" data-period="1y">1 Year</button>';
+        html += '</div>';
+
+        // Trend content for each period
+        ['30d', '60d', '90d', '1y'].forEach((period, index) => {
+            const periodData = trends.trends[period];
+            if (!periodData) return;
+
+            const isActive = index === 0 ? 'active' : '';
+            html += `<div class="trend-content ${isActive}" data-period="${period}">`;
+            html += '<div class="trends-container">';
+
+            // Column 1: Corruption Trends, Scanning Performance, Overall Summary
+            html += '<div class="trend-column column-1">';
+
+            // Corruption Trends
+            html += '<h4>Corruption Trends</h4>';
+            html += '<div class="stats-section">';
+            html += `<p>Corruption Rate: ${Number(periodData.corruption.corruption_rate).toFixed(2)}%</p>`;
+            html += `<p>Total Scanned: ${Number(periodData.corruption.total_scanned).toLocaleString()}</p>`;
+            html += `<p>Corrupted Files: ${Number(periodData.corruption.corrupted).toLocaleString()}</p>`;
+            html += `<p>Files with Warnings: ${Number(periodData.corruption.warnings).toLocaleString()}</p>`;
+            if (periodData.corruption.top_corrupted_types && periodData.corruption.top_corrupted_types.length > 0) {
+                html += '<p><strong>Top Corrupted Types:</strong></p>';
+                html += '<ul style="margin-left: 20px;">';
+                periodData.corruption.top_corrupted_types.slice(0, 5).forEach(item => {
+                    html += `<li>${item.type}: ${item.count} files</li>`;
+                });
+                html += '</ul>';
+            }
+            html += '</div>';
+
+            // Scanning Performance (in same column)
+            html += '<h4 style="margin-top: 2rem;">Scanning Performance</h4>';
+            html += '<div class="stats-section">';
+            html += `<p>File Types Scanned: ${periodData.scanning.unique_file_types}</p>`;
+            html += `<p>Avg Scan Duration: ${Number(periodData.scanning.avg_scan_duration).toFixed(2)}s</p>`;
+            html += `<p>Files per Day: ${Number(periodData.scanning.files_per_day).toFixed(1)}</p>`;
+            html += '</div>';
+
+            // Overall Summary (appears in all period tabs)
+            if (trends.summary) {
+                html += '<h4 style="margin-top: 2rem;">Overall Summary</h4>';
+                html += '<div class="stats-section">';
+                html += `<p><strong>Total Storage:</strong> ${this.formatStorage(trends.summary.total_storage_gb)}</p>`;
+                html += `<p><strong>Total Files:</strong> ${Number(trends.summary.total_files).toLocaleString()}</p>`;
+                html += `<p><strong>Collection Age:</strong> ${trends.summary.collection_age_days} days</p>`;
+                html += `<p><strong>Average Growth:</strong> ${this.formatStorage(trends.summary.avg_gb_per_day)}/day</p>`;
+                html += '</div>';
+            }
+
+            html += '</div>'; // End Column 1
+
+            // Storage Trends Column
+            html += '<div class="trend-column storage-trends">';
+            html += '<h4>Storage Trends</h4>';
+            html += '<div class="stats-section">';
+            html += `<p><strong>Total Storage:</strong> ${this.formatStorage(periodData.storage.total_gb)}</p>`;
+            html += `<p><strong>Growth Rate:</strong> ${this.formatStorage(periodData.storage.gb_per_day)}/day</p>`;
+            html += '<p><strong>Projections:</strong></p>';
+            html += `<p class="ml-20">Next 30 days: ${this.formatStorage(periodData.storage.projections.next_30d_gb)}</p>`;
+            html += `<p class="ml-20">Next 1 year: ${this.formatStorage(periodData.storage.projections.next_1y_gb)}</p>`;
+
+            // Files by Type section with bar chart
+            if (periodData.storage.by_file_type && periodData.storage.by_file_type.length > 0) {
+                html += '<div class="file-types-section">';
+                html += '<h4 style="margin-top: 20px;">Files by Type (All Types)</h4>';
+
+                // Calculate dynamic height based on number of file types (25px per bar)
+                const chartHeight = Math.max(300, periodData.storage.by_file_type.length * 25);
+
+                // Bar chart container with dynamic height
+                html += `<div class="chart-container" style="position: relative; height: ${chartHeight}px; width: 100%; margin: 15px 0;">`;
+                html += `<canvas id="fileTypeChart-${period}"></canvas>`;
+                html += '</div>';
+
+                // Summary stats
+                html += '<div class="file-types-summary">';
+                html += `<p><strong>Total Types:</strong> ${periodData.storage.by_file_type.length}</p>`;
+                html += `<p><strong>Largest:</strong> ${periodData.storage.by_file_type[0].type} - ${this.formatStorage(periodData.storage.by_file_type[0].total_gb)}</p>`;
+                if (periodData.storage.by_file_type.length > 1) {
+                    const last = periodData.storage.by_file_type[periodData.storage.by_file_type.length - 1];
+                    html += `<p><strong>Smallest:</strong> ${last.type} - ${this.formatStorage(last.total_gb)}</p>`;
+                }
+                html += '</div>';
+
+                // Complete listing of all file types
+                html += '<div class="file-types-list">';
+                html += '<h5 style="margin: 15px 0 10px 0; color: var(--text-primary);">Complete Listing:</h5>';
+                periodData.storage.by_file_type.forEach((item, index) => {
+                    html += `<p class="file-type-item"><strong>${index + 1}.</strong> ${item.type}: ${this.formatStorage(item.total_gb)} (${Number(item.file_count).toLocaleString()} files)</p>`;
+                });
+                html += '</div>';
+                html += '</div>';
+            }
+            html += '</div>';
+            html += '</div>'; // End Storage Column
+
+            html += '</div>'; // End trends-container
+            html += '</div>'; // End trend-content
+        });
+
+        html += '</div>'; // End trends-section
+        return html;
+    }
+
+    showTrendsModal(trends) {
+        const modal = document.querySelector('#trends-modal');
+        if (!modal) return;
+
+        const modalBody = modal.querySelector('.modal-body');
+        if (!modalBody) return;
+
+        // Store trends data for chart recreation
+        this.trendsData = trends;
+
+        // Render trends content
+        modalBody.innerHTML = this.renderTrendsSection(trends);
+
+        // Setup tab switching
+        this.setupTrendTabs();
+
+        // Create pie charts for all periods
+        this.createFileTypeCharts(trends);
+
+        // Show modal
+        modal.style.display = 'flex';
+    }
+
+    createFileTypeCharts(trends) {
+        // Destroy existing charts if any
+        if (this.fileTypeCharts) {
+            Object.values(this.fileTypeCharts).forEach(chart => chart.destroy());
+        }
+        this.fileTypeCharts = {};
+
+        // Color palette for charts - cycle through these colors for all file types
+        const baseColors = [
+            '#00ff88',  // Primary green
+            '#ff6b6b',  // Red
+            '#4ecdc4',  // Cyan
+            '#ffe66d',  // Yellow
+            '#a8dadc',  // Light blue
+            '#95e1d3',  // Mint
+            '#f38181',  // Light red
+            '#aa96da',  // Purple
+            '#fcbad3',  // Pink
+            '#a8e6cf'   // Light green
+        ];
+
+        // Helper function to generate colors for any number of items
+        const generateColors = (count) => {
+            const colors = [];
+            for (let i = 0; i < count; i++) {
+                colors.push(baseColors[i % baseColors.length]);
+            }
+            return colors;
+        };
+
+        ['30d', '60d', '90d', '1y'].forEach(period => {
+            const periodData = trends.trends[period];
+            if (!periodData || !periodData.storage.by_file_type) return;
+
+            const canvas = document.getElementById(`fileTypeChart-${period}`);
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            const data = periodData.storage.by_file_type; // Use ALL file types
+
+            const colors = generateColors(data.length);
+
+            this.fileTypeCharts[period] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.map(item => item.type),
+                    datasets: [{
+                        label: 'Storage (GB)',
+                        data: data.map(item => Number(item.total_gb)),
+                        backgroundColor: colors,
+                        borderColor: colors,
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',  // Horizontal bar chart
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => {
+                                    const value = context.parsed.x || 0;
+                                    const fileType = data[context.dataIndex];
+                                    return [
+                                        `Storage: ${this.formatStorage(value)}`,
+                                        `Files: ${Number(fileType.file_count).toLocaleString()}`
+                                    ];
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'logarithmic',  // Logarithmic scale for better visualization
+                            beginAtZero: false,
+                            ticks: {
+                                color: '#b0b0b0',
+                                callback: (value) => this.formatStorage(value)
+                            },
+                            grid: {
+                                color: '#333'
+                            },
+                            title: {
+                                display: true,
+                                text: 'Storage (Log Scale)',
+                                color: '#b0b0b0'
+                            }
+                        },
+                        y: {
+                            ticks: {
+                                color: '#b0b0b0',
+                                font: {
+                                    size: 10
+                                }
+                            },
+                            grid: {
+                                display: false
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    setupTrendTabs() {
+        const tabs = document.querySelectorAll('.period-tab');
+        const contents = document.querySelectorAll('.trend-content');
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const period = tab.dataset.period;
+
+                // Update active tab
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+
+                // Update active content
+                contents.forEach(c => {
+                    if (c.dataset.period === period) {
+                        c.classList.add('active');
+                    } else {
+                        c.classList.remove('active');
+                    }
+                });
+            });
+        });
+    }
+
     async showApiDocs() {
-        // Navigate to Swagger UI in the current tab
-        window.location.href = '/api/v1/docs';
+        // Navigate to API documentation page
+        window.location.href = '/api-docs';
     }
 
     async showScanReports() {
@@ -2649,22 +2976,6 @@ class PixelProbeApp {
         try {
             const fileIds = Array.from(this.table.selectedFiles);
 
-            // First, reset the selected files for rescanning
-            const resetResponse = await fetch('/api/reset-for-rescan', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    type: 'selected',
-                    file_ids: fileIds
-                })
-            });
-
-            if (!resetResponse.ok) {
-                throw new Error('Failed to reset files for rescan');
-            }
-
             // Get file paths for the selected files
             const filePaths = [];
             for (const fileId of fileIds) {
@@ -2675,21 +2986,18 @@ class PixelProbeApp {
                 }
             }
 
-            // Start scan on only the selected files
-            const scanResponse = await fetch('/api/scan-parallel', {
+            // Send all files as one bulk rescan request to /scan-files-parallel
+            // This scans the specific files directly without discovery phase
+            const scanResponse = await this.api.request('/scan-files-parallel', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
                 body: JSON.stringify({
                     file_paths: filePaths,
-                    force_rescan: true  // Force rescan to actually re-scan the files
+                    force_rescan: true
                 })
             });
 
-            if (scanResponse.ok) {
-                this.showNotification(`Rescan started for ${fileIds.length} files`, 'success');
-                // Start monitoring with 'scan' operation type to ensure auto-refresh
+            if (scanResponse) {
+                this.showNotification(`Rescan started for ${filePaths.length} files`, 'success');
                 this.progress.startMonitoring('scan');
             } else {
                 throw new Error('Rescan failed');

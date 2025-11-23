@@ -28,8 +28,9 @@ def get_allowed_scan_paths():
         allowed_paths = [os.path.abspath(config.path) for config in configs]
         
         # Add any environment-configured paths
-        env_paths = os.environ.get('ALLOWED_SCAN_PATHS', '').split(':')
+        env_paths = os.environ.get('SCAN_PATHS', '').split(',')
         for path in env_paths:
+            path = path.strip()  # Remove whitespace
             if path and os.path.exists(path):
                 allowed_paths.append(os.path.abspath(path))
         
@@ -73,8 +74,16 @@ def validate_file_path(file_path, allowed_paths=None):
     # Get allowed paths if not provided
     if allowed_paths is None:
         allowed_paths = get_allowed_scan_paths()
-    
+
+    # If still no paths, this is likely a rescan operation - check if file exists in database
     if not allowed_paths:
+        # Import here to avoid circular dependency
+        from models import ScanResult
+        existing = ScanResult.query.filter_by(file_path=normalized).first()
+        if existing:
+            # File already in database - trust it for rescan
+            if os.path.exists(normalized) and os.access(normalized, os.R_OK):
+                return normalized
         raise PathTraversalError("No allowed scan paths configured")
     
     # Check if path is within allowed directories

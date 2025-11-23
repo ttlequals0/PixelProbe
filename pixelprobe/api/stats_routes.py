@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, current_app
+from flask import Blueprint, current_app
 from sqlalchemy import text
 import os
 import time
@@ -45,10 +45,10 @@ def get_stats():
                     SUM(CASE WHEN scan_status = 'pending' THEN 1 ELSE 0 END) as pending_files,
                     SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
                     SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
-                    SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,
-                    SUM(CASE WHEN (is_corrupted = FALSE OR is_corrupted IS NULL OR marked_as_good = TRUE) AND (has_warnings = FALSE OR has_warnings IS NULL) AND scan_status = 'completed' THEN 1 ELSE 0 END) as healthy_files,
+                    SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE AND scan_status = 'completed' THEN 1 ELSE 0 END) as corrupted_files,
+                    SUM(CASE WHEN (marked_as_good = TRUE OR ((is_corrupted = FALSE OR is_corrupted IS NULL) AND (has_warnings = FALSE OR has_warnings IS NULL))) AND scan_status = 'completed' THEN 1 ELSE 0 END) as healthy_files,
                     SUM(CASE WHEN marked_as_good = TRUE THEN 1 ELSE 0 END) as marked_as_good,
-                    SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) THEN 1 ELSE 0 END) as warning_files
+                    SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) AND scan_status = 'completed' THEN 1 ELSE 0 END) as warning_files
                 FROM scan_results
             """)
         ).fetchone()
@@ -64,9 +64,9 @@ def get_stats():
             'marked_as_good': stats[7] or 0,
             'warning_files': stats[8] or 0
         }
-        
-        return jsonify(result)
-        
+
+        return result
+
     except Exception as e:
         logger.error(f"Error getting stats: {str(e)}")
         # Fallback to individual queries if the optimized query fails
@@ -79,29 +79,36 @@ def get_stats():
             scanning_files = ScanResult.query.filter_by(scan_status='scanning').count()
             error_files = ScanResult.query.filter_by(scan_status='error').count()
             
-            # Corrupted files: corrupted AND not marked as good
+            # Corrupted files: corrupted AND not marked as good AND completed
             corrupted_files = ScanResult.query.filter(
                 (ScanResult.is_corrupted == True) &
-                (ScanResult.marked_as_good == False)
+                (ScanResult.marked_as_good == False) &
+                (ScanResult.scan_status == 'completed')
             ).count()
 
-            # Warning files: has warnings, not marked as good, and not corrupted
+            # Warning files: has warnings, not marked as good, not corrupted, AND completed
             warning_files = ScanResult.query.filter(
                 (ScanResult.has_warnings == True) &
                 (ScanResult.marked_as_good == False) &
-                ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None))
+                ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None)) &
+                (ScanResult.scan_status == 'completed')
             ).count()
 
             marked_as_good = ScanResult.query.filter_by(marked_as_good=True).count()
 
-            # Healthy files: completed, no warnings, and (not corrupted OR marked as good)
+            # Healthy files: marked as good OR (completed with no corruption and no warnings)
             healthy_files = ScanResult.query.filter(
-                ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None) | (ScanResult.marked_as_good == True)) &
-                ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None)) &
+                (
+                    (ScanResult.marked_as_good == True) |
+                    (
+                        ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None)) &
+                        ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None))
+                    )
+                ) &
                 (ScanResult.scan_status == 'completed')
             ).count()
             
-            return jsonify({
+            return {
                 'total_files': total_files,
                 'completed_files': completed_files,
                 'pending_files': pending_files,
@@ -111,10 +118,189 @@ def get_stats():
                 'healthy_files': healthy_files,
                 'marked_as_good': marked_as_good,
                 'warning_files': warning_files
-            })
+            }
         except Exception as e2:
             logger.error(f"Fallback stats query also failed: {str(e2)}")
-            return jsonify({'error': 'Database query failed'}), 500
+            return {'error': 'Database query failed'}, 500
+
+@stats_bp.route('/trends')
+@exempt_from_rate_limit
+@auth_required
+def get_trends():
+    """Get corruption and storage trends over multiple time periods"""
+    try:
+        from datetime import timedelta
+
+        now = datetime.now(timezone.utc)
+        periods = {
+            '30d': now - timedelta(days=30),
+            '60d': now - timedelta(days=60),
+            '90d': now - timedelta(days=90),
+            '1y': now - timedelta(days=365)
+        }
+
+        trends = {}
+
+        for period_name, cutoff_date in periods.items():
+            # Corruption trends for this period
+            period_stats = db.session.execute(
+                text("""
+                    SELECT
+                        COUNT(*) as total_scanned,
+                        SUM(CASE WHEN is_corrupted = TRUE THEN 1 ELSE 0 END) as corrupted,
+                        SUM(CASE WHEN has_warnings = TRUE THEN 1 ELSE 0 END) as warnings,
+                        COUNT(DISTINCT file_type) as file_types,
+                        AVG(scan_duration) as avg_scan_duration,
+                        SUM(file_size) as total_bytes,
+                        COUNT(DISTINCT DATE(discovered_date)) as discovery_days
+                    FROM scan_results
+                    WHERE scan_date >= :cutoff
+                """),
+                {'cutoff': cutoff_date}
+            ).fetchone()
+
+            total_scanned = period_stats[0] or 0
+            corrupted = period_stats[1] or 0
+            warnings = period_stats[2] or 0
+            file_types = period_stats[3] or 0
+            avg_duration = period_stats[4] or 0
+            total_bytes = period_stats[5] or 0
+            discovery_days = period_stats[6] or 0
+
+            # Calculate corruption rate
+            corruption_rate = round((corrupted / total_scanned * 100), 2) if total_scanned > 0 else 0
+
+            # Storage metrics
+            total_gb = round(total_bytes / (1024**3), 2) if total_bytes else 0
+
+            # Daily averages
+            days_in_period = (now - cutoff_date).days
+            files_per_day = round(total_scanned / days_in_period, 1) if days_in_period > 0 else 0
+            gb_per_day = round(total_gb / days_in_period, 2) if days_in_period > 0 else 0
+
+            # Storage growth projection (linear)
+            projected_30d_gb = round(gb_per_day * 30, 2) if gb_per_day > 0 else 0
+            projected_1y_gb = round(gb_per_day * 365, 2) if gb_per_day > 0 else 0
+
+            # Top corrupted file types in this period
+            top_corrupted_types = db.session.execute(
+                text("""
+                    SELECT file_type, COUNT(*) as count
+                    FROM scan_results
+                    WHERE scan_date >= :cutoff
+                      AND is_corrupted = TRUE
+                      AND file_type IS NOT NULL
+                    GROUP BY file_type
+                    ORDER BY count DESC
+                    LIMIT 5
+                """),
+                {'cutoff': cutoff_date}
+            ).fetchall()
+
+            # Storage by file type in this period
+            storage_by_type = db.session.execute(
+                text("""
+                    SELECT
+                        file_type,
+                        COUNT(*) as file_count,
+                        SUM(file_size) as total_bytes
+                    FROM scan_results
+                    WHERE discovered_date >= :cutoff
+                      AND file_type IS NOT NULL
+                      AND file_size IS NOT NULL
+                    GROUP BY file_type
+                    ORDER BY total_bytes DESC
+                    LIMIT 10
+                """),
+                {'cutoff': cutoff_date}
+            ).fetchall()
+
+            trends[period_name] = {
+                'corruption': {
+                    'total_scanned': total_scanned,
+                    'corrupted': corrupted,
+                    'warnings': warnings,
+                    'corruption_rate': corruption_rate,
+                    'top_corrupted_types': [
+                        {'type': row[0], 'count': row[1]}
+                        for row in top_corrupted_types
+                    ]
+                },
+                'scanning': {
+                    'unique_file_types': file_types,
+                    'avg_scan_duration': round(avg_duration, 2) if avg_duration else 0,
+                    'files_per_day': files_per_day
+                },
+                'storage': {
+                    'total_gb': total_gb,
+                    'total_bytes': total_bytes,
+                    'gb_per_day': gb_per_day,
+                    'files_discovered': total_scanned,
+                    'discovery_days': discovery_days,
+                    'projections': {
+                        'next_30d_gb': projected_30d_gb,
+                        'next_1y_gb': projected_1y_gb
+                    },
+                    'by_file_type': [
+                        {
+                            'type': row[0],
+                            'file_count': row[1],
+                            'total_gb': round(row[2] / (1024**3), 2),
+                            'avg_size_mb': round(row[2] / row[1] / (1024**2), 2) if row[1] > 0 else 0
+                        }
+                        for row in storage_by_type
+                    ]
+                }
+            }
+
+        # Overall storage summary (all-time)
+        total_storage = db.session.execute(
+            text("""
+                SELECT
+                    SUM(file_size) as total_bytes,
+                    COUNT(*) as total_files,
+                    MIN(discovered_date) as oldest_file,
+                    MAX(discovered_date) as newest_file
+                FROM scan_results
+                WHERE file_size IS NOT NULL
+            """)
+        ).fetchone()
+
+        total_bytes = total_storage[0] or 0
+        total_files = total_storage[1] or 0
+        oldest_file = total_storage[2]
+        newest_file = total_storage[3]
+
+        # Calculate collection age in days
+        if oldest_file and newest_file:
+            if isinstance(oldest_file, str):
+                oldest_dt = datetime.fromisoformat(oldest_file.replace('Z', '+00:00'))
+            else:
+                oldest_dt = oldest_file
+            if oldest_dt.tzinfo is None:
+                oldest_dt = oldest_dt.replace(tzinfo=timezone.utc)
+
+            collection_days = (now - oldest_dt).days
+        else:
+            collection_days = 0
+
+        overall_summary = {
+            'total_storage_gb': round(total_bytes / (1024**3), 2),
+            'total_storage_tb': round(total_bytes / (1024**4), 2),
+            'total_files': total_files,
+            'collection_age_days': collection_days,
+            'avg_gb_per_day': round(total_bytes / (1024**3) / collection_days, 2) if collection_days > 0 else 0
+        }
+
+        return {
+            'trends': trends,
+            'summary': overall_summary,
+            'generated_at': now.isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting trends: {str(e)}")
+        return {'error': 'Failed to get trends data'}, 500
 
 @stats_bp.route('/system-info')
 @auth_required
@@ -135,10 +321,10 @@ def get_system_info():
                     SUM(CASE WHEN scan_status = 'pending' THEN 1 ELSE 0 END) as pending_files,
                     SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
                     SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
-                    SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,
-                    SUM(CASE WHEN (is_corrupted = FALSE OR is_corrupted IS NULL OR marked_as_good = TRUE) AND (has_warnings = FALSE OR has_warnings IS NULL) AND scan_status = 'completed' THEN 1 ELSE 0 END) as healthy_files,
+                    SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE AND scan_status = 'completed' THEN 1 ELSE 0 END) as corrupted_files,
+                    SUM(CASE WHEN (marked_as_good = TRUE OR ((is_corrupted = FALSE OR is_corrupted IS NULL) AND (has_warnings = FALSE OR has_warnings IS NULL))) AND scan_status = 'completed' THEN 1 ELSE 0 END) as healthy_files,
                     SUM(CASE WHEN marked_as_good = TRUE THEN 1 ELSE 0 END) as marked_as_good,
-                    SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) THEN 1 ELSE 0 END) as warning_files
+                    SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) AND scan_status = 'completed' THEN 1 ELSE 0 END) as warning_files
                 FROM scan_results
             """)
         ).fetchone()
@@ -363,9 +549,9 @@ def get_system_info():
         elapsed_time = time.time() - start_time
         if elapsed_time > 5:
             logger.warning(f"System info endpoint took {elapsed_time:.2f} seconds")
-        
-        return jsonify(system_info)
-        
+
+        return system_info
+
     except Exception as e:
         logger.error(f"Error getting system info: {str(e)}")
-        return jsonify({'error': 'Failed to get system info'}), 500
+        return {'error': 'Failed to get system info'}, 500

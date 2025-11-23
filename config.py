@@ -82,7 +82,14 @@ class Config:
     # Monitoring
     ENABLE_MONITORING = os.getenv('ENABLE_MONITORING', 'false').lower() == 'true'
     METRICS_PORT = int(os.getenv('METRICS_PORT', '9090'))
-    
+
+    # P2 Data Retention Configuration
+    # Configurable retention periods for automated cleanup
+    # Note: scan_output archival is DISABLED - keeps all scan_results data forever
+    SCAN_OUTPUT_RETENTION_DAYS = int(os.getenv('SCAN_OUTPUT_RETENTION_DAYS', '30'))  # Not used - scan_output archival disabled
+    REPORT_RETENTION_DAYS = int(os.getenv('REPORT_RETENTION_DAYS', '90'))
+    SCAN_STATE_RETENTION_DAYS = int(os.getenv('SCAN_STATE_RETENTION_DAYS', '7'))
+
     @classmethod
     def init_app(cls, app):
         """Initialize application with configuration"""

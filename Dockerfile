@@ -128,7 +128,9 @@ RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 COPY . .
 
 # Ensure the pixelprobe package is properly installed
-RUN mkdir -p /app/instance
+RUN mkdir -p /app/instance && \
+    chmod -R 755 /app && \
+    find /app -type f -name "*.py" -exec chmod 644 {} \;
 
 # Set Python path to include the app directory
 ENV PYTHONPATH=/app
