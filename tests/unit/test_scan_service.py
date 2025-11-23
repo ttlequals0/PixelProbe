@@ -202,9 +202,10 @@ class TestScanService:
             assert result['directories'] == ['/test/dir']
             assert result['force_rescan'] == True
             assert result['num_workers'] == 1
-            
-            # Wait for thread to complete
-            scan_service.current_scan_thread.join(timeout=2)
+
+            # Wait for thread to complete (if it hasn't already)
+            if scan_service.current_scan_thread is not None:
+                scan_service.current_scan_thread.join(timeout=2)
             
             # Verify scan state was updated
             mock_scan_state.start_scan.assert_called_once()
