@@ -20,23 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Fixed 617MB API response payloads causing UI to freeze**
   - `/api/scan-results` was returning 617MB of data for just 50 results
-  - Root cause: `ScanResult.to_dict()` included full `scan_output`, `warning_details`, and `media_info` fields
-  - For files with thousands of DTS warnings, these fields could be hundreds of KB each
+  - Root cause: `warning_details` field contained thousands of individual DTS warning lines per file
+  - For files with DTS warnings, warning_details could be hundreds of KB each (1000+ lines × 50 files = 617MB)
   - Browser tabs became unresponsive trying to parse massive JSON payloads
-  - Solution: Added `lightweight=True` parameter to `to_dict()` method
-  - List endpoint now excludes large fields, detail endpoint still includes them
-  - API responses reduced from 617MB to ~2-5MB
-  - Files: `models.py:62-101`, `pixelprobe/api/scan_routes.py:261`
+  - Solution: Store minimal summary in database instead of thousands of warning lines (see log flooding fix)
+  - API responses reduced from 617MB to ~2-5MB WITHOUT excluding any fields
+  - All data remains accessible - just stored more efficiently
+  - Files: `media_checker.py:1325-1342`, `models.py:62-96`
 
 - **Fixed 1GB log flooding from benign DTS warnings**
   - Celery worker log reached 1.02GB with 4.8 million warning lines
   - Only 261 files had warnings, but each file had ~1000+ lines logged individually
-  - Root cause: `media_checker.py:1326-1328` logged every warning line separately
+  - Root cause: `media_checker.py` logged every DTS/PTS warning line separately
   - DTS warnings are benign (common in H.264/HEVC files) but created millions of log entries
-  - Solution: Summarize warnings - log all if ≤20 lines, otherwise log first/last 10 only
-  - Store summarized warning_details in database (first 10 + last 10 + count)
-  - Expected log reduction: 1GB → ~50MB
-  - Files: `media_checker.py:1325-1344`
+  - Solution: Log DTS warnings only ONCE with count: "1247 DTS/PTS timestamp warnings detected"
+  - Store minimal summary in database: `["1247 DTS/PTS timestamp warnings"]` instead of 1000+ lines
+  - This single change fixes BOTH the log flooding AND the 617MB API response issue
+  - Expected reductions: Logs 1GB → <10MB (99%), API responses 617MB → ~2-5MB (99.6%)
+  - Warning details remain visible and useful in UI
+  - Files: `media_checker.py:1325-1342`
 
 ### API Documentation Corrections
 

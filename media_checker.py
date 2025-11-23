@@ -1322,26 +1322,24 @@ class PixelProbe:
                     is_corrupted = True
                 elif (has_nal_errors or has_reference_frame_warnings or has_dts_pts_warnings) and result.returncode == 0:
                     # NAL errors, reference frame warnings, or DTS/PTS warnings only - mark as warning instead of corrupted
-                    # Summarize warnings to avoid log flooding (files can have thousands of DTS warnings)
+                    # For DTS warnings, only log once with count to avoid log flooding
                     warning_count = len(error_lines)
-                    logger.info(f"BENIGN WARNING in {file_path}: {warning_count} warning lines detected")
-                    if warning_count <= 20:
-                        # Log all warnings if there are only a few
-                        for line in error_lines:
-                            logger.warning(line)
-                        warning_details = error_lines
+
+                    # Determine warning type for concise logging
+                    if has_dts_pts_warnings:
+                        warning_type = "DTS/PTS timestamp warnings"
+                    elif has_nal_errors:
+                        warning_type = "NAL unit errors"
+                    elif has_reference_frame_warnings:
+                        warning_type = "reference frame warnings"
                     else:
-                        # For large warning sets, log summary and store first/last 10 lines only
-                        logger.warning(f"First 10 warnings: {error_lines[:10]}")
-                        logger.warning(f"Last 10 warnings: {error_lines[-10:]}")
-                        logger.warning(f"({warning_count - 20} additional warnings omitted)")
-                        # Store summarized warning details
-                        warning_details = (
-                            [f"Total warnings: {warning_count}"] +
-                            [f"First: {line}" for line in error_lines[:10]] +
-                            [f"... ({warning_count - 20} warnings omitted) ..."] +
-                            [f"Last: {line}" for line in error_lines[-10:]]
-                        )
+                        warning_type = "warnings"
+
+                    # Log once with count only - no individual warning lines
+                    logger.info(f"BENIGN WARNING in {file_path}: {warning_count} {warning_type} detected (common in H.264/HEVC files)")
+
+                    # Store minimal summary for database
+                    warning_details = [f"{warning_count} {warning_type}"]
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         
