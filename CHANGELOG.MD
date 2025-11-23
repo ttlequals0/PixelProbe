@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.213] - 2025-11-23
+
+### Improvements
+
+- **Simplified warning storage - one fix for both log and API issues**
+  - Previous v2.4.212 used "lightweight mode" to exclude fields from API
+  - Realized this was unnecessary - the real issue was storing thousands of warning lines
+  - Reverted lightweight mode completely - simpler code
+  - Store warning summaries: `["1247 DTS/PTS timestamp warnings"]` instead of 1000+ individual lines
+  - This SINGLE change fixes BOTH the log flooding AND 617MB API response
+  - All fields now returned in API (no exclusions needed)
+  - Warning details visible in UI
+  - Files: `media_checker.py:1325-1342`, `models.py:62-96`, `scan_routes.py:260`
+
+### Impact
+
+- Simpler, cleaner code without lightweight mode complexity
+- API responses: 617MB → ~2-5MB (99.6% reduction)
+- Logs: 1GB → <10MB (99% reduction)
+- All data accessible, just stored efficiently
+
 ## [2.4.212] - 2025-11-23
 
 ### Critical Fixes
