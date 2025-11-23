@@ -44,8 +44,9 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - Modern responsive design with dark/light theme support
 - Real-time scan progress with WebSocket updates
 - Advanced filtering and search capabilities
-- Bulk file selection and management
+- Bulk file selection and management with shift-click range selection
 - Mobile-optimized touch interface
+- In-browser media file viewing and streaming
 - Detailed file corruption reports
 
 ### System Features
@@ -53,7 +54,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **Redis-backed task queue**: Background processing with Celery workers
 - **Docker deployment**: Multi-container architecture (web, workers, database, queue)
 - **REST API**: Comprehensive OpenAPI/Swagger documentation
-- **Monitoring & Reports**: Real-time statistics, PDF/JSON exports, complete audit trail
+- **Monitoring & Reports**: Real-time statistics, trend analytics, storage projections, PDF/JSON exports, complete audit trail
 - **Performance optimized**: Production-tested with millions of files
 
 ### Security & Authentication
@@ -155,6 +156,29 @@ Create and manage automated scan schedules:
 - Support for both cron expressions and simple intervals
 - Multiple scan types: Normal Scan, Cleanup, Integrity Check
 - View next run times and last execution status
+
+#### Trend Analytics
+![Trend Analytics](docs/screenshots/features/trends-analytics.png)
+
+Comprehensive analytics and insights over multiple time periods:
+- **Multi-period Analysis**: View trends across 30 days, 60 days, 90 days, and 1 year
+- **Corruption Trends**: Track corruption rates, total scanned files, corrupted files, and files with warnings
+- **Top Corrupted Types**: Identify which file types have the most corruption issues
+- **Storage Analytics**: Monitor total storage, growth rates, and storage projections
+- **Growth Projections**: Predict storage needs for the next 30 days and 1 year based on historical data
+- **Performance Metrics**: Track average scan duration, files per day, and file types scanned
+- **Visual Charts**: Interactive horizontal bar charts showing storage distribution by file type with log scale
+- **File Type Breakdown**: Complete listing of all file types with file counts and storage sizes
+
+#### Exclusions Management
+![Exclusions Management](docs/screenshots/features/exclusions-management.png)
+
+Fine-tune scanning behavior by excluding specific paths and file types:
+- **Excluded Paths**: Skip entire directories (e.g., `/media/temp`, `/media/.thumbnails`, backup folders)
+- **Excluded Extensions**: Ignore specific file types (e.g., `.tmp`, `.part`, `.download`)
+- **Interactive UI**: Add and remove exclusions without restarting the application
+- **Real-time Updates**: Changes take effect immediately on the next scan
+- **Performance Optimization**: Reduce scan times by excluding non-media directories
 
 ##  Quick Start
 
@@ -334,11 +358,17 @@ export MEDIA_PATH=/mnt/all-media  # Contains subdirs: movies/, tv/, backup/
 2. **Start a Scan**: Click "Scan All Files" to begin scanning your media directories
 3. **View Results**: Results appear in the table below with corruption status
 4. **Filter Results**: Use the filter buttons to show only corrupted or healthy files
-5. **File Actions**: 
-   - **Rescan**: Re-examine a specific file
+5. **Bulk Selection**: Select multiple files using checkboxes, or use Shift+click to select ranges
+6. **File Actions**:
+   - **View**: Stream and preview media files directly in your browser
+   - **Rescan**: Re-examine a specific file for corruption
    - **Download**: Download the file to your local machine
-6. **Schedules**: Manage automated scan schedules with multiple scan types
-7. **Exclusions**: Interactive management of paths and extensions to exclude
+   - **Mark as Good**: Mark false positives as healthy (supports bulk operations up to 1000 files)
+   - **Integrity Check**: Verify file still exists and hasn't changed
+7. **Schedules**: Manage automated scan schedules with multiple scan types
+8. **Exclusions**: Interactive management of paths and extensions to exclude
+9. **Ignored Errors**: Configure error patterns to suppress known benign warnings (e.g., codec-specific messages)
+10. **Trend Analytics**: View corruption trends, storage growth, and projections over multiple time periods
 
 ### API Documentation
 
@@ -364,6 +394,7 @@ PixelProbe provides a comprehensive REST API with OpenAPI/Swagger documentation.
 
 #### Scanning Endpoints
 - `GET /api/stats` - Get scanning statistics
+- `GET /api/trends` - Get corruption and storage trends over multiple time periods (30/60/90 days, 1 year)
 - `GET /api/scan-results` - Get paginated scan results with filtering
 - `POST /api/scan` - Start a directory scan
 - `POST /api/scan/parallel` - Start parallel scan with Celery
@@ -395,7 +426,7 @@ PixelProbe provides a comprehensive REST API with OpenAPI/Swagger documentation.
 - `DELETE /api/ignored-errors/{id}` - Remove error pattern
 
 #### Data Export
-- `POST /api/export` - Export scan results (CSV, JSON, Excel)
+- `POST /api/export` - Export scan results (CSV, JSON, PDF)
 - `GET /api/reports` - List generated reports
 - `GET /api/reports/{filename}` - Download specific report
 

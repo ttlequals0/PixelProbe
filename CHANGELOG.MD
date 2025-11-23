@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.215] - 2025-11-23
+
+### P2-12: Documentation Updates (COMPLETED)
+
+- **README.md comprehensive updates**
+  - Added Trend Analytics section with screenshot and full feature documentation
+  - Added Exclusions Management section with screenshot
+  - Documented shift-click range selection feature for bulk file operations
+  - Added in-browser media viewing and streaming to features list
+  - Enhanced File Actions documentation (View, Mark as Good, Integrity Check)
+  - Added Bulk Selection and Ignored Errors documentation
+  - Added /api/trends endpoint to API documentation
+  - Fixed Excel export documentation bug (corrected to CSV/JSON/PDF only)
+  - Updated Monitoring & Reports features (trend analytics, storage projections)
+  - Files: `README.md`
+
+- **Documentation organization improvements**
+  - Moved INSTALLATION.md to docs/ directory
+  - Moved CONFIGURATION.md to docs/ directory
+  - Moved TROUBLESHOOTING.md to docs/ directory
+  - All documentation now properly organized in docs/ folder
+
+- **Screenshots verified**
+  - trends-analytics.png referenced and exists
+  - exclusions-management.png referenced and exists
+  - All screenshot references validated
+
+### New UI Feature: Shift-Click Range Selection
+
+- **Multi-select range functionality**
+  - Added shift-click to select ranges of files in results table
+  - Tracks last clicked checkbox for range selection calculation
+  - Works in both desktop table view and mobile card view
+  - Resets last clicked when using "Select All" checkbox
+  - Properly integrates with existing bulk operations (Mark as Good, Rescan, etc.)
+  - Files: `static/js/app.js`
+
+### P2 Progress
+
+- P2-12: Documentation Updates - COMPLETED
+- Overall P2 Progress: 83% (5 of 6 items complete)
+- Remaining: P2-11 Frontend Build Process
+
 ## [2.4.214] - 2025-11-23
 
 ### Critical Hotfix

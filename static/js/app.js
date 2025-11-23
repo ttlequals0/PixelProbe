@@ -894,6 +894,7 @@ class TableManager {
         this.filter = 'all';
         this.searchQuery = '';
         this.selectedFiles = new Set();
+        this.lastClickedCheckbox = null; // Track last clicked checkbox for shift-select
     }
 
     async init() {
@@ -996,6 +997,7 @@ class TableManager {
                         this.selectedFiles.delete(parseInt(cb.value));
                     }
                 });
+                this.lastClickedCheckbox = null; // Reset last clicked when using select all
                 this.updateSelectionUI();
             });
         }
@@ -1054,17 +1056,11 @@ class TableManager {
             if (!tbody) return;
 
             tbody.innerHTML = data.results.map(file => this.renderRow(file)).join('');
-            
-            // Re-bind checkbox events
+
+            // Re-bind checkbox events with shift-select support
             tbody.querySelectorAll('.file-checkbox').forEach(cb => {
-                cb.addEventListener('change', (e) => {
-                    const fileId = parseInt(e.target.value);
-                    if (e.target.checked) {
-                        this.selectedFiles.add(fileId);
-                    } else {
-                        this.selectedFiles.delete(fileId);
-                    }
-                    this.updateSelectionUI();
+                cb.addEventListener('click', (e) => {
+                    this.handleCheckboxClick(e, data.results);
                 });
             });
         }
@@ -1084,17 +1080,11 @@ class TableManager {
         }
 
         container.innerHTML = data.results.map(file => this.renderMobileCard(file)).join('');
-        
-        // Re-bind checkbox events for mobile
+
+        // Re-bind checkbox events for mobile with shift-select support
         container.querySelectorAll('.file-checkbox').forEach(cb => {
-            cb.addEventListener('change', (e) => {
-                const fileId = parseInt(e.target.value);
-                if (e.target.checked) {
-                    this.selectedFiles.add(fileId);
-                } else {
-                    this.selectedFiles.delete(fileId);
-                }
-                this.updateSelectionUI();
+            cb.addEventListener('click', (e) => {
+                this.handleCheckboxClick(e, data.results);
             });
         });
     }
@@ -1319,6 +1309,53 @@ class TableManager {
                 }
             });
         });
+    }
+
+    handleCheckboxClick(event, allFiles) {
+        const checkbox = event.target;
+        const fileId = parseInt(checkbox.value);
+
+        // If shift key is pressed and we have a last clicked checkbox, select range
+        if (event.shiftKey && this.lastClickedCheckbox !== null) {
+            // Get all checkboxes currently in the DOM
+            const allCheckboxes = Array.from(document.querySelectorAll('.file-checkbox'));
+
+            // Find indices of current and last clicked checkboxes
+            const currentIndex = allCheckboxes.findIndex(cb => parseInt(cb.value) === fileId);
+            const lastIndex = allCheckboxes.findIndex(cb => parseInt(cb.value) === this.lastClickedCheckbox);
+
+            if (currentIndex !== -1 && lastIndex !== -1) {
+                // Determine the range
+                const startIndex = Math.min(currentIndex, lastIndex);
+                const endIndex = Math.max(currentIndex, lastIndex);
+
+                // Select all checkboxes in the range
+                const shouldCheck = checkbox.checked;
+                for (let i = startIndex; i <= endIndex; i++) {
+                    const cb = allCheckboxes[i];
+                    cb.checked = shouldCheck;
+                    const id = parseInt(cb.value);
+                    if (shouldCheck) {
+                        this.selectedFiles.add(id);
+                    } else {
+                        this.selectedFiles.delete(id);
+                    }
+                }
+            }
+        } else {
+            // Normal checkbox click (no shift key)
+            if (checkbox.checked) {
+                this.selectedFiles.add(fileId);
+            } else {
+                this.selectedFiles.delete(fileId);
+            }
+        }
+
+        // Update last clicked checkbox
+        this.lastClickedCheckbox = fileId;
+
+        // Update UI
+        this.updateSelectionUI();
     }
 
     updateSelectionUI() {
