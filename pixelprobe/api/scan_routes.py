@@ -257,7 +257,8 @@ def get_scan_results():
     # Build response
     results = []
     for result in pagination.items:
-        result_dict = result.to_dict()
+        # Use lightweight mode for list view to avoid massive payloads
+        result_dict = result.to_dict(lightweight=True)
         
         # Convert timestamps to configured timezone for display
         if result.scan_date:

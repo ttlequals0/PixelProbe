@@ -668,30 +668,6 @@ paths:
         '404':
           description: Result not found
 
-  /scan-results/{result_id}/mark-good:
-    post:
-      summary: Mark file as good (false positive)
-      description: |
-        Mark a file as not corrupted, even if the scan detected corruption.
-
-        **Example:**
-        ```bash
-        curl -X POST http://your-server/api/scan-results/123/mark-good \
-          -H "Authorization: Bearer YOUR_TOKEN"
-        ```
-      tags: [Maintenance]
-      parameters:
-        - name: result_id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: File marked as good successfully
-        '404':
-          description: Result not found
-
   /scan-file:
     post:
       summary: Scan a single file
@@ -915,24 +891,6 @@ paths:
           description: Invalid request
         '503':
           description: Celery workers not available
-
-  /rescan-corrupted:
-    post:
-      summary: Rescan all corrupted files
-      description: |
-        Re-scan all files that were previously marked as corrupted.
-
-        **Example:**
-        ```bash
-        curl -X POST http://your-server/api/rescan-corrupted \
-          -H "Authorization: Bearer YOUR_TOKEN"
-        ```
-      tags: [Scan]
-      responses:
-        '200':
-          description: Rescan initiated successfully
-        '409':
-          description: Scan already in progress
 
   /reset-for-rescan:
     post:
@@ -1201,49 +1159,7 @@ paths:
           description: System information retrieved successfully
 
   # Admin Endpoints
-  /admin/settings:
-    get:
-      summary: Get application settings
-      description: |
-        Retrieve current application configuration settings.
-
-        **Example:**
-        ```bash
-        curl -X GET http://your-server/api/admin/settings \
-          -H "Authorization: Bearer YOUR_TOKEN"
-        ```
-      tags: [Admin]
-      responses:
-        '200':
-          description: Settings retrieved successfully
-
-    put:
-      summary: Update application settings
-      description: |
-        Update application configuration settings.
-
-        **Example:**
-        ```bash
-        curl -X PUT http://your-server/api/admin/settings \
-          -H "Authorization: Bearer YOUR_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d '{
-            "scan_interval": 43200,
-            "max_file_size": 21474836480
-          }'
-        ```
-      tags: [Admin]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        '200':
-          description: Settings updated successfully
-
-  /admin/scan-config:
+  /configurations:
     get:
       summary: Get scan configurations
       description: |
@@ -1251,7 +1167,7 @@ paths:
 
         **Example:**
         ```bash
-        curl -X GET http://your-server/api/admin/scan-config \
+        curl -X GET http://your-server/api/configurations \
           -H "Authorization: Bearer YOUR_TOKEN"
         ```
       tags: [Admin]
@@ -1266,7 +1182,7 @@ paths:
 
         **Example:**
         ```bash
-        curl -X POST http://your-server/api/admin/scan-config \
+        curl -X POST http://your-server/api/configurations \
           -H "Authorization: Bearer YOUR_TOKEN" \
           -H "Content-Type: application/json" \
           -d '{
@@ -1291,176 +1207,6 @@ paths:
       responses:
         '200':
           description: Configuration added successfully
-
-  /admin/scan-config/{config_id}:
-    delete:
-      summary: Delete scan configuration
-      description: |
-        Remove a directory from the scan configuration.
-
-        **Example:**
-        ```bash
-        curl -X DELETE http://your-server/api/admin/scan-config/3 \
-          -H "Authorization: Bearer YOUR_TOKEN"
-        ```
-      tags: [Admin]
-      parameters:
-        - name: config_id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: Configuration deleted successfully
-        '404':
-          description: Configuration not found
-
-    put:
-      summary: Update scan configuration
-      description: |
-        Update an existing scan configuration.
-
-        **Example:**
-        ```bash
-        curl -X PUT http://your-server/api/admin/scan-config/1 \
-          -H "Authorization: Bearer YOUR_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d '{"is_active": false}'
-        ```
-      tags: [Admin]
-      parameters:
-        - name: config_id
-          in: path
-          required: true
-          schema:
-            type: integer
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                path:
-                  type: string
-                is_active:
-                  type: boolean
-      responses:
-        '200':
-          description: Configuration updated successfully
-        '404':
-          description: Configuration not found
-
-  /admin/scan-config/test:
-    post:
-      summary: Test scan configuration
-      description: |
-        Test if a directory path is valid and accessible for scanning.
-
-        **Example:**
-        ```bash
-        curl -X POST http://your-server/api/admin/scan-config/test \
-          -H "Authorization: Bearer YOUR_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d '{"path": "/mnt/media/new-directory"}'
-        ```
-      tags: [Admin]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [path]
-              properties:
-                path:
-                  type: string
-      responses:
-        '200':
-          description: Test results returned
-
-  /admin/db-backup:
-    post:
-      summary: Backup database
-      description: |
-        Create a backup of the PixelProbe database.
-
-        **Example:**
-        ```bash
-        curl -X POST http://your-server/api/admin/db-backup \
-          -H "Authorization: Bearer YOUR_TOKEN"
-        ```
-      tags: [Admin]
-      responses:
-        '200':
-          description: Backup created successfully
-
-  /admin/db-backups:
-    get:
-      summary: List database backups
-      description: |
-        Retrieve a list of all available database backups.
-
-        **Example:**
-        ```bash
-        curl -X GET http://your-server/api/admin/db-backups \
-          -H "Authorization: Bearer YOUR_TOKEN"
-        ```
-      tags: [Admin]
-      responses:
-        '200':
-          description: Backup list retrieved successfully
-
-  /admin/db-restore:
-    post:
-      summary: Restore database backup
-      description: |
-        Restore the database from a backup file.
-
-        **Example:**
-        ```bash
-        curl -X POST http://your-server/api/admin/db-restore \
-          -H "Authorization: Bearer YOUR_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d '{"backup_file": "pixelprobe_backup_20240110_083020.db"}'
-        ```
-      tags: [Admin]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [backup_file]
-              properties:
-                backup_file:
-                  type: string
-      responses:
-        '200':
-          description: Database restored successfully
-
-  /admin/logs:
-    get:
-      summary: Get application logs
-      description: |
-        Retrieve recent application logs for debugging and monitoring.
-
-        **Example:**
-        ```bash
-        curl -X GET "http://your-server/api/admin/logs?lines=100" \
-          -H "Authorization: Bearer YOUR_TOKEN"
-        ```
-      tags: [Admin]
-      parameters:
-        - name: lines
-          in: query
-          schema:
-            type: integer
-            default: 100
-      responses:
-        '200':
-          description: Logs retrieved successfully
 
   /mark-as-good:
     post:

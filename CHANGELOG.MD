@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.212] - 2025-11-23
+
+### Critical Fixes
+
+- **Fixed NameError: 'warning_details' is not defined in _enhanced_corruption_check()**
+  - This bug caused 39 files to remain stuck in "pending" status after scan completion
+  - Root cause: `warning_details` was never initialized in `_enhanced_corruption_check()` function
+  - The function tried to call `warning_details.extend()` at lines 1680 and 1692 without initialization
+  - Also fixed return value to include `warning_details` as 4th parameter
+  - Fixed unpacking at caller (line 1367) to handle 4 return values
+  - This is the ACTUAL fix - previous fixes in v2.4.211, v2.4.190, v2.3.107, and v2.3.79 fixed different instances of the same bug but missed this one
+  - Files: `media_checker.py:1644`, `media_checker.py:1699`, `media_checker.py:1367`
+
+- **Fixed 617MB API response payloads causing UI to freeze**
+  - `/api/scan-results` was returning 617MB of data for just 50 results
+  - Root cause: `ScanResult.to_dict()` included full `scan_output`, `warning_details`, and `media_info` fields
+  - For files with thousands of DTS warnings, these fields could be hundreds of KB each
+  - Browser tabs became unresponsive trying to parse massive JSON payloads
+  - Solution: Added `lightweight=True` parameter to `to_dict()` method
+  - List endpoint now excludes large fields, detail endpoint still includes them
+  - API responses reduced from 617MB to ~2-5MB
+  - Files: `models.py:62-101`, `pixelprobe/api/scan_routes.py:261`
+
+- **Fixed 1GB log flooding from benign DTS warnings**
+  - Celery worker log reached 1.02GB with 4.8 million warning lines
+  - Only 261 files had warnings, but each file had ~1000+ lines logged individually
+  - Root cause: `media_checker.py:1326-1328` logged every warning line separately
+  - DTS warnings are benign (common in H.264/HEVC files) but created millions of log entries
+  - Solution: Summarize warnings - log all if ≤20 lines, otherwise log first/last 10 only
+  - Store summarized warning_details in database (first 10 + last 10 + count)
+  - Expected log reduction: 1GB → ~50MB
+  - Files: `media_checker.py:1325-1344`
+
+### API Documentation Corrections
+
+- **Removed 12+ fake/non-existent endpoints from openapi.yaml**
+  - Deleted completely fabricated database backup endpoints:
+    - `POST /admin/db-backup` (never implemented)
+    - `GET /admin/db-backups` (never implemented)
+    - `POST /admin/db-restore` (never implemented)
+  - Deleted non-existent admin endpoints:
+    - `GET /admin/settings` (never implemented)
+    - `PUT /admin/settings` (never implemented)
+    - `GET /admin/logs` (never implemented)
+    - `DELETE /admin/scan-config/{config_id}` (never implemented)
+    - `PUT /admin/scan-config/{config_id}` (never implemented)
+    - `POST /admin/scan-config/test` (never implemented)
+  - Deleted non-existent scan endpoints:
+    - `POST /rescan-corrupted` (never implemented)
+    - `POST /scan-results/{result_id}/mark-good` (batch operation exists at `/mark-as-good` instead)
+  - Fixed path mismatches:
+    - Changed `/admin/scan-config` → `/configurations` (actual endpoint)
+    - Updated all example curl commands to use correct paths
+  - The recent fix in v2.4.211 made this problem visible by exposing the full openapi.yaml
+  - Files: `openapi.yaml` (removed ~200 lines of fake documentation)
+
+### Impact
+
+These fixes resolve three major production issues:
+1. Scans will now complete fully without files stuck in "pending" status
+2. UI will be responsive even with large datasets (no more 617MB API responses)
+3. Logs will remain manageable size (no more 1GB log files from benign warnings)
+4. API documentation now accurately reflects actual available endpoints
+
 ## [2.4.211] - 2025-11-22
 
 ### Fixed

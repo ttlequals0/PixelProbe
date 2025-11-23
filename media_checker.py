@@ -1322,11 +1322,26 @@ class PixelProbe:
                     is_corrupted = True
                 elif (has_nal_errors or has_reference_frame_warnings or has_dts_pts_warnings) and result.returncode == 0:
                     # NAL errors, reference frame warnings, or DTS/PTS warnings only - mark as warning instead of corrupted
-                    # Store the ACTUAL ffmpeg output, not a generic summary
-                    logger.info(f"BENIGN WARNING in middle of {file_path}:")
-                    for line in error_lines:
-                        logger.warning(line)
-                    warning_details = error_lines  # Pass through actual ffmpeg stderr
+                    # Summarize warnings to avoid log flooding (files can have thousands of DTS warnings)
+                    warning_count = len(error_lines)
+                    logger.info(f"BENIGN WARNING in {file_path}: {warning_count} warning lines detected")
+                    if warning_count <= 20:
+                        # Log all warnings if there are only a few
+                        for line in error_lines:
+                            logger.warning(line)
+                        warning_details = error_lines
+                    else:
+                        # For large warning sets, log summary and store first/last 10 lines only
+                        logger.warning(f"First 10 warnings: {error_lines[:10]}")
+                        logger.warning(f"Last 10 warnings: {error_lines[-10:]}")
+                        logger.warning(f"({warning_count - 20} additional warnings omitted)")
+                        # Store summarized warning details
+                        warning_details = (
+                            [f"Total warnings: {warning_count}"] +
+                            [f"First: {line}" for line in error_lines[:10]] +
+                            [f"... ({warning_count - 20} warnings omitted) ..."] +
+                            [f"Last: {line}" for line in error_lines[-10:]]
+                        )
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         
@@ -1364,11 +1379,13 @@ class PixelProbe:
         # Always run enhanced checks for comprehensive validation (merge deep scan into regular)
         # Since we're checking entire files anyway, might as well be thorough
         logger.info(f"Running comprehensive validation for {file_path}")
-        enhanced_corrupted, enhanced_details, enhanced_output = self._enhanced_corruption_check(file_path, file_size_gb)
+        enhanced_corrupted, enhanced_details, enhanced_output, enhanced_warnings = self._enhanced_corruption_check(file_path, file_size_gb)
         if enhanced_corrupted:
             is_corrupted = True
             corruption_details.extend(enhanced_details)
             scan_output.extend(enhanced_output)
+        if enhanced_warnings:
+            warning_details.extend(enhanced_warnings)
         
         # Additional HEVC Main 10 specific checks
         if not is_corrupted and codec_name == 'hevc' and codec_profile and 'Main 10' in codec_profile:
@@ -1641,6 +1658,7 @@ class PixelProbe:
         corruption_details = []
         is_corrupted = False
         enhanced_output = []
+        warning_details = []
         
         logger.info(f"Starting enhanced corruption analysis for {file_path}")
         enhanced_output.append(f"=== Enhanced Corruption Analysis for {file_size_gb:.2f}GB file ===")
@@ -1695,7 +1713,7 @@ class PixelProbe:
             enhanced_output.append("  Result: PASSED")
         
         enhanced_output.append(f"=== Enhanced Analysis Complete: {'CORRUPTED' if is_corrupted else 'CLEAN'} ===")
-        return is_corrupted, corruption_details, enhanced_output
+        return is_corrupted, corruption_details, enhanced_output, warning_details
     
     def _check_frame_integrity(self, file_path):
         """Verify frame count matches expected count based on duration and framerate"""

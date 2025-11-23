@@ -59,7 +59,7 @@ class ScanResult(db.Model):
     # Output rotation tracking
     output_rotation_enabled = db.Column(db.Boolean, nullable=True)  # Per-record rotation setting
     
-    def to_dict(self):
+    def to_dict(self, lightweight=False):
         def convert_to_tz(dt):
             """Return datetime as ISO string for display"""
             if dt is None:
@@ -69,8 +69,8 @@ class ScanResult(db.Model):
                 dt = dt.replace(tzinfo=timezone.utc)
             # Return as ISO string - timezone conversion handled in API routes
             return dt.isoformat()
-        
-        return {
+
+        base_dict = {
             'id': self.id,
             'file_path': self.file_path,
             'file_size': self.file_size,
@@ -86,14 +86,19 @@ class ScanResult(db.Model):
             'last_integrity_check_date': convert_to_tz(self.last_integrity_check_date),
             'scan_tool': self.scan_tool,
             'scan_duration': self.scan_duration,
-            'scan_output': self.scan_output,
             'has_warnings': self.has_warnings,
-            'warning_details': self.warning_details,
             'discovered_date': convert_to_tz(self.discovered_date),
             'error_message': self.error_message,
-            'media_info': self.media_info,
             'file_exists': self.file_exists
         }
+
+        # Only include large fields when not in lightweight mode
+        if not lightweight:
+            base_dict['scan_output'] = self.scan_output
+            base_dict['warning_details'] = self.warning_details
+            base_dict['media_info'] = self.media_info
+
+        return base_dict
     
     def append_output(self, new_output):
         """
