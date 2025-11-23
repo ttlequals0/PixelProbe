@@ -1025,6 +1025,7 @@ class TableManager {
                         break;
                     case 'healthy':
                         params.is_corrupted = 'false';
+                        params.has_warnings = 'false';
                         break;
                     case 'warning':
                         params.has_warnings = 'true';

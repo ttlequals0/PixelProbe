@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.219] - 2025-11-23
+
+### Bug Fixes
+
+- **Fix Healthy Only filter showing warning files**
+  - Fixed Healthy Only filter to exclude files with warnings
+  - Added has_warnings: false parameter when healthy filter is active
+  - Previously healthy filter only checked is_corrupted: false
+  - Files can have is_corrupted: false AND has_warnings: true
+  - Healthy files should have no corruption AND no warnings
+  - Files: `static/js/app.js`
+
 ## [2.4.218] - 2025-11-23
 
 ### Bug Fixes
