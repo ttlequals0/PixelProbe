@@ -719,6 +719,34 @@ with app.app_context():
         logger.warning(f"Could not clean up stuck scans on startup: {e}")
         # This is not critical for app startup, so we continue
 
+    # Clean up bloated scan results from pre-v2.4.213 (when warning_details stored thousands of lines)
+    # Files with large scan_output or warning_details will be marked for rescan
+    try:
+        from models import ScanResult
+        # Find records with large text fields (>50KB indicates old bloated format)
+        # Using SQL length() function for efficiency
+        bloated_results = db.session.query(ScanResult).filter(
+            db.or_(
+                db.func.length(ScanResult.scan_output) > 50000,
+                db.func.length(ScanResult.warning_details) > 50000
+            )
+        ).all()
+
+        if bloated_results:
+            logger.info(f"Found {len(bloated_results)} scan results with bloated output fields (pre-v2.4.213 format)")
+            logger.info("Deleting bloated records to trigger efficient rescan with v2.4.213+ format")
+
+            for result in bloated_results:
+                db.session.delete(result)
+
+            db.session.commit()
+            logger.info(f"Deleted {len(bloated_results)} bloated scan results - they will be rescanned with efficient storage")
+        else:
+            logger.debug("No bloated scan results found - database is clean")
+    except Exception as e:
+        logger.warning(f"Could not clean up bloated scan results on startup: {e}")
+        # Not critical for app startup
+
 if __name__ == '__main__':
     # Start the application (initialization already done above)
     app.run(

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.214] - 2025-11-23
+
+### Critical Hotfix
+
+- **Automatic cleanup of bloated scan results on startup**
+  - v2.4.213 fixed NEW scans to store warning summaries efficiently
+  - But OLD scan results (pre-v2.4.213) still had thousands of lines in database
+  - This caused 617 MB API responses and empty scan results table
+  - Solution: Automatically delete bloated records on startup (>50KB scan_output or warning_details)
+  - Deleted files will be automatically rescanned with efficient v2.4.213+ storage format
+  - Self-healing: database cleans itself on every deployment
+  - Files: `app.py:722-748`
+
+### Impact
+
+- Scan results table loads instantly after deployment
+- Bloated records automatically cleaned up (one-time on v2.4.214 deployment)
+- Future deployments also protected - cleanup runs every startup
+- Affected files will be rescanned with efficient storage (<100 bytes per warning)
+
 ## [2.4.213] - 2025-11-23
 
 ### Improvements
