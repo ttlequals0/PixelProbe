@@ -3987,6 +3987,13 @@ class PixelProbeApp {
         }
     }
 
+    openModal(modalId) {
+        const modal = document.querySelector(`#${modalId}`);
+        if (modal) {
+            modal.style.display = 'block';
+        }
+    }
+
     closeModal(modalId) {
         const modal = document.querySelector(`#${modalId}`);
         if (modal) {
