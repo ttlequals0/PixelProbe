@@ -3,7 +3,52 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
+
+## [2.5.2] - 2025-11-24
+
+### Hotfix Release: Critical Bug Fixes
+
+This hotfix release fixes multiple critical production issues found in v2.5.1.
+
+#### Fixed
+
+- **Trends Dashboard Endpoint - CORRECTED AGAIN**
+  - v2.5.1 incorrectly "fixed" endpoint from `/stats/trends` to `/trends`
+  - This was WRONG - the correct endpoint is `/api/stats/trends`
+  - Changed from `/trends` to `/stats/trends` in `static/js/app.js:194`
+  - The `/api/stats/trends` endpoint returns scan counter metrics (correct data structure)
+  - The `/api/trends` endpoint returns corruption/storage trends (different structure)
+
+- **Edit Schedule Button 405 Error**
+  - Added missing GET endpoint for individual schedules
+  - Frontend was calling `GET /api/schedules/{id}` which returned 405 Method Not Allowed
+  - Added new route in `pixelprobe/api/admin_routes.py`:
+    ```python
+    @admin_bp.route('/schedules/<int:schedule_id>', methods=['GET'])
+    def get_schedule(schedule_id)
+    ```
+  - Edit schedule button now works correctly
+
+#### Added
+
+- **Healthcheck Visual Indicators**
+  - Added visual indicators to show which schedules have healthcheck configured
+  - Backend changes (`models.py` ScanSchedule.to_dict()):
+    - Added `has_healthcheck` field (bool)
+    - Added `healthcheck_active` field (bool)
+  - Frontend changes (`static/js/app.js`):
+    - Healthcheck button changes color to green when configured
+    - Checkmark (✓) appears on button when healthcheck exists
+    - Tooltip shows status: "Healthcheck Active", "Healthcheck Configured (Inactive)", or "Configure Healthcheck"
+  - No need to click button to see if healthcheck is configured
+
+#### Root Cause Analysis
+
+The v2.5.1 trends fix was based on incorrect understanding of the endpoint structure:
+- CHANGELOG.md documented the feature correctly as `/api/stats/trends`
+- But I mistakenly thought the fix should be to `/api/trends` (removing /stats/)
+- The correct fix is to keep `/stats/` in the path: `/api/stats/trends`
 
 ## [2.5.1] - 2025-11-24
 

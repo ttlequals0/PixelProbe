@@ -236,6 +236,13 @@ def get_schedules():
     schedules = ScanSchedule.query.all()
     return {'schedules': [schedule.to_dict() for schedule in schedules]}
 
+@admin_bp.route('/schedules/<int:schedule_id>', methods=['GET'])
+@auth_required
+def get_schedule(schedule_id):
+    """Get a specific scan schedule by ID"""
+    schedule = ScanSchedule.query.get_or_404(schedule_id)
+    return jsonify(schedule.to_dict())
+
 @admin_bp.route('/schedules', methods=['POST'])
 @auth_required
 def create_schedule():

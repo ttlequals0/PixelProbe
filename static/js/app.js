@@ -191,7 +191,7 @@ class APIClient {
     }
 
     async getTrends(days = 30) {
-        return this.request(`/trends?days=${days}`);
+        return this.request(`/stats/trends?days=${days}`);
     }
 
     async getDurationHistogram(days = 30, buckets = 10) {
@@ -3503,10 +3503,10 @@ class PixelProbeApp {
                                             title="Edit Schedule">
                                         <i class="fas fa-edit"></i>
                                     </button>
-                                    <button class="btn btn-sm btn-info"
+                                    <button class="btn btn-sm ${schedule.has_healthcheck ? 'btn-success' : 'btn-info'}"
                                             onclick="app.showHealthcheckConfig(${schedule.id}, '${this.escapeHtml(schedule.name)}')"
-                                            title="Configure Healthcheck">
-                                        <i class="fas fa-heartbeat"></i>
+                                            title="${schedule.has_healthcheck ? (schedule.healthcheck_active ? 'Healthcheck Active' : 'Healthcheck Configured (Inactive)') : 'Configure Healthcheck'}">
+                                        <i class="fas fa-heartbeat"></i>${schedule.has_healthcheck ? ' ✓' : ''}
                                     </button>
                                     <button class="btn btn-sm ${schedule.is_active ? 'btn-warning' : 'btn-success'}"
                                             onclick="app.toggleSchedule(${schedule.id}, ${!schedule.is_active})">

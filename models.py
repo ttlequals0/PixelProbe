@@ -236,7 +236,9 @@ class ScanSchedule(db.Model):
             'last_run': convert_to_tz(self.last_run),
             'next_run': convert_to_tz(self.next_run),
             'created_at': convert_to_tz(self.created_at),
-            'created_date': convert_to_tz(self.created_date)
+            'created_date': convert_to_tz(self.created_date),
+            'has_healthcheck': self.healthcheck_config is not None,
+            'healthcheck_active': self.healthcheck_config.is_active if self.healthcheck_config else False
         }
 
 class HealthcheckConfig(db.Model):
