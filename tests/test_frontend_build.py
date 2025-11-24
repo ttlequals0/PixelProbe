@@ -10,6 +10,7 @@ This module tests:
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 import pytest
@@ -49,7 +50,10 @@ class TestWebpackBuild:
             text=True
         )
         assert result.returncode == 0, f"webpack build failed: {result.stderr}"
-        assert 'compiled successfully' in result.stdout, "Build should complete successfully"
+        # Strip ANSI color codes from output before checking
+        ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+        clean_output = ansi_escape.sub('', result.stdout)
+        assert 'compiled successfully' in clean_output, "Build should complete successfully"
 
     def test_dist_directory_created(self):
         """Test that dist directory is created after build"""
