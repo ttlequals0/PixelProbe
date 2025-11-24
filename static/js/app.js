@@ -191,7 +191,7 @@ class APIClient {
     }
 
     async getTrends(days = 30) {
-        return this.request(`/stats/trends?days=${days}`);
+        return this.request(`/trends?days=${days}`);
     }
 
     async getDurationHistogram(days = 30, buckets = 10) {
@@ -3498,6 +3498,11 @@ class PixelProbeApp {
                             <div class="schedule-header">
                                 <h4>${this.escapeHtml(schedule.name)}</h4>
                                 <div class="schedule-actions">
+                                    <button class="btn btn-sm btn-primary"
+                                            onclick="app.showEditSchedule(${schedule.id})"
+                                            title="Edit Schedule">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
                                     <button class="btn btn-sm btn-info"
                                             onclick="app.showHealthcheckConfig(${schedule.id}, '${this.escapeHtml(schedule.name)}')"
                                             title="Configure Healthcheck">
@@ -3548,13 +3553,126 @@ class PixelProbeApp {
         const scheduleType = document.querySelector('#schedule-type').value;
         const cronInput = document.querySelector('#cron-input');
         const intervalInput = document.querySelector('#interval-input');
-        
+
         if (scheduleType === 'cron') {
             cronInput.style.display = 'block';
             intervalInput.style.display = 'none';
         } else {
             cronInput.style.display = 'none';
             intervalInput.style.display = 'block';
+        }
+    }
+
+    toggleEditScheduleInput() {
+        const scheduleType = document.querySelector('#edit-schedule-type').value;
+        const cronInput = document.querySelector('#edit-cron-input');
+        const intervalInput = document.querySelector('#edit-interval-input');
+
+        if (scheduleType === 'cron') {
+            cronInput.style.display = 'block';
+            intervalInput.style.display = 'none';
+        } else {
+            cronInput.style.display = 'none';
+            intervalInput.style.display = 'block';
+        }
+    }
+
+    async showEditSchedule(scheduleId) {
+        try {
+            // Load schedule data
+            const response = await fetch(`/api/schedules/${scheduleId}`);
+            if (!response.ok) throw new Error('Failed to load schedule');
+
+            const schedule = await response.json();
+
+            // Populate form fields
+            document.getElementById('edit-schedule-id').value = schedule.id;
+            document.getElementById('edit-schedule-name').value = schedule.name || '';
+            document.getElementById('edit-scan-type').value = schedule.scan_type || 'normal';
+            document.getElementById('edit-schedule-paths').value = schedule.scan_paths ? schedule.scan_paths.join('\n') : '';
+            document.getElementById('edit-force-rescan').checked = schedule.force_rescan || false;
+            document.getElementById('edit-is-active').checked = schedule.is_active !== undefined ? schedule.is_active : true;
+
+            // Determine if it's cron or interval
+            const cronExpression = schedule.cron_expression || '';
+            const isCron = !cronExpression.match(/^\d+\s+(hour|day|week)s?$/i);
+
+            if (isCron) {
+                document.getElementById('edit-schedule-type').value = 'cron';
+                document.getElementById('edit-cron-expression').value = cronExpression;
+                document.getElementById('edit-cron-input').style.display = 'block';
+                document.getElementById('edit-interval-input').style.display = 'none';
+            } else {
+                // Parse interval (e.g., "24 hours", "7 days")
+                const match = cronExpression.match(/^(\d+)\s+(hour|day|week)s?$/i);
+                if (match) {
+                    document.getElementById('edit-schedule-type').value = 'interval';
+                    document.getElementById('edit-interval-value').value = match[1];
+                    document.getElementById('edit-interval-unit').value = match[2].toLowerCase() + 's';
+                    document.getElementById('edit-cron-input').style.display = 'none';
+                    document.getElementById('edit-interval-input').style.display = 'block';
+                }
+            }
+
+            // Setup form submission
+            const form = document.getElementById('edit-schedule-form');
+            form.onsubmit = async (e) => {
+                e.preventDefault();
+                await this.saveScheduleEdit();
+            };
+
+            this.openModal('edit-schedule-modal');
+        } catch (error) {
+            console.error('Failed to load schedule for editing:', error);
+            this.showNotification('Failed to load schedule', 'error');
+        }
+    }
+
+    async saveScheduleEdit() {
+        try {
+            const scheduleId = document.getElementById('edit-schedule-id').value;
+            const name = document.getElementById('edit-schedule-name').value;
+            const scanType = document.getElementById('edit-scan-type').value;
+            const paths = document.getElementById('edit-schedule-paths').value;
+            const forceRescan = document.getElementById('edit-force-rescan').checked;
+            const isActive = document.getElementById('edit-is-active').checked;
+            const scheduleType = document.getElementById('edit-schedule-type').value;
+
+            let cronExpression;
+            if (scheduleType === 'cron') {
+                cronExpression = document.getElementById('edit-cron-expression').value;
+            } else {
+                const intervalValue = document.getElementById('edit-interval-value').value;
+                const intervalUnit = document.getElementById('edit-interval-unit').value;
+                cronExpression = `${intervalValue} ${intervalUnit}`;
+            }
+
+            const scanPaths = paths.trim() ? paths.split('\n').map(p => p.trim()).filter(p => p) : [];
+
+            const response = await fetch(`/api/schedules/${scheduleId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    cron_expression: cronExpression,
+                    scan_type: scanType,
+                    scan_paths: scanPaths,
+                    force_rescan: forceRescan,
+                    is_active: isActive
+                })
+            });
+
+            if (response.ok) {
+                this.showNotification('Schedule updated successfully', 'success');
+                this.closeModal('edit-schedule-modal');
+                await this.loadSchedules();
+            } else {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to update schedule');
+            }
+        } catch (error) {
+            console.error('Failed to save schedule:', error);
+            this.showNotification(`Failed to update schedule: ${error.message}`, 'error');
         }
     }
 

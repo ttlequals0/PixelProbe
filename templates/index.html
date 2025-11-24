@@ -561,6 +561,76 @@
         </div>
     </div>
 
+    <!-- Edit Schedule Modal -->
+    <div id="edit-schedule-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Edit Scan Schedule</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="edit-schedule-form">
+                    <input type="hidden" id="edit-schedule-id">
+                    <div class="form-group">
+                        <label for="edit-schedule-name">Schedule Name</label>
+                        <input type="text" id="edit-schedule-name" class="form-control" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-schedule-type">Schedule Type</label>
+                        <select id="edit-schedule-type" class="form-control" onchange="app.toggleEditScheduleInput()">
+                            <option value="cron">Cron Expression</option>
+                            <option value="interval">Interval</option>
+                        </select>
+                    </div>
+                    <div id="edit-cron-input" class="form-group">
+                        <label for="edit-cron-expression">Cron Expression</label>
+                        <input type="text" id="edit-cron-expression" class="form-control" placeholder="0 2 * * *">
+                        <small class="form-text text-muted">Format: minute hour day month day_of_week</small>
+                    </div>
+                    <div id="edit-interval-input" class="form-group" style="display: none;">
+                        <label for="edit-interval-value">Interval</label>
+                        <div class="input-group">
+                            <input type="number" id="edit-interval-value" class="form-control" min="1">
+                            <select id="edit-interval-unit" class="form-control">
+                                <option value="hours">Hours</option>
+                                <option value="days">Days</option>
+                                <option value="weeks">Weeks</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-scan-type">Scan Type</label>
+                        <select id="edit-scan-type" class="form-control">
+                            <option value="normal">Normal Scan (Scan All Files)</option>
+                            <option value="orphan">Cleanup</option>
+                            <option value="file_changes">Integrity Check</option>
+                        </select>
+                        <small class="form-text text-muted">Choose what type of operation to perform</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-schedule-paths">Scan Paths (optional)</label>
+                        <textarea id="edit-schedule-paths" class="form-control" rows="3" placeholder="Leave empty to use default paths"></textarea>
+                        <small class="form-text text-muted">One path per line</small>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="edit-force-rescan"> Force rescan of all files
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="edit-is-active"> Schedule is active
+                        </label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Update Schedule</button>
+                        <button type="button" class="btn btn-secondary" onclick="app.closeModal('edit-schedule-modal')">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <!-- Exclusions Modal -->
     <div id="exclusions-modal" class="modal">
         <div class="modal-content">

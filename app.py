@@ -138,6 +138,7 @@ csrf.exempt(export_bp)
 csrf.exempt(maintenance_bp)
 csrf.exempt(reports_bp)
 csrf.exempt(auth_api_bp)  # Exempt API auth endpoints from CSRF
+csrf.exempt(healthcheck_bp)  # Exempt healthcheck API endpoints from CSRF
 # Note: auth_ui_bp (login/logout pages) should NOT be exempted from CSRF
 
 # Initialize scheduler

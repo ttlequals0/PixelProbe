@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2025-11-24
+
+### Hotfix Release: Bug Fixes & Schedule Editing
+
+This hotfix release addresses critical production bugs and adds the ability to edit existing schedules.
+
+#### Fixed
+
+- **Trends Dashboard Error**
+  - Fixed TypeError when accessing trends dashboard
+  - Root cause: Wrong API endpoint called (`/stats/trends` instead of `/trends`)
+  - The `/trends` endpoint returns corruption/storage trends with the correct data structure
+  - The `/stats/trends` endpoint returns scan counter metrics with a different structure
+  - Files: `static/js/app.js:194`
+
+- **Healthcheck Configuration CSRF Error**
+  - Fixed 400 Bad Request errors when saving healthcheck configurations
+  - Root cause: Healthcheck blueprint not exempted from CSRF protection
+  - Added `csrf.exempt(healthcheck_bp)` to CSRF exemption list
+  - Files: `app.py:141`
+
+#### Added
+
+- **Schedule Editing UI**
+  - Added ability to edit existing scan schedules through the UI
+  - Edit button added to each schedule in the schedules list
+  - New Edit Schedule modal with all schedule fields:
+    - Schedule Name
+    - Schedule Type (Cron Expression / Interval)
+    - Scan Type (Normal / Cleanup / Integrity Check)
+    - Scan Paths
+    - Force Rescan flag
+    - Active status
+  - Backend API already supported editing via PUT `/api/schedules/{id}`
+  - Files: `templates/index.html` (new modal), `static/js/app.js` (new functions)
+
+#### Technical Details
+
+- New JavaScript functions:
+  - `toggleEditScheduleInput()` - Toggle between cron and interval input fields
+  - `showEditSchedule(scheduleId)` - Load schedule data and display edit modal
+  - `saveScheduleEdit()` - Submit PUT request to update schedule
+- Edit modal mirrors Add Schedule modal structure with pre-populated fields
+- Automatic detection of cron vs interval format when loading schedule data
+- Proper error handling and user notifications
+
 ## [2.5.0] - 2025-11-24
 
 ### P3 Features: Enhanced Monitoring & Analytics (Part 1)
