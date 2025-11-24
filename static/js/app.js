@@ -191,7 +191,7 @@ class APIClient {
     }
 
     async getTrends(days = 30) {
-        return this.request(`/stats/trends?days=${days}`);
+        return this.request(`/trends?days=${days}`);
     }
 
     async getDurationHistogram(days = 30, buckets = 10) {
