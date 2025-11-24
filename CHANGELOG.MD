@@ -5,7 +5,98 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
-## [2.5.2] - 2025-11-24
+## [2.5.5] - 2025-11-24
+
+### Critical Hotfix: Scheduler Race Condition in Multi-Worker Deployments
+
+This hotfix resolves a race condition causing 60% failure rate when creating/updating/deleting schedules in multi-worker Gunicorn deployments.
+
+#### Fixed
+
+- **Scheduler Race Condition - Multi-Worker Compatibility**
+  - Error: `'NoneType' object has no attribute 'app_context'` (60% failure rate)
+  - Changed `scheduler.py:558` from `self.app.app_context()` to `current_app.app_context()`
+  - Fixed in `update_schedules()` method of MediaScheduler class
+  - Affects schedule create/update/delete operations via API
+
+#### Root Cause
+
+In multi-worker Gunicorn deployments:
+- Scheduler is initialized in only ONE worker (the one that acquires file lock in app.py:724)
+- Other workers have `scheduler.app = None`
+- When HTTP request hits non-scheduler worker, `scheduler.update_schedules()` is called from `admin_routes.py:301`
+- Method tries to use `self.app.app_context()` but `self.app` is None
+- Failure rate depends on load balancing across workers (reported 2 failures out of 3 attempts = 67%)
+
+#### Solution
+
+Use Flask's `current_app` proxy instead of `self.app`:
+- `current_app` resolves to the app instance in ANY worker during HTTP request context
+- Works correctly in all workers, not just the one with scheduler lock
+- No changes to initialization sequence needed
+- Safe for both single-worker and multi-worker deployments
+
+#### Testing Recommendations
+
+Test schedule operations (create/update/delete) multiple times in production to verify:
+- Success rate improves from ~40% to 100%
+- No more `NoneType` errors in container logs
+- All workers can successfully handle schedule modification requests
+
+## [2.5.4] - 2025-11-24
+
+### Critical Hotfix: Missing openModal() Method
+
+This hotfix adds the missing `openModal()` method that was being called but never implemented.
+
+#### Fixed
+
+- **Edit Schedule Button - FINALLY WORKING**
+  - Added missing `openModal()` method to PixelProbeApp class
+  - Method was called at `static/js/app.js:3624` but never implemented
+  - Regression introduced in v2.5.1 when schedule editing was added
+  - Fix: Added `openModal(modalId)` method at line 3990 (before `closeModal()`)
+  - Mirrors existing `closeModal()` pattern: finds modal by ID and sets `display: 'block'`
+
+- **Trends Modal - Also Fixed**
+  - Trends modal was also broken since v2.5.0
+  - Called `this.openModal('trends-modal')` at line 2014
+  - Now works with the new `openModal()` method
+
+#### Root Cause
+
+When schedule editing feature was added in v2.5.1, the code called `this.openModal()` but the method implementation was never created. This is a common oversight when refactoring direct modal manipulation to use helper methods.
+
+## [2.5.3] - 2025-11-24 [PARTIALLY BROKEN - Edit/Trends buttons don't work]
+
+### Emergency Hotfix: Fix v2.5.2 Regressions
+
+This emergency hotfix corrects critical bugs introduced in v2.5.2.
+
+#### Fixed
+
+- **Trends Dashboard Endpoint - FINALLY CORRECT**
+  - v2.5.2 made the problem WORSE by pointing to wrong endpoint
+  - The v2.5.2 "fix" changed endpoint from `/trends` to `/stats/trends`
+  - This was completely WRONG - there are TWO DIFFERENT endpoints:
+    - `/api/trends` - Returns trend data with `trends[period]` structure (CORRECT for dashboard)
+    - `/api/stats/trends` - Returns scan counter metrics (WRONG data structure)
+  - Changed back from `/stats/trends` to `/trends` in `static/js/app.js:194`
+  - Frontend `renderTrendsSection()` expects `trends.trends[period]` structure
+  - The `/api/trends` endpoint returns exactly that structure
+  - **ROOT CAUSE**: Confusion about which endpoint was correct, didn't verify data structure match
+
+- **Edit Schedule Button 500 Error**
+  - Fixed `NameError: name 'jsonify' is not defined` in `admin_routes.py:244`
+  - Added missing `jsonify` import to `admin_routes.py:1`
+  - v2.5.2 added the GET endpoint but forgot the import
+  - Edit schedule button now actually works
+
+#### Apology
+
+v2.5.2 attempted to fix the trends endpoint but made it worse. The root cause was not verifying which endpoint structure matched the frontend expectations. This hotfix restores the correct endpoint and fixes the import issue that broke schedule editing.
+
+## [2.5.2] - 2025-11-24 [BROKEN - DO NOT USE]
 
 ### Hotfix Release: Critical Bug Fixes
 
