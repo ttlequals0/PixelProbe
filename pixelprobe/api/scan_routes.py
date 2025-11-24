@@ -208,9 +208,14 @@ def get_scan_results():
     # Apply warnings filter
     if has_warnings == 'true':
         query = query.filter(
-            (ScanResult.has_warnings == True) & 
+            (ScanResult.has_warnings == True) &
             (ScanResult.marked_as_good == False) &
             (ScanResult.is_corrupted == False)  # Exclude corrupted files from warnings filter
+        )
+    elif has_warnings == 'false':
+        query = query.filter(
+            (ScanResult.has_warnings == False) |
+            (ScanResult.has_warnings == None)
         )
     
     # Apply sorting

@@ -15,6 +15,7 @@ from flask_wtf.csrf import CSRFProtect
 from flask_login import login_required, current_user
 from dotenv import load_dotenv
 from pathlib import Path
+import json
 
 # Import database and models
 from models import db
@@ -199,18 +200,47 @@ apply_auth_to_blueprint(parallel_scan_bp)
 # Pass scheduler to admin blueprint
 set_scheduler(scheduler)
 
+# Webpack manifest loader for production builds
+_webpack_manifest = None
+
+def load_webpack_manifest():
+    """Load webpack manifest for hashed asset filenames"""
+    global _webpack_manifest
+    if _webpack_manifest is None:
+        manifest_path = Path(__file__).parent / 'static' / 'dist' / 'manifest.json'
+        if manifest_path.exists():
+            with open(manifest_path, 'r') as f:
+                _webpack_manifest = json.load(f)
+        else:
+            _webpack_manifest = {}
+    return _webpack_manifest
+
+@app.context_processor
+def inject_assets():
+    """Inject asset helper function into templates"""
+    manifest = load_webpack_manifest()
+
+    def asset_url(filename):
+        """Get the hashed filename from webpack manifest, fallback to original"""
+        if manifest and filename in manifest:
+            return manifest[filename]
+        # Fallback for development or if manifest doesn't exist
+        return f'/static/{filename}?v={__version__}'
+
+    return dict(asset_url=asset_url, version=__version__, github_url=__github_url__)
+
 # Basic routes that remain in app.py
 @app.route('/')
 @login_required
 def index():
     """Serve the main application page"""
-    return render_template('index.html', version=__version__, github_url=__github_url__, user=current_user)
+    return render_template('index.html', user=current_user)
 
 @app.route('/api-docs')
 @login_required
 def api_docs():
     """Serve API documentation page"""
-    return render_template('api_docs.html', version=__version__)
+    return render_template('api_docs.html')
 
 @app.route('/health')
 @limiter.exempt

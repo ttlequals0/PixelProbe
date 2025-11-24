@@ -21,9 +21,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/css/desktop.css?v={{ version }}">
-    <link rel="stylesheet" href="/static/css/mobile.css?v={{ version }}">
-    <link rel="stylesheet" href="/static/css/logo-styles.css?v={{ version }}">
+    <link rel="stylesheet" href="{{ asset_url('styles.css') }}">
 </head>
 <body>
     <div class="app-wrapper">
@@ -618,8 +616,9 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/static/js/app.js?v={{ version }}"></script>
-    <script src="/static/js/auth.js?v={{ version }}"></script>
+    <script src="{{ asset_url('app.js') }}"></script>
+    <script src="{{ asset_url('auth.js') }}"></script>
+    <script src="{{ asset_url('state.js') }}"></script>
     
     <!-- Initialize version info -->
     <script>

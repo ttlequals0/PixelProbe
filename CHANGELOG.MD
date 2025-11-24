@@ -5,6 +5,156 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.220] - 2025-11-23
+
+### Bug Fixes
+
+- **Fix backend handling of has_warnings filter**
+  - Added backend support for has_warnings=false parameter
+  - Backend API now properly filters out warning files when requested
+  - Previously only handled has_warnings=true, ignored has_warnings=false
+  - Completes the Healthy Only filter fix from v2.4.219
+  - Frontend was sending correct parameters but backend was ignoring them
+  - Files: `pixelprobe/api/scan_routes.py`
+
+## [2.4.219] - 2025-11-23
+
+### Bug Fixes
+
+- **Fix Healthy Only filter showing warning files**
+  - Fixed Healthy Only filter to exclude files with warnings
+  - Added has_warnings: false parameter when healthy filter is active
+  - Previously healthy filter only checked is_corrupted: false
+  - Files can have is_corrupted: false AND has_warnings: true
+  - Healthy files should have no corruption AND no warnings
+  - Files: `static/js/app.js`
+
+## [2.4.218] - 2025-11-23
+
+### Bug Fixes
+
+- **Fix webpack asset loading**
+  - Fixed asset_url() calls in index.html to use correct filenames without directory prefix
+  - Changed from asset_url('css/styles.css') to asset_url('styles.css')
+  - Changed from asset_url('js/app.js') to asset_url('app.js')
+  - Webpack manifest uses base filenames as keys, not paths
+  - Fixes broken UI where CSS and JS were not loading
+  - Files: `templates/index.html`
+
+## [2.4.217] - 2025-11-23
+
+### Testing
+
+- **Webpack build test suite**
+  - Added comprehensive test suite for webpack build process in tests/test_frontend_build.py
+  - 19 tests covering build process, manifest generation, minification, and template integration
+  - Tests verify webpack build succeeds and creates properly hashed assets
+  - Tests confirm minification achieves at least 30% size reduction
+  - Tests validate manifest.json structure and content hash format
+  - Tests ensure templates use asset_url() helper correctly
+  - Tests verify .gitignore excludes build artifacts
+  - Files: `tests/test_frontend_build.py`
+
+## [2.4.216] - 2025-11-23
+
+### P2-11: Frontend Build Process (COMPLETED)
+
+- **Production-ready webpack build system**
+  - Created package.json without hardcoded version (version from version.py)
+  - Created webpack.config.js with minification and code splitting
+  - JavaScript bundle with content hash for cache busting
+  - CSS bundle combining all stylesheets
+  - Production builds use Terser for JS minification
+  - Production builds use CSS Minimizer for CSS optimization
+  - Development builds include source maps
+  - Files: `package.json`, `webpack.config.js`
+
+- **Asset manifest system**
+  - Webpack generates manifest.json mapping original to hashed filenames
+  - Added asset_url() template helper function in app.py
+  - Loads webpack manifest on startup
+  - Fallback to version query params if manifest missing (development mode)
+  - Global context processor provides asset_url, version, github_url to all templates
+  - Files: `app.py`
+
+- **Template updates**
+  - Updated index.html to use asset_url() for all CSS and JS references
+  - Single bundled CSS file (styles.css) instead of 3 separate files
+  - All JS files referenced through webpack bundles
+  - Removed hardcoded version query parameters
+  - Files: `templates/index.html`
+
+- **Docker build integration**
+  - Added Node.js and npm to Dockerfile
+  - npm install runs before copying source files
+  - npm run build executes after copying source files
+  - Production builds create optimized bundles automatically
+  - Files: `Dockerfile`
+
+- **Build configuration**
+  - Added node_modules/, package-lock.json, static/dist/ to .gitignore
+  - Build output goes to static/dist/ directory
+  - Separate dev and production build modes
+  - Files: `.gitignore`
+
+### Expected Results
+
+- 60% smaller JavaScript bundle (143KB → ~57KB minified)
+- Proper cache busting with content hashes
+- Faster page load times
+- Professional build process
+- Single source of truth for version in version.py
+
+### P2 Progress
+
+- P2-11: Frontend Build Process - COMPLETED
+- P2-12: Documentation Updates - COMPLETED (v2.4.215)
+- Overall P2 Progress: 100% (6 of 6 items complete)
+- ALL P2 ITEMS COMPLETED
+
+## [2.4.215] - 2025-11-23
+
+### P2-12: Documentation Updates (COMPLETED)
+
+- **README.md comprehensive updates**
+  - Added Trend Analytics section with screenshot and full feature documentation
+  - Added Exclusions Management section with screenshot
+  - Documented shift-click range selection feature for bulk file operations
+  - Added in-browser media viewing and streaming to features list
+  - Enhanced File Actions documentation (View, Mark as Good, Integrity Check)
+  - Added Bulk Selection and Ignored Errors documentation
+  - Added /api/trends endpoint to API documentation
+  - Fixed Excel export documentation bug (corrected to CSV/JSON/PDF only)
+  - Updated Monitoring & Reports features (trend analytics, storage projections)
+  - Files: `README.md`
+
+- **Documentation organization improvements**
+  - Moved INSTALLATION.md to docs/ directory
+  - Moved CONFIGURATION.md to docs/ directory
+  - Moved TROUBLESHOOTING.md to docs/ directory
+  - All documentation now properly organized in docs/ folder
+
+- **Screenshots verified**
+  - trends-analytics.png referenced and exists
+  - exclusions-management.png referenced and exists
+  - All screenshot references validated
+
+### New UI Feature: Shift-Click Range Selection
+
+- **Multi-select range functionality**
+  - Added shift-click to select ranges of files in results table
+  - Tracks last clicked checkbox for range selection calculation
+  - Works in both desktop table view and mobile card view
+  - Resets last clicked when using "Select All" checkbox
+  - Properly integrates with existing bulk operations (Mark as Good, Rescan, etc.)
+  - Files: `static/js/app.js`
+
+### P2 Progress
+
+- P2-12: Documentation Updates - COMPLETED
+- Overall P2 Progress: 83% (5 of 6 items complete)
+- Remaining: P2-11 Frontend Build Process
+
 ## [2.4.214] - 2025-11-23
 
 ### Critical Hotfix
