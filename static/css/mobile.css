@@ -1066,4 +1066,47 @@
     #media-viewer-modal .modal-header {
         padding: 0.75rem 1rem;
     }
+
+    /* Schedule items - mobile layout fixes */
+    .schedule-header {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .schedule-header h4 {
+        flex: 1 1 100%;
+        font-size: 1rem;
+        margin-bottom: 0.25rem;
+    }
+
+    .schedule-actions {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 0.25rem;
+    }
+
+    .schedule-actions .btn {
+        padding: 0.35rem 0.5rem;
+        font-size: 0.75rem;
+        min-width: auto;
+    }
+
+    /* Make Enable/Disable button more compact */
+    .schedule-actions .btn-warning,
+    .schedule-actions .btn-success:not([title*="Healthcheck"]) {
+        font-size: 0.7rem;
+        padding: 0.35rem 0.5rem;
+    }
+
+    .schedule-info {
+        font-size: 0.8rem;
+    }
+
+    .schedule-info p {
+        margin: 0.2rem 0;
+    }
+
+    .schedule-item {
+        padding: 0.875rem;
+    }
 }

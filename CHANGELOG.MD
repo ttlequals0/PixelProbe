@@ -5,7 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
-## [2.5.5] - 2025-11-24
+## [2.5.6] - 2025-11-24
+
+### Hotfix: Scheduler Activation in Non-Scheduler Workers
+
+This hotfix completes the multi-worker scheduler fix from v2.5.5. The previous fix addressed the app context issue but didn't handle cases where the scheduler isn't running.
+
+#### Fixed
+
+- **Schedule Activation Error in Non-Scheduler Workers**
+  - Error: `'Job' object has no attribute 'next_run_time'`
+  - Added check for `self.scheduler.running` before attempting to manipulate jobs
+  - Non-scheduler workers now skip `update_schedules()` gracefully
+  - Database changes are still saved; scheduler worker picks up changes on reload
+
+#### Root Cause
+
+The v2.5.5 fix only addressed the `app_context` issue but still tried to manipulate jobs in workers where the scheduler wasn't started:
+- `BackgroundScheduler()` is created in `__init__` for all workers
+- `scheduler.start()` is only called in `init_app()` for the scheduler worker
+- Adding jobs to an unstarted scheduler results in Job objects without `next_run_time`
+- Accessing `job.next_run_time` on line 219 fails with AttributeError
+
+#### Solution
+
+Check both `self.app` AND `self.scheduler.running` before manipulating schedules:
+- If scheduler isn't running, skip the update and return early
+- Database is already updated by the API route
+- The scheduler worker will reload schedules on next restart or periodic refresh
+
+#### Mobile UI Fix
+
+- Fixed schedule card layout on mobile devices
+- Schedule name now displays on its own row, preventing overlap with action buttons
+- Reduced button padding and font size for better fit on small screens
+
+## [2.5.5] - 2025-11-24 [INCOMPLETE - See v2.5.6]
 
 ### Critical Hotfix: Scheduler Race Condition in Multi-Worker Deployments
 

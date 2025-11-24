@@ -549,15 +549,19 @@ class MediaScheduler:
             
     def update_schedules(self):
         """Reload all schedules from database"""
-        from flask import current_app
+        # Only reload schedules if this worker has the scheduler running
+        # In non-scheduler workers, self.app is None and scheduler isn't started
+        if not self.app or not self.scheduler.running:
+            logger.debug("Scheduler not running in this worker, skipping update_schedules")
+            return
 
         # Remove all existing scheduled jobs except defaults
         for job in self.scheduler.get_jobs():
             if job.id.startswith('schedule_'):
                 self.scheduler.remove_job(job.id)
 
-        # Reload from database - use current_app for multi-worker compatibility
-        with current_app.app_context():
+        # Reload from database
+        with self.app.app_context():
             self._load_saved_schedules()
             
     def _check_stuck_scans(self):
