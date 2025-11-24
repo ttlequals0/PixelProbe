@@ -1085,17 +1085,15 @@
         gap: 0.25rem;
     }
 
+    /* Make all schedule action buttons uniform size */
     .schedule-actions .btn {
-        padding: 0.35rem 0.5rem;
-        font-size: 0.75rem;
-        min-width: auto;
-    }
-
-    /* Make Enable/Disable button more compact */
-    .schedule-actions .btn-warning,
-    .schedule-actions .btn-success:not([title*="Healthcheck"]) {
-        font-size: 0.7rem;
-        padding: 0.35rem 0.5rem;
+        padding: 0.5rem;
+        font-size: 0.875rem;
+        min-width: 2.25rem;
+        height: 2.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
     }
 
     .schedule-info {

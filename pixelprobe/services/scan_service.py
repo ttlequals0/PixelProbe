@@ -1743,9 +1743,16 @@ class ScanService:
             
             db.session.add(report)
             db.session.commit()
-            
+
             logger.info(f"Created scan report {report.report_id} for scan {scan_state.scan_id}")
-            
+
+            # Send healthcheck completion ping for scheduled scans
+            try:
+                from scheduler import MediaScheduler
+                MediaScheduler.send_healthcheck_completion(report.report_id)
+            except Exception as hc_error:
+                logger.error(f"Failed to send healthcheck completion ping: {hc_error}")
+
         except Exception as e:
             logger.error(f"Failed to create scan report: {e}")
     

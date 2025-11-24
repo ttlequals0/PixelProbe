@@ -3509,8 +3509,9 @@ class PixelProbeApp {
                                         <i class="fas fa-heartbeat"></i>${schedule.has_healthcheck ? ' ✓' : ''}
                                     </button>
                                     <button class="btn btn-sm ${schedule.is_active ? 'btn-warning' : 'btn-success'}"
-                                            onclick="app.toggleSchedule(${schedule.id}, ${!schedule.is_active})">
-                                        ${schedule.is_active ? 'Disable' : 'Enable'}
+                                            onclick="app.toggleSchedule(${schedule.id}, ${!schedule.is_active})"
+                                            title="${schedule.is_active ? 'Disable Schedule' : 'Enable Schedule'}">
+                                        <i class="fas ${schedule.is_active ? 'fa-pause' : 'fa-play'}"></i>
                                     </button>
                                     <button class="btn btn-sm btn-danger" onclick="app.deleteSchedule(${schedule.id})">
                                         <i class="fas fa-trash"></i>

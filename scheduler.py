@@ -617,7 +617,7 @@ class MediaScheduler:
             logger.error(f"Error checking for stuck scans: {e}")
     
     @staticmethod
-    def send_healthcheck_completion(scan_report_id: int, app_context):
+    def send_healthcheck_completion(scan_report_id: int, app=None):
         """Send healthcheck completion ping for a scan report
 
         This method should be called after a scan completes to send success/failure pings.
@@ -625,10 +625,14 @@ class MediaScheduler:
 
         Args:
             scan_report_id: The ID of the completed scan report
-            app_context: Flask app context to use for database queries
+            app: Flask app instance (optional, uses current_app if not provided)
         """
         try:
-            with app_context.app_context():
+            from flask import current_app
+            if app is None:
+                app = current_app._get_current_object()
+
+            with app.app_context():
                 # Get the scan report
                 scan_report = ScanReport.query.get(scan_report_id)
                 if not scan_report:

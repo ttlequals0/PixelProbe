@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.7] - 2025-11-24
+
+### Critical Fix: Healthcheck Completion Pings + Mobile UI
+
+#### Fixed
+
+- **Healthcheck Completion Pings Now Working**
+  - CRITICAL BUG: `send_healthcheck_completion()` was defined but never called
+  - Start pings worked, but success/failure pings on scan completion were never sent
+  - Added call to `MediaScheduler.send_healthcheck_completion()` in `scan_service._create_scan_report()`
+  - Now properly sends success ping when scan completes successfully
+  - Now properly sends failure ping when scan fails/errors
+  - Includes scan report data in success pings when configured
+
+- **Improved Healthcheck URL Logging**
+  - All ping methods now log the full URL being pinged
+  - Logs include HTTP status code on success
+  - Error messages now include the URL that failed
+  - Helps debug connectivity issues with self-hosted instances
+
+- **Self-Hosted Healthchecks.io Support**
+  - Removed confusing warning message for non-standard URL formats
+  - Supports any URL format (public hc-ping.com or self-hosted instances)
+  - Self-hosted URLs can use custom paths, not just `/ping/UUID`
+
+#### Changed
+
+- **Schedule Action Buttons - Now All Icons**
+  - Disable button: Changed from text "Disable" to pause icon (`fa-pause`)
+  - Enable button: Changed from text "Enable" to play icon (`fa-play`)
+  - All four buttons now use icons only: edit, healthcheck, pause/play, trash
+  - Added title tooltips for accessibility
+
+- **Uniform Button Sizing on Mobile**
+  - All schedule action buttons now have fixed 2.25rem width/height
+  - Buttons use flexbox centering for consistent icon alignment
+  - Removed variable sizing that caused layout issues
+
+#### Files Modified
+
+- `pixelprobe/services/scan_service.py` - Added healthcheck completion ping call
+- `scheduler.py` - Updated method signature for easier calling
+- `pixelprobe/services/healthcheck_service.py` - Improved logging, removed restrictive URL warning
+- `static/js/app.js` - Changed Enable/Disable to icons
+- `static/css/mobile.css` - Uniform button sizing
+
 ## [2.5.6] - 2025-11-24
 
 ### Hotfix: Scheduler Activation in Non-Scheduler Workers

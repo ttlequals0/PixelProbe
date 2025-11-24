@@ -37,21 +37,22 @@ class HealthcheckService:
 
             # Healthchecks.io uses /start slug for start signals
             start_url = f"{healthcheck_url.rstrip('/')}/start"
+            logger.info(f"Sending healthcheck start ping to: {start_url}")
 
             response = self.session.get(start_url, timeout=10)
             response.raise_for_status()
 
-            logger.info(f"Healthcheck start ping successful")
+            logger.info(f"Healthcheck start ping successful (status: {response.status_code})")
             return True
 
         except requests.exceptions.Timeout:
-            logger.error(f"Healthcheck start ping timed out")
+            logger.error(f"Healthcheck start ping timed out for URL: {healthcheck_url}")
             return False
         except requests.exceptions.RequestException as e:
-            logger.error(f"Healthcheck start ping failed: {e}")
+            logger.error(f"Healthcheck start ping failed for URL {healthcheck_url}: {e}")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error in healthcheck start ping: {e}")
+            logger.error(f"Unexpected error in healthcheck start ping for URL {healthcheck_url}: {e}")
             return False
 
     def ping_success(self, healthcheck_url: str, report_data: Optional[Dict] = None) -> bool:
@@ -68,6 +69,8 @@ class HealthcheckService:
             if not healthcheck_url:
                 logger.warning("No healthcheck URL provided")
                 return False
+
+            logger.info(f"Sending healthcheck success ping to: {healthcheck_url}")
 
             # Format report data if provided
             if report_data:
@@ -104,17 +107,17 @@ class HealthcheckService:
 
             response.raise_for_status()
 
-            logger.info(f"Healthcheck success ping successful")
+            logger.info(f"Healthcheck success ping successful (status: {response.status_code})")
             return True
 
         except requests.exceptions.Timeout:
-            logger.error(f"Healthcheck success ping timed out")
+            logger.error(f"Healthcheck success ping timed out for URL: {healthcheck_url}")
             return False
         except requests.exceptions.RequestException as e:
-            logger.error(f"Healthcheck success ping failed: {e}")
+            logger.error(f"Healthcheck success ping failed for URL {healthcheck_url}: {e}")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error in healthcheck success ping: {e}")
+            logger.error(f"Unexpected error in healthcheck success ping for URL {healthcheck_url}: {e}")
             return False
 
     def ping_fail(self, healthcheck_url: str, error_message: Optional[str] = None) -> bool:
@@ -134,6 +137,7 @@ class HealthcheckService:
 
             # Healthchecks.io uses /fail slug for failure signals
             fail_url = f"{healthcheck_url.rstrip('/')}/fail"
+            logger.info(f"Sending healthcheck failure ping to: {fail_url}")
 
             if error_message:
                 # POST with error message
@@ -149,14 +153,14 @@ class HealthcheckService:
 
             response.raise_for_status()
 
-            logger.info(f"Healthcheck failure ping successful")
+            logger.info(f"Healthcheck failure ping successful (status: {response.status_code})")
             return True
 
         except requests.exceptions.Timeout:
-            logger.error(f"Healthcheck failure ping timed out")
+            logger.error(f"Healthcheck failure ping timed out for URL: {healthcheck_url}")
             return False
         except requests.exceptions.RequestException as e:
-            logger.error(f"Healthcheck failure ping failed: {e}")
+            logger.error(f"Healthcheck failure ping failed for URL {healthcheck_url}: {e}")
             return False
         except Exception as e:
             logger.error(f"Unexpected error in healthcheck failure ping: {e}")
@@ -226,10 +230,10 @@ class HealthcheckService:
         if not healthcheck_url.startswith(('http://', 'https://')):
             return False, "Healthcheck URL must start with http:// or https://"
 
-        # Check for common healthchecks.io patterns
+        # Log the URL format for debugging
+        # Supports both public hc-ping.com and self-hosted instances
         # Public: https://hc-ping.com/UUID
-        # Self-hosted: https://your-domain.com/ping/UUID
-        if '/ping/' not in healthcheck_url and 'hc-ping.com' not in healthcheck_url:
-            logger.warning(f"Healthcheck URL format may be incorrect: {healthcheck_url}")
+        # Self-hosted: https://your-domain.com/ping/UUID (or custom paths)
+        logger.debug(f"Validating healthcheck URL: {healthcheck_url}")
 
         return True, None
