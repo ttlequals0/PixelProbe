@@ -30,6 +30,7 @@ from pixelprobe.api.export_routes import export_bp
 from pixelprobe.api.maintenance_routes import maintenance_bp
 from pixelprobe.api.reports_routes import reports_bp
 from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
+from pixelprobe.api.healthcheck_routes import healthcheck_bp
 from pixelprobe.api.auth_routes import auth_api_bp, auth_ui_bp, auth_bp  # auth_bp for backward compat
 
 # Import authentication module
@@ -190,6 +191,9 @@ apply_auth_to_blueprint(reports_bp)
 
 app.register_blueprint(parallel_scan_bp)
 apply_auth_to_blueprint(parallel_scan_bp)
+
+app.register_blueprint(healthcheck_bp)
+apply_auth_to_blueprint(healthcheck_bp)
 
 # API documentation is now provided via openapi.yaml specification file
 

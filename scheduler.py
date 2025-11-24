@@ -6,10 +6,11 @@ from typing import Dict, List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from models import db, ScanSchedule, ScanResult, ScanState
+from models import db, ScanSchedule, ScanResult, ScanState, HealthcheckConfig, ScanReport
 from sqlalchemy import text
 import threading
 import requests
+from pixelprobe.services.healthcheck_service import HealthcheckService
 
 logger = logging.getLogger(__name__)
 
@@ -295,7 +296,7 @@ class MediaScheduler:
         if not self.scan_lock.acquire(blocking=False):
             logger.warning(f"Scheduled scan {schedule_id} already in progress, skipping")
             return
-            
+
         try:
             with self.app.app_context():
                 # Check if ANY scan is already running before proceeding
@@ -303,10 +304,26 @@ class MediaScheduler:
                 if scan_state.is_active and scan_state.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
                     logger.warning(f"Scheduled scan {schedule_id} skipped - another scan is already running (phase: {scan_state.phase})")
                     return
-                
+
                 schedule = ScanSchedule.query.get(schedule_id)
                 if not schedule or not schedule.is_active:
                     return
+
+                # Check for healthcheck configuration and send start ping
+                healthcheck_config = HealthcheckConfig.query.filter_by(schedule_id=schedule_id).first()
+                if healthcheck_config and healthcheck_config.is_active and healthcheck_config.send_start_ping:
+                    try:
+                        healthcheck_service = HealthcheckService()
+                        success = healthcheck_service.ping_start(healthcheck_config.healthcheck_url)
+
+                        # Update ping status
+                        healthcheck_config.last_ping_status = 'success' if success else 'failure'
+                        healthcheck_config.last_ping_time = datetime.now(timezone.utc)
+                        db.session.commit()
+
+                        logger.info(f"Healthcheck start ping sent for schedule {schedule_id}: {'success' if success else 'failure'}")
+                    except Exception as e:
+                        logger.error(f"Failed to send healthcheck start ping for schedule {schedule_id}: {e}")
                     
                 # Update last run time
                 schedule.last_run = datetime.now(timezone.utc)
@@ -593,6 +610,84 @@ class MediaScheduler:
         except Exception as e:
             logger.error(f"Error checking for stuck scans: {e}")
     
+    @staticmethod
+    def send_healthcheck_completion(scan_report_id: int, app_context):
+        """Send healthcheck completion ping for a scan report
+
+        This method should be called after a scan completes to send success/failure pings.
+        It's static so it can be called from scan services without needing a scheduler instance.
+
+        Args:
+            scan_report_id: The ID of the completed scan report
+            app_context: Flask app context to use for database queries
+        """
+        try:
+            with app_context.app_context():
+                # Get the scan report
+                scan_report = ScanReport.query.get(scan_report_id)
+                if not scan_report:
+                    logger.warning(f"Scan report {scan_report_id} not found for healthcheck ping")
+                    return
+
+                # Try to find associated schedule by matching the scan source
+                # Scan reports from scheduled scans have scan_id like 'scheduled_123'
+                schedule_id = None
+                if scan_report.scan_id and scan_report.scan_id.startswith('scheduled_'):
+                    try:
+                        schedule_id = int(scan_report.scan_id.split('_')[1])
+                    except (IndexError, ValueError):
+                        logger.debug(f"Could not extract schedule ID from scan_id: {scan_report.scan_id}")
+
+                if not schedule_id:
+                    logger.debug(f"Scan report {scan_report_id} is not from a scheduled scan, skipping healthcheck ping")
+                    return
+
+                # Get healthcheck configuration for this schedule
+                healthcheck_config = HealthcheckConfig.query.filter_by(schedule_id=schedule_id).first()
+                if not healthcheck_config or not healthcheck_config.is_active:
+                    logger.debug(f"No active healthcheck config for schedule {schedule_id}")
+                    return
+
+                # Determine if scan was successful
+                is_success = scan_report.status == 'completed'
+
+                # Send appropriate ping
+                healthcheck_service = HealthcheckService()
+
+                if is_success and healthcheck_config.send_success_ping:
+                    # Prepare report data if configured
+                    report_data = None
+                    if healthcheck_config.include_report_data:
+                        report_data = scan_report.to_dict()
+
+                    success = healthcheck_service.ping_success(
+                        healthcheck_config.healthcheck_url,
+                        report_data=report_data
+                    )
+
+                    healthcheck_config.last_ping_status = 'success' if success else 'failure'
+                    healthcheck_config.last_ping_time = datetime.now(timezone.utc)
+
+                    logger.info(f"Healthcheck success ping sent for schedule {schedule_id}: {'success' if success else 'failure'}")
+
+                elif not is_success and healthcheck_config.send_failure_ping:
+                    error_message = scan_report.error_message or f"Scan status: {scan_report.status}"
+
+                    success = healthcheck_service.ping_fail(
+                        healthcheck_config.healthcheck_url,
+                        error_message=error_message
+                    )
+
+                    healthcheck_config.last_ping_status = 'failure' if success else 'error'
+                    healthcheck_config.last_ping_time = datetime.now(timezone.utc)
+
+                    logger.info(f"Healthcheck failure ping sent for schedule {schedule_id}: {'success' if success else 'failure'}")
+
+                db.session.commit()
+
+        except Exception as e:
+            logger.error(f"Error sending healthcheck completion ping: {e}")
+
     def shutdown(self):
         """Shutdown the scheduler"""
         if self.scheduler.running:

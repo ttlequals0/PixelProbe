@@ -5,6 +5,116 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2025-11-24
+
+### P3 Features: Enhanced Monitoring & Analytics (Part 1)
+
+This major release adds comprehensive monitoring, analytics, and notification capabilities to PixelProbe.
+
+#### Added
+
+- **Documentation Improvements**
+  - Added comprehensive documentation links to README.md
+  - Links to installation guides, architecture docs, API docs, and client examples
+  - Files: `README.md`
+
+- **Scan Trends & Analytics**
+  - Added scan counter metrics with daily breakdown over configurable time periods
+  - Added scan duration histogram with configurable bucket counts
+  - New API endpoints: `/api/stats/trends` and `/api/stats/duration-histogram`
+  - Query parameters: days (1-365), buckets (2-50 for histogram)
+  - Returns comprehensive statistics including total scans, files scanned, corrupted files, and duration analysis
+  - Per scan-type breakdown (full_scan, rescan, cleanup, file_changes)
+  - Files: `pixelprobe/services/stats_service.py`, `pixelprobe/api/stats_routes.py`
+
+- **Frontend Trends Dashboard**
+  - Interactive trends visualization using Chart.js
+  - Summary statistics cards showing total scans, files scanned, corrupted files, and average duration
+  - Scan activity line chart displaying scan counts and corrupted files over time
+  - Duration distribution bar chart showing scan duration histogram
+  - Per scan-type duration statistics cards
+  - Fetches data for last 30 days by default
+  - Files: `static/js/app.js`, `templates/index.html`
+
+- **Healthchecks.io Integration**
+  - Complete integration with Healthchecks.io for scheduled scan monitoring
+  - Support for both public (hc-ping.com) and self-hosted instances
+  - Per-schedule healthcheck configuration
+  - Configurable ping options:
+    - Start ping (sent when scan begins using /start slug)
+    - Success ping (sent when scan completes with optional report data)
+    - Failure ping (sent when scan fails using /fail slug)
+  - Report data formatting includes: Report ID, Scan Type, Status, Duration, and detailed statistics
+  - New service: `HealthcheckService` with URL validation
+  - New model: `HealthcheckConfig` (one-to-one relationship with ScanSchedule)
+  - 8 new API endpoints: List, Get, Get by Schedule, Create, Update, Delete, Test
+  - Scheduler integration: Automatic pings during scan lifecycle
+  - Complete UI: Configuration modal accessible from schedules list
+  - Test ping functionality to verify configuration
+  - Files: `pixelprobe/services/healthcheck_service.py`, `pixelprobe/api/healthcheck_routes.py`,
+    `models.py`, `scheduler.py`, `app.py`, `static/js/app.js`, `templates/index.html`
+
+- **Notification System Foundation**
+  - Comprehensive notification service supporting multiple providers
+  - Pushover API integration with priority levels, device targeting, and custom sounds
+  - ntfy.sh API integration (public and self-hosted) with authentication support
+  - Generic webhook support with templates for Slack and Discord
+  - Custom webhook format for other integrations
+  - New service: `NotificationService` with provider abstraction
+  - New models:
+    - `NotificationProvider` for provider configurations (Pushover, ntfy, webhook)
+    - `NotificationRule` for event-based notification rules
+  - Sensitive data masking in API responses
+  - Test provider functionality
+  - Event types supported: scan_start, scan_complete, scan_failed, scan_missed,
+    user_added, user_deleted, api_key_added, api_key_deleted, auth_failed
+  - Files: `pixelprobe/services/notification_service.py`, `models.py`
+
+#### Changed
+
+- **API Documentation**
+  - Updated openapi.yaml with all new endpoints
+  - Added comprehensive documentation for trends, histogram, and healthcheck endpoints
+  - Added HealthcheckConfig schema definition
+  - Added Healthcheck tag for endpoint organization
+  - Query parameter documentation with min/max values and defaults
+  - Response schema definitions with detailed property descriptions
+  - Files: `openapi.yaml`
+
+- **Frontend Architecture**
+  - Enhanced PixelProbeApp constructor to include chart instances (trendsChart, histogramChart)
+  - Added API methods: getTrends(days), getDurationHistogram(days, buckets)
+  - Chart.js integration for data visualization
+  - Modal-based UI pattern extended for healthcheck configuration
+  - Files: `static/js/app.js`
+
+#### Database Changes
+
+- **New Tables**:
+  - `healthcheck_configs` - Healthcheck.io configuration per schedule
+  - `notification_providers` - Notification provider configurations
+  - `notification_rules` - Event-based notification rules
+
+- **Schema Details**:
+  - HealthcheckConfig: schedule_id (FK, unique), healthcheck_url, configuration flags, ping status tracking
+  - NotificationProvider: name, provider_type, configuration (JSON), status tracking
+  - NotificationRule: provider_id (FK), event_type, priority, conditions (JSON)
+  - All tables use timezone-aware timestamps (created_at, updated_at)
+  - Cascade delete relationships for data integrity
+
+#### Migration Notes
+
+- Database migration required for new tables
+- No breaking changes to existing API endpoints
+- Backward compatible - healthcheck and notification features are optional
+
+#### Coming in Next Release (v2.6.0)
+
+- Notification API endpoints and integration
+- Notification configuration UI
+- Detailed health monitoring dashboard
+- Data retention policy management
+
 ## [2.4.220] - 2025-11-23
 
 ### Bug Fixes

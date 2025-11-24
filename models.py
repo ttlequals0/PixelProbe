@@ -239,9 +239,54 @@ class ScanSchedule(db.Model):
             'created_date': convert_to_tz(self.created_date)
         }
 
+class HealthcheckConfig(db.Model):
+    __tablename__ = 'healthcheck_configs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    schedule_id = db.Column(db.Integer, db.ForeignKey('scan_schedules.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
+    healthcheck_url = db.Column(db.String(500), nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    send_start_ping = db.Column(db.Boolean, nullable=False, default=True)
+    send_success_ping = db.Column(db.Boolean, nullable=False, default=True)
+    send_failure_ping = db.Column(db.Boolean, nullable=False, default=True)
+    include_report_data = db.Column(db.Boolean, nullable=False, default=True)
+    last_ping_status = db.Column(db.String(20), nullable=True)  # success, failure, timeout, null
+    last_ping_time = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relationship
+    schedule = db.relationship('ScanSchedule', backref=db.backref('healthcheck_config', uselist=False, cascade='all, delete-orphan'))
+
+    def to_dict(self):
+        def convert_to_tz(dt):
+            """Return datetime as ISO string for display"""
+            if dt is None:
+                return None
+            # If datetime is naive, assume it's UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            # Return as ISO string - timezone conversion handled in API routes
+            return dt.isoformat()
+
+        return {
+            'id': self.id,
+            'schedule_id': self.schedule_id,
+            'healthcheck_url': self.healthcheck_url,
+            'is_active': self.is_active,
+            'send_start_ping': self.send_start_ping,
+            'send_success_ping': self.send_success_ping,
+            'send_failure_ping': self.send_failure_ping,
+            'include_report_data': self.include_report_data,
+            'last_ping_status': self.last_ping_status,
+            'last_ping_time': convert_to_tz(self.last_ping_time),
+            'created_at': convert_to_tz(self.created_at),
+            'updated_at': convert_to_tz(self.updated_at)
+        }
+
 class ScanConfiguration(db.Model):
     __tablename__ = 'scan_configurations'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     # Old structure for backward compatibility
     key = db.Column(db.String(50), nullable=True, unique=True)
@@ -835,3 +880,99 @@ class APIToken(db.Model):
 
     def __repr__(self):
         return f'<APIToken {self.id} for user {self.user_id}>'
+
+
+class NotificationProvider(db.Model):
+    """Notification provider configuration (Pushover, ntfy, webhooks)"""
+    __tablename__ = 'notification_providers'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    provider_type = db.Column(db.String(20), nullable=False, index=True)  # 'pushover', 'ntfy', 'webhook'
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    configuration = db.Column(db.JSON, nullable=False)  # Provider-specific config
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, 
+                          default=lambda: datetime.now(timezone.utc), 
+                          onupdate=lambda: datetime.now(timezone.utc))
+    last_notification_status = db.Column(db.String(20), nullable=True)  # 'success', 'failure'
+    last_notification_time = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    # Relationship to notification rules
+    rules = db.relationship('NotificationRule', back_populates='provider', cascade='all, delete-orphan')
+
+    def to_dict(self, include_config=False):
+        result = {
+            'id': self.id,
+            'name': self.name,
+            'provider_type': self.provider_type,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'last_notification_status': self.last_notification_status,
+            'last_notification_time': self.last_notification_time.isoformat() if self.last_notification_time else None,
+            'rules_count': len(self.rules)
+        }
+
+        if include_config:
+            # Mask sensitive data in config
+            masked_config = self.configuration.copy()
+            if self.provider_type == 'pushover':
+                if 'api_token' in masked_config:
+                    masked_config['api_token'] = '***'
+                if 'user_key' in masked_config:
+                    masked_config['user_key'] = '***'
+            elif self.provider_type == 'ntfy':
+                if 'token' in masked_config:
+                    masked_config['token'] = '***'
+            elif self.provider_type == 'webhook':
+                if 'webhook_url' in masked_config:
+                    # Show only the domain
+                    from urllib.parse import urlparse
+                    parsed = urlparse(masked_config['webhook_url'])
+                    masked_config['webhook_url'] = f"{parsed.scheme}://{parsed.netloc}/***"
+
+            result['configuration'] = masked_config
+
+        return result
+
+    def __repr__(self):
+        return f'<NotificationProvider {self.name} ({self.provider_type})>'
+
+
+class NotificationRule(db.Model):
+    """Rules for when to send notifications"""
+    __tablename__ = 'notification_rules'
+
+    id = db.Column(db.Integer, primary_key=True)
+    provider_id = db.Column(db.Integer, db.ForeignKey('notification_providers.id', ondelete='CASCADE'), 
+                           nullable=False, index=True)
+    event_type = db.Column(db.String(50), nullable=False, index=True)
+    # Event types: 'scan_start', 'scan_complete', 'scan_failed', 'scan_missed',
+    #              'user_added', 'user_deleted', 'api_key_added', 'api_key_deleted', 'auth_failed'
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    priority = db.Column(db.String(10), nullable=False, default='normal')  # 'low', 'normal', 'high'
+    conditions = db.Column(db.JSON, nullable=True)  # Optional conditions (e.g., {"corrupted_count": ">0"})
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, 
+                          default=lambda: datetime.now(timezone.utc), 
+                          onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relationship to provider
+    provider = db.relationship('NotificationProvider', back_populates='rules')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'provider_id': self.provider_id,
+            'provider_name': self.provider.name if self.provider else None,
+            'event_type': self.event_type,
+            'is_active': self.is_active,
+            'priority': self.priority,
+            'conditions': self.conditions,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+    def __repr__(self):
+        return f'<NotificationRule {self.event_type} -> Provider {self.provider_id}>'

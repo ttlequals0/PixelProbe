@@ -1,4 +1,4 @@
-from flask import Blueprint, current_app
+from flask import Blueprint, current_app, request
 from sqlalchemy import text
 import os
 import time
@@ -9,6 +9,7 @@ from functools import wraps
 from models import db, ScanResult
 from version import __version__
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone_name
+from pixelprobe.services.stats_service import StatsService
 from auth import auth_required
 
 logger = logging.getLogger(__name__)
@@ -555,3 +556,69 @@ def get_system_info():
     except Exception as e:
         logger.error(f"Error getting system info: {str(e)}")
         return {'error': 'Failed to get system info'}, 500
+
+@stats_bp.route('/stats/trends')
+@exempt_from_rate_limit
+@auth_required
+def get_scan_trends():
+    """Get scan counter metrics over time
+
+    Query Parameters:
+        days (int): Number of days to look back (default: 30)
+
+    Returns:
+        JSON with scan trends including daily counts, files scanned, and corruption stats
+    """
+    try:
+        days = request.args.get('days', default=30, type=int)
+
+        # Validate days parameter
+        if days < 1:
+            return {'error': 'days parameter must be greater than 0'}, 400
+        if days > 365:
+            return {'error': 'days parameter cannot exceed 365'}, 400
+
+        stats_service = StatsService()
+        trends = stats_service.get_scan_trends(days=days)
+
+        return trends
+
+    except Exception as e:
+        logger.error(f"Error getting scan trends: {str(e)}")
+        return {'error': 'Failed to get scan trends'}, 500
+
+@stats_bp.route('/stats/duration-histogram')
+@exempt_from_rate_limit
+@auth_required
+def get_duration_histogram():
+    """Get scan duration histogram
+
+    Query Parameters:
+        days (int): Number of days to look back (default: 30)
+        buckets (int): Number of histogram buckets (default: 10)
+
+    Returns:
+        JSON with duration histogram data including buckets, summary stats, and per-scan-type analysis
+    """
+    try:
+        days = request.args.get('days', default=30, type=int)
+        buckets = request.args.get('buckets', default=10, type=int)
+
+        # Validate parameters
+        if days < 1:
+            return {'error': 'days parameter must be greater than 0'}, 400
+        if days > 365:
+            return {'error': 'days parameter cannot exceed 365'}, 400
+        if buckets < 2:
+            return {'error': 'buckets parameter must be at least 2'}, 400
+        if buckets > 50:
+            return {'error': 'buckets parameter cannot exceed 50'}, 400
+
+        stats_service = StatsService()
+        histogram = stats_service.get_duration_histogram(days=days, bucket_count=buckets)
+
+        return histogram
+
+    except Exception as e:
+        logger.error(f"Error getting duration histogram: {str(e)}")
+        return {'error': 'Failed to get duration histogram'}, 500

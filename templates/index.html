@@ -615,6 +615,114 @@
         </div>
     </div>
 
+    <!-- Healthcheck Configuration Modal -->
+    <div id="healthcheck-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="healthcheck-modal-title">Configure Healthcheck</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="healthcheck-form">
+                    <input type="hidden" id="healthcheck-config-id">
+
+                    <div class="form-group">
+                        <label for="healthcheck-url">Healthcheck URL *</label>
+                        <input type="text"
+                               id="healthcheck-url"
+                               class="form-control"
+                               placeholder="https://hc-ping.com/your-uuid-here"
+                               required>
+                        <small class="form-text">
+                            Enter your Healthchecks.io ping URL (supports both public and self-hosted instances)
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="healthcheck-active" checked>
+                            Active
+                        </label>
+                        <small class="form-text" style="display: block; margin-left: 1.5rem;">
+                            Enable or disable healthcheck pings for this schedule
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label style="font-weight: bold; display: block; margin-bottom: 0.5rem;">Ping Options:</label>
+
+                        <div style="margin-left: 1rem;">
+                            <label style="display: block; margin-bottom: 0.5rem;">
+                                <input type="checkbox" id="send-start-ping" checked>
+                                Send start ping
+                            </label>
+                            <small class="form-text" style="display: block; margin-left: 1.5rem; margin-bottom: 0.75rem;">
+                                Ping when scan starts (uses /start slug)
+                            </small>
+
+                            <label style="display: block; margin-bottom: 0.5rem;">
+                                <input type="checkbox" id="send-success-ping" checked>
+                                Send success ping
+                            </label>
+                            <small class="form-text" style="display: block; margin-left: 1.5rem; margin-bottom: 0.75rem;">
+                                Ping when scan completes successfully
+                            </small>
+
+                            <label style="display: block; margin-bottom: 0.5rem;">
+                                <input type="checkbox" id="send-failure-ping" checked>
+                                Send failure ping
+                            </label>
+                            <small class="form-text" style="display: block; margin-left: 1.5rem; margin-bottom: 0.75rem;">
+                                Ping when scan fails (uses /fail slug)
+                            </small>
+
+                            <label style="display: block; margin-bottom: 0.5rem;">
+                                <input type="checkbox" id="include-report-data" checked>
+                                Include report data
+                            </label>
+                            <small class="form-text" style="display: block; margin-left: 1.5rem;">
+                                Include scan results summary in success pings
+                            </small>
+                        </div>
+                    </div>
+
+                    <div id="healthcheck-status" style="margin-top: 1rem; padding: 0.75rem; border-radius: 4px; display: none;">
+                        <!-- Status messages will be displayed here -->
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 10px; justify-content: space-between; padding: 1rem;">
+                <div>
+                    <button id="healthcheck-delete-btn"
+                            class="btn btn-danger"
+                            onclick="app.deleteHealthcheckConfig()"
+                            style="display: none;">
+                        Delete
+                    </button>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button type="button"
+                            class="btn btn-secondary"
+                            onclick="app.closeModal('healthcheck-modal')">
+                        Cancel
+                    </button>
+                    <button id="healthcheck-test-btn"
+                            type="button"
+                            class="btn btn-warning"
+                            onclick="app.testHealthcheck()"
+                            style="display: none;">
+                        Test
+                    </button>
+                    <button type="button"
+                            class="btn btn-primary"
+                            onclick="app.saveHealthcheckConfig()">
+                        Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="{{ asset_url('app.js') }}"></script>
     <script src="{{ asset_url('auth.js') }}"></script>
