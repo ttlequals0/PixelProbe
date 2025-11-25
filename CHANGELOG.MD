@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.15] - 2025-11-25
+
+### Fix: Healthcheck Completion Ping Not Sent When Scan Already Completed
+
+#### Fixed
+
+- **No completion ping sent when scheduled scan detects existing completed scan**
+  - Root cause: When Celery task detects that a scan with the same `scan_id` (e.g., `scheduled_11`) already exists in `completed` phase, it returns early to prevent duplicate work
+  - This early return bypassed `_create_scan_report()` which calls `send_healthcheck_completion()`
+  - Result: Start ping sent by scheduler, but no completion ping ever sent
+  - Fix: When returning early for "already completed" scans, still send completion ping since the scheduler already sent a start ping and healthcheck services expect a completion signal
+  - Now finds the existing ScanReport for the scan_id and sends the completion ping before returning early
+
+#### Technical Details
+
+- Modified early-return path in `scan_media_task()` at `pixelprobe/tasks.py:100-126`
+- When `scan_id.startswith('scheduled_')` and scan is already completed, queries for existing `ScanReport` and calls `MediaScheduler.send_healthcheck_completion()`
+- Added `ScanReport` to imports in tasks.py
+
+#### Files Modified
+
+- `pixelprobe/tasks.py` - Added completion ping to early-return path for already-completed scans
+
 ## [2.5.14] - 2025-11-25
 
 ### Fix: Schedule Re-enable Does Not Update next_run Time
