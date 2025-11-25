@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.16] - 2025-11-25
+
+### Fix: Stale Scheduler Lock Prevents Scheduled Tasks After Container Restart
+
+#### Fixed
+
+- **Scheduler not starting after container restart due to stale Redis lock**
+  - Root cause: Redis scheduler lock used 24-hour TTL (86400 seconds)
+  - When container is replaced during deployment, old container's lock persists
+  - New container finds existing lock and skips scheduler initialization
+  - Result: No scheduler running - all scheduled scans fail to execute
+  - Fix: Changed lock TTL from 24 hours to 60 seconds with heartbeat refresh
+  - Added background thread that refreshes the lock every 30 seconds
+  - Stale locks from crashed containers now expire within 60 seconds
+  - Active schedulers maintain their lock indefinitely through heartbeat
+
+#### Technical Details
+
+- Modified scheduler lock logic in `app.py` lines 721-755
+- Lock TTL reduced from `ex=86400` to `ex=60`
+- Added daemon thread `refresh_scheduler_lock()` that runs every 30 seconds
+- Thread refreshes lock with new timestamp and 60-second TTL
+- Worst case recovery time: 60 seconds after container crash
+
+#### Files Modified
+
+- `app.py` - Changed lock TTL and added heartbeat thread
+
 ## [2.5.15] - 2025-11-25
 
 ### Fix: Healthcheck Completion Ping Not Sent When Scan Already Completed

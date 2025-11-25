@@ -720,18 +720,39 @@ with app.app_context():
 
     if redis_client:
         try:
-            # Use Redis SETNX for atomic lock acquisition (24-hour expiry for auto-recovery)
+            # Use Redis SETNX for atomic lock acquisition (60-second expiry for auto-recovery)
+            # Short TTL ensures stale locks from crashed containers expire quickly
             lock_key = 'pixelprobe:scheduler:lock'
             lock_value = f"{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
 
             # Try to set the lock (only succeeds if key doesn't exist)
-            acquired = redis_client.set(lock_key, lock_value, nx=True, ex=86400)
+            acquired = redis_client.set(lock_key, lock_value, nx=True, ex=60)
 
             if acquired:
                 logger.info(f"Acquired Redis scheduler lock in process {os.getpid()}, initializing scheduler")
                 scheduler.init_app(app)
                 scheduler_initialized = True
                 app.scheduler_redis_lock_key = lock_key
+
+                # Start background thread to refresh the lock every 30 seconds
+                # This keeps the lock alive while the scheduler is running
+                def refresh_scheduler_lock():
+                    import time
+                    while True:
+                        try:
+                            time.sleep(30)
+                            # Refresh the lock TTL
+                            new_value = f"{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
+                            redis_client.set(lock_key, new_value, ex=60)
+                            logger.debug(f"Refreshed scheduler lock in process {os.getpid()}")
+                        except Exception as e:
+                            logger.warning(f"Failed to refresh scheduler lock: {e}")
+                            break  # Stop refreshing if we can't connect to Redis
+
+                import threading
+                lock_refresh_thread = threading.Thread(target=refresh_scheduler_lock, daemon=True)
+                lock_refresh_thread.start()
+                logger.info(f"Started scheduler lock heartbeat thread in process {os.getpid()}")
             else:
                 # Check who has the lock for debugging
                 existing = redis_client.get(lock_key)
