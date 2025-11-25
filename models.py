@@ -425,6 +425,19 @@ class ScanState(db.Model):
             logger.error(f"Error cleaning up active scans: {e}")
             db.session.rollback()
 
+        # If scan_id provided (e.g., scheduled scans), delete any existing record with same ID
+        # This allows scheduled scans to run again without hitting unique constraint violation
+        if scan_id:
+            try:
+                existing = ScanState.query.filter_by(scan_id=scan_id).first()
+                if existing:
+                    logger.info(f"Removing previous scan_state with scan_id={scan_id} (id={existing.id}, phase={existing.phase})")
+                    db.session.delete(existing)
+                    db.session.commit()
+            except Exception as e:
+                logger.error(f"Error removing existing scan_state with scan_id={scan_id}: {e}")
+                db.session.rollback()
+
         # Always create a fresh scan state when starting a new scan
         scan_state = ScanState()
         # Use provided scan_id (for scheduled scans) or generate UUID

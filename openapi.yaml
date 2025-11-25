@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: PixelProbe API
-  version: 2.4.211
+  version: 2.5.17
   description: |
     # PixelProbe REST API
 

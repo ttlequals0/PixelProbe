@@ -5,9 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.17] - 2025-11-25
+
+### Fix: Complete Stale Scheduler Lock Fix (v2.5.16 was incomplete)
+
+#### Fixed
+
+- **v2.5.16 fix was incomplete - existing stale lock was not cleared**
+  - v2.5.16 only changed TTL for NEW locks from 24h to 60s with heartbeat
+  - But existing stale lock (created with 24h TTL by v2.5.15) still blocked scheduler
+  - Fix: Now explicitly deletes any stale lock on startup BEFORE attempting to acquire
+  - Safe because on fresh container startup, any existing lock is from a dead process
+  - Workers within same container race to acquire after delete, first one wins
+
+#### Technical Details
+
+- Added `redis_client.delete(lock_key)` before `set(..., nx=True)` in `app.py`
+- Added log message: "Cleared stale scheduler lock (if any) on startup"
+
+#### Files Modified
+
+- `app.py` - Added delete of stale lock before acquiring new lock
+
 ## [2.5.16] - 2025-11-25
 
-### Fix: Stale Scheduler Lock Prevents Scheduled Tasks After Container Restart
+### Fix: Stale Scheduler Lock Prevents Scheduled Tasks After Container Restart (INCOMPLETE)
 
 #### Fixed
 

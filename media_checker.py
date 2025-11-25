@@ -1913,9 +1913,18 @@ class PixelProbe:
                                        for line in result.stderr.splitlines() if line.strip())
 
                         if is_benign and result.returncode == 0:
-                            # Benign warning only - not corruption
-                            warning_details.append(f"Benign FFmpeg warnings in {location} section")
-                            logger.warning(f"BENIGN WARNING in {location} of {file_path}:\n{result.stderr}")
+                            # Count specific warning types for concise logging
+                            stderr_lines = result.stderr.splitlines()
+                            dts_count = len([line for line in stderr_lines if 'dts' in line.lower()])
+                            pts_count = len([line for line in stderr_lines if 'pts' in line.lower()])
+
+                            if dts_count > 0 or pts_count > 0:
+                                warning_msg = f"{dts_count} DTS, {pts_count} PTS warnings in {location}"
+                            else:
+                                warning_msg = f"Benign FFmpeg warnings in {location}"
+
+                            warning_details.append(warning_msg)
+                            logger.info(f"BENIGN WARNING in {location} of {file_path}: {warning_msg}")
                         else:
                             # Real corruption detected
                             corruption_details.append(f"Corruption detected in {location} section")

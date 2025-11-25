@@ -10,6 +10,7 @@ from sqlalchemy import text, func
 
 from models import db, ScanResult, ScanReport
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone
+from version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ class StatsService:
             
             # Build system info
             return {
-                'version': os.environ.get('APP_VERSION', 'unknown'),
+                'version': __version__,
                 'timezone': str(self.tz),
                 'current_time': datetime.now(self.tz).isoformat(),
                 'database': {

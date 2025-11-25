@@ -567,11 +567,11 @@ class ScanService:
                             db.or_(*[ScanResult.file_path.like(f"{d}%") for d in valid_dirs])
                         ).count()
                     else:
-                        # Normal scan: count NEW and PENDING files for corruption check
-                        # This includes newly discovered files (pending status)
+                        # Normal scan: count ALL pending files (includes orphaned from previous scans)
+                        # This ensures orphaned pending files from failed chunks or interrupted scans
+                        # eventually get processed on the next scan
                         total_scan_files = db.session.query(ScanResult).filter(
-                            ScanResult.scan_status == 'pending',
-                            db.or_(*[ScanResult.file_path.like(f"{d}%") for d in valid_dirs])
+                            ScanResult.scan_status == 'pending'
                         ).count()
                     
                     # Special case: if no files to scan, complete immediately
@@ -731,6 +731,24 @@ class ScanService:
                             else:
                                 logger.error(f"Database connection failed after {max_retries} attempts: {e}")
                                 corrupted_found = 0
+
+                    # Re-fetch scan_state after potential session closure to avoid DetachedInstanceError
+                    # db.session.close() above can detach the original final_scan_state object
+                    final_scan_state = ScanState.query.get(scan_state_id)
+                    if not final_scan_state:
+                        logger.error(f"Could not re-fetch scan_state {scan_state_id} after retry loop")
+                        return {
+                            'status': 'completed',
+                            'message': 'Scan completed (state unavailable)',
+                            'directories': valid_dirs,
+                            'force_rescan': force_rescan,
+                            'num_workers': num_workers,
+                            'files_processed': 0,
+                            'files_discovered': 0,
+                            'corrupted_found': corrupted_found,
+                            'phase': 'completed'
+                        }
+
                     return {
                         'status': 'completed',
                         'message': 'Scan completed',
@@ -1420,6 +1438,7 @@ class ScanService:
         actual_total_discovered = 0  # Track actual total as we discover files in chunks
         files_scanned_lock = threading.Lock()
         discovery_lock = threading.Lock()
+        failed_chunks = []  # Track chunks that fail during parallel processing for retry
         
         # Create progress tracker for scan
         progress_tracker = ProgressTracker('scan')
@@ -1559,7 +1578,34 @@ class ScanService:
                     
                     logger.info(f"Parallel scan progress: {completed_chunks}/{total_chunks} chunks processed, {current_files_scanned}/{total_files_to_scan} files scanned")
                 except Exception as e:
-                    logger.error(f"Error processing chunk result: {e}")
+                    # Track failed chunk for retry
+                    failed_chunk = future_to_chunk[future]
+                    failed_chunks.append(failed_chunk)
+                    logger.error(f"Error processing chunk {failed_chunk.chunk_id} result: {e}")
+
+        # Retry failed chunks sequentially (single-threaded to avoid concurrency issues)
+        if failed_chunks and not self.scan_cancelled:
+            logger.warning(f"Retrying {len(failed_chunks)} failed chunks sequentially...")
+            for chunk in failed_chunks:
+                if self.scan_cancelled:
+                    break
+                try:
+                    logger.info(f"Retrying chunk {chunk.chunk_id} ({chunk.directory_path})...")
+                    # Use scan_chunk function which handles app context and retries
+                    result = scan_chunk(chunk)
+                    if result:
+                        retry_chunk, files_in_chunk = result
+                        completed_chunks += 1
+                        with files_scanned_lock:
+                            total_files_scanned += files_in_chunk
+                            current_files_scanned = total_files_scanned
+                        logger.info(f"[CHUNK RETRY SUCCESS] Chunk {chunk.chunk_id}: scanned {files_in_chunk} files")
+                        self.update_progress(current_files_scanned, total_files_to_scan, chunk.directory_path, 'scanning')
+                    else:
+                        logger.error(f"Chunk {chunk.chunk_id} retry returned None (scan cancelled or error)")
+                except Exception as e:
+                    logger.error(f"Chunk {chunk.chunk_id} failed on retry: {e}")
+                    # Files in this chunk remain pending and will be picked up on next scan
 
         # Complete scan
         if self.scan_cancelled:

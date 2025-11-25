@@ -29,7 +29,7 @@ Welcome to the PixelProbe documentation! This directory contains all technical d
 ### 🔌 API Documentation
 - **[API Reference](api/README.md)** - Complete API endpoint documentation
 - **[Scan Types Documentation](api/SCAN_TYPES_DOCUMENTATION.md)** - Comprehensive guide to all 7 scan types
-- **[OpenAPI Specification](api/openapi.yaml)** - OpenAPI 3.0 specification
+- **[OpenAPI Specification](../openapi.yaml)** - OpenAPI 3.0 specification
 
 ###  Integration Examples
 - **[Python Client](examples/python-client.py)** - Full-featured Python client
