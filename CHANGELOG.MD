@@ -5,6 +5,106 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.14] - 2025-11-25
+
+### Fix: Schedule Re-enable Does Not Update next_run Time
+
+#### Fixed
+
+- **Re-enabling a disabled schedule shows stale next_run time**
+  - Root cause: In multi-worker Gunicorn deployment, scheduler runs in only ONE worker
+  - When API request to re-enable schedule arrives, it may be handled by a worker without the scheduler
+  - `scheduler.update_schedules()` returns early if `not self.scheduler.running`
+  - The `next_run` is never recalculated for re-enabled schedules
+  - Fix: Calculate `next_run` directly in the API endpoint using APScheduler's `CronTrigger.get_next_fire_time()`
+  - This works without requiring a running APScheduler instance
+  - Supports both cron expressions (e.g., "*/5 * * * *") and interval expressions (e.g., "interval:hours:6")
+  - Also recalculates `next_run` when cron expression is changed on an active schedule
+
+#### Technical Details
+
+- Added `calculate_next_run()` helper function to `admin_routes.py`
+- Uses APScheduler's `CronTrigger` class which can calculate next fire time without a running scheduler
+- Detects when schedule transitions from `is_active=False` to `is_active=True`
+- Also triggers recalculation when `cron_expression` changes on an active schedule
+
+#### Files Modified
+
+- `pixelprobe/api/admin_routes.py` - Added `calculate_next_run()` helper and updated `update_schedule()` endpoint
+- `tests/integration/test_admin_endpoints.py` - Added tests for schedule reactivation scenarios
+
+## [2.5.13] - 2025-11-25
+
+### Fix: Scheduled Scan Duplicate Key + DetachedInstanceError + Celery Retry
+
+#### Fixed
+
+- **Scheduled scans fail with duplicate key constraint violation**
+  - Root cause: `scan_id` has unique constraint in ScanState model
+  - When a scheduled scan runs again, it tries to INSERT with same scan_id (e.g., "scheduled_1")
+  - Previous scan_state record remains in database after completion
+  - Fix: `create_new_scan()` now deletes existing scan_state with same scan_id before creating new
+  - Scheduled scans can now run repeatedly without constraint violations
+
+- **DetachedInstanceError after scan completion**
+  - Root cause: `db.session.close()` in retry loop at line 729 detaches all SQLAlchemy objects
+  - `final_scan_state` was fetched before retry loop but accessed after potential session closure
+  - Fix: Re-fetch `final_scan_state` after retry loop completes
+  - Added graceful fallback if scan_state cannot be re-fetched
+
+- **Celery retry creates duplicate scan state on already-completed scans**
+  - Root cause: When Celery retries a task after DetachedInstanceError, scan may have already completed
+  - Retry would try to create new scan_state with same scan_id
+  - Fix: Check if scan_id already has completed phase before starting
+  - Returns early with success if scan already finished
+
+#### Technical Details
+
+- `models.py`: `create_new_scan()` deletes existing scan_state with same scan_id before INSERT
+- `scan_service.py`: Re-fetch final_scan_state after db.session.close() to avoid DetachedInstanceError
+- `tasks.py`: Early-exit check if scan_id already has phase='completed'
+
+#### Files Modified
+
+- `models.py` - Delete existing scan_state before creating new one for same scan_id
+- `pixelprobe/services/scan_service.py` - Re-fetch scan_state after retry loop
+- `pixelprobe/tasks.py` - Skip retry if scan already completed
+
+## [2.5.12] - 2025-11-25
+
+### Fix: Orphaned Pending Files + FFmpeg Warning Format + Chunk Retry
+
+#### Fixed
+
+- **Orphaned pending files from failed scan chunks now get processed**
+  - Root cause: SQLAlchemy concurrency error "This session is provisioning a new connection" caused scan chunks to fail silently
+  - Scan would report success but files in failed chunks stayed in `pending` status forever
+  - Fix 1: Remove directory filter from pending files query so ALL pending files are included in every scan
+  - Fix 2: Add retry logic for failed chunks - failed chunks are retried sequentially after parallel processing completes
+  - This ensures orphaned files from previous interrupted scans eventually get processed
+
+- **FFmpeg warning details now show actual DTS/PTS counts**
+  - Before: Generic "Benign FFmpeg warnings in middle section" message
+  - After: Specific counts like "3 DTS, 2 PTS warnings in middle"
+  - Helps identify actual warning severity without looking at raw logs
+
+- **Failed scan chunks are now retried**
+  - Before: If a chunk failed during parallel processing, it was logged and ignored
+  - After: Failed chunks are tracked and retried sequentially after the main parallel loop
+  - Sequential retry avoids the concurrency issues that caused the original failure
+
+#### Technical Details
+
+- Pending files from failed chunks (e.g., SQLAlchemy concurrency errors) are now recovered
+- `scan_service.py` line 573: Removed directory filter from pending files count
+- `scan_service.py` lines 1562-1590: Added failed chunk tracking and sequential retry
+- `media_checker.py` lines 1915-1927: Parse stderr for DTS/PTS counts instead of generic message
+
+#### Files Modified
+
+- `pixelprobe/services/scan_service.py` - Include all pending files in scan, add chunk retry logic
+- `media_checker.py` - Show actual DTS/PTS warning counts
+
 ## [2.5.11] - 2025-11-24
 
 ### Fix: Duplicate Scheduler Start Pings in Multi-Container Deployments
