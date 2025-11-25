@@ -191,8 +191,8 @@ class ScanService:
 
         return {'status': 'started', 'message': 'Scan started', 'file_path': file_path, 'scan_id': scan_id}
     
-    def scan_directories(self, directories: List[str], force_rescan: bool = False, 
-                        num_workers: int = 1, async_mode: bool = True) -> Dict:
+    def scan_directories(self, directories: List[str], force_rescan: bool = False,
+                        num_workers: int = 1, async_mode: bool = True, scan_id: str = None) -> Dict:
         """Scan multiple directories"""
         if self.is_scan_running():
             raise RuntimeError("Another scan is already in progress")
@@ -214,7 +214,8 @@ class ScanService:
         
         # Save scan state and capture ID before threading
         # Create a new scan state for this scan instead of reusing existing one
-        scan_state = ScanState.create_new_scan()
+        # Pass scan_id if provided (e.g., 'scheduled_11' for scheduled scans)
+        scan_state = ScanState.create_new_scan(scan_id=scan_id)
         scan_state.start_scan(valid_dirs, force_rescan)
         # Safely set num_workers if column exists
         if hasattr(scan_state, 'num_workers'):
@@ -1749,7 +1750,7 @@ class ScanService:
             # Send healthcheck completion ping for scheduled scans
             try:
                 from scheduler import MediaScheduler
-                MediaScheduler.send_healthcheck_completion(report.report_id)
+                MediaScheduler.send_healthcheck_completion(report.id)
             except Exception as hc_error:
                 logger.error(f"Failed to send healthcheck completion ping: {hc_error}")
 

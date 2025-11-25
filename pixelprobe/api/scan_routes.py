@@ -456,6 +456,7 @@ def scan():
     data = request.get_json() or {}
     force_rescan = data.get('force_rescan', False)
     scan_dirs = data.get('directories', [])
+    source = data.get('source')  # For scheduled scans, this will be 'scheduled_XX'
     
     # If no directories provided, use configured ones
     if not scan_dirs:
@@ -493,10 +494,15 @@ def scan():
             # Use Celery task queue
             from pixelprobe.tasks import scan_media_task
             from uuid import uuid4
-            
-            # Generate scan ID
-            scan_id = str(uuid4())
-            
+
+            # Use source as scan_id for scheduled scans, otherwise generate UUID
+            # This allows healthcheck completion pings to identify scheduled scans
+            if source and source.startswith('scheduled_'):
+                scan_id = source
+                logger.info(f"Using scheduled scan source as scan_id: {scan_id}")
+            else:
+                scan_id = str(uuid4())
+
             # Queue the scan task
             task = scan_media_task.delay(
                 scan_id=scan_id,
@@ -504,7 +510,7 @@ def scan():
                 scan_type='full',
                 force_rescan=force_rescan
             )
-            
+
             logger.info(f"Queued full scan task {task.id} for scan_id {scan_id}")
             
             return {

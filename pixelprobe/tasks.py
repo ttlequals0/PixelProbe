@@ -196,11 +196,13 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
 
             # Note: ScanService handles progress internally via database updates
             # The progress_callback defined above is for Celery task state updates
+            # Pass scan_id to preserve scheduled scan IDs (e.g., 'scheduled_11')
             result = scan_service.scan_directories(
                 directories=paths,
                 force_rescan=force_rescan,
                 num_workers=num_workers,
-                async_mode=False  # Run synchronously in Celery task
+                async_mode=False,  # Run synchronously in Celery task
+                scan_id=scan_id  # Pass through for healthcheck completion tracking
             )
             
             # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible
@@ -226,7 +228,8 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                 directories=paths,
                 force_rescan=False,  # Don't force rescan for discovery
                 num_workers=Config.MAX_WORKERS,  # Use configured MAX_WORKERS instead of hardcoded 1
-                async_mode=False  # Run synchronously in Celery task
+                async_mode=False,  # Run synchronously in Celery task
+                scan_id=scan_id  # Pass through for healthcheck completion tracking
             )
             
             # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible

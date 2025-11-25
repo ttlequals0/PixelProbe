@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.10] - 2025-11-24
+
+### Hotfix: Pass Scheduled Scan ID Through Entire Scan Pipeline
+
+#### Fixed
+
+- **Scheduled scan ID not preserved through scan pipeline**
+  - Bug: Even though `/api/scan` now passes `scheduled_XX` as scan_id, `ScanService.scan_directories()` was creating a new UUID
+  - The scan_id was not passed through: Celery task -> scan_directories() -> ScanState.create_new_scan()
+  - Fix: Added `scan_id` parameter through the entire chain
+  - `ScanState.create_new_scan(scan_id=None)` now accepts optional scan_id
+  - `scan_directories(scan_id=None)` now passes it to create_new_scan
+  - Celery task now passes scan_id to scan_directories
+
+#### Known Issue
+
+- Duplicate start pings: Scheduler runs in both gunicorn and celery containers (separate /tmp filesystems)
+- Will address in future version with Redis-based distributed lock
+
+#### Files Modified
+
+- `models.py` - `create_new_scan()` accepts optional scan_id parameter
+- `pixelprobe/services/scan_service.py` - `scan_directories()` accepts and passes scan_id
+- `pixelprobe/tasks.py` - Pass scan_id to scan_directories()
+
+## [2.5.9] - 2025-11-24
+
+### Hotfix: Scheduled Scan ID Not Passed to Healthcheck
+
+#### Fixed
+
+- **Scheduled scans not identified for healthcheck completion pings**
+  - Bug: `/api/scan` endpoint ignored the `source` field from scheduler
+  - The scheduler sent `source: 'scheduled_XX'` but endpoint generated a new UUID
+  - `send_healthcheck_completion()` checks for `scan_id.startswith('scheduled_')` to identify scheduled scans
+  - Since scan_id was always a UUID, completion pings were never sent
+  - Fix: Use `source` as `scan_id` when it starts with `scheduled_`
+
+#### Files Modified
+
+- `pixelprobe/api/scan_routes.py` - Use scheduler source as scan_id for scheduled scans
+
+## [2.5.8] - 2025-11-24
+
+### Hotfix: Healthcheck Completion Ping Type Error
+
+#### Fixed
+
+- **Healthcheck completion ping failed with type error**
+  - Bug: Passing `report.report_id` (UUID string) instead of `report.id` (integer primary key)
+  - Error: `invalid input syntax for type integer: "UUID-string"`
+  - Fix: Changed to pass `report.id` to `send_healthcheck_completion()`
+  - Completion pings now work correctly for all scan types including empty scans (0 files)
+
+#### Files Modified
+
+- `pixelprobe/services/scan_service.py` - Fixed parameter type (report.id instead of report.report_id)
+
 ## [2.5.7] - 2025-11-24
 
 ### Critical Fix: Healthcheck Completion Pings + Mobile UI

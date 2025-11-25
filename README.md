@@ -157,6 +157,17 @@ Create and manage automated scan schedules:
 - Multiple scan types: Normal Scan, Cleanup, Integrity Check
 - View next run times and last execution status
 
+#### Healthcheck Monitoring
+![Healthcheck Configuration](docs/screenshots/features/healthcheck-config.png)
+
+Integrate with [Healthchecks.io](https://healthchecks.io/) or self-hosted instances for monitoring:
+- **Start Ping**: Notify when a scheduled scan begins (uses `/start` slug)
+- **Success Ping**: Notify when scan completes successfully with optional report data
+- **Failure Ping**: Alert when a scan fails (uses `/fail` slug)
+- **Report Data**: Include scan summary (files scanned, corrupted, duration) in success pings
+- **Self-Hosted Support**: Works with both public hc-ping.com and self-hosted Healthchecks.io instances
+- **Per-Schedule Config**: Configure different healthcheck URLs for each scan schedule
+
 #### Trend Analytics
 ![Trend Analytics](docs/screenshots/features/trends-analytics.png)
 
@@ -438,6 +449,12 @@ PixelProbe provides a comprehensive REST API with OpenAPI/Swagger documentation.
 - `PUT /api/schedules/{id}` - Update schedule
 - `DELETE /api/schedules/{id}` - Delete schedule
 - `GET /api/schedule-types` - Get available schedule types
+
+#### Healthcheck Integration
+- `GET /api/healthcheck/schedule/{id}` - Get healthcheck config for a schedule
+- `POST /api/healthcheck` - Create healthcheck configuration
+- `PUT /api/healthcheck/{id}` - Update healthcheck configuration
+- `DELETE /api/healthcheck/{id}` - Delete healthcheck configuration
 
 #### System Configuration
 - `GET /api/exclusions` - Get path and extension exclusions

@@ -404,8 +404,13 @@ class ScanState(db.Model):
         return scan_state
     
     @staticmethod
-    def create_new_scan():
-        """Create a new scan state record for starting a new scan"""
+    def create_new_scan(scan_id=None):
+        """Create a new scan state record for starting a new scan
+
+        Args:
+            scan_id: Optional scan ID to use (e.g., 'scheduled_11' for scheduled scans).
+                     If not provided, a UUID will be generated.
+        """
         # First, ensure no other scans are active (clean up any stale active states)
         try:
             # Deactivate any existing active scans
@@ -422,7 +427,8 @@ class ScanState(db.Model):
 
         # Always create a fresh scan state when starting a new scan
         scan_state = ScanState()
-        scan_state.scan_id = str(uuid.uuid4())
+        # Use provided scan_id (for scheduled scans) or generate UUID
+        scan_state.scan_id = scan_id if scan_id else str(uuid.uuid4())
         scan_state.is_active = False  # Will be set to True when scan actually starts
         scan_state.phase = 'idle'
         try:
