@@ -261,12 +261,53 @@ def health_check():
 @app.route('/api/version')
 @auth_required
 def get_version():
-    """Get application version"""
+    """Get application version and infrastructure component versions"""
     logger.info("Version information requested")
+
+    # Get infrastructure versions
+    infrastructure = {}
+
+    # Celery version
+    try:
+        import celery
+        infrastructure['celery'] = celery.__version__
+    except Exception as e:
+        logger.warning(f"Could not get Celery version: {e}")
+        infrastructure['celery'] = 'unknown'
+
+    # Redis version
+    try:
+        import redis
+        redis_url = app.config.get('CELERY_BROKER_URL', os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
+        r = redis.from_url(redis_url)
+        redis_info = r.info('server')
+        infrastructure['redis'] = redis_info.get('redis_version', 'unknown')
+    except Exception as e:
+        logger.warning(f"Could not get Redis version: {e}")
+        infrastructure['redis'] = 'unavailable'
+
+    # PostgreSQL version
+    try:
+        from sqlalchemy import text
+        result = db.session.execute(text('SELECT version()')).fetchone()
+        if result:
+            # Extract just the version number from full string like "PostgreSQL 15.2 (Debian 15.2-1.pgdg110+1)..."
+            pg_version_full = result[0]
+            # Extract version number (e.g., "15.2")
+            import re
+            match = re.search(r'PostgreSQL (\d+\.\d+)', pg_version_full)
+            infrastructure['postgresql'] = match.group(1) if match else pg_version_full
+        else:
+            infrastructure['postgresql'] = 'unknown'
+    except Exception as e:
+        logger.warning(f"Could not get PostgreSQL version: {e}")
+        infrastructure['postgresql'] = 'unavailable'
+
     return jsonify({
         'version': __version__,
         'github_url': __github_url__,
-        'api_version': '1.0'
+        'api_version': '1.0',
+        'infrastructure': infrastructure
     })
 
 @app.route('/api/openapi.yaml')

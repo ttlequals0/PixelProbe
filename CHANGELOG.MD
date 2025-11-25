@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.18] - 2025-11-25
+
+### Feature: Enhanced Version API Endpoint with Infrastructure Versions
+
+#### Added
+
+- **`/api/version` endpoint now returns infrastructure component versions**
+  - Celery version (task queue)
+  - Redis version (message broker)
+  - PostgreSQL version (database)
+  - Example response includes `infrastructure: { celery: "5.3.4", redis: "7.2.3", postgresql: "15.2" }`
+
+- **`/api/version` endpoint added to OpenAPI documentation**
+  - New "System" tag category for system information endpoints
+  - Full schema documentation for version response
+
+#### Changed
+
+- **Removed `tools/update_version.py`** - Version should only be updated manually in `version.py`
+- **`openapi.yaml` version is now dynamic** - Served via `/api/openapi.yaml` with version injected from `version.py` at runtime
+- **Static `openapi.yaml` uses placeholder version `0.0.0`** - Indicates it's dynamically set
+
+#### Technical Details
+
+- `version.py` is the single source of truth for application version
+- All version references read from `version.py` dynamically
+- Infrastructure versions queried at runtime from actual services
+
+#### Files Modified
+
+- `app.py` - Enhanced `/api/version` endpoint with infrastructure versions
+- `openapi.yaml` - Added `/api/version` endpoint documentation, added "System" tag
+- Deleted: `tools/update_version.py`
+
 ## [2.5.17] - 2025-11-25
 
 ### Fix: Complete Stale Scheduler Lock Fix (v2.5.16 was incomplete)

@@ -1,7 +1,8 @@
 openapi: 3.0.3
 info:
   title: PixelProbe API
-  version: 2.5.17
+  # Version is dynamically set from version.py when served via /api/openapi.yaml
+  version: 0.0.0
   description: |
     # PixelProbe REST API
 
@@ -1156,6 +1157,65 @@ paths:
           description: Scan output retrieved successfully
         '404':
           description: Result not found
+
+  # System Information Endpoints
+  /version:
+    get:
+      summary: Get application and infrastructure versions
+      description: |
+        Returns the current PixelProbe application version along with versions of
+        infrastructure components (Celery, Redis, PostgreSQL).
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/version \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+
+        **Response:**
+        ```json
+        {
+          "version": "2.5.18",
+          "github_url": "https://github.com/ttlequals0/PixelProbe",
+          "api_version": "1.0",
+          "infrastructure": {
+            "celery": "5.3.4",
+            "redis": "7.2.3",
+            "postgresql": "15.2"
+          }
+        }
+        ```
+      tags: [System]
+      responses:
+        '200':
+          description: Version information retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    description: PixelProbe application version
+                  github_url:
+                    type: string
+                    description: Link to GitHub repository
+                  api_version:
+                    type: string
+                    description: API version
+                  infrastructure:
+                    type: object
+                    description: Infrastructure component versions
+                    properties:
+                      celery:
+                        type: string
+                        description: Celery task queue version
+                      redis:
+                        type: string
+                        description: Redis server version
+                      postgresql:
+                        type: string
+                        description: PostgreSQL database version
 
   # Statistics Endpoints
   /stats:
@@ -2637,6 +2697,8 @@ paths:
 tags:
   - name: Authentication
     description: User authentication, authorization, and API token management
+  - name: System
+    description: Application version and infrastructure component information
   - name: Scan
     description: Media file scanning operations, status monitoring, and scan management
   - name: Statistics
