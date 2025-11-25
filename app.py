@@ -710,25 +710,54 @@ with app.app_context():
     init_services()
     
 
-    # Use a file lock to ensure only one scheduler runs across all workers
-    import fcntl
-    scheduler_lock_file = '/tmp/pixelprobe_scheduler.lock'
-    
-    try:
-        # Try to acquire exclusive lock (non-blocking)
-        lock_file = open(scheduler_lock_file, 'w')
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        
-        # We got the lock, so we're the scheduler process
-        logger.info(f"Acquired scheduler lock in process {os.getpid()}, initializing scheduler")
-        scheduler.init_app(app)
-        
-        # Keep the lock file open to maintain the lock
-        app.scheduler_lock_file = lock_file
-        
-    except (IOError, OSError) as e:
-        # Another process has the lock
-        logger.info(f"Scheduler already running in another process, skipping initialization in process {os.getpid()}")
+    # Use Redis-based distributed lock for cross-container scheduler coordination
+    # File locks don't work across containers (each has separate /tmp filesystem)
+    from pixelprobe.progress_utils import get_redis_client
+    from datetime import datetime, timezone
+
+    redis_client = get_redis_client()
+    scheduler_initialized = False
+
+    if redis_client:
+        try:
+            # Use Redis SETNX for atomic lock acquisition (24-hour expiry for auto-recovery)
+            lock_key = 'pixelprobe:scheduler:lock'
+            lock_value = f"{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
+
+            # Try to set the lock (only succeeds if key doesn't exist)
+            acquired = redis_client.set(lock_key, lock_value, nx=True, ex=86400)
+
+            if acquired:
+                logger.info(f"Acquired Redis scheduler lock in process {os.getpid()}, initializing scheduler")
+                scheduler.init_app(app)
+                scheduler_initialized = True
+                app.scheduler_redis_lock_key = lock_key
+            else:
+                # Check who has the lock for debugging
+                existing = redis_client.get(lock_key)
+                if existing:
+                    existing = existing.decode('utf-8') if isinstance(existing, bytes) else existing
+                logger.info(f"Scheduler already running (lock held by: {existing}), skipping in process {os.getpid()}")
+
+        except Exception as e:
+            logger.warning(f"Redis lock failed ({e}), falling back to file lock")
+            redis_client = None
+
+    # Fallback to file lock if Redis unavailable (for local development without Redis)
+    if not redis_client and not scheduler_initialized:
+        import fcntl
+        scheduler_lock_file = '/tmp/pixelprobe_scheduler.lock'
+
+        try:
+            lock_file = open(scheduler_lock_file, 'w')
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            logger.info(f"Acquired file scheduler lock in process {os.getpid()}, initializing scheduler (Redis unavailable)")
+            scheduler.init_app(app)
+            app.scheduler_lock_file = lock_file
+
+        except (IOError, OSError) as e:
+            logger.info(f"Scheduler already running in another process, skipping initialization in process {os.getpid()}")
     
 
     # Clean up ALL active scans from previous runs - they can't still be running after restart

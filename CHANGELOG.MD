@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.11] - 2025-11-24
+
+### Fix: Duplicate Scheduler Start Pings in Multi-Container Deployments
+
+#### Fixed
+
+- **Duplicate start pings due to scheduler running in multiple containers**
+  - Bug: File-based lock (`fcntl.flock`) doesn't work across containers (each has separate `/tmp` filesystem)
+  - Both gunicorn and celery-worker containers would acquire their own lock and initialize the scheduler
+  - Fix: Replaced file lock with Redis-based distributed lock using `SETNX`
+  - Uses `redis.set(lock_key, lock_value, nx=True, ex=86400)` for atomic acquisition
+  - 24-hour expiry ensures auto-recovery if container crashes
+  - Falls back to file lock if Redis unavailable (for local development)
+
+#### Technical Details
+
+- Lock key: `pixelprobe:scheduler:lock`
+- Lock value: `{pid}:{timestamp}` for debugging
+- Only the first container to acquire the Redis lock will initialize the scheduler
+- Other containers log which process holds the lock
+
+#### Files Modified
+
+- `app.py` - Replace file-based lock with Redis distributed lock
+
 ## [2.5.10] - 2025-11-24
 
 ### Hotfix: Pass Scheduled Scan ID Through Entire Scan Pipeline
@@ -18,11 +43,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ScanState.create_new_scan(scan_id=None)` now accepts optional scan_id
   - `scan_directories(scan_id=None)` now passes it to create_new_scan
   - Celery task now passes scan_id to scan_directories
-
-#### Known Issue
-
-- Duplicate start pings: Scheduler runs in both gunicorn and celery containers (separate /tmp filesystems)
-- Will address in future version with Redis-based distributed lock
 
 #### Files Modified
 
