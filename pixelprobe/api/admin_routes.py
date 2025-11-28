@@ -1,8 +1,10 @@
-from flask import Blueprint, request
+from flask import Blueprint, request, jsonify
 import os
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+from apscheduler.triggers.cron import CronTrigger
 
 from models import db, ScanResult, IgnoredErrorPattern, ScanConfiguration, ScanSchedule
 from scheduler import MediaScheduler
@@ -42,6 +44,56 @@ def set_scheduler(sched):
     """Set the scheduler instance"""
     global scheduler
     scheduler = sched
+
+
+def calculate_next_run(cron_expression: str, last_run=None):
+    """
+    Calculate next run time from cron/interval expression.
+
+    Works without requiring a running APScheduler instance, allowing any
+    Gunicorn worker to calculate the correct next_run time.
+
+    Args:
+        cron_expression: Either a cron expression (e.g., "*/5 * * * *")
+                        or interval format (e.g., "interval:hours:6")
+        last_run: Optional last run time (used for interval calculations)
+
+    Returns:
+        Next run time as timezone-aware datetime (UTC)
+    """
+    now = datetime.now(timezone.utc)
+
+    if cron_expression.startswith('interval:'):
+        # Parse interval format: interval:unit:value
+        parts = cron_expression.split(':')
+        if len(parts) == 3:
+            unit = parts[1]
+            value = int(parts[2])
+            interval = timedelta(**{unit: value})
+
+            if last_run:
+                # Ensure timezone-aware
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                next_time = last_run + interval
+                # If calculated time is in past, schedule from now
+                if next_time < now:
+                    next_time = now + interval
+                return next_time
+            return now + interval
+        raise ValueError(f"Invalid interval format: {cron_expression}")
+    else:
+        # Standard cron format - use APScheduler's trigger
+        parts = cron_expression.split()
+        if len(parts) != 5:
+            raise ValueError(f"Invalid cron expression: {cron_expression}")
+        trigger = CronTrigger(
+            minute=parts[0], hour=parts[1], day=parts[2],
+            month=parts[3], day_of_week=parts[4],
+            timezone='UTC'
+        )
+        return trigger.get_next_fire_time(None, now)
+
 
 @admin_bp.route('/mark-as-good', methods=['POST'])
 @rate_limit("10 per minute")
@@ -236,6 +288,13 @@ def get_schedules():
     schedules = ScanSchedule.query.all()
     return {'schedules': [schedule.to_dict() for schedule in schedules]}
 
+@admin_bp.route('/schedules/<int:schedule_id>', methods=['GET'])
+@auth_required
+def get_schedule(schedule_id):
+    """Get a specific scan schedule by ID"""
+    schedule = ScanSchedule.query.get_or_404(schedule_id)
+    return jsonify(schedule.to_dict())
+
 @admin_bp.route('/schedules', methods=['POST'])
 @auth_required
 def create_schedule():
@@ -277,19 +336,38 @@ def update_schedule(schedule_id):
     """Update a scan schedule"""
     schedule = ScanSchedule.query.get_or_404(schedule_id)
     data = request.get_json()
-    
+
     try:
+        # Track if schedule is being re-enabled or cron changed
+        was_inactive = not schedule.is_active
+        new_is_active = data.get('is_active', schedule.is_active)
+        being_reactivated = was_inactive and new_is_active
+
+        new_cron = data.get('cron_expression', schedule.cron_expression)
+        cron_changed = new_cron != schedule.cron_expression
+
+        # Update fields
         schedule.name = data.get('name', schedule.name)
-        schedule.cron_expression = data.get('cron_expression', schedule.cron_expression)
+        schedule.cron_expression = new_cron
         if 'scan_paths' in data:
             schedule.scan_paths = json.dumps(data['scan_paths'])
         schedule.scan_type = data.get('scan_type', schedule.scan_type)
         schedule.force_rescan = data.get('force_rescan', schedule.force_rescan)
-        schedule.is_active = data.get('is_active', schedule.is_active)
-        
+        schedule.is_active = new_is_active
+
+        # Recalculate next_run when:
+        # 1. Schedule is being re-enabled, OR
+        # 2. Cron expression changed while schedule is active
+        if being_reactivated or (cron_changed and new_is_active):
+            try:
+                schedule.next_run = calculate_next_run(schedule.cron_expression, schedule.last_run)
+                logger.info(f"Recalculated next_run for schedule {schedule_id}: {schedule.next_run}")
+            except Exception as e:
+                logger.warning(f"Could not calculate next_run for schedule {schedule_id}: {e}")
+
         db.session.commit()
-        
-        # Update scheduler
+
+        # Update scheduler (will activate/deactivate jobs in the scheduler worker)
         if scheduler:
             scheduler.update_schedules()
 

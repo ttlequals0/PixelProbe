@@ -5,11 +5,12 @@ Statistics service for PixelProbe
 import os
 import logging
 from typing import Dict, List
-from datetime import datetime
-from sqlalchemy import text
+from datetime import datetime, timedelta
+from sqlalchemy import text, func
 
-from models import db, ScanResult
+from models import db, ScanResult, ScanReport
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone
+from version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ class StatsService:
             
             # Build system info
             return {
-                'version': os.environ.get('APP_VERSION', 'unknown'),
+                'version': __version__,
                 'timezone': str(self.tz),
                 'current_time': datetime.now(self.tz).isoformat(),
                 'database': {
@@ -284,3 +285,196 @@ class StatsService:
                 'oldest_scan': None,
                 'newest_scan': None
             }
+
+    def get_scan_trends(self, days: int = 30) -> Dict:
+        """Get scan counter metrics over time
+
+        Args:
+            days: Number of days to look back (default: 30)
+
+        Returns:
+            Dictionary with scan counts over time
+        """
+        try:
+            # Calculate date threshold
+            start_date = datetime.now(self.tz) - timedelta(days=days)
+
+            # Get scan reports grouped by date
+            scan_counts = db.session.execute(
+                text("""
+                    SELECT
+                        DATE(start_time) as scan_date,
+                        COUNT(*) as scan_count,
+                        COUNT(DISTINCT scan_type) as scan_types_count,
+                        SUM(files_scanned) as total_files_scanned,
+                        SUM(files_corrupted) as total_corrupted,
+                        SUM(files_with_warnings) as total_warnings,
+                        AVG(duration_seconds) as avg_duration
+                    FROM scan_reports
+                    WHERE start_time >= :start_date
+                        AND status = 'completed'
+                    GROUP BY DATE(start_time)
+                    ORDER BY scan_date DESC
+                """),
+                {'start_date': start_date}
+            ).fetchall()
+
+            # Format results
+            trends = []
+            for row in scan_counts:
+                trends.append({
+                    'date': row[0],
+                    'scan_count': row[1] or 0,
+                    'scan_types_count': row[2] or 0,
+                    'files_scanned': row[3] or 0,
+                    'files_corrupted': row[4] or 0,
+                    'files_with_warnings': row[5] or 0,
+                    'avg_duration_seconds': round(row[6], 2) if row[6] else 0
+                })
+
+            # Get summary statistics
+            total_query = db.session.execute(
+                text("""
+                    SELECT
+                        COUNT(*) as total_scans,
+                        SUM(files_scanned) as total_files_scanned,
+                        SUM(files_corrupted) as total_corrupted,
+                        SUM(files_with_warnings) as total_warnings
+                    FROM scan_reports
+                    WHERE start_time >= :start_date
+                        AND status = 'completed'
+                """),
+                {'start_date': start_date}
+            ).fetchone()
+
+            return {
+                'period_days': days,
+                'start_date': start_date.isoformat(),
+                'summary': {
+                    'total_scans': total_query[0] or 0,
+                    'total_files_scanned': total_query[1] or 0,
+                    'total_corrupted': total_query[2] or 0,
+                    'total_warnings': total_query[3] or 0
+                },
+                'daily_trends': trends
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting scan trends: {e}")
+            raise
+
+    def get_duration_histogram(self, days: int = 30, bucket_count: int = 10) -> Dict:
+        """Get scan duration histogram
+
+        Args:
+            days: Number of days to look back (default: 30)
+            bucket_count: Number of histogram buckets (default: 10)
+
+        Returns:
+            Dictionary with duration histogram data
+        """
+        try:
+            # Calculate date threshold
+            start_date = datetime.now(self.tz) - timedelta(days=days)
+
+            # Get all durations in the period
+            durations_query = db.session.execute(
+                text("""
+                    SELECT
+                        duration_seconds,
+                        scan_type,
+                        files_scanned
+                    FROM scan_reports
+                    WHERE start_time >= :start_date
+                        AND status = 'completed'
+                        AND duration_seconds IS NOT NULL
+                    ORDER BY duration_seconds
+                """),
+                {'start_date': start_date}
+            ).fetchall()
+
+            if not durations_query:
+                return {
+                    'period_days': days,
+                    'start_date': start_date.isoformat(),
+                    'histogram': [],
+                    'summary': {
+                        'total_scans': 0,
+                        'min_duration': 0,
+                        'max_duration': 0,
+                        'avg_duration': 0,
+                        'median_duration': 0
+                    }
+                }
+
+            durations = [row[0] for row in durations_query]
+
+            # Calculate statistics
+            min_duration = min(durations)
+            max_duration = max(durations)
+            avg_duration = sum(durations) / len(durations)
+            median_duration = sorted(durations)[len(durations) // 2]
+
+            # Create histogram buckets
+            bucket_size = (max_duration - min_duration) / bucket_count if max_duration > min_duration else 1
+            buckets = []
+
+            for i in range(bucket_count):
+                bucket_start = min_duration + (i * bucket_size)
+                bucket_end = bucket_start + bucket_size
+
+                # Count scans in this bucket
+                count = sum(1 for d in durations if bucket_start <= d < bucket_end or (i == bucket_count - 1 and d == bucket_end))
+
+                buckets.append({
+                    'range_start': round(bucket_start, 2),
+                    'range_end': round(bucket_end, 2),
+                    'count': count,
+                    'percentage': round((count / len(durations)) * 100, 2) if len(durations) > 0 else 0
+                })
+
+            # Get duration stats by scan type
+            by_scan_type = {}
+            for row in durations_query:
+                duration, scan_type, files_scanned = row
+                if scan_type not in by_scan_type:
+                    by_scan_type[scan_type] = {
+                        'count': 0,
+                        'total_duration': 0,
+                        'total_files': 0,
+                        'durations': []
+                    }
+                by_scan_type[scan_type]['count'] += 1
+                by_scan_type[scan_type]['total_duration'] += duration
+                by_scan_type[scan_type]['total_files'] += files_scanned or 0
+                by_scan_type[scan_type]['durations'].append(duration)
+
+            # Calculate averages per scan type
+            scan_type_stats = {}
+            for scan_type, stats in by_scan_type.items():
+                scan_type_stats[scan_type] = {
+                    'count': stats['count'],
+                    'avg_duration': round(stats['total_duration'] / stats['count'], 2),
+                    'total_files_scanned': stats['total_files'],
+                    'avg_files_per_scan': round(stats['total_files'] / stats['count'], 2) if stats['count'] > 0 else 0,
+                    'min_duration': round(min(stats['durations']), 2),
+                    'max_duration': round(max(stats['durations']), 2)
+                }
+
+            return {
+                'period_days': days,
+                'start_date': start_date.isoformat(),
+                'histogram': buckets,
+                'summary': {
+                    'total_scans': len(durations),
+                    'min_duration': round(min_duration, 2),
+                    'max_duration': round(max_duration, 2),
+                    'avg_duration': round(avg_duration, 2),
+                    'median_duration': round(median_duration, 2)
+                },
+                'by_scan_type': scan_type_stats
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting duration histogram: {e}")
+            raise

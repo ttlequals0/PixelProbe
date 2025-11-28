@@ -157,6 +157,17 @@ Create and manage automated scan schedules:
 - Multiple scan types: Normal Scan, Cleanup, Integrity Check
 - View next run times and last execution status
 
+#### Healthcheck Monitoring
+![Healthcheck Configuration](docs/screenshots/features/healthcheck-config.png)
+
+Integrate with [Healthchecks.io](https://healthchecks.io/) or self-hosted instances for monitoring:
+- **Start Ping**: Notify when a scheduled scan begins (uses `/start` slug)
+- **Success Ping**: Notify when scan completes successfully with optional report data
+- **Failure Ping**: Alert when a scan fails (uses `/fail` slug)
+- **Report Data**: Include scan summary (files scanned, corrupted, duration) in success pings
+- **Self-Hosted Support**: Works with both public hc-ping.com and self-hosted Healthchecks.io instances
+- **Per-Schedule Config**: Configure different healthcheck URLs for each scan schedule
+
 #### Trend Analytics
 ![Trend Analytics](docs/screenshots/features/trends-analytics.png)
 
@@ -179,6 +190,42 @@ Fine-tune scanning behavior by excluding specific paths and file types:
 - **Interactive UI**: Add and remove exclusions without restarting the application
 - **Real-time Updates**: Changes take effect immediately on the next scan
 - **Performance Optimization**: Reduce scan times by excluding non-media directories
+
+## Documentation
+
+### Installation & Setup
+- [Docker Setup Guide](docs/DOCKER_SETUP.md) - Complete Docker Compose setup with container explanations
+- [Installation Guide](docs/INSTALLATION.md) - Detailed installation instructions
+- [Configuration Guide](docs/CONFIGURATION.md) - Environment variables and configuration options
+- [Migration Guides](docs/migration/) - Upgrading from previous versions
+
+### System & Architecture
+- [System Architecture](docs/SYSTEM_ARCHITECTURE.md) - Container architecture, Celery queues, and data flow
+- [Architecture Overview](docs/ARCHITECTURE.md) - Application layers and design patterns
+- [Project Structure](docs/PROJECT_STRUCTURE.md) - Codebase organization and module overview
+- [Performance Tuning](docs/PERFORMANCE_TUNING.md) - Optimization strategies for large-scale deployments
+
+### API & Integration
+- [API Documentation](docs/api/README.md) - Complete REST API reference with authentication guide
+- [OpenAPI Specification](openapi.yaml) - OpenAPI 3.0 spec for API documentation
+- [Scan Types Documentation](docs/api/SCAN_TYPES_DOCUMENTATION.md) - Comprehensive guide to all scan types
+- [Integration Guide](docs/examples/integration-guide.md) - Best practices for integrating with PixelProbe
+
+### Client Examples
+- [Python Client](docs/examples/python-client.py) - Full-featured Python client with CLI
+- [Node.js Client](docs/examples/nodejs-client.js) - JavaScript/Node.js client implementation
+- [Bash Client](docs/examples/bash-client.sh) - Shell script client using curl and jq
+
+### Development & Maintenance
+- [Developer Guide](docs/developer/README.md) - Development setup and contribution guidelines
+- [Testing Guide](docs/developer/testing-guide.md) - Testing strategy and running tests
+- [Release Process](docs/developer/release-process.md) - How to create and publish releases
+- [Tools & Scripts](docs/maintenance/TOOLS_AND_SCRIPTS.md) - Maintenance utilities and scripts
+- [Troubleshooting Guide](docs/TROUBLESHOOTING.md) - Common issues and solutions
+
+### Additional Resources
+- [Database Schema](docs/developer/database-schema.md) - Complete database structure documentation
+- [Complete Documentation Index](docs/README.md) - Full documentation directory with organized links
 
 ##  Quick Start
 
@@ -285,21 +332,6 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
    ```
 
 For detailed migration instructions, see [MIGRATION_v2.2.0.md](MIGRATION_v2.2.0.md).
-
-## Documentation
-
-### Quick Links
-- **[Docker Setup Guide](docs/DOCKER_SETUP.md)** - Complete Docker Compose setup with container explanations
-- **[System Architecture](docs/SYSTEM_ARCHITECTURE.md)** - Container architecture, Celery queues, and data flow
-- **[API Documentation](docs/api/README.md)** - Complete REST API reference  
-- **[Architecture Overview](docs/ARCHITECTURE.md)** - Application layers and design
-- **[Performance Tuning](docs/PERFORMANCE_TUNING.md)** - Optimization strategies
-- **[Developer Guide](docs/developer/README.md)** - Development setup and guidelines
-
-### API Client Examples
-- **[Python Client](docs/examples/python-client.py)** - Full-featured Python client with CLI
-- **[Node.js Client](docs/examples/nodejs-client.js)** - JavaScript/Node.js client implementation
-- **[Bash Client](docs/examples/bash-client.sh)** - Shell script client using curl and jq
 
 ## Configuration
 
@@ -417,6 +449,12 @@ PixelProbe provides a comprehensive REST API with OpenAPI/Swagger documentation.
 - `PUT /api/schedules/{id}` - Update schedule
 - `DELETE /api/schedules/{id}` - Delete schedule
 - `GET /api/schedule-types` - Get available schedule types
+
+#### Healthcheck Integration
+- `GET /api/healthcheck/schedule/{id}` - Get healthcheck config for a schedule
+- `POST /api/healthcheck` - Create healthcheck configuration
+- `PUT /api/healthcheck/{id}` - Update healthcheck configuration
+- `DELETE /api/healthcheck/{id}` - Delete healthcheck configuration
 
 #### System Configuration
 - `GET /api/exclusions` - Get path and extension exclusions

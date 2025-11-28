@@ -2,7 +2,7 @@
 PixelProbe - Media file corruption detection tool
 """
 
-__version__ = '2.0.55'
+from version import __version__
 
 from . import api
 from . import services

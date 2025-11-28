@@ -190,8 +190,12 @@ class APIClient {
         return this.request('/system-info');
     }
 
-    async getTrends() {
-        return this.request('/trends');
+    async getTrends(days = 30) {
+        return this.request(`/trends?days=${days}`);
+    }
+
+    async getDurationHistogram(days = 30, buckets = 10) {
+        return this.request(`/stats/duration-histogram?days=${days}&buckets=${buckets}`);
     }
 
     // Scan methods
@@ -1421,6 +1425,8 @@ class PixelProbeApp {
         this.stats = new StatsDashboard(this.api);
         this.progress = new ProgressManager(this.api, this);
         this.table = new TableManager(this.api);
+        this.trendsChart = null;
+        this.histogramChart = null;
     }
 
     escapeHtml(text) {
@@ -1920,11 +1926,196 @@ class PixelProbeApp {
 
     async showTrends() {
         try {
-            const trends = await this.api.getTrends();
-            this.showTrendsModal(trends);
+            const days = 30;
+            const [trendsData, histogramData] = await Promise.all([
+                this.api.getTrends(days),
+                this.api.getDurationHistogram(days, 10)
+            ]);
+            this.showTrendsModal(trendsData, histogramData);
         } catch (error) {
             console.error('Trends error:', error);
             this.showNotification('Failed to load trends data', 'error');
+        }
+    }
+
+    showTrendsModal(trendsData, histogramData) {
+        const modal = document.querySelector('#trends-modal');
+        if (!modal) return;
+
+        const modalBody = modal.querySelector('.modal-body');
+        if (!modalBody) return;
+
+        // Create HTML structure for charts
+        let html = '<div class="trends-dashboard">';
+
+        // Summary stats at the top
+        html += '<div class="trends-summary" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;">';
+
+        if (trendsData.summary) {
+            html += `
+                <div class="stat-card" style="padding: 1rem; background: var(--card-bg, #f8f9fa); border-radius: 4px;">
+                    <div style="font-size: 0.875rem; color: var(--text-muted, #6c757d); margin-bottom: 0.5rem;">Total Scans</div>
+                    <div style="font-size: 1.5rem; font-weight: bold;">${trendsData.summary.total_scans || 0}</div>
+                </div>
+                <div class="stat-card" style="padding: 1rem; background: var(--card-bg, #f8f9fa); border-radius: 4px;">
+                    <div style="font-size: 0.875rem; color: var(--text-muted, #6c757d); margin-bottom: 0.5rem;">Files Scanned</div>
+                    <div style="font-size: 1.5rem; font-weight: bold;">${(trendsData.summary.total_files_scanned || 0).toLocaleString()}</div>
+                </div>
+                <div class="stat-card" style="padding: 1rem; background: var(--card-bg, #f8f9fa); border-radius: 4px;">
+                    <div style="font-size: 0.875rem; color: var(--text-muted, #6c757d); margin-bottom: 0.5rem;">Corrupted Files</div>
+                    <div style="font-size: 1.5rem; font-weight: bold; color: ${(trendsData.summary.total_corrupted || 0) > 0 ? '#dc3545' : '#28a745'};">${trendsData.summary.total_corrupted || 0}</div>
+                </div>
+                <div class="stat-card" style="padding: 1rem; background: var(--card-bg, #f8f9fa); border-radius: 4px;">
+                    <div style="font-size: 0.875rem; color: var(--text-muted, #6c757d); margin-bottom: 0.5rem;">Avg Duration</div>
+                    <div style="font-size: 1.5rem; font-weight: bold;">${trendsData.summary.avg_duration ? trendsData.summary.avg_duration.toFixed(1) + 's' : 'N/A'}</div>
+                </div>
+            `;
+        }
+
+        html += '</div>';
+
+        // Scan trends chart
+        html += '<div class="chart-container" style="margin-bottom: 2rem;">';
+        html += '<h4 style="margin-bottom: 1rem;">Scan Activity (Last 30 Days)</h4>';
+        html += '<canvas id="trends-chart" style="max-height: 300px;"></canvas>';
+        html += '</div>';
+
+        // Duration histogram chart
+        html += '<div class="chart-container" style="margin-bottom: 2rem;">';
+        html += '<h4 style="margin-bottom: 1rem;">Scan Duration Distribution</h4>';
+        html += '<canvas id="histogram-chart" style="max-height: 300px;"></canvas>';
+        html += '</div>';
+
+        // Per scan-type breakdown
+        if (histogramData.by_scan_type && Object.keys(histogramData.by_scan_type).length > 0) {
+            html += '<div class="scan-type-breakdown">';
+            html += '<h4 style="margin-bottom: 1rem;">Duration by Scan Type</h4>';
+            html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">';
+
+            for (const [scanType, stats] of Object.entries(histogramData.by_scan_type)) {
+                html += `
+                    <div class="stat-card" style="padding: 1rem; background: var(--card-bg, #f8f9fa); border-radius: 4px;">
+                        <div style="font-size: 0.875rem; font-weight: bold; margin-bottom: 0.5rem;">${scanType.replace('_', ' ').toUpperCase()}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted, #6c757d);">
+                            Count: ${stats.count || 0}<br>
+                            Avg: ${stats.avg ? stats.avg.toFixed(1) + 's' : 'N/A'}<br>
+                            Min: ${stats.min ? stats.min.toFixed(1) + 's' : 'N/A'} | Max: ${stats.max ? stats.max.toFixed(1) + 's' : 'N/A'}
+                        </div>
+                    </div>
+                `;
+            }
+
+            html += '</div></div>';
+        }
+
+        html += '</div>';
+
+        modalBody.innerHTML = html;
+        this.openModal('trends-modal');
+
+        // Render charts after modal is opened
+        this.renderTrendsCharts(trendsData, histogramData);
+    }
+
+    renderTrendsCharts(trendsData, histogramData) {
+        // Destroy existing chart instances if they exist
+        if (this.trendsChart) {
+            this.trendsChart.destroy();
+        }
+        if (this.histogramChart) {
+            this.histogramChart.destroy();
+        }
+
+        // Render scan trends line chart
+        const trendsCanvas = document.getElementById('trends-chart');
+        if (trendsCanvas && trendsData.daily_trends) {
+            const ctx = trendsCanvas.getContext('2d');
+            const dates = trendsData.daily_trends.map(d => d.date);
+            const scanCounts = trendsData.daily_trends.map(d => d.scan_count || 0);
+            const corruptedCounts = trendsData.daily_trends.map(d => d.corrupted_count || 0);
+
+            this.trendsChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        {
+                            label: 'Scans',
+                            data: scanCounts,
+                            borderColor: '#007bff',
+                            backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        },
+                        {
+                            label: 'Corrupted Files',
+                            data: corruptedCounts,
+                            borderColor: '#dc3545',
+                            backgroundColor: 'rgba(220, 53, 69, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                precision: 0
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Render duration histogram bar chart
+        const histogramCanvas = document.getElementById('histogram-chart');
+        if (histogramCanvas && histogramData.histogram) {
+            const ctx = histogramCanvas.getContext('2d');
+            const labels = histogramData.histogram.map(bucket =>
+                `${bucket.min_duration.toFixed(0)}-${bucket.max_duration.toFixed(0)}s`
+            );
+            const counts = histogramData.histogram.map(bucket => bucket.count || 0);
+
+            this.histogramChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Number of Scans',
+                        data: counts,
+                        backgroundColor: '#28a745',
+                        borderColor: '#1e7e34',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                precision: 0
+                            }
+                        }
+                    }
+                }
+            });
         }
     }
 
@@ -3307,9 +3498,20 @@ class PixelProbeApp {
                             <div class="schedule-header">
                                 <h4>${this.escapeHtml(schedule.name)}</h4>
                                 <div class="schedule-actions">
-                                    <button class="btn btn-sm ${schedule.is_active ? 'btn-warning' : 'btn-success'}" 
-                                            onclick="app.toggleSchedule(${schedule.id}, ${!schedule.is_active})">
-                                        ${schedule.is_active ? 'Disable' : 'Enable'}
+                                    <button class="btn btn-sm btn-primary"
+                                            onclick="app.showEditSchedule(${schedule.id})"
+                                            title="Edit Schedule">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                    <button class="btn btn-sm ${schedule.has_healthcheck ? 'btn-success' : 'btn-info'}"
+                                            onclick="app.showHealthcheckConfig(${schedule.id}, '${this.escapeHtml(schedule.name)}')"
+                                            title="${schedule.has_healthcheck ? (schedule.healthcheck_active ? 'Healthcheck Active' : 'Healthcheck Configured (Inactive)') : 'Configure Healthcheck'}">
+                                        <i class="fas fa-heartbeat"></i>${schedule.has_healthcheck ? ' ✓' : ''}
+                                    </button>
+                                    <button class="btn btn-sm ${schedule.is_active ? 'btn-warning' : 'btn-success'}"
+                                            onclick="app.toggleSchedule(${schedule.id}, ${!schedule.is_active})"
+                                            title="${schedule.is_active ? 'Disable Schedule' : 'Enable Schedule'}">
+                                        <i class="fas ${schedule.is_active ? 'fa-pause' : 'fa-play'}"></i>
                                     </button>
                                     <button class="btn btn-sm btn-danger" onclick="app.deleteSchedule(${schedule.id})">
                                         <i class="fas fa-trash"></i>
@@ -3352,13 +3554,126 @@ class PixelProbeApp {
         const scheduleType = document.querySelector('#schedule-type').value;
         const cronInput = document.querySelector('#cron-input');
         const intervalInput = document.querySelector('#interval-input');
-        
+
         if (scheduleType === 'cron') {
             cronInput.style.display = 'block';
             intervalInput.style.display = 'none';
         } else {
             cronInput.style.display = 'none';
             intervalInput.style.display = 'block';
+        }
+    }
+
+    toggleEditScheduleInput() {
+        const scheduleType = document.querySelector('#edit-schedule-type').value;
+        const cronInput = document.querySelector('#edit-cron-input');
+        const intervalInput = document.querySelector('#edit-interval-input');
+
+        if (scheduleType === 'cron') {
+            cronInput.style.display = 'block';
+            intervalInput.style.display = 'none';
+        } else {
+            cronInput.style.display = 'none';
+            intervalInput.style.display = 'block';
+        }
+    }
+
+    async showEditSchedule(scheduleId) {
+        try {
+            // Load schedule data
+            const response = await fetch(`/api/schedules/${scheduleId}`);
+            if (!response.ok) throw new Error('Failed to load schedule');
+
+            const schedule = await response.json();
+
+            // Populate form fields
+            document.getElementById('edit-schedule-id').value = schedule.id;
+            document.getElementById('edit-schedule-name').value = schedule.name || '';
+            document.getElementById('edit-scan-type').value = schedule.scan_type || 'normal';
+            document.getElementById('edit-schedule-paths').value = schedule.scan_paths ? schedule.scan_paths.join('\n') : '';
+            document.getElementById('edit-force-rescan').checked = schedule.force_rescan || false;
+            document.getElementById('edit-is-active').checked = schedule.is_active !== undefined ? schedule.is_active : true;
+
+            // Determine if it's cron or interval
+            const cronExpression = schedule.cron_expression || '';
+            const isCron = !cronExpression.match(/^\d+\s+(hour|day|week)s?$/i);
+
+            if (isCron) {
+                document.getElementById('edit-schedule-type').value = 'cron';
+                document.getElementById('edit-cron-expression').value = cronExpression;
+                document.getElementById('edit-cron-input').style.display = 'block';
+                document.getElementById('edit-interval-input').style.display = 'none';
+            } else {
+                // Parse interval (e.g., "24 hours", "7 days")
+                const match = cronExpression.match(/^(\d+)\s+(hour|day|week)s?$/i);
+                if (match) {
+                    document.getElementById('edit-schedule-type').value = 'interval';
+                    document.getElementById('edit-interval-value').value = match[1];
+                    document.getElementById('edit-interval-unit').value = match[2].toLowerCase() + 's';
+                    document.getElementById('edit-cron-input').style.display = 'none';
+                    document.getElementById('edit-interval-input').style.display = 'block';
+                }
+            }
+
+            // Setup form submission
+            const form = document.getElementById('edit-schedule-form');
+            form.onsubmit = async (e) => {
+                e.preventDefault();
+                await this.saveScheduleEdit();
+            };
+
+            this.openModal('edit-schedule-modal');
+        } catch (error) {
+            console.error('Failed to load schedule for editing:', error);
+            this.showNotification('Failed to load schedule', 'error');
+        }
+    }
+
+    async saveScheduleEdit() {
+        try {
+            const scheduleId = document.getElementById('edit-schedule-id').value;
+            const name = document.getElementById('edit-schedule-name').value;
+            const scanType = document.getElementById('edit-scan-type').value;
+            const paths = document.getElementById('edit-schedule-paths').value;
+            const forceRescan = document.getElementById('edit-force-rescan').checked;
+            const isActive = document.getElementById('edit-is-active').checked;
+            const scheduleType = document.getElementById('edit-schedule-type').value;
+
+            let cronExpression;
+            if (scheduleType === 'cron') {
+                cronExpression = document.getElementById('edit-cron-expression').value;
+            } else {
+                const intervalValue = document.getElementById('edit-interval-value').value;
+                const intervalUnit = document.getElementById('edit-interval-unit').value;
+                cronExpression = `${intervalValue} ${intervalUnit}`;
+            }
+
+            const scanPaths = paths.trim() ? paths.split('\n').map(p => p.trim()).filter(p => p) : [];
+
+            const response = await fetch(`/api/schedules/${scheduleId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    cron_expression: cronExpression,
+                    scan_type: scanType,
+                    scan_paths: scanPaths,
+                    force_rescan: forceRescan,
+                    is_active: isActive
+                })
+            });
+
+            if (response.ok) {
+                this.showNotification('Schedule updated successfully', 'success');
+                this.closeModal('edit-schedule-modal');
+                await this.loadSchedules();
+            } else {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to update schedule');
+            }
+        } catch (error) {
+            console.error('Failed to save schedule:', error);
+            this.showNotification(`Failed to update schedule: ${error.message}`, 'error');
         }
     }
 
@@ -3384,12 +3699,12 @@ class PixelProbeApp {
 
     async deleteSchedule(scheduleId) {
         if (!confirm('Are you sure you want to delete this schedule?')) return;
-        
+
         try {
             const response = await fetch(`/api/schedules/${scheduleId}`, {
                 method: 'DELETE'
             });
-            
+
             if (response.ok) {
                 this.showNotification('Schedule deleted', 'success');
                 await this.loadSchedules();
@@ -3399,6 +3714,174 @@ class PixelProbeApp {
         } catch (error) {
             console.error('Failed to delete schedule:', error);
             this.showNotification('Failed to delete schedule', 'error');
+        }
+    }
+
+    // Healthcheck Management
+    async showHealthcheckConfig(scheduleId, scheduleName) {
+        const modal = document.querySelector('#healthcheck-modal');
+        if (!modal) return;
+
+        // Store current schedule ID
+        this.currentScheduleId = scheduleId;
+
+        // Update modal title
+        const modalTitle = document.querySelector('#healthcheck-modal-title');
+        if (modalTitle) {
+            modalTitle.textContent = `Healthcheck for: ${scheduleName}`;
+        }
+
+        // Load existing config if any
+        await this.loadHealthcheckConfig(scheduleId);
+
+        modal.style.display = 'block';
+    }
+
+    async loadHealthcheckConfig(scheduleId) {
+        try {
+            const response = await fetch(`/api/healthcheck/schedule/${scheduleId}`);
+
+            if (response.ok) {
+                const config = await response.json();
+
+                // Populate form with existing config
+                document.querySelector('#healthcheck-url').value = config.healthcheck_url || '';
+                document.querySelector('#healthcheck-active').checked = config.is_active !== false;
+                document.querySelector('#send-start-ping').checked = config.send_start_ping !== false;
+                document.querySelector('#send-success-ping').checked = config.send_success_ping !== false;
+                document.querySelector('#send-failure-ping').checked = config.send_failure_ping !== false;
+                document.querySelector('#include-report-data').checked = config.include_report_data !== false;
+
+                // Show delete button if config exists
+                const deleteBtn = document.querySelector('#delete-healthcheck-btn');
+                if (deleteBtn) {
+                    deleteBtn.style.display = 'inline-block';
+                    deleteBtn.onclick = () => this.deleteHealthcheckConfig(config.id);
+                }
+
+                // Show last ping status if available
+                const statusDiv = document.querySelector('#healthcheck-status');
+                if (statusDiv && config.last_ping_time) {
+                    const lastPing = new Date(config.last_ping_time).toLocaleString();
+                    const statusClass = config.last_ping_status === 'success' ? 'text-success' : 'text-danger';
+                    statusDiv.innerHTML = `<p class="${statusClass}">Last ping: ${lastPing} (${config.last_ping_status})</p>`;
+                    statusDiv.style.display = 'block';
+                }
+            } else if (response.status === 404) {
+                // No config exists yet, reset form
+                document.querySelector('#healthcheck-url').value = '';
+                document.querySelector('#healthcheck-active').checked = true;
+                document.querySelector('#send-start-ping').checked = true;
+                document.querySelector('#send-success-ping').checked = true;
+                document.querySelector('#send-failure-ping').checked = true;
+                document.querySelector('#include-report-data').checked = true;
+
+                const deleteBtn = document.querySelector('#delete-healthcheck-btn');
+                if (deleteBtn) deleteBtn.style.display = 'none';
+
+                const statusDiv = document.querySelector('#healthcheck-status');
+                if (statusDiv) statusDiv.style.display = 'none';
+            }
+        } catch (error) {
+            console.error('Failed to load healthcheck config:', error);
+        }
+    }
+
+    async saveHealthcheckConfig() {
+        const scheduleId = this.currentScheduleId;
+        if (!scheduleId) return;
+
+        const url = document.querySelector('#healthcheck-url').value.trim();
+        if (!url) {
+            this.showNotification('Healthcheck URL is required', 'error');
+            return;
+        }
+
+        const configData = {
+            schedule_id: scheduleId,
+            healthcheck_url: url,
+            is_active: document.querySelector('#healthcheck-active').checked,
+            send_start_ping: document.querySelector('#send-start-ping').checked,
+            send_success_ping: document.querySelector('#send-success-ping').checked,
+            send_failure_ping: document.querySelector('#send-failure-ping').checked,
+            include_report_data: document.querySelector('#include-report-data').checked
+        };
+
+        try {
+            // Check if config exists
+            const checkResponse = await fetch(`/api/healthcheck/schedule/${scheduleId}`);
+            const method = checkResponse.ok ? 'PUT' : 'POST';
+            const endpoint = checkResponse.ok ? `/api/healthcheck/${(await checkResponse.json()).id}` : '/api/healthcheck';
+
+            const response = await fetch(endpoint, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(configData)
+            });
+
+            if (response.ok) {
+                this.showNotification('Healthcheck configuration saved', 'success');
+                this.closeModal('healthcheck-modal');
+            } else {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to save configuration');
+            }
+        } catch (error) {
+            console.error('Failed to save healthcheck config:', error);
+            this.showNotification(`Failed to save: ${error.message}`, 'error');
+        }
+    }
+
+    async deleteHealthcheckConfig(configId) {
+        if (!confirm('Are you sure you want to delete this healthcheck configuration?')) return;
+
+        try {
+            const response = await fetch(`/api/healthcheck/${configId}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                this.showNotification('Healthcheck configuration deleted', 'success');
+                this.closeModal('healthcheck-modal');
+            } else {
+                throw new Error('Failed to delete configuration');
+            }
+        } catch (error) {
+            console.error('Failed to delete healthcheck config:', error);
+            this.showNotification('Failed to delete configuration', 'error');
+        }
+    }
+
+    async testHealthcheck() {
+        const scheduleId = this.currentScheduleId;
+        if (!scheduleId) return;
+
+        try {
+            // First check if config exists
+            const checkResponse = await fetch(`/api/healthcheck/schedule/${scheduleId}`);
+            if (!checkResponse.ok) {
+                this.showNotification('Please save the configuration before testing', 'warning');
+                return;
+            }
+
+            const config = await checkResponse.json();
+            const response = await fetch(`/api/healthcheck/${config.id}/test`, {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                this.showNotification('Test ping sent successfully!', 'success');
+
+                // Reload config to show updated ping status
+                await this.loadHealthcheckConfig(scheduleId);
+            } else {
+                this.showNotification(`Test ping failed: ${result.message}`, 'error');
+            }
+        } catch (error) {
+            console.error('Failed to test healthcheck:', error);
+            this.showNotification('Failed to send test ping', 'error');
         }
     }
 
@@ -3502,6 +3985,13 @@ class PixelProbeApp {
         } catch (error) {
             console.error('Failed to remove exclusion:', error);
             this.showNotification('Failed to remove exclusion', 'error');
+        }
+    }
+
+    openModal(modalId) {
+        const modal = document.querySelector(`#${modalId}`);
+        if (modal) {
+            modal.style.display = 'block';
         }
     }
 

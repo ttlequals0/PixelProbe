@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from celery_config import celery_app
 from pixelprobe.services.scan_service import ScanService
 from pixelprobe.progress_utils import get_redis_client, update_scan_progress_redis
-from models import db, ScanState, ScanResult
+from models import db, ScanState, ScanResult, ScanReport
 
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,36 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
     # The ContextTask wrapper handles session management properly
 
     logger.info(f"Starting Celery scan task {self.request.id} for scan_id: {scan_id}")
+
+    # Check if this scan_id already completed (e.g., on retry after DetachedInstanceError)
+    # This prevents duplicate work when Celery retries a task that actually succeeded
+    if scan_id:
+        existing_state = ScanState.query.filter_by(scan_id=scan_id).first()
+        if existing_state and existing_state.phase == 'completed':
+            logger.info(f"Scan {scan_id} already completed (phase={existing_state.phase}), skipping retry")
+
+            # Send completion ping for scheduled scans even when returning early
+            # because the scheduler already sent a start ping and expects a completion signal
+            if scan_id.startswith('scheduled_'):
+                try:
+                    from scheduler import MediaScheduler
+                    # Find the existing scan report for this scan
+                    existing_report = ScanReport.query.filter_by(scan_id=scan_id).order_by(ScanReport.end_time.desc()).first()
+                    if existing_report:
+                        logger.info(f"Sending completion ping for already-completed scan {scan_id} (report {existing_report.id})")
+                        MediaScheduler.send_healthcheck_completion(existing_report.id)
+                    else:
+                        logger.warning(f"No scan report found for already-completed scan {scan_id}, cannot send completion ping")
+                except Exception as hc_error:
+                    logger.error(f"Failed to send completion ping for already-completed scan: {hc_error}")
+
+            return {
+                'status': 'completed',
+                'message': 'Scan already completed (from previous attempt)',
+                'scan_id': scan_id,
+                'files_processed': existing_state.files_processed or 0,
+                'files_discovered': existing_state.discovery_count or 0
+            }
 
     try:
         # CRITICAL: Use distributed lock to prevent race conditions when multiple workers
@@ -196,11 +226,13 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
 
             # Note: ScanService handles progress internally via database updates
             # The progress_callback defined above is for Celery task state updates
+            # Pass scan_id to preserve scheduled scan IDs (e.g., 'scheduled_11')
             result = scan_service.scan_directories(
                 directories=paths,
                 force_rescan=force_rescan,
                 num_workers=num_workers,
-                async_mode=False  # Run synchronously in Celery task
+                async_mode=False,  # Run synchronously in Celery task
+                scan_id=scan_id  # Pass through for healthcheck completion tracking
             )
             
             # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible
@@ -226,7 +258,8 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                 directories=paths,
                 force_rescan=False,  # Don't force rescan for discovery
                 num_workers=Config.MAX_WORKERS,  # Use configured MAX_WORKERS instead of hardcoded 1
-                async_mode=False  # Run synchronously in Celery task
+                async_mode=False,  # Run synchronously in Celery task
+                scan_id=scan_id  # Pass through for healthcheck completion tracking
             )
             
             # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible

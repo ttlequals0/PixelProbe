@@ -111,7 +111,7 @@ Check if the service is running.
 ```json
 {
   "status": "healthy",
-  "version": "2.2.45",
+  "version": "<current_version>",
   "timestamp": "2025-01-20T12:00:00Z"
 }
 ```
@@ -126,7 +126,7 @@ Get version information.
 **Response:**
 ```json
 {
-  "version": "2.2.45",
+  "version": "<current_version>",
   "github_url": "https://github.com/ttlequals0/PixelProbe",
   "api_version": "1.0"
 }

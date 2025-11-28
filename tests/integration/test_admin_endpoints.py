@@ -1,5 +1,6 @@
 import pytest
 import json
+from datetime import datetime, timezone, timedelta
 from models import db, ScanSchedule, IgnoredErrorPattern
 
 class TestScheduleEndpoints:
@@ -112,6 +113,116 @@ class TestScheduleEndpoints:
             # Check that scan_paths is returned as array
             for schedule in data['schedules']:
                 assert isinstance(schedule['scan_paths'], list)
+
+    def test_reactivate_schedule_updates_next_run(self, authenticated_client, app, db):
+        """Test that re-enabling a disabled schedule updates next_run to the future"""
+        with app.app_context():
+            # Create an inactive schedule with stale next_run (7 days in the past)
+            stale_time = datetime.now(timezone.utc) - timedelta(days=7)
+            schedule = ScanSchedule(
+                name='Test Reactivation',
+                cron_expression='0 2 * * *',  # Daily at 2am
+                scan_paths='["/test/path"]',
+                scan_type='normal',
+                is_active=False,
+                next_run=stale_time
+            )
+            db.session.add(schedule)
+            db.session.commit()
+            schedule_id = schedule.id
+
+        # Re-enable the schedule via API
+        response = authenticated_client.put(
+            f'/api/schedules/{schedule_id}',
+            json={'is_active': True}
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # next_run should now be in the future (not the stale time)
+        assert data['next_run'] is not None
+        # Parse the datetime from response
+        from dateutil.parser import parse
+        next_run = parse(data['next_run'])
+        if next_run.tzinfo is None:
+            next_run = next_run.replace(tzinfo=timezone.utc)
+        assert next_run > datetime.now(timezone.utc), "next_run should be in the future after re-enabling"
+
+    def test_update_cron_expression_updates_next_run(self, authenticated_client, app, db):
+        """Test that changing cron expression on active schedule updates next_run"""
+        with app.app_context():
+            # Create an active schedule
+            schedule = ScanSchedule(
+                name='Test Cron Change',
+                cron_expression='0 2 * * *',  # Daily at 2am
+                scan_paths='["/test/path"]',
+                scan_type='normal',
+                is_active=True,
+                next_run=datetime.now(timezone.utc) + timedelta(hours=5)
+            )
+            db.session.add(schedule)
+            db.session.commit()
+            schedule_id = schedule.id
+            original_next_run = schedule.next_run
+
+        # Change the cron expression
+        response = authenticated_client.put(
+            f'/api/schedules/{schedule_id}',
+            json={'cron_expression': '*/30 * * * *'}  # Every 30 minutes
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # next_run should be recalculated (within 30 minutes from now)
+        assert data['next_run'] is not None
+        from dateutil.parser import parse
+        next_run = parse(data['next_run'])
+        if next_run.tzinfo is None:
+            next_run = next_run.replace(tzinfo=timezone.utc)
+        # For a */30 schedule, next_run should be within 30 minutes
+        assert next_run <= datetime.now(timezone.utc) + timedelta(minutes=31)
+
+    def test_interval_schedule_reactivation(self, authenticated_client, app, db):
+        """Test that re-enabling an interval schedule updates next_run correctly"""
+        with app.app_context():
+            # Create an inactive interval schedule with stale next_run
+            stale_time = datetime.now(timezone.utc) - timedelta(days=3)
+            schedule = ScanSchedule(
+                name='Test Interval Reactivation',
+                cron_expression='interval:hours:6',  # Every 6 hours
+                scan_paths='["/test/path"]',
+                scan_type='normal',
+                is_active=False,
+                next_run=stale_time
+            )
+            db.session.add(schedule)
+            db.session.commit()
+            schedule_id = schedule.id
+            stale_ts = stale_time.timestamp()
+
+        # Re-enable the schedule
+        response = authenticated_client.put(
+            f'/api/schedules/{schedule_id}',
+            json={'is_active': True}
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # The key assertion: next_run should NOT be the stale time anymore
+        # It should be in the future (regardless of timezone representation)
+        assert data['next_run'] is not None
+        from dateutil.parser import parse
+        next_run = parse(data['next_run'])
+        next_run_ts = next_run.timestamp()
+        now_ts = datetime.now(timezone.utc).timestamp()
+
+        # next_run should be in the future (not the stale time from 3 days ago)
+        assert next_run_ts > now_ts, "next_run should be in the future after re-enabling"
+        # next_run should definitely not be the stale time
+        assert next_run_ts > stale_ts + 86400, "next_run should not be the stale time from 3 days ago"
 
 
 class TestExclusionEndpoints:

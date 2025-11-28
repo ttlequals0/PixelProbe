@@ -30,6 +30,7 @@ from pixelprobe.api.export_routes import export_bp
 from pixelprobe.api.maintenance_routes import maintenance_bp
 from pixelprobe.api.reports_routes import reports_bp
 from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
+from pixelprobe.api.healthcheck_routes import healthcheck_bp
 from pixelprobe.api.auth_routes import auth_api_bp, auth_ui_bp, auth_bp  # auth_bp for backward compat
 
 # Import authentication module
@@ -137,6 +138,7 @@ csrf.exempt(export_bp)
 csrf.exempt(maintenance_bp)
 csrf.exempt(reports_bp)
 csrf.exempt(auth_api_bp)  # Exempt API auth endpoints from CSRF
+csrf.exempt(healthcheck_bp)  # Exempt healthcheck API endpoints from CSRF
 # Note: auth_ui_bp (login/logout pages) should NOT be exempted from CSRF
 
 # Initialize scheduler
@@ -190,6 +192,9 @@ apply_auth_to_blueprint(reports_bp)
 
 app.register_blueprint(parallel_scan_bp)
 apply_auth_to_blueprint(parallel_scan_bp)
+
+app.register_blueprint(healthcheck_bp)
+apply_auth_to_blueprint(healthcheck_bp)
 
 # API documentation is now provided via openapi.yaml specification file
 
@@ -256,12 +261,53 @@ def health_check():
 @app.route('/api/version')
 @auth_required
 def get_version():
-    """Get application version"""
+    """Get application version and infrastructure component versions"""
     logger.info("Version information requested")
+
+    # Get infrastructure versions
+    infrastructure = {}
+
+    # Celery version
+    try:
+        import celery
+        infrastructure['celery'] = celery.__version__
+    except Exception as e:
+        logger.warning(f"Could not get Celery version: {e}")
+        infrastructure['celery'] = 'unknown'
+
+    # Redis version
+    try:
+        import redis
+        redis_url = app.config.get('CELERY_BROKER_URL', os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
+        r = redis.from_url(redis_url)
+        redis_info = r.info('server')
+        infrastructure['redis'] = redis_info.get('redis_version', 'unknown')
+    except Exception as e:
+        logger.warning(f"Could not get Redis version: {e}")
+        infrastructure['redis'] = 'unavailable'
+
+    # PostgreSQL version
+    try:
+        from sqlalchemy import text
+        result = db.session.execute(text('SELECT version()')).fetchone()
+        if result:
+            # Extract just the version number from full string like "PostgreSQL 15.2 (Debian 15.2-1.pgdg110+1)..."
+            pg_version_full = result[0]
+            # Extract version number (e.g., "15.2")
+            import re
+            match = re.search(r'PostgreSQL (\d+\.\d+)', pg_version_full)
+            infrastructure['postgresql'] = match.group(1) if match else pg_version_full
+        else:
+            infrastructure['postgresql'] = 'unknown'
+    except Exception as e:
+        logger.warning(f"Could not get PostgreSQL version: {e}")
+        infrastructure['postgresql'] = 'unavailable'
+
     return jsonify({
         'version': __version__,
         'github_url': __github_url__,
-        'api_version': '1.0'
+        'api_version': '1.0',
+        'infrastructure': infrastructure
     })
 
 @app.route('/api/openapi.yaml')
@@ -705,25 +751,81 @@ with app.app_context():
     init_services()
     
 
-    # Use a file lock to ensure only one scheduler runs across all workers
-    import fcntl
-    scheduler_lock_file = '/tmp/pixelprobe_scheduler.lock'
-    
-    try:
-        # Try to acquire exclusive lock (non-blocking)
-        lock_file = open(scheduler_lock_file, 'w')
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        
-        # We got the lock, so we're the scheduler process
-        logger.info(f"Acquired scheduler lock in process {os.getpid()}, initializing scheduler")
-        scheduler.init_app(app)
-        
-        # Keep the lock file open to maintain the lock
-        app.scheduler_lock_file = lock_file
-        
-    except (IOError, OSError) as e:
-        # Another process has the lock
-        logger.info(f"Scheduler already running in another process, skipping initialization in process {os.getpid()}")
+    # Use Redis-based distributed lock for cross-container scheduler coordination
+    # File locks don't work across containers (each has separate /tmp filesystem)
+    from pixelprobe.progress_utils import get_redis_client
+    from datetime import datetime, timezone
+
+    redis_client = get_redis_client()
+    scheduler_initialized = False
+
+    if redis_client:
+        try:
+            # Use Redis SETNX for atomic lock acquisition (60-second expiry for auto-recovery)
+            # Short TTL ensures stale locks from crashed containers expire quickly
+            lock_key = 'pixelprobe:scheduler:lock'
+            lock_value = f"{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
+
+            # CRITICAL: Delete any stale lock from previous container on startup
+            # This is safe because on fresh container startup, any existing lock is from a dead process
+            # Workers within the same container will race to acquire, first one wins
+            redis_client.delete(lock_key)
+            logger.info(f"Cleared stale scheduler lock (if any) on startup in process {os.getpid()}")
+
+            # Try to set the lock (only succeeds if key doesn't exist)
+            acquired = redis_client.set(lock_key, lock_value, nx=True, ex=60)
+
+            if acquired:
+                logger.info(f"Acquired Redis scheduler lock in process {os.getpid()}, initializing scheduler")
+                scheduler.init_app(app)
+                scheduler_initialized = True
+                app.scheduler_redis_lock_key = lock_key
+
+                # Start background thread to refresh the lock every 30 seconds
+                # This keeps the lock alive while the scheduler is running
+                def refresh_scheduler_lock():
+                    import time
+                    while True:
+                        try:
+                            time.sleep(30)
+                            # Refresh the lock TTL
+                            new_value = f"{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
+                            redis_client.set(lock_key, new_value, ex=60)
+                            logger.debug(f"Refreshed scheduler lock in process {os.getpid()}")
+                        except Exception as e:
+                            logger.warning(f"Failed to refresh scheduler lock: {e}")
+                            break  # Stop refreshing if we can't connect to Redis
+
+                import threading
+                lock_refresh_thread = threading.Thread(target=refresh_scheduler_lock, daemon=True)
+                lock_refresh_thread.start()
+                logger.info(f"Started scheduler lock heartbeat thread in process {os.getpid()}")
+            else:
+                # Check who has the lock for debugging
+                existing = redis_client.get(lock_key)
+                if existing:
+                    existing = existing.decode('utf-8') if isinstance(existing, bytes) else existing
+                logger.info(f"Scheduler already running (lock held by: {existing}), skipping in process {os.getpid()}")
+
+        except Exception as e:
+            logger.warning(f"Redis lock failed ({e}), falling back to file lock")
+            redis_client = None
+
+    # Fallback to file lock if Redis unavailable (for local development without Redis)
+    if not redis_client and not scheduler_initialized:
+        import fcntl
+        scheduler_lock_file = '/tmp/pixelprobe_scheduler.lock'
+
+        try:
+            lock_file = open(scheduler_lock_file, 'w')
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            logger.info(f"Acquired file scheduler lock in process {os.getpid()}, initializing scheduler (Redis unavailable)")
+            scheduler.init_app(app)
+            app.scheduler_lock_file = lock_file
+
+        except (IOError, OSError) as e:
+            logger.info(f"Scheduler already running in another process, skipping initialization in process {os.getpid()}")
     
 
     # Clean up ALL active scans from previous runs - they can't still be running after restart

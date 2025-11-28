@@ -54,13 +54,9 @@ class TestStatsService:
         assert stats['total_files'] == 100
         assert stats['completed_files'] == 80
     
-    @patch('pixelprobe.services.stats_service.os')
     @patch('pixelprobe.services.stats_service.db')
-    def test_get_system_info(self, mock_db, mock_os, stats_service):
+    def test_get_system_info(self, mock_db, stats_service):
         """Test system info retrieval"""
-        # Mock environment
-        mock_os.environ.get.return_value = '2.0.55'
-        
         # Mock file statistics
         with patch.object(stats_service, 'get_file_statistics') as mock_get_stats:
             mock_get_stats.return_value = {
@@ -74,14 +70,14 @@ class TestStatsService:
                 'marked_as_good': 3,
                 'warning_files': 2
             }
-            
+
             # Mock monitored paths
             with patch.object(stats_service, '_get_monitored_paths') as mock_paths:
                 mock_paths.return_value = [
                     {'path': '/movies', 'exists': True, 'file_count': 50},
                     {'path': '/tv', 'exists': True, 'file_count': 30}
                 ]
-                
+
                 # Mock database performance
                 with patch.object(stats_service, '_get_database_performance') as mock_perf:
                     mock_perf.return_value = {
@@ -90,10 +86,12 @@ class TestStatsService:
                         'oldest_scan': '2024-01-01T00:00:00Z',
                         'newest_scan': '2025-01-20T00:00:00Z'
                     }
-                    
+
                     info = stats_service.get_system_info()
-                    
-                    assert info['version'] == '2.0.55'
+
+                    # Version now comes from version.py dynamically
+                    from version import __version__
+                    assert info['version'] == __version__
                     assert info['database']['total_files'] == 100
                     assert len(info['monitored_paths']) == 2
                     assert 'deep_scan' not in info['features']

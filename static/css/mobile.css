@@ -1066,4 +1066,45 @@
     #media-viewer-modal .modal-header {
         padding: 0.75rem 1rem;
     }
+
+    /* Schedule items - mobile layout fixes */
+    .schedule-header {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .schedule-header h4 {
+        flex: 1 1 100%;
+        font-size: 1rem;
+        margin-bottom: 0.25rem;
+    }
+
+    .schedule-actions {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 0.25rem;
+    }
+
+    /* Make all schedule action buttons uniform size */
+    .schedule-actions .btn {
+        padding: 0.5rem;
+        font-size: 0.875rem;
+        min-width: 2.25rem;
+        height: 2.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .schedule-info {
+        font-size: 0.8rem;
+    }
+
+    .schedule-info p {
+        margin: 0.2rem 0;
+    }
+
+    .schedule-item {
+        padding: 0.875rem;
+    }
 }

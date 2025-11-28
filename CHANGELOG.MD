@@ -3,7 +3,665 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
+
+## [2.5.18] - 2025-11-25
+
+### Feature: Enhanced Version API Endpoint with Infrastructure Versions
+
+#### Added
+
+- **`/api/version` endpoint now returns infrastructure component versions**
+  - Celery version (task queue)
+  - Redis version (message broker)
+  - PostgreSQL version (database)
+  - Example response includes `infrastructure: { celery: "5.3.4", redis: "7.2.3", postgresql: "15.2" }`
+
+- **`/api/version` endpoint added to OpenAPI documentation**
+  - New "System" tag category for system information endpoints
+  - Full schema documentation for version response
+
+#### Changed
+
+- **Removed `tools/update_version.py`** - Version should only be updated manually in `version.py`
+- **`openapi.yaml` version is now dynamic** - Served via `/api/openapi.yaml` with version injected from `version.py` at runtime
+- **Static `openapi.yaml` uses placeholder version `0.0.0`** - Indicates it's dynamically set
+
+#### Technical Details
+
+- `version.py` is the single source of truth for application version
+- All version references read from `version.py` dynamically
+- Infrastructure versions queried at runtime from actual services
+
+#### Files Modified
+
+- `app.py` - Enhanced `/api/version` endpoint with infrastructure versions
+- `openapi.yaml` - Added `/api/version` endpoint documentation, added "System" tag
+- Deleted: `tools/update_version.py`
+
+## [2.5.17] - 2025-11-25
+
+### Fix: Complete Stale Scheduler Lock Fix (v2.5.16 was incomplete)
+
+#### Fixed
+
+- **v2.5.16 fix was incomplete - existing stale lock was not cleared**
+  - v2.5.16 only changed TTL for NEW locks from 24h to 60s with heartbeat
+  - But existing stale lock (created with 24h TTL by v2.5.15) still blocked scheduler
+  - Fix: Now explicitly deletes any stale lock on startup BEFORE attempting to acquire
+  - Safe because on fresh container startup, any existing lock is from a dead process
+  - Workers within same container race to acquire after delete, first one wins
+
+#### Technical Details
+
+- Added `redis_client.delete(lock_key)` before `set(..., nx=True)` in `app.py`
+- Added log message: "Cleared stale scheduler lock (if any) on startup"
+
+#### Files Modified
+
+- `app.py` - Added delete of stale lock before acquiring new lock
+
+## [2.5.16] - 2025-11-25
+
+### Fix: Stale Scheduler Lock Prevents Scheduled Tasks After Container Restart (INCOMPLETE)
+
+#### Fixed
+
+- **Scheduler not starting after container restart due to stale Redis lock**
+  - Root cause: Redis scheduler lock used 24-hour TTL (86400 seconds)
+  - When container is replaced during deployment, old container's lock persists
+  - New container finds existing lock and skips scheduler initialization
+  - Result: No scheduler running - all scheduled scans fail to execute
+  - Fix: Changed lock TTL from 24 hours to 60 seconds with heartbeat refresh
+  - Added background thread that refreshes the lock every 30 seconds
+  - Stale locks from crashed containers now expire within 60 seconds
+  - Active schedulers maintain their lock indefinitely through heartbeat
+
+#### Technical Details
+
+- Modified scheduler lock logic in `app.py` lines 721-755
+- Lock TTL reduced from `ex=86400` to `ex=60`
+- Added daemon thread `refresh_scheduler_lock()` that runs every 30 seconds
+- Thread refreshes lock with new timestamp and 60-second TTL
+- Worst case recovery time: 60 seconds after container crash
+
+#### Files Modified
+
+- `app.py` - Changed lock TTL and added heartbeat thread
+
+## [2.5.15] - 2025-11-25
+
+### Fix: Healthcheck Completion Ping Not Sent When Scan Already Completed
+
+#### Fixed
+
+- **No completion ping sent when scheduled scan detects existing completed scan**
+  - Root cause: When Celery task detects that a scan with the same `scan_id` (e.g., `scheduled_11`) already exists in `completed` phase, it returns early to prevent duplicate work
+  - This early return bypassed `_create_scan_report()` which calls `send_healthcheck_completion()`
+  - Result: Start ping sent by scheduler, but no completion ping ever sent
+  - Fix: When returning early for "already completed" scans, still send completion ping since the scheduler already sent a start ping and healthcheck services expect a completion signal
+  - Now finds the existing ScanReport for the scan_id and sends the completion ping before returning early
+
+#### Technical Details
+
+- Modified early-return path in `scan_media_task()` at `pixelprobe/tasks.py:100-126`
+- When `scan_id.startswith('scheduled_')` and scan is already completed, queries for existing `ScanReport` and calls `MediaScheduler.send_healthcheck_completion()`
+- Added `ScanReport` to imports in tasks.py
+
+#### Files Modified
+
+- `pixelprobe/tasks.py` - Added completion ping to early-return path for already-completed scans
+
+## [2.5.14] - 2025-11-25
+
+### Fix: Schedule Re-enable Does Not Update next_run Time
+
+#### Fixed
+
+- **Re-enabling a disabled schedule shows stale next_run time**
+  - Root cause: In multi-worker Gunicorn deployment, scheduler runs in only ONE worker
+  - When API request to re-enable schedule arrives, it may be handled by a worker without the scheduler
+  - `scheduler.update_schedules()` returns early if `not self.scheduler.running`
+  - The `next_run` is never recalculated for re-enabled schedules
+  - Fix: Calculate `next_run` directly in the API endpoint using APScheduler's `CronTrigger.get_next_fire_time()`
+  - This works without requiring a running APScheduler instance
+  - Supports both cron expressions (e.g., "*/5 * * * *") and interval expressions (e.g., "interval:hours:6")
+  - Also recalculates `next_run` when cron expression is changed on an active schedule
+
+#### Technical Details
+
+- Added `calculate_next_run()` helper function to `admin_routes.py`
+- Uses APScheduler's `CronTrigger` class which can calculate next fire time without a running scheduler
+- Detects when schedule transitions from `is_active=False` to `is_active=True`
+- Also triggers recalculation when `cron_expression` changes on an active schedule
+
+#### Files Modified
+
+- `pixelprobe/api/admin_routes.py` - Added `calculate_next_run()` helper and updated `update_schedule()` endpoint
+- `tests/integration/test_admin_endpoints.py` - Added tests for schedule reactivation scenarios
+
+## [2.5.13] - 2025-11-25
+
+### Fix: Scheduled Scan Duplicate Key + DetachedInstanceError + Celery Retry
+
+#### Fixed
+
+- **Scheduled scans fail with duplicate key constraint violation**
+  - Root cause: `scan_id` has unique constraint in ScanState model
+  - When a scheduled scan runs again, it tries to INSERT with same scan_id (e.g., "scheduled_1")
+  - Previous scan_state record remains in database after completion
+  - Fix: `create_new_scan()` now deletes existing scan_state with same scan_id before creating new
+  - Scheduled scans can now run repeatedly without constraint violations
+
+- **DetachedInstanceError after scan completion**
+  - Root cause: `db.session.close()` in retry loop at line 729 detaches all SQLAlchemy objects
+  - `final_scan_state` was fetched before retry loop but accessed after potential session closure
+  - Fix: Re-fetch `final_scan_state` after retry loop completes
+  - Added graceful fallback if scan_state cannot be re-fetched
+
+- **Celery retry creates duplicate scan state on already-completed scans**
+  - Root cause: When Celery retries a task after DetachedInstanceError, scan may have already completed
+  - Retry would try to create new scan_state with same scan_id
+  - Fix: Check if scan_id already has completed phase before starting
+  - Returns early with success if scan already finished
+
+#### Technical Details
+
+- `models.py`: `create_new_scan()` deletes existing scan_state with same scan_id before INSERT
+- `scan_service.py`: Re-fetch final_scan_state after db.session.close() to avoid DetachedInstanceError
+- `tasks.py`: Early-exit check if scan_id already has phase='completed'
+
+#### Files Modified
+
+- `models.py` - Delete existing scan_state before creating new one for same scan_id
+- `pixelprobe/services/scan_service.py` - Re-fetch scan_state after retry loop
+- `pixelprobe/tasks.py` - Skip retry if scan already completed
+
+## [2.5.12] - 2025-11-25
+
+### Fix: Orphaned Pending Files + FFmpeg Warning Format + Chunk Retry
+
+#### Fixed
+
+- **Orphaned pending files from failed scan chunks now get processed**
+  - Root cause: SQLAlchemy concurrency error "This session is provisioning a new connection" caused scan chunks to fail silently
+  - Scan would report success but files in failed chunks stayed in `pending` status forever
+  - Fix 1: Remove directory filter from pending files query so ALL pending files are included in every scan
+  - Fix 2: Add retry logic for failed chunks - failed chunks are retried sequentially after parallel processing completes
+  - This ensures orphaned files from previous interrupted scans eventually get processed
+
+- **FFmpeg warning details now show actual DTS/PTS counts**
+  - Before: Generic "Benign FFmpeg warnings in middle section" message
+  - After: Specific counts like "3 DTS, 2 PTS warnings in middle"
+  - Helps identify actual warning severity without looking at raw logs
+
+- **Failed scan chunks are now retried**
+  - Before: If a chunk failed during parallel processing, it was logged and ignored
+  - After: Failed chunks are tracked and retried sequentially after the main parallel loop
+  - Sequential retry avoids the concurrency issues that caused the original failure
+
+#### Technical Details
+
+- Pending files from failed chunks (e.g., SQLAlchemy concurrency errors) are now recovered
+- `scan_service.py` line 573: Removed directory filter from pending files count
+- `scan_service.py` lines 1562-1590: Added failed chunk tracking and sequential retry
+- `media_checker.py` lines 1915-1927: Parse stderr for DTS/PTS counts instead of generic message
+
+#### Files Modified
+
+- `pixelprobe/services/scan_service.py` - Include all pending files in scan, add chunk retry logic
+- `media_checker.py` - Show actual DTS/PTS warning counts
+
+## [2.5.11] - 2025-11-24
+
+### Fix: Duplicate Scheduler Start Pings in Multi-Container Deployments
+
+#### Fixed
+
+- **Duplicate start pings due to scheduler running in multiple containers**
+  - Bug: File-based lock (`fcntl.flock`) doesn't work across containers (each has separate `/tmp` filesystem)
+  - Both gunicorn and celery-worker containers would acquire their own lock and initialize the scheduler
+  - Fix: Replaced file lock with Redis-based distributed lock using `SETNX`
+  - Uses `redis.set(lock_key, lock_value, nx=True, ex=86400)` for atomic acquisition
+  - 24-hour expiry ensures auto-recovery if container crashes
+  - Falls back to file lock if Redis unavailable (for local development)
+
+#### Technical Details
+
+- Lock key: `pixelprobe:scheduler:lock`
+- Lock value: `{pid}:{timestamp}` for debugging
+- Only the first container to acquire the Redis lock will initialize the scheduler
+- Other containers log which process holds the lock
+
+#### Files Modified
+
+- `app.py` - Replace file-based lock with Redis distributed lock
+
+## [2.5.10] - 2025-11-24
+
+### Hotfix: Pass Scheduled Scan ID Through Entire Scan Pipeline
+
+#### Fixed
+
+- **Scheduled scan ID not preserved through scan pipeline**
+  - Bug: Even though `/api/scan` now passes `scheduled_XX` as scan_id, `ScanService.scan_directories()` was creating a new UUID
+  - The scan_id was not passed through: Celery task -> scan_directories() -> ScanState.create_new_scan()
+  - Fix: Added `scan_id` parameter through the entire chain
+  - `ScanState.create_new_scan(scan_id=None)` now accepts optional scan_id
+  - `scan_directories(scan_id=None)` now passes it to create_new_scan
+  - Celery task now passes scan_id to scan_directories
+
+#### Files Modified
+
+- `models.py` - `create_new_scan()` accepts optional scan_id parameter
+- `pixelprobe/services/scan_service.py` - `scan_directories()` accepts and passes scan_id
+- `pixelprobe/tasks.py` - Pass scan_id to scan_directories()
+
+## [2.5.9] - 2025-11-24
+
+### Hotfix: Scheduled Scan ID Not Passed to Healthcheck
+
+#### Fixed
+
+- **Scheduled scans not identified for healthcheck completion pings**
+  - Bug: `/api/scan` endpoint ignored the `source` field from scheduler
+  - The scheduler sent `source: 'scheduled_XX'` but endpoint generated a new UUID
+  - `send_healthcheck_completion()` checks for `scan_id.startswith('scheduled_')` to identify scheduled scans
+  - Since scan_id was always a UUID, completion pings were never sent
+  - Fix: Use `source` as `scan_id` when it starts with `scheduled_`
+
+#### Files Modified
+
+- `pixelprobe/api/scan_routes.py` - Use scheduler source as scan_id for scheduled scans
+
+## [2.5.8] - 2025-11-24
+
+### Hotfix: Healthcheck Completion Ping Type Error
+
+#### Fixed
+
+- **Healthcheck completion ping failed with type error**
+  - Bug: Passing `report.report_id` (UUID string) instead of `report.id` (integer primary key)
+  - Error: `invalid input syntax for type integer: "UUID-string"`
+  - Fix: Changed to pass `report.id` to `send_healthcheck_completion()`
+  - Completion pings now work correctly for all scan types including empty scans (0 files)
+
+#### Files Modified
+
+- `pixelprobe/services/scan_service.py` - Fixed parameter type (report.id instead of report.report_id)
+
+## [2.5.7] - 2025-11-24
+
+### Critical Fix: Healthcheck Completion Pings + Mobile UI
+
+#### Fixed
+
+- **Healthcheck Completion Pings Now Working**
+  - CRITICAL BUG: `send_healthcheck_completion()` was defined but never called
+  - Start pings worked, but success/failure pings on scan completion were never sent
+  - Added call to `MediaScheduler.send_healthcheck_completion()` in `scan_service._create_scan_report()`
+  - Now properly sends success ping when scan completes successfully
+  - Now properly sends failure ping when scan fails/errors
+  - Includes scan report data in success pings when configured
+
+- **Improved Healthcheck URL Logging**
+  - All ping methods now log the full URL being pinged
+  - Logs include HTTP status code on success
+  - Error messages now include the URL that failed
+  - Helps debug connectivity issues with self-hosted instances
+
+- **Self-Hosted Healthchecks.io Support**
+  - Removed confusing warning message for non-standard URL formats
+  - Supports any URL format (public hc-ping.com or self-hosted instances)
+  - Self-hosted URLs can use custom paths, not just `/ping/UUID`
+
+#### Changed
+
+- **Schedule Action Buttons - Now All Icons**
+  - Disable button: Changed from text "Disable" to pause icon (`fa-pause`)
+  - Enable button: Changed from text "Enable" to play icon (`fa-play`)
+  - All four buttons now use icons only: edit, healthcheck, pause/play, trash
+  - Added title tooltips for accessibility
+
+- **Uniform Button Sizing on Mobile**
+  - All schedule action buttons now have fixed 2.25rem width/height
+  - Buttons use flexbox centering for consistent icon alignment
+  - Removed variable sizing that caused layout issues
+
+#### Files Modified
+
+- `pixelprobe/services/scan_service.py` - Added healthcheck completion ping call
+- `scheduler.py` - Updated method signature for easier calling
+- `pixelprobe/services/healthcheck_service.py` - Improved logging, removed restrictive URL warning
+- `static/js/app.js` - Changed Enable/Disable to icons
+- `static/css/mobile.css` - Uniform button sizing
+
+## [2.5.6] - 2025-11-24
+
+### Hotfix: Scheduler Activation in Non-Scheduler Workers
+
+This hotfix completes the multi-worker scheduler fix from v2.5.5. The previous fix addressed the app context issue but didn't handle cases where the scheduler isn't running.
+
+#### Fixed
+
+- **Schedule Activation Error in Non-Scheduler Workers**
+  - Error: `'Job' object has no attribute 'next_run_time'`
+  - Added check for `self.scheduler.running` before attempting to manipulate jobs
+  - Non-scheduler workers now skip `update_schedules()` gracefully
+  - Database changes are still saved; scheduler worker picks up changes on reload
+
+#### Root Cause
+
+The v2.5.5 fix only addressed the `app_context` issue but still tried to manipulate jobs in workers where the scheduler wasn't started:
+- `BackgroundScheduler()` is created in `__init__` for all workers
+- `scheduler.start()` is only called in `init_app()` for the scheduler worker
+- Adding jobs to an unstarted scheduler results in Job objects without `next_run_time`
+- Accessing `job.next_run_time` on line 219 fails with AttributeError
+
+#### Solution
+
+Check both `self.app` AND `self.scheduler.running` before manipulating schedules:
+- If scheduler isn't running, skip the update and return early
+- Database is already updated by the API route
+- The scheduler worker will reload schedules on next restart or periodic refresh
+
+#### Mobile UI Fix
+
+- Fixed schedule card layout on mobile devices
+- Schedule name now displays on its own row, preventing overlap with action buttons
+- Reduced button padding and font size for better fit on small screens
+
+## [2.5.5] - 2025-11-24 [INCOMPLETE - See v2.5.6]
+
+### Critical Hotfix: Scheduler Race Condition in Multi-Worker Deployments
+
+This hotfix resolves a race condition causing 60% failure rate when creating/updating/deleting schedules in multi-worker Gunicorn deployments.
+
+#### Fixed
+
+- **Scheduler Race Condition - Multi-Worker Compatibility**
+  - Error: `'NoneType' object has no attribute 'app_context'` (60% failure rate)
+  - Changed `scheduler.py:558` from `self.app.app_context()` to `current_app.app_context()`
+  - Fixed in `update_schedules()` method of MediaScheduler class
+  - Affects schedule create/update/delete operations via API
+
+#### Root Cause
+
+In multi-worker Gunicorn deployments:
+- Scheduler is initialized in only ONE worker (the one that acquires file lock in app.py:724)
+- Other workers have `scheduler.app = None`
+- When HTTP request hits non-scheduler worker, `scheduler.update_schedules()` is called from `admin_routes.py:301`
+- Method tries to use `self.app.app_context()` but `self.app` is None
+- Failure rate depends on load balancing across workers (reported 2 failures out of 3 attempts = 67%)
+
+#### Solution
+
+Use Flask's `current_app` proxy instead of `self.app`:
+- `current_app` resolves to the app instance in ANY worker during HTTP request context
+- Works correctly in all workers, not just the one with scheduler lock
+- No changes to initialization sequence needed
+- Safe for both single-worker and multi-worker deployments
+
+#### Testing Recommendations
+
+Test schedule operations (create/update/delete) multiple times in production to verify:
+- Success rate improves from ~40% to 100%
+- No more `NoneType` errors in container logs
+- All workers can successfully handle schedule modification requests
+
+## [2.5.4] - 2025-11-24
+
+### Critical Hotfix: Missing openModal() Method
+
+This hotfix adds the missing `openModal()` method that was being called but never implemented.
+
+#### Fixed
+
+- **Edit Schedule Button - FINALLY WORKING**
+  - Added missing `openModal()` method to PixelProbeApp class
+  - Method was called at `static/js/app.js:3624` but never implemented
+  - Regression introduced in v2.5.1 when schedule editing was added
+  - Fix: Added `openModal(modalId)` method at line 3990 (before `closeModal()`)
+  - Mirrors existing `closeModal()` pattern: finds modal by ID and sets `display: 'block'`
+
+- **Trends Modal - Also Fixed**
+  - Trends modal was also broken since v2.5.0
+  - Called `this.openModal('trends-modal')` at line 2014
+  - Now works with the new `openModal()` method
+
+#### Root Cause
+
+When schedule editing feature was added in v2.5.1, the code called `this.openModal()` but the method implementation was never created. This is a common oversight when refactoring direct modal manipulation to use helper methods.
+
+## [2.5.3] - 2025-11-24 [PARTIALLY BROKEN - Edit/Trends buttons don't work]
+
+### Emergency Hotfix: Fix v2.5.2 Regressions
+
+This emergency hotfix corrects critical bugs introduced in v2.5.2.
+
+#### Fixed
+
+- **Trends Dashboard Endpoint - FINALLY CORRECT**
+  - v2.5.2 made the problem WORSE by pointing to wrong endpoint
+  - The v2.5.2 "fix" changed endpoint from `/trends` to `/stats/trends`
+  - This was completely WRONG - there are TWO DIFFERENT endpoints:
+    - `/api/trends` - Returns trend data with `trends[period]` structure (CORRECT for dashboard)
+    - `/api/stats/trends` - Returns scan counter metrics (WRONG data structure)
+  - Changed back from `/stats/trends` to `/trends` in `static/js/app.js:194`
+  - Frontend `renderTrendsSection()` expects `trends.trends[period]` structure
+  - The `/api/trends` endpoint returns exactly that structure
+  - **ROOT CAUSE**: Confusion about which endpoint was correct, didn't verify data structure match
+
+- **Edit Schedule Button 500 Error**
+  - Fixed `NameError: name 'jsonify' is not defined` in `admin_routes.py:244`
+  - Added missing `jsonify` import to `admin_routes.py:1`
+  - v2.5.2 added the GET endpoint but forgot the import
+  - Edit schedule button now actually works
+
+#### Apology
+
+v2.5.2 attempted to fix the trends endpoint but made it worse. The root cause was not verifying which endpoint structure matched the frontend expectations. This hotfix restores the correct endpoint and fixes the import issue that broke schedule editing.
+
+## [2.5.2] - 2025-11-24 [BROKEN - DO NOT USE]
+
+### Hotfix Release: Critical Bug Fixes
+
+This hotfix release fixes multiple critical production issues found in v2.5.1.
+
+#### Fixed
+
+- **Trends Dashboard Endpoint - CORRECTED AGAIN**
+  - v2.5.1 incorrectly "fixed" endpoint from `/stats/trends` to `/trends`
+  - This was WRONG - the correct endpoint is `/api/stats/trends`
+  - Changed from `/trends` to `/stats/trends` in `static/js/app.js:194`
+  - The `/api/stats/trends` endpoint returns scan counter metrics (correct data structure)
+  - The `/api/trends` endpoint returns corruption/storage trends (different structure)
+
+- **Edit Schedule Button 405 Error**
+  - Added missing GET endpoint for individual schedules
+  - Frontend was calling `GET /api/schedules/{id}` which returned 405 Method Not Allowed
+  - Added new route in `pixelprobe/api/admin_routes.py`:
+    ```python
+    @admin_bp.route('/schedules/<int:schedule_id>', methods=['GET'])
+    def get_schedule(schedule_id)
+    ```
+  - Edit schedule button now works correctly
+
+#### Added
+
+- **Healthcheck Visual Indicators**
+  - Added visual indicators to show which schedules have healthcheck configured
+  - Backend changes (`models.py` ScanSchedule.to_dict()):
+    - Added `has_healthcheck` field (bool)
+    - Added `healthcheck_active` field (bool)
+  - Frontend changes (`static/js/app.js`):
+    - Healthcheck button changes color to green when configured
+    - Checkmark (✓) appears on button when healthcheck exists
+    - Tooltip shows status: "Healthcheck Active", "Healthcheck Configured (Inactive)", or "Configure Healthcheck"
+  - No need to click button to see if healthcheck is configured
+
+#### Root Cause Analysis
+
+The v2.5.1 trends fix was based on incorrect understanding of the endpoint structure:
+- CHANGELOG.md documented the feature correctly as `/api/stats/trends`
+- But I mistakenly thought the fix should be to `/api/trends` (removing /stats/)
+- The correct fix is to keep `/stats/` in the path: `/api/stats/trends`
+
+## [2.5.1] - 2025-11-24
+
+### Hotfix Release: Bug Fixes & Schedule Editing
+
+This hotfix release addresses critical production bugs and adds the ability to edit existing schedules.
+
+#### Fixed
+
+- **Trends Dashboard Error**
+  - Fixed TypeError when accessing trends dashboard
+  - Root cause: Wrong API endpoint called (`/stats/trends` instead of `/trends`)
+  - The `/trends` endpoint returns corruption/storage trends with the correct data structure
+  - The `/stats/trends` endpoint returns scan counter metrics with a different structure
+  - Files: `static/js/app.js:194`
+
+- **Healthcheck Configuration CSRF Error**
+  - Fixed 400 Bad Request errors when saving healthcheck configurations
+  - Root cause: Healthcheck blueprint not exempted from CSRF protection
+  - Added `csrf.exempt(healthcheck_bp)` to CSRF exemption list
+  - Files: `app.py:141`
+
+#### Added
+
+- **Schedule Editing UI**
+  - Added ability to edit existing scan schedules through the UI
+  - Edit button added to each schedule in the schedules list
+  - New Edit Schedule modal with all schedule fields:
+    - Schedule Name
+    - Schedule Type (Cron Expression / Interval)
+    - Scan Type (Normal / Cleanup / Integrity Check)
+    - Scan Paths
+    - Force Rescan flag
+    - Active status
+  - Backend API already supported editing via PUT `/api/schedules/{id}`
+  - Files: `templates/index.html` (new modal), `static/js/app.js` (new functions)
+
+#### Technical Details
+
+- New JavaScript functions:
+  - `toggleEditScheduleInput()` - Toggle between cron and interval input fields
+  - `showEditSchedule(scheduleId)` - Load schedule data and display edit modal
+  - `saveScheduleEdit()` - Submit PUT request to update schedule
+- Edit modal mirrors Add Schedule modal structure with pre-populated fields
+- Automatic detection of cron vs interval format when loading schedule data
+- Proper error handling and user notifications
+
+## [2.5.0] - 2025-11-24
+
+### P3 Features: Enhanced Monitoring & Analytics (Part 1)
+
+This major release adds comprehensive monitoring, analytics, and notification capabilities to PixelProbe.
+
+#### Added
+
+- **Documentation Improvements**
+  - Added comprehensive documentation links to README.md
+  - Links to installation guides, architecture docs, API docs, and client examples
+  - Files: `README.md`
+
+- **Scan Trends & Analytics**
+  - Added scan counter metrics with daily breakdown over configurable time periods
+  - Added scan duration histogram with configurable bucket counts
+  - New API endpoints: `/api/stats/trends` and `/api/stats/duration-histogram`
+  - Query parameters: days (1-365), buckets (2-50 for histogram)
+  - Returns comprehensive statistics including total scans, files scanned, corrupted files, and duration analysis
+  - Per scan-type breakdown (full_scan, rescan, cleanup, file_changes)
+  - Files: `pixelprobe/services/stats_service.py`, `pixelprobe/api/stats_routes.py`
+
+- **Frontend Trends Dashboard**
+  - Interactive trends visualization using Chart.js
+  - Summary statistics cards showing total scans, files scanned, corrupted files, and average duration
+  - Scan activity line chart displaying scan counts and corrupted files over time
+  - Duration distribution bar chart showing scan duration histogram
+  - Per scan-type duration statistics cards
+  - Fetches data for last 30 days by default
+  - Files: `static/js/app.js`, `templates/index.html`
+
+- **Healthchecks.io Integration**
+  - Complete integration with Healthchecks.io for scheduled scan monitoring
+  - Support for both public (hc-ping.com) and self-hosted instances
+  - Per-schedule healthcheck configuration
+  - Configurable ping options:
+    - Start ping (sent when scan begins using /start slug)
+    - Success ping (sent when scan completes with optional report data)
+    - Failure ping (sent when scan fails using /fail slug)
+  - Report data formatting includes: Report ID, Scan Type, Status, Duration, and detailed statistics
+  - New service: `HealthcheckService` with URL validation
+  - New model: `HealthcheckConfig` (one-to-one relationship with ScanSchedule)
+  - 8 new API endpoints: List, Get, Get by Schedule, Create, Update, Delete, Test
+  - Scheduler integration: Automatic pings during scan lifecycle
+  - Complete UI: Configuration modal accessible from schedules list
+  - Test ping functionality to verify configuration
+  - Files: `pixelprobe/services/healthcheck_service.py`, `pixelprobe/api/healthcheck_routes.py`,
+    `models.py`, `scheduler.py`, `app.py`, `static/js/app.js`, `templates/index.html`
+
+- **Notification System Foundation**
+  - Comprehensive notification service supporting multiple providers
+  - Pushover API integration with priority levels, device targeting, and custom sounds
+  - ntfy.sh API integration (public and self-hosted) with authentication support
+  - Generic webhook support with templates for Slack and Discord
+  - Custom webhook format for other integrations
+  - New service: `NotificationService` with provider abstraction
+  - New models:
+    - `NotificationProvider` for provider configurations (Pushover, ntfy, webhook)
+    - `NotificationRule` for event-based notification rules
+  - Sensitive data masking in API responses
+  - Test provider functionality
+  - Event types supported: scan_start, scan_complete, scan_failed, scan_missed,
+    user_added, user_deleted, api_key_added, api_key_deleted, auth_failed
+  - Files: `pixelprobe/services/notification_service.py`, `models.py`
+
+#### Changed
+
+- **API Documentation**
+  - Updated openapi.yaml with all new endpoints
+  - Added comprehensive documentation for trends, histogram, and healthcheck endpoints
+  - Added HealthcheckConfig schema definition
+  - Added Healthcheck tag for endpoint organization
+  - Query parameter documentation with min/max values and defaults
+  - Response schema definitions with detailed property descriptions
+  - Files: `openapi.yaml`
+
+- **Frontend Architecture**
+  - Enhanced PixelProbeApp constructor to include chart instances (trendsChart, histogramChart)
+  - Added API methods: getTrends(days), getDurationHistogram(days, buckets)
+  - Chart.js integration for data visualization
+  - Modal-based UI pattern extended for healthcheck configuration
+  - Files: `static/js/app.js`
+
+#### Database Changes
+
+- **New Tables**:
+  - `healthcheck_configs` - Healthcheck.io configuration per schedule
+  - `notification_providers` - Notification provider configurations
+  - `notification_rules` - Event-based notification rules
+
+- **Schema Details**:
+  - HealthcheckConfig: schedule_id (FK, unique), healthcheck_url, configuration flags, ping status tracking
+  - NotificationProvider: name, provider_type, configuration (JSON), status tracking
+  - NotificationRule: provider_id (FK), event_type, priority, conditions (JSON)
+  - All tables use timezone-aware timestamps (created_at, updated_at)
+  - Cascade delete relationships for data integrity
+
+#### Migration Notes
+
+- Database migration required for new tables
+- No breaking changes to existing API endpoints
+- Backward compatible - healthcheck and notification features are optional
+
+#### Coming in Next Release (v2.6.0)
+
+- Notification API endpoints and integration
+- Notification configuration UI
+- Detailed health monitoring dashboard
+- Data retention policy management
 
 ## [2.4.220] - 2025-11-23
 

@@ -2,7 +2,7 @@
 
 ## Quick Start
 
-This guide explains the Docker Compose setup for PixelProbe v2.4.34 and what each container does.
+This guide explains the Docker Compose setup for PixelProbe and what each container does.
 
 ## Container Overview
 

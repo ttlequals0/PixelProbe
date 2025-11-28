@@ -1,7 +1,8 @@
 openapi: 3.0.3
 info:
   title: PixelProbe API
-  version: 2.4.211
+  # Version is dynamically set from version.py when served via /api/openapi.yaml
+  version: 0.0.0
   description: |
     # PixelProbe REST API
 
@@ -268,6 +269,54 @@ components:
         files_per_second:
           type: number
           description: Current scanning speed
+
+    HealthcheckConfig:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Unique identifier for the healthcheck configuration
+        schedule_id:
+          type: integer
+          description: ID of the associated schedule
+        schedule_name:
+          type: string
+          description: Name of the associated schedule
+        healthcheck_url:
+          type: string
+          format: uri
+          description: Healthchecks.io ping URL
+        is_active:
+          type: boolean
+          description: Whether healthcheck pings are enabled
+        send_start_ping:
+          type: boolean
+          description: Send ping when scan starts (using /start slug)
+        send_success_ping:
+          type: boolean
+          description: Send ping when scan completes successfully
+        send_failure_ping:
+          type: boolean
+          description: Send ping when scan fails (using /fail slug)
+        include_report_data:
+          type: boolean
+          description: Include scan results summary in success pings
+        last_ping_status:
+          type: string
+          enum: [success, failure]
+          description: Status of the last ping sent
+        last_ping_time:
+          type: string
+          format: date-time
+          description: Timestamp of the last ping
+        created_at:
+          type: string
+          format: date-time
+          description: When the configuration was created
+        updated_at:
+          type: string
+          format: date-time
+          description: When the configuration was last updated
 
 paths:
   # Authentication Endpoints
@@ -1109,6 +1158,65 @@ paths:
         '404':
           description: Result not found
 
+  # System Information Endpoints
+  /version:
+    get:
+      summary: Get application and infrastructure versions
+      description: |
+        Returns the current PixelProbe application version along with versions of
+        infrastructure components (Celery, Redis, PostgreSQL).
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/version \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+
+        **Response:**
+        ```json
+        {
+          "version": "2.5.18",
+          "github_url": "https://github.com/ttlequals0/PixelProbe",
+          "api_version": "1.0",
+          "infrastructure": {
+            "celery": "5.3.4",
+            "redis": "7.2.3",
+            "postgresql": "15.2"
+          }
+        }
+        ```
+      tags: [System]
+      responses:
+        '200':
+          description: Version information retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    description: PixelProbe application version
+                  github_url:
+                    type: string
+                    description: Link to GitHub repository
+                  api_version:
+                    type: string
+                    description: API version
+                  infrastructure:
+                    type: object
+                    description: Infrastructure component versions
+                    properties:
+                      celery:
+                        type: string
+                        description: Celery task queue version
+                      redis:
+                        type: string
+                        description: Redis server version
+                      postgresql:
+                        type: string
+                        description: PostgreSQL database version
+
   # Statistics Endpoints
   /stats:
     get:
@@ -1126,21 +1234,160 @@ paths:
         '200':
           description: Statistics retrieved successfully
 
-  /trends:
+  /stats/trends:
     get:
-      summary: Get corruption and storage trends
+      summary: Get scan counter metrics and trends
       description: |
-        Returns comprehensive analytics and trends over multiple time periods (30d, 60d, 90d, 1y).
+        Returns scan counter metrics over time with daily breakdown.
+
+        **Query Parameters:**
+        - `days` (optional): Number of days to include (default: 30, max: 365)
 
         **Example:**
         ```bash
-        curl -X GET http://your-server/api/trends \
+        curl -X GET "http://your-server/api/stats/trends?days=30" \
           -H "Authorization: Bearer YOUR_TOKEN"
         ```
       tags: [Statistics]
+      parameters:
+        - in: query
+          name: days
+          schema:
+            type: integer
+            default: 30
+            minimum: 1
+            maximum: 365
+          description: Number of days of historical data to retrieve
       responses:
         '200':
-          description: Trends data retrieved successfully
+          description: Scan trends data retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period_days:
+                    type: integer
+                  daily_trends:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date:
+                          type: string
+                          format: date
+                        scan_count:
+                          type: integer
+                        files_scanned:
+                          type: integer
+                        corrupted_count:
+                          type: integer
+                        errors_count:
+                          type: integer
+                        warnings_count:
+                          type: integer
+                  summary:
+                    type: object
+                    properties:
+                      total_scans:
+                        type: integer
+                      total_files_scanned:
+                        type: integer
+                      total_corrupted:
+                        type: integer
+                      avg_duration:
+                        type: number
+        '400':
+          description: Invalid parameters
+        '401':
+          description: Unauthorized
+
+  /stats/duration-histogram:
+    get:
+      summary: Get scan duration histogram
+      description: |
+        Returns a histogram of scan durations grouped into buckets.
+
+        **Query Parameters:**
+        - `days` (optional): Number of days to include (default: 30, max: 365)
+        - `buckets` (optional): Number of histogram buckets (default: 10, min: 2, max: 50)
+
+        **Example:**
+        ```bash
+        curl -X GET "http://your-server/api/stats/duration-histogram?days=30&buckets=10" \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Statistics]
+      parameters:
+        - in: query
+          name: days
+          schema:
+            type: integer
+            default: 30
+            minimum: 1
+            maximum: 365
+          description: Number of days of historical data
+        - in: query
+          name: buckets
+          schema:
+            type: integer
+            default: 10
+            minimum: 2
+            maximum: 50
+          description: Number of histogram buckets
+      responses:
+        '200':
+          description: Duration histogram retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period_days:
+                    type: integer
+                  bucket_count:
+                    type: integer
+                  histogram:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        bucket_index:
+                          type: integer
+                        min_duration:
+                          type: number
+                        max_duration:
+                          type: number
+                        count:
+                          type: integer
+                  summary:
+                    type: object
+                    properties:
+                      total_scans:
+                        type: integer
+                      min_duration:
+                        type: number
+                      max_duration:
+                        type: number
+                      avg_duration:
+                        type: number
+                  by_scan_type:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      properties:
+                        count:
+                          type: integer
+                        min:
+                          type: number
+                        max:
+                          type: number
+                        avg:
+                          type: number
+        '400':
+          description: Invalid parameters
+        '401':
+          description: Unauthorized
 
   /system-info:
     get:
@@ -1365,6 +1612,273 @@ paths:
       responses:
         '204':
           description: Schedule deleted successfully
+
+  # Healthcheck Endpoints
+  /healthcheck:
+    get:
+      summary: List all healthcheck configurations
+      description: |
+        Get all healthcheck configurations with their associated schedules.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/healthcheck \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Healthcheck]
+      responses:
+        '200':
+          description: Healthcheck configurations retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HealthcheckConfig'
+        '401':
+          description: Unauthorized
+
+    post:
+      summary: Create healthcheck configuration
+      description: |
+        Create a new healthcheck configuration for a schedule.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/healthcheck \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "schedule_id": 1,
+            "healthcheck_url": "https://hc-ping.com/your-uuid-here",
+            "is_active": true,
+            "send_start_ping": true,
+            "send_success_ping": true,
+            "send_failure_ping": true,
+            "include_report_data": true
+          }'
+        ```
+      tags: [Healthcheck]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schedule_id, healthcheck_url]
+              properties:
+                schedule_id:
+                  type: integer
+                healthcheck_url:
+                  type: string
+                  format: uri
+                is_active:
+                  type: boolean
+                  default: true
+                send_start_ping:
+                  type: boolean
+                  default: true
+                send_success_ping:
+                  type: boolean
+                  default: true
+                send_failure_ping:
+                  type: boolean
+                  default: true
+                include_report_data:
+                  type: boolean
+                  default: true
+      responses:
+        '201':
+          description: Healthcheck configuration created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthcheckConfig'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
+        '409':
+          description: Healthcheck configuration already exists for this schedule
+
+  /healthcheck/{config_id}:
+    get:
+      summary: Get specific healthcheck configuration
+      description: |
+        Get a specific healthcheck configuration by ID.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/healthcheck/1 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Healthcheck]
+      parameters:
+        - name: config_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Healthcheck configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthcheckConfig'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Healthcheck configuration not found
+
+    put:
+      summary: Update healthcheck configuration
+      description: |
+        Update an existing healthcheck configuration.
+
+        **Example:**
+        ```bash
+        curl -X PUT http://your-server/api/healthcheck/1 \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "healthcheck_url": "https://hc-ping.com/new-uuid",
+            "is_active": false
+          }'
+        ```
+      tags: [Healthcheck]
+      parameters:
+        - name: config_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                healthcheck_url:
+                  type: string
+                  format: uri
+                is_active:
+                  type: boolean
+                send_start_ping:
+                  type: boolean
+                send_success_ping:
+                  type: boolean
+                send_failure_ping:
+                  type: boolean
+                include_report_data:
+                  type: boolean
+      responses:
+        '200':
+          description: Healthcheck configuration updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthcheckConfig'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
+        '404':
+          description: Healthcheck configuration not found
+
+    delete:
+      summary: Delete healthcheck configuration
+      description: |
+        Delete a healthcheck configuration.
+
+        **Example:**
+        ```bash
+        curl -X DELETE http://your-server/api/healthcheck/1 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Healthcheck]
+      parameters:
+        - name: config_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Healthcheck configuration deleted successfully
+        '401':
+          description: Unauthorized
+        '404':
+          description: Healthcheck configuration not found
+
+  /healthcheck/schedule/{schedule_id}:
+    get:
+      summary: Get healthcheck by schedule
+      description: |
+        Get healthcheck configuration for a specific schedule.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/healthcheck/schedule/1 \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Healthcheck]
+      parameters:
+        - name: schedule_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Healthcheck configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthcheckConfig'
+        '401':
+          description: Unauthorized
+        '404':
+          description: No healthcheck configuration found for this schedule
+
+  /healthcheck/{config_id}/test:
+    post:
+      summary: Test healthcheck configuration
+      description: |
+        Send a test ping to verify the healthcheck configuration.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/healthcheck/1/test \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Healthcheck]
+      parameters:
+        - name: config_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Test ping result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  last_ping_time:
+                    type: string
+                    format: date-time
+        '401':
+          description: Unauthorized
+        '404':
+          description: Healthcheck configuration not found
 
   /ignored-patterns:
     get:
@@ -2183,12 +2697,16 @@ paths:
 tags:
   - name: Authentication
     description: User authentication, authorization, and API token management
+  - name: System
+    description: Application version and infrastructure component information
   - name: Scan
     description: Media file scanning operations, status monitoring, and scan management
   - name: Statistics
     description: Statistics, analytics, and trend data
   - name: Admin
     description: Administrative functions, settings, and system configuration
+  - name: Healthcheck
+    description: Healthchecks.io integration for monitoring scheduled scans
   - name: Export
     description: Data export operations and file download/streaming
   - name: Maintenance
