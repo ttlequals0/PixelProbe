@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.19] - 2025-12-03
+
+### Fix: HEVC PPS False Positive in Corruption Detection
+
+#### Fixed
+
+- **HEVC "PPS changed between slices" no longer triggers false positive corruption**
+  - Added to benign patterns list in multi-point sampling
+  - Common in Blu-ray remux content where dynamic parameter sets are used
+  - Files with only PPS warnings now marked as HEALTHY (not corrupted)
+
+- **Added additional HEVC benign patterns**
+  - `'skipping nal unit'` - Filler/padding NAL units (type 63)
+  - `'last message repeated'` - FFmpeg continuation line format
+
+#### Changed
+
+- **Improved warning logging format**
+  - Now shows counts: "14 PPS parameter changes, 9 NAL unit skips in middle"
+  - Files with only benign warnings stay HEALTHY (no warning_details added)
+
+#### Technical Details
+
+- Root cause: Multi-point sampling in `_check_multipoint_sampling()` was flagging legitimate HEVC stream features
+- PPS (Picture Parameter Set) changes are part of HEVC spec for adaptive encoding
+- NAL unit 63 is reserved/unspecified, often used for Blu-ray markers
+
+#### Files Modified
+
+- `media_checker.py` - Updated benign_patterns list and warning logging
+
+---
+
 ## [2.5.18] - 2025-11-25
 
 ### Feature: Enhanced Version API Endpoint with Infrastructure Versions

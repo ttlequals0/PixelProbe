@@ -1901,12 +1901,18 @@ class PixelProbe:
                         # - DTS warnings from null muxer (muxing artifacts, not corruption)
                         # - PTS warnings (timestamp ordering issues in muxer, not corruption)
                         # - Subtitle warnings (cosmetic issues)
+                        # - PPS changes (legitimate HEVC feature for dynamic parameters)
+                        # - NAL unit skips (filler/padding units, Blu-ray markers)
+                        # - "Last message repeated X times" (continuation of previous benign message)
                         benign_patterns = [
                             'non monotonically increasing dts',
                             'application provided invalid',
                             'dts to muxer',
                             'pts to muxer',
-                            'subtitle'
+                            'subtitle',
+                            'pps changed between slices',
+                            'skipping nal unit',
+                            'last message repeated'
                         ]
                         # Check if stderr only contains benign warnings
                         is_benign = all(any(pattern in line.lower() for pattern in benign_patterns)
@@ -1917,14 +1923,26 @@ class PixelProbe:
                             stderr_lines = result.stderr.splitlines()
                             dts_count = len([line for line in stderr_lines if 'dts' in line.lower()])
                             pts_count = len([line for line in stderr_lines if 'pts' in line.lower()])
+                            pps_count = len([line for line in stderr_lines if 'pps changed' in line.lower()])
+                            nal_count = len([line for line in stderr_lines if 'skipping nal' in line.lower()])
 
+                            # Build warning message with all warning types
+                            warning_parts = []
                             if dts_count > 0 or pts_count > 0:
-                                warning_msg = f"{dts_count} DTS, {pts_count} PTS warnings in {location}"
+                                warning_parts.append(f"{dts_count + pts_count} DTS/PTS timestamp warnings")
+                            if pps_count > 0:
+                                warning_parts.append(f"{pps_count} PPS parameter changes")
+                            if nal_count > 0:
+                                warning_parts.append(f"{nal_count} NAL unit skips")
+
+                            if warning_parts:
+                                warning_msg = f"{', '.join(warning_parts)} in {location}"
                             else:
                                 warning_msg = f"Benign FFmpeg warnings in {location}"
 
-                            warning_details.append(warning_msg)
-                            logger.info(f"BENIGN WARNING in {location} of {file_path}: {warning_msg}")
+                            # Log for debugging but DON'T add to warning_details
+                            # Files with only benign warnings should stay HEALTHY
+                            logger.info(f"BENIGN (healthy) in {location} of {file_path}: {warning_msg}")
                         else:
                             # Real corruption detected
                             corruption_details.append(f"Corruption detected in {location} section")
