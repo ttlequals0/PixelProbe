@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.23] - 2025-12-03
+
+### Fix: Remove Aggressive Error Detection from Stage 3 Multi-Point Sampling
+
+#### Changed
+
+- **Removed `-err_detect crccheck+bitstream` from Stage 3 multi-point sampling**
+  - Aggressive error detection is incompatible with seeking mid-stream
+  - HEVC decoder reports errors (PPS missing, first slice missing) until finding keyframe
+  - These are normal seek artifacts, not corruption
+
+- **Simplified Stage 3 logic**
+  - Now just checks FFmpeg exit code (0 = success)
+  - Removed complex benign pattern matching (was a maintenance burden)
+  - Stage 4 still uses aggressive detection (starts from beginning, no seek issues)
+
+#### Impact
+
+- All false positives from HEVC seek artifacts eliminated
+- Cleaner, more maintainable code
+- Actual corruption still detected via non-zero exit code
+
+---
+
 ## [2.5.22] - 2025-12-03
 
 ### Fix: Multi-Point Sampling False Positives (Stage 3)

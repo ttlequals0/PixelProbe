@@ -1881,10 +1881,12 @@ class PixelProbe:
             
             for start_time, sample_duration, location in sample_points:
                 try:
+                    # No aggressive error detection flags - seeking mid-stream triggers
+                    # false positives (PPS errors, first slice missing, etc.)
+                    # Just check if FFmpeg can decode frames at this position
                     result = safe_subprocess_run([
                         'ffmpeg',
                         '-v', 'error',
-                        '-err_detect', 'crccheck+bitstream',
                         '-ss', str(start_time),
                         '-t', str(sample_duration),
                         '-i', file_path,
@@ -1892,75 +1894,15 @@ class PixelProbe:
                         '-'
                     ], capture_output=True, text=True, timeout=30)
 
-                    # Filter out benign warnings that don't indicate actual corruption
-                    if result.stderr:
-                        stderr_lower = result.stderr.lower()
-                        # Benign warnings that don't indicate actual corruption:
-                        # - DTS warnings from null muxer (muxing artifacts, not corruption)
-                        # - PTS warnings (timestamp ordering issues in muxer, not corruption)
-                        # - Subtitle warnings (cosmetic issues)
-                        # - PPS changes (legitimate HEVC feature for dynamic parameters)
-                        # - NAL unit skips (filler/padding units, Blu-ray markers)
-                        # - "Last message repeated X times" (continuation of previous benign message)
-                        benign_patterns = [
-                            # DTS/PTS muxer warnings (timestamp ordering issues)
-                            'non monotonically increasing dts',
-                            'application provided invalid',
-                            'dts to muxer',
-                            'pts to muxer',
-                            'subtitle',
-                            # HEVC parameter set changes (legitimate codec feature)
-                            'pps changed between slices',
-                            'skipping nal unit',
-                            'last message repeated',
-                            # HEVC seek artifacts (normal when seeking mid-stream)
-                            'first slice in a frame missing',
-                            'pps id out of range',
-                            # EOF/seek-related messages (video stream shorter than container)
-                            'cannot determine format',
-                            'nothing was written into output',
-                            'error marking filters',
-                            'error while filtering',
-                            'received no packets',
-                            # Audio codec warnings (not video corruption)
-                            'truehd',
-                            'dts-hd',
-                            'quant_step_size',
-                        ]
-                        # Check if stderr only contains benign warnings
-                        is_benign = all(any(pattern in line.lower() for pattern in benign_patterns)
-                                       for line in result.stderr.splitlines() if line.strip())
-
-                        if is_benign and result.returncode == 0:
-                            # Count specific warning types for concise logging
-                            stderr_lines = result.stderr.splitlines()
-                            dts_count = len([line for line in stderr_lines if 'dts' in line.lower()])
-                            pts_count = len([line for line in stderr_lines if 'pts' in line.lower()])
-                            pps_count = len([line for line in stderr_lines if 'pps changed' in line.lower()])
-                            nal_count = len([line for line in stderr_lines if 'skipping nal' in line.lower()])
-
-                            # Build warning message with all warning types
-                            warning_parts = []
-                            if dts_count > 0 or pts_count > 0:
-                                warning_parts.append(f"{dts_count + pts_count} DTS/PTS timestamp warnings")
-                            if pps_count > 0:
-                                warning_parts.append(f"{pps_count} PPS parameter changes")
-                            if nal_count > 0:
-                                warning_parts.append(f"{nal_count} NAL unit skips")
-
-                            if warning_parts:
-                                warning_msg = f"{', '.join(warning_parts)} in {location}"
-                            else:
-                                warning_msg = f"Benign FFmpeg warnings in {location}"
-
-                            # Log for debugging but DON'T add to warning_details
-                            # Files with only benign warnings should stay HEALTHY
-                            logger.info(f"BENIGN (healthy) in {location} of {file_path}: {warning_msg}")
-                        else:
-                            # Real corruption detected
-                            corruption_details.append(f"Corruption detected in {location} section")
-                            is_corrupted = True
-                            logger.warning(f"CORRUPTION DETECTED in {location} of {file_path}:\n{result.stderr}")
+                    # Simple check: if exit code is 0, the section decoded successfully
+                    if result.returncode == 0:
+                        # File is fine at this position
+                        logger.debug(f"Multi-point sample {location} OK for {file_path}")
+                    else:
+                        # Non-zero exit code indicates real decode failure
+                        corruption_details.append(f"Corruption detected in {location} section")
+                        is_corrupted = True
+                        logger.warning(f"CORRUPTION DETECTED in {location} of {file_path}:\n{result.stderr}")
                         
                 except subprocess.TimeoutExpired:
                     corruption_details.append(f"Timeout checking {location} section")
