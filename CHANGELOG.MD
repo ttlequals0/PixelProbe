@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.21] - 2025-12-03
+
+### Fix: DTS/PTS Warnings Should NOT Mark Files as Warning Status
+
+#### Fixed
+
+- **Files with only DTS/PTS timestamp warnings now marked as HEALTHY (not Warning)**
+  - Removed `warning_details` assignment in `_check_video_corruption()` for benign warnings
+  - DTS/PTS warnings are common muxer artifacts in H.264/HEVC files
+  - Files with NAL unit warnings or reference frame warnings also stay HEALTHY
+
+#### Technical Details
+
+- Root cause: `_check_video_corruption()` at line 1343 was adding warnings to `warning_details`
+- This caused `has_warnings = True` even though warnings are benign
+- Fix: Log the warnings for debugging but don't add to warning_details
+
+#### Files Modified
+
+- `media_checker.py` - Removed warning_details assignment for benign DTS/PTS warnings
+
+---
+
 ## [2.5.20] - 2025-12-03
 
 ### Fix: HEVC PPS False Positive in Corruption Detection

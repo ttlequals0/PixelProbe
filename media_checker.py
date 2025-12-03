@@ -1336,11 +1336,9 @@ class PixelProbe:
                     else:
                         warning_type = "warnings"
 
-                    # Log once with count only - no individual warning lines
-                    logger.info(f"BENIGN WARNING in {file_path}: {warning_count} {warning_type} detected (common in H.264/HEVC files)")
-
-                    # Store minimal summary for database
-                    warning_details = [f"{warning_count} {warning_type}"]
+                    # Log once with count only - files with only DTS/PTS/NAL/reference warnings stay HEALTHY
+                    logger.info(f"BENIGN (healthy) in {file_path}: {warning_count} {warning_type} detected (common in H.264/HEVC files)")
+                    # DON'T add to warning_details - file stays HEALTHY
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         
