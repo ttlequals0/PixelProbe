@@ -1903,14 +1903,29 @@ class PixelProbe:
                         # - NAL unit skips (filler/padding units, Blu-ray markers)
                         # - "Last message repeated X times" (continuation of previous benign message)
                         benign_patterns = [
+                            # DTS/PTS muxer warnings (timestamp ordering issues)
                             'non monotonically increasing dts',
                             'application provided invalid',
                             'dts to muxer',
                             'pts to muxer',
                             'subtitle',
+                            # HEVC parameter set changes (legitimate codec feature)
                             'pps changed between slices',
                             'skipping nal unit',
-                            'last message repeated'
+                            'last message repeated',
+                            # HEVC seek artifacts (normal when seeking mid-stream)
+                            'first slice in a frame missing',
+                            'pps id out of range',
+                            # EOF/seek-related messages (video stream shorter than container)
+                            'cannot determine format',
+                            'nothing was written into output',
+                            'error marking filters',
+                            'error while filtering',
+                            'received no packets',
+                            # Audio codec warnings (not video corruption)
+                            'truehd',
+                            'dts-hd',
+                            'quant_step_size',
                         ]
                         # Check if stderr only contains benign warnings
                         is_benign = all(any(pattern in line.lower() for pattern in benign_patterns)

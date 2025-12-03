@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.22] - 2025-12-03
+
+### Fix: Multi-Point Sampling False Positives (Stage 3)
+
+#### Fixed
+
+- **HEVC seek artifacts no longer trigger false corruption**
+  - `First slice in a frame missing` - Normal HEVC seek behavior
+  - `PPS id out of range` - HEVC initialization after seek
+
+- **EOF/seek-related messages no longer trigger false corruption**
+  - `Cannot determine format` - Video stream shorter than container
+  - `Nothing was written into output` - No frames at seek position
+  - `Error marking filters` / `Error while filtering` - Consequence of EOF
+  - `Received no packets` - No data at seek position
+
+- **Audio codec warnings no longer trigger false corruption**
+  - TrueHD, DTS-HD warnings (audio issues, not video corruption)
+  - `quant_step_size` TrueHD specific warning
+
+#### Impact
+
+- 19+ files previously marked as "Corrupted" now correctly show as "Healthy"
+- Files affected: Station Eleven (all episodes), Law Abiding Citizen, Avengers Endgame, Mufasa, Lord of the Rings, etc.
+
+#### Files Modified
+
+- `media_checker.py` - Added benign patterns in `_check_multipoint_sampling()`
+
+---
+
 ## [2.5.21] - 2025-12-03
 
 ### Fix: DTS/PTS Warnings Should NOT Mark Files as Warning Status
