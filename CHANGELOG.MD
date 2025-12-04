@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.24] - 2025-12-03
+
+### Fix: Stage 3 FFmpeg Version Compatibility
+
+#### Problem
+
+v2.5.23's exit-code-only approach failed due to FFmpeg version differences:
+- **FFmpeg 8.0 (macOS)**: Returns exit code 0 for PPS seek errors
+- **FFmpeg 6.1.1 (Docker/Ubuntu 24.04)**: Returns non-zero exit code for same errors
+
+#### Solution
+
+Stage 3 (multi-point sampling) now **never marks files as corrupted**:
+- All Stage 3 output is logged as debug info only
+- Stage 1 (full decode from beginning, no seeking) remains the authoritative check
+
+#### Impact
+
+- 3 remaining false positives now correctly detected as healthy
+- Works consistently across all FFmpeg versions
+- No pattern matching or exit code dependencies
+
+---
+
 ## [2.5.23] - 2025-12-03
 
 ### Fix: Remove Aggressive Error Detection from Stage 3 Multi-Point Sampling

@@ -1894,18 +1894,17 @@ class PixelProbe:
                         '-'
                     ], capture_output=True, text=True, timeout=30)
 
-                    # Simple check: if exit code is 0, the section decoded successfully
-                    if result.returncode == 0:
-                        # File is fine at this position
-                        logger.debug(f"Multi-point sample {location} OK for {file_path}")
+                    # Stage 3 NEVER marks as corrupted - seeking causes version-dependent
+                    # false positives (FFmpeg 6.x returns non-zero exit code for PPS errors
+                    # during seeking, FFmpeg 8.x returns 0). Stage 1 (full decode from
+                    # beginning) is the authoritative corruption check.
+                    if result.returncode != 0 or result.stderr:
+                        logger.debug(f"Stage 3 {location} noise (informational): {result.stderr[:200] if result.stderr else 'exit ' + str(result.returncode)}")
                     else:
-                        # Non-zero exit code indicates real decode failure
-                        corruption_details.append(f"Corruption detected in {location} section")
-                        is_corrupted = True
-                        logger.warning(f"CORRUPTION DETECTED in {location} of {file_path}:\n{result.stderr}")
-                        
+                        logger.debug(f"Multi-point sample {location} OK for {file_path}")
+
                 except subprocess.TimeoutExpired:
-                    corruption_details.append(f"Timeout checking {location} section")
+                    logger.debug(f"Stage 3 {location} timeout (informational)")
                     
         except Exception as e:
             logger.debug(f"Multi-point sampling error: {str(e)}")
