@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.25] - 2025-12-04
+
+### Fix: Scheduled Scans Not Executing (Falsely Detected as Already Completed)
+
+#### Problem
+
+Scheduled scans were being skipped with message "Scan already completed (from previous attempt)":
+- All scheduled scans used static scan_id like `scheduled_1` or `scheduled_periodic`
+- Celery task checked if scan_id was already completed
+- Found PREVIOUS day's completed scan and skipped the new scan
+- Healthcheck received "success" ping despite no actual scanning
+
+#### Root Cause
+
+- `scheduler.py` sent `source: scheduled_1` to `/api/scan`
+- `scan_routes.py` used this directly as `scan_id`
+- `tasks.py` queried ScanState for `scan_id=scheduled_1` and found completed state
+- Task returned early thinking it was a retry of a completed scan
+
+#### Solution
+
+- Added timestamp to scheduled scan_id: `scheduled_1_20241204_180000`
+- Each scheduled scan now has a unique identifier
+- Celery retry detection only matches same-session scans
+- Applies to both `scheduled_{id}` and `scheduled_periodic` sources
+
+#### Impact
+
+- Scheduled scans now execute correctly
+- New files are discovered on schedule
+- Healthcheck pings reflect actual scan execution
+
+---
+
 ## [2.5.24] - 2025-12-03
 
 ### Fix: Stage 3 FFmpeg Version Compatibility
