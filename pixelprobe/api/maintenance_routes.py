@@ -399,13 +399,19 @@ def cleanup_orphaned_files():
     """Start cleanup of orphaned database entries"""
     global current_cleanup_thread
 
-    # Check if cleanup is already running
+    # Check if cleanup is already running - use database check for cross-worker visibility
+    active_cleanup = CleanupState.query.filter_by(is_active=True).first()
+    if active_cleanup:
+        return {'error': 'Cleanup operation already in progress'}, 409
+
+    # Secondary check: process-local thread (for same-worker requests)
     if current_cleanup_thread and current_cleanup_thread.is_alive():
         return {'error': 'Cleanup operation already in progress'}, 409
 
-    # Get optional file_paths parameter for scoped orphan checking
+    # Get optional parameters from request
     data = request.get_json(silent=True) or {}
     file_paths = data.get('file_paths', [])
+    schedule_id = data.get('schedule_id')  # For healthcheck integration
 
     # Reset state
     with cleanup_state_lock:
@@ -434,7 +440,7 @@ def cleanup_orphaned_files():
     app = current_app._get_current_object()
     current_cleanup_thread = threading.Thread(
         target=cleanup_orphaned_async,
-        args=(app, cleanup_record.id, file_paths),
+        args=(app, cleanup_record.id, file_paths, schedule_id),
         name=f'cleanup_{cleanup_record.id}'
     )
     current_cleanup_thread.start()
@@ -457,13 +463,19 @@ def check_file_changes():
     """Check for file changes since last scan"""
     global current_file_changes_thread
 
-    # Check if file changes check is already running
+    # Check if file changes check is already running - use database check for cross-worker visibility
+    active_check = FileChangesState.query.filter_by(is_active=True).first()
+    if active_check:
+        return {'error': 'File changes check already in progress'}, 409
+
+    # Secondary check: process-local thread (for same-worker requests)
     if current_file_changes_thread and current_file_changes_thread.is_alive():
         return {'error': 'File changes check already in progress'}, 409
 
-    # Get optional file_paths parameter for scoped file changes checking
+    # Get optional parameters from request
     data = request.get_json(silent=True) or {}
     file_paths = data.get('file_paths', [])
+    schedule_id = data.get('schedule_id')  # For healthcheck integration
 
     # Create unique check ID
     check_id = str(uuid.uuid4())
@@ -514,7 +526,7 @@ def check_file_changes():
     app = current_app._get_current_object()
     current_file_changes_thread = threading.Thread(
         target=check_file_changes_async,
-        args=(app, check_id, file_paths)
+        args=(app, check_id, file_paths, schedule_id)
     )
     current_file_changes_thread.start()
 
@@ -530,13 +542,14 @@ def check_file_changes():
         'file_count': len(file_paths) if file_paths else None
     }
 
-def cleanup_orphaned_async(app, cleanup_id, file_paths=None):
+def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
     """Async function to cleanup orphaned database entries
 
     Args:
         app: Flask app instance
         cleanup_id: ID of the cleanup record
         file_paths: Optional list of specific file paths to check (if None, checks all files)
+        schedule_id: Optional schedule ID for healthcheck integration
     """
     try:
         with app.app_context():
@@ -553,7 +566,7 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None):
                     maintenance_service = MaintenanceService(database_url)
 
                     # Run the cleanup using the maintenance service logic with optional file_paths filter
-                    maintenance_service._run_cleanup(cleanup_record.id, file_paths=file_paths)
+                    maintenance_service._run_cleanup(cleanup_record.id, file_paths=file_paths, schedule_id=schedule_id)
 
     except Exception as e:
         logger.error(f"Error in cleanup_orphaned_async: {str(e)}")
@@ -569,13 +582,14 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None):
         except Exception as commit_error:
             logger.error(f"Failed to update cleanup record on error: {str(commit_error)}")
 
-def check_file_changes_async(app, check_id, file_paths=None):
+def check_file_changes_async(app, check_id, file_paths=None, schedule_id=None):
     """Async function to check file changes
 
     Args:
         app: Flask app instance
         check_id: Unique ID for this check
         file_paths: Optional list of specific file paths to check (if None, checks all files)
+        schedule_id: Optional schedule ID for healthcheck integration
     """
     try:
         with app.app_context():
@@ -592,7 +606,7 @@ def check_file_changes_async(app, check_id, file_paths=None):
                     maintenance_service = MaintenanceService(database_url)
 
                     # Run the file changes check using the maintenance service logic with optional file_paths filter
-                    maintenance_service._run_file_changes_check(check_record.check_id, file_paths=file_paths)
+                    maintenance_service._run_file_changes_check(check_record.check_id, file_paths=file_paths, schedule_id=schedule_id)
 
     except Exception as e:
         logger.error(f"Error in check_file_changes_async: {str(e)}")

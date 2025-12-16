@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.26] - 2025-12-16
+
+### Fix: Cleanup/File Changes Duplicate Reports & Missing Healthcheck Ping
+
+#### Problem 1: Duplicate Reports
+
+Scheduled cleanup and file_changes scans were creating multiple reports:
+- Gunicorn runs 4 workers, each with its own process-local `current_cleanup_thread` variable
+- When scheduler triggered 4 simultaneous requests, 3 workers passed the "already running" check
+- Result: 3 cleanup operations ran concurrently, creating 3 reports
+
+#### Problem 2: Missing Finish Healthcheck Ping
+
+Cleanup and file_changes scans sent start ping but no completion ping:
+- Reports were created without `scan_id` field (needed `scheduled_X` format)
+- `send_healthcheck_completion()` was never called after report creation
+- Healthcheck monitoring showed scan started but never finished
+
+#### Solution
+
+**Duplicate Prevention:**
+- Added database-level check using `CleanupState.is_active` and `FileChangesState.is_active`
+- Database check provides cross-worker visibility (vs process-local thread check)
+
+**Healthcheck Integration:**
+- Scheduler now passes `schedule_id` in API request body
+- API routes accept and pass `schedule_id` to async functions
+- Report creation now sets `scan_id=scheduled_{id}` for schedule association
+- Calls `MediaScheduler.send_healthcheck_completion()` after report creation
+
+#### Files Modified
+
+- `pixelprobe/api/maintenance_routes.py`: Database-level duplicate checks, schedule_id handling
+- `pixelprobe/services/maintenance_service.py`: Schedule-aware report creation with healthcheck ping
+- `scheduler.py`: Pass schedule_id to cleanup/file_changes API requests
+
+---
+
 ## [2.5.25] - 2025-12-04
 
 ### Fix: Scheduled Scans Not Executing (Falsely Detected as Already Completed)
