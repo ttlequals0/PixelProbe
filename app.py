@@ -806,11 +806,9 @@ with app.app_context():
             lock_key = 'pixelprobe:scheduler:lock'
             lock_value = f"{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
 
-            # CRITICAL: Delete any stale lock from previous container on startup
-            # This is safe because on fresh container startup, any existing lock is from a dead process
-            # Workers within the same container will race to acquire, first one wins
-            redis_client.delete(lock_key)
-            logger.info(f"Cleared stale scheduler lock (if any) on startup in process {os.getpid()}")
+            # NOTE: We do NOT delete existing locks on startup - the 60-second TTL handles stale locks
+            # from crashed containers. Deleting unconditionally causes race conditions when multiple
+            # containers start simultaneously (e.g., during deployment) as they delete each other's locks.
 
             # Try to set the lock (only succeeds if key doesn't exist)
             acquired = redis_client.set(lock_key, lock_value, nx=True, ex=60)
