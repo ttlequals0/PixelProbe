@@ -59,6 +59,12 @@ This release addresses gaps identified in the November 2025 security audit verif
 - Applied SQLAlchemy composite index patterns from Context7 docs
 - Applied Flask-Session inactivity timeout patterns from Context7 docs
 
+#### Testing
+
+- Fixed flaky schedule reactivation test that failed due to APScheduler timing edge cases
+- Updated pytest configuration to properly scope test discovery to `tests/` and `scripts/` directories
+- UI screenshot updates with correct viewport sizing and element-specific captures
+
 ---
 
 ## [2.5.26] - 2025-12-16
