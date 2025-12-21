@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.29] - 2025-12-21
+
+### Bug Fixes
+
+#### Fixed
+
+- **Scan Chunk Pagination Race Condition**: Fixed files being skipped during scan due to pagination bug
+  - Chunks were using OFFSET/LIMIT on pending files query, but as files were scanned their status changed
+  - This caused the result set to shrink, making subsequent chunk offsets skip files
+  - New approach: Capture file path boundaries at chunk creation time (JSON format: FCP)
+  - Query by stable path range (`file_path >= first AND file_path <= last`) instead of offset/limit
+  - Maintains backwards compatibility with legacy FILE_CHUNK format
+  - Files affected: `pixelprobe/services/scan_service.py`
+
+#### Updated Screenshots
+
+- Updated `docs/screenshots/features/scan-schedules.png` with working Font Awesome icons
+
+---
+
+## [2.5.28] - 2025-12-21
+
+### Bug Fixes
+
+#### Fixed
+
+- **Font Awesome Icons Missing**: Fixed CSP blocking Font Awesome CSS from cdnjs.cloudflare.com
+  - Changed Font Awesome CDN from `cdnjs.cloudflare.com` to `cdn.jsdelivr.net` (already in CSP whitelist)
+  - Affects both `templates/index.html` and `templates/login.html`
+  - Icons now display correctly on all pages (mobile and desktop)
+
+- **Scheduler Race Condition**: Fixed duplicate scheduler initialization during container startup
+  - Removed unconditional Redis lock deletion in `app.py` that caused race condition
+  - When both pixelprobe and celery-worker containers start simultaneously, they were deleting each other's locks
+  - The 60-second TTL already handles stale locks from crashed containers
+  - This fixes premature scan completion and pending files accumulation issues
+
+---
+
 ## [2.5.27] - 2025-12-20
 
 ### Security Audit Gap Implementation

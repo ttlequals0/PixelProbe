@@ -179,3 +179,4 @@ docker-compose.local.yml
 CLAUDE.md
 CLAUDE.MD
 audit_reports/
+.playwright-mcp/
