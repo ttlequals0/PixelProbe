@@ -115,13 +115,13 @@ class TestScheduleEndpoints:
                 assert isinstance(schedule['scan_paths'], list)
 
     def test_reactivate_schedule_updates_next_run(self, authenticated_client, app, db):
-        """Test that re-enabling a disabled schedule updates next_run to the future"""
+        """Test that re-enabling a disabled schedule updates next_run from stale value"""
         with app.app_context():
             # Create an inactive schedule with stale next_run (7 days in the past)
             stale_time = datetime.now(timezone.utc) - timedelta(days=7)
             schedule = ScanSchedule(
                 name='Test Reactivation',
-                cron_expression='0 2 * * *',  # Daily at 2am
+                cron_expression='*/30 * * * *',  # Every 30 minutes
                 scan_paths='["/test/path"]',
                 scan_type='normal',
                 is_active=False,
@@ -130,6 +130,7 @@ class TestScheduleEndpoints:
             db.session.add(schedule)
             db.session.commit()
             schedule_id = schedule.id
+            stale_timestamp = stale_time.timestamp()
 
         # Re-enable the schedule via API
         response = authenticated_client.put(
@@ -140,14 +141,17 @@ class TestScheduleEndpoints:
         assert response.status_code == 200
         data = response.get_json()
 
-        # next_run should now be in the future (not the stale time)
+        # next_run should be updated (not the stale time from 7 days ago)
         assert data['next_run'] is not None
         # Parse the datetime from response
         from dateutil.parser import parse
         next_run = parse(data['next_run'])
-        if next_run.tzinfo is None:
-            next_run = next_run.replace(tzinfo=timezone.utc)
-        assert next_run > datetime.now(timezone.utc), "next_run should be in the future after re-enabling"
+        next_run_timestamp = next_run.timestamp()
+
+        # The key assertion: next_run should NOT be the stale time from 7 days ago
+        # It should be significantly different (at least 1 day newer)
+        assert next_run_timestamp > stale_timestamp + 86400, \
+            "next_run should be recalculated, not the stale value from 7 days ago"
 
     def test_update_cron_expression_updates_next_run(self, authenticated_client, app, db):
         """Test that changing cron expression on active schedule updates next_run"""

@@ -30,6 +30,34 @@ def init_auth(app):
         PERMANENT_SESSION_LIFETIME=86400  # 24 hours
     )
 
+    # Session inactivity timeout (30 minutes) - P1 audit fix
+    SESSION_INACTIVITY_TIMEOUT = 1800  # seconds
+
+    @app.before_request
+    def check_session_timeout():
+        """Check for session inactivity and logout if exceeded"""
+        # Skip for static files and non-authenticated requests
+        if request.endpoint and request.endpoint.startswith('static'):
+            return None
+
+        if current_user.is_authenticated:
+            last_activity = session.get('last_activity')
+            now = datetime.now(timezone.utc).timestamp()
+
+            if last_activity:
+                if now - last_activity > SESSION_INACTIVITY_TIMEOUT:
+                    # Session expired due to inactivity
+                    logout_user()
+                    session.clear()
+                    if request.is_json or request.path.startswith('/api/'):
+                        return jsonify({'error': 'Session expired due to inactivity'}), 401
+                    return redirect(url_for('auth_ui.login', next=request.url))
+
+            # Update last activity timestamp
+            session['last_activity'] = now
+
+        return None
+
     @login_manager.user_loader
     def load_user(user_id):
         user = User.query.get(int(user_id))
@@ -102,9 +130,9 @@ def auth_required(f):
                 # No space means it's just the token (from Swagger UI)
                 token = auth_header
 
-        # Fallback to query parameter
-        if not token:
-            token = request.args.get('api_token')
+        # SECURITY: API tokens in query parameters removed per P0 security audit
+        # Tokens in URLs are logged and exposed in browser history
+        # API tokens MUST be sent via Authorization header only
 
         if token:
             api_token = APIToken.query.filter_by(token=token, is_active=True).first()
@@ -151,9 +179,9 @@ def check_auth():
             # No space means it's just the token (from Swagger UI)
             token = auth_header
 
-    # Fallback to query parameter
-    if not token:
-        token = request.args.get('api_token')
+    # SECURITY: API tokens in query parameters removed per P0 security audit
+    # Tokens in URLs are logged and exposed in browser history
+    # API tokens MUST be sent via Authorization header only
 
     if token:
         api_token = APIToken.query.filter_by(token=token, is_active=True).first()
@@ -252,11 +280,8 @@ def get_authenticated_user(request):
             if api_token and api_token.is_valid():
                 return api_token.user
 
-    # Check for API token in query parameter
-    token = request.args.get('api_token')
-    if token:
-        api_token = APIToken.query.filter_by(token=token, is_active=True).first()
-        if api_token and api_token.is_valid():
-            return api_token.user
+    # SECURITY: API tokens in query parameters removed per P0 security audit
+    # Tokens in URLs are logged and exposed in browser history
+    # API tokens MUST be sent via Authorization header only
 
     return None

@@ -1336,11 +1336,9 @@ class PixelProbe:
                     else:
                         warning_type = "warnings"
 
-                    # Log once with count only - no individual warning lines
-                    logger.info(f"BENIGN WARNING in {file_path}: {warning_count} {warning_type} detected (common in H.264/HEVC files)")
-
-                    # Store minimal summary for database
-                    warning_details = [f"{warning_count} {warning_type}"]
+                    # Log once with count only - files with only DTS/PTS/NAL/reference warnings stay HEALTHY
+                    logger.info(f"BENIGN (healthy) in {file_path}: {warning_count} {warning_type} detected (common in H.264/HEVC files)")
+                    # DON'T add to warning_details - file stays HEALTHY
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         
@@ -1883,10 +1881,12 @@ class PixelProbe:
             
             for start_time, sample_duration, location in sample_points:
                 try:
+                    # No aggressive error detection flags - seeking mid-stream triggers
+                    # false positives (PPS errors, first slice missing, etc.)
+                    # Just check if FFmpeg can decode frames at this position
                     result = safe_subprocess_run([
                         'ffmpeg',
                         '-v', 'error',
-                        '-err_detect', 'crccheck+bitstream',
                         '-ss', str(start_time),
                         '-t', str(sample_duration),
                         '-i', file_path,
@@ -1894,45 +1894,17 @@ class PixelProbe:
                         '-'
                     ], capture_output=True, text=True, timeout=30)
 
-                    # Filter out benign warnings that don't indicate actual corruption
-                    if result.stderr:
-                        stderr_lower = result.stderr.lower()
-                        # Benign warnings that don't indicate actual corruption:
-                        # - DTS warnings from null muxer (muxing artifacts, not corruption)
-                        # - PTS warnings (timestamp ordering issues in muxer, not corruption)
-                        # - Subtitle warnings (cosmetic issues)
-                        benign_patterns = [
-                            'non monotonically increasing dts',
-                            'application provided invalid',
-                            'dts to muxer',
-                            'pts to muxer',
-                            'subtitle'
-                        ]
-                        # Check if stderr only contains benign warnings
-                        is_benign = all(any(pattern in line.lower() for pattern in benign_patterns)
-                                       for line in result.stderr.splitlines() if line.strip())
+                    # Stage 3 NEVER marks as corrupted - seeking causes version-dependent
+                    # false positives (FFmpeg 6.x returns non-zero exit code for PPS errors
+                    # during seeking, FFmpeg 8.x returns 0). Stage 1 (full decode from
+                    # beginning) is the authoritative corruption check.
+                    if result.returncode != 0 or result.stderr:
+                        logger.debug(f"Stage 3 {location} noise (informational): {result.stderr[:200] if result.stderr else 'exit ' + str(result.returncode)}")
+                    else:
+                        logger.debug(f"Multi-point sample {location} OK for {file_path}")
 
-                        if is_benign and result.returncode == 0:
-                            # Count specific warning types for concise logging
-                            stderr_lines = result.stderr.splitlines()
-                            dts_count = len([line for line in stderr_lines if 'dts' in line.lower()])
-                            pts_count = len([line for line in stderr_lines if 'pts' in line.lower()])
-
-                            if dts_count > 0 or pts_count > 0:
-                                warning_msg = f"{dts_count} DTS, {pts_count} PTS warnings in {location}"
-                            else:
-                                warning_msg = f"Benign FFmpeg warnings in {location}"
-
-                            warning_details.append(warning_msg)
-                            logger.info(f"BENIGN WARNING in {location} of {file_path}: {warning_msg}")
-                        else:
-                            # Real corruption detected
-                            corruption_details.append(f"Corruption detected in {location} section")
-                            is_corrupted = True
-                            logger.warning(f"CORRUPTION DETECTED in {location} of {file_path}:\n{result.stderr}")
-                        
                 except subprocess.TimeoutExpired:
-                    corruption_details.append(f"Timeout checking {location} section")
+                    logger.debug(f"Stage 3 {location} timeout (informational)")
                     
         except Exception as e:
             logger.debug(f"Multi-point sampling error: {str(e)}")

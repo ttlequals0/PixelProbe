@@ -371,12 +371,14 @@ class MediaScheduler:
                     try:
                         if scan_type == 'orphan':
                             # Run orphan cleanup with longer timeout since it can take time
-                            response = requests.post(f'{base_url}/api/cleanup-orphaned', 
+                            response = requests.post(f'{base_url}/api/cleanup-orphaned',
+                                                    json={'schedule_id': schedule_id},
                                                     headers=headers,
                                                     timeout=60)
                         elif scan_type == 'file_changes':
                             # Run file changes scan with longer timeout
-                            response = requests.post(f'{base_url}/api/file-changes', 
+                            response = requests.post(f'{base_url}/api/file-changes',
+                                                    json={'schedule_id': schedule_id},
                                                     headers=headers,
                                                     timeout=60)
                         else:

@@ -58,7 +58,15 @@ class ScanResult(db.Model):
     
     # Output rotation tracking
     output_rotation_enabled = db.Column(db.Boolean, nullable=True)  # Per-record rotation setting
-    
+
+    # Composite indexes for query optimization (P1 audit fix)
+    # Context7: Use Index("idx_name", "col1", "col2") inline syntax
+    __table_args__ = (
+        db.Index('idx_status_corrupted', 'scan_status', 'is_corrupted'),
+        db.Index('idx_scan_date_corrupted', 'scan_date', 'is_corrupted'),
+        db.Index('idx_exists_status', 'file_exists', 'scan_status'),
+    )
+
     def to_dict(self):
         def convert_to_tz(dt):
             """Return datetime as ISO string for display"""

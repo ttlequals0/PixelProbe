@@ -31,6 +31,7 @@ from pixelprobe.api.maintenance_routes import maintenance_bp
 from pixelprobe.api.reports_routes import reports_bp
 from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
 from pixelprobe.api.healthcheck_routes import healthcheck_bp
+from pixelprobe.api.notification_routes import notification_bp  # P3 audit: Notification API
 from pixelprobe.api.auth_routes import auth_api_bp, auth_ui_bp, auth_bp  # auth_bp for backward compat
 
 # Import authentication module
@@ -103,6 +104,40 @@ CORS(app, resources={
     r"/": {"origins": "*"}
 })
 
+# Security headers middleware (P1 audit fix)
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to all responses"""
+    # Prevent clickjacking
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+
+    # Prevent MIME type sniffing
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+
+    # XSS Protection (legacy browsers)
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+
+    # Referrer Policy
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+
+    # Content Security Policy (unsafe-inline required - inline handlers kept per user decision)
+    csp = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; "
+        "img-src 'self' data: blob:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'self';"
+    )
+    response.headers['Content-Security-Policy'] = csp
+
+    # HSTS (only if HTTPS)
+    if request.is_secure:
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+
+    return response
+
 # Custom key function that exempts internal requests
 def get_rate_limit_key():
     """Get rate limit key, exempting internal requests"""
@@ -139,6 +174,7 @@ csrf.exempt(maintenance_bp)
 csrf.exempt(reports_bp)
 csrf.exempt(auth_api_bp)  # Exempt API auth endpoints from CSRF
 csrf.exempt(healthcheck_bp)  # Exempt healthcheck API endpoints from CSRF
+csrf.exempt(notification_bp)  # Exempt notification API endpoints from CSRF (P3 audit)
 # Note: auth_ui_bp (login/logout pages) should NOT be exempted from CSRF
 
 # Initialize scheduler
@@ -195,6 +231,10 @@ apply_auth_to_blueprint(parallel_scan_bp)
 
 app.register_blueprint(healthcheck_bp)
 apply_auth_to_blueprint(healthcheck_bp)
+
+# P3 audit: Register notification API routes
+app.register_blueprint(notification_bp)
+apply_auth_to_blueprint(notification_bp)
 
 # API documentation is now provided via openapi.yaml specification file
 

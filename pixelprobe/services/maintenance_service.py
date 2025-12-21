@@ -237,13 +237,16 @@ class MaintenanceService:
         with app.app_context():
             self._run_file_changes_check(check_id)
 
-    def _run_cleanup(self, cleanup_id, file_paths=None):
+    def _run_cleanup(self, cleanup_id, file_paths=None, schedule_id=None):
         """Run the cleanup operation
 
         Args:
             cleanup_id: ID of the cleanup record
             file_paths: Optional list of specific file paths to check (if None, checks all files)
+            schedule_id: Optional schedule ID for healthcheck integration
         """
+        # Store schedule_id for report creation
+        self._cleanup_schedule_id = schedule_id
         try:
             cleanup_record = CleanupState.query.get(cleanup_id)
             if not cleanup_record:
@@ -504,9 +507,13 @@ class MaintenanceService:
             if cleanup_record.start_time and cleanup_record.end_time:
                 duration_seconds = (cleanup_record.end_time - cleanup_record.start_time).total_seconds()
 
+            # Get schedule_id for healthcheck integration
+            schedule_id = getattr(self, '_cleanup_schedule_id', None)
+
             # Create the report
             report = ScanReport(
                 scan_type='cleanup',
+                scan_id=f'scheduled_{schedule_id}' if schedule_id else None,
                 start_time=cleanup_record.start_time,
                 end_time=cleanup_record.end_time,
                 duration_seconds=duration_seconds,
@@ -523,25 +530,37 @@ class MaintenanceService:
             if orphaned_files_list:
                 import json
                 report.directories_scanned = json.dumps(orphaned_files_list)
-            
+
             db.session.add(report)
             db.session.commit()
-            
+
             logger.info(f"Created cleanup report {report.report_id} for cleanup operation")
+
+            # Send healthcheck completion ping if this was a scheduled cleanup
+            if schedule_id:
+                try:
+                    from scheduler import MediaScheduler
+                    MediaScheduler.send_healthcheck_completion(report.id)
+                except Exception as hc_error:
+                    logger.error(f"Failed to send healthcheck completion ping: {hc_error}")
+
             return report
-            
+
         except Exception as e:
             logger.error(f"Failed to create cleanup report: {e}")
             # Don't fail the cleanup operation if report creation fails
             return None
     
-    def _run_file_changes_check(self, check_id: str, file_paths=None):
+    def _run_file_changes_check(self, check_id: str, file_paths=None, schedule_id=None):
         """Run the file changes check operation
 
         Args:
             check_id: Unique ID for this check
             file_paths: Optional list of specific file paths to check (if None, checks all files)
+            schedule_id: Optional schedule ID for healthcheck integration
         """
+        # Store schedule_id for report creation
+        self._file_changes_schedule_id = schedule_id
         try:
             # Use READ COMMITTED isolation level to reduce lock contention
             # This allows reads to see committed data without holding locks
@@ -1083,9 +1102,13 @@ class MaintenanceService:
             if file_changes_record.start_time and file_changes_record.end_time:
                 duration = (file_changes_record.end_time - file_changes_record.start_time).total_seconds()
 
+            # Get schedule_id for healthcheck integration
+            schedule_id = getattr(self, '_file_changes_schedule_id', None)
+
             # Create scan report
             report = ScanReport(
                 scan_type='file_changes',
+                scan_id=f'scheduled_{schedule_id}' if schedule_id else None,
                 start_time=file_changes_record.start_time,
                 end_time=file_changes_record.end_time,
                 duration_seconds=duration,
@@ -1112,6 +1135,14 @@ class MaintenanceService:
                 f"{report.files_changed} modified files, "
                 f"{report.orphaned_records_found} deleted files"
             )
+
+            # Send healthcheck completion ping if this was a scheduled file changes check
+            if schedule_id:
+                try:
+                    from scheduler import MediaScheduler
+                    MediaScheduler.send_healthcheck_completion(report.id)
+                except Exception as hc_error:
+                    logger.error(f"Failed to send healthcheck completion ping: {hc_error}")
 
         except Exception as e:
             logger.error(f"Failed to create file changes report: {e}")
