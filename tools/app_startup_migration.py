@@ -44,6 +44,17 @@ def run_index_optimizations(db):
             'name': 'idx_scan_state_celery_task_id',
             'sql': 'CREATE INDEX IF NOT EXISTS idx_scan_state_celery_task_id ON scan_state(celery_task_id)',
             'description': 'Index for Celery task ID lookups (v2.4.196)'
+        },
+        # P1 audit fix: Additional composite indexes (v2.5.26)
+        {
+            'name': 'idx_scan_date_corrupted',
+            'sql': 'CREATE INDEX IF NOT EXISTS idx_scan_date_corrupted ON scan_results(scan_date DESC, is_corrupted)',
+            'description': 'Composite index for date-ordered corruption queries (P1 audit)'
+        },
+        {
+            'name': 'idx_exists_status',
+            'sql': 'CREATE INDEX IF NOT EXISTS idx_exists_status ON scan_results(file_exists, scan_status)',
+            'description': 'Composite index for file existence/status queries (P1 audit)'
         }
     ]
 
