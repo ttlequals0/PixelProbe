@@ -1945,12 +1945,18 @@ class ScanService:
         
         return added_count, duplicate_count
     
-    def _create_scanning_chunks(self, total_files: int, scan_id: str, is_pending_scan: bool, 
+    def _create_scanning_chunks(self, total_files: int, scan_id: str, is_pending_scan: bool,
                                 force_rescan: bool, directories: List[str]) -> List[ScanChunk]:
-        """Create file-based chunks for Phase 3 scanning"""
+        """Create file-based chunks for Phase 3 scanning
+
+        Uses path-based boundaries instead of offset/limit to avoid pagination race conditions.
+        Each chunk stores the first and last file_path it should process, making queries
+        stable even as files change status during scanning.
+        """
         from models import ScanChunk
+        import json
         chunks = []
-        
+
         # Determine optimal chunk size based on total files
         if total_files <= 100:
             chunk_size = total_files  # Single chunk for small scans
@@ -1960,29 +1966,62 @@ class ScanService:
             chunk_size = 500  # 500 files per chunk
         else:
             chunk_size = 1000  # 1000 files per chunk for large scans
-        
+
         num_chunks = (total_files + chunk_size - 1) // chunk_size
         logger.info(f"Creating {num_chunks} file-based chunks for {total_files} files (chunk size: {chunk_size})")
-        
-        # Create file-based chunks
+
+        # Query all pending file paths ordered by path to establish stable boundaries
+        # This captures the exact files at scan start, preventing pagination race conditions
+        if force_rescan:
+            # For force rescan, get all files in directories
+            all_files_query = db.session.query(ScanResult.file_path).filter(
+                db.or_(*[ScanResult.file_path.like(f"{d}%") for d in directories])
+            ).order_by(ScanResult.file_path)
+        else:
+            # Normal scan: get all pending files
+            all_files_query = db.session.query(ScanResult.file_path).filter(
+                ScanResult.scan_status == 'pending'
+            ).order_by(ScanResult.file_path)
+
+        all_file_paths = [row[0] for row in all_files_query.all()]
+        actual_file_count = len(all_file_paths)
+
+        if actual_file_count == 0:
+            logger.info("No files to create chunks for")
+            return chunks
+
+        # Recalculate num_chunks based on actual file count
+        num_chunks = (actual_file_count + chunk_size - 1) // chunk_size
+        logger.info(f"Actual files: {actual_file_count}, creating {num_chunks} chunks")
+
+        # Create file-based chunks with path boundaries
         for i in range(num_chunks):
             chunk_id = hashlib.md5(f"{scan_id}:scan_chunk_{i}:{time.time()}".encode()).hexdigest()
-            
-            # Store chunk metadata in directory_path for now (will be refactored later)
-            # Format: "FILE_CHUNK:offset:limit"
-            offset = i * chunk_size
-            limit = min(chunk_size, total_files - offset)
-            
+
+            # Calculate the file indices for this chunk
+            start_idx = i * chunk_size
+            end_idx = min(start_idx + chunk_size - 1, actual_file_count - 1)
+
+            first_path = all_file_paths[start_idx]
+            last_path = all_file_paths[end_idx]
+            files_in_chunk = end_idx - start_idx + 1
+
+            # Store as JSON for safe handling of any path characters
+            # Format: {"t":"FCP","f":"first_path","l":"last_path"}
+            chunk_metadata = json.dumps({"t": "FCP", "f": first_path, "l": last_path})
+
             chunk = ScanChunk(
                 scan_id=scan_id,
                 chunk_id=chunk_id,
-                directory_path=f"FILE_CHUNK:{offset}:{limit}",
+                directory_path=chunk_metadata,
                 phase='scanning',
                 status='pending',
-                files_discovered=limit  # Set the expected file count
+                files_discovered=files_in_chunk  # Set the expected file count
             )
             chunks.append(chunk)
-        
+
+            logger.debug(f"Chunk {i}: files {start_idx}-{end_idx} ({files_in_chunk} files)")
+
         return chunks
     
     def _create_directory_chunks(self, directories: List[str], scan_id: str) -> List[ScanChunk]:
@@ -2089,17 +2128,38 @@ class ScanService:
                 
             elif phase == 'scanning':
                 # Check if this is a file-based chunk (Phase 3)
-                if chunk.directory_path.startswith('FILE_CHUNK:'):
-                    # Parse the chunk metadata: "FILE_CHUNK:offset:limit"
+                # New format: JSON with path boundaries {"t":"FCP","f":"first","l":"last"}
+                if chunk.directory_path.startswith('{'):
+                    import json
+                    try:
+                        chunk_meta = json.loads(chunk.directory_path)
+                        if chunk_meta.get('t') == 'FCP':
+                            first_path = chunk_meta['f']
+                            last_path = chunk_meta['l']
+                            # Query by path range - stable even as files change status
+                            files_to_scan = db.session.query(ScanResult).filter(
+                                ScanResult.file_path >= first_path,
+                                ScanResult.file_path <= last_path,
+                                ScanResult.scan_status == 'pending'
+                            ).order_by(ScanResult.file_path).all()
+                            logger.info(f"Processing FCP chunk {chunk.chunk_id}: {len(files_to_scan)} pending files in path range")
+                        else:
+                            logger.error(f"Unknown chunk type: {chunk_meta.get('t')}")
+                            files_to_scan = []
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse chunk metadata: {e}")
+                        files_to_scan = []
+                elif chunk.directory_path.startswith('FILE_CHUNK:'):
+                    # Legacy format: "FILE_CHUNK:offset:limit" - kept for backwards compatibility
                     parts = chunk.directory_path.split(':')
                     offset = int(parts[1])
                     limit = int(parts[2])
-                    
+
                     # Get the specified range of pending files
                     files_to_scan = db.session.query(ScanResult).filter(
                         ScanResult.scan_status == 'pending'
                     ).order_by(ScanResult.file_path).offset(offset).limit(limit).all()
-                    
+
                     logger.info(f"Processing FILE_CHUNK {chunk.chunk_id}: {len(files_to_scan)} files (offset={offset}, limit={limit})")
                 elif chunk.directory_path == 'PENDING_FILES':
                     # Legacy: Scan ALL pending files regardless of directory
@@ -2140,6 +2200,7 @@ class ScanService:
     
     def _get_chunk_file_count(self, chunk: ScanChunk, force_rescan: bool) -> int:
         """Get count of files to scan in a chunk without actually scanning them"""
+        import json
         # Disable autoflush to avoid SQLAlchemy warnings when accessing chunk attributes
         with db.session.no_autoflush:
             # Check if this is the special pending files chunk
@@ -2149,7 +2210,30 @@ class ScanService:
                     ScanResult.scan_status == 'pending'
                 ).count()
 
-            # Check if this is a FILE_CHUNK format (FILE_CHUNK:offset:limit)
+            # Check for new FCP (File Chunk Paths) JSON format
+            if chunk.directory_path.startswith('{'):
+                try:
+                    chunk_meta = json.loads(chunk.directory_path)
+                    if chunk_meta.get('t') == 'FCP':
+                        first_path = chunk_meta['f']
+                        last_path = chunk_meta['l']
+                        # Count files in path range that are pending
+                        if force_rescan:
+                            return db.session.query(ScanResult).filter(
+                                ScanResult.file_path >= first_path,
+                                ScanResult.file_path <= last_path
+                            ).count()
+                        else:
+                            return db.session.query(ScanResult).filter(
+                                ScanResult.file_path >= first_path,
+                                ScanResult.file_path <= last_path,
+                                ScanResult.scan_status == 'pending'
+                            ).count()
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON chunk format: {chunk.directory_path}")
+                    return 0
+
+            # Check if this is a FILE_CHUNK format (FILE_CHUNK:offset:limit) - legacy
             if chunk.directory_path.startswith('FILE_CHUNK:'):
                 # Parse the offset and limit from the chunk directory_path
                 parts = chunk.directory_path.split(':')
@@ -2203,13 +2287,40 @@ class ScanService:
         db.session.commit()
         
         try:
+            import json as json_module
             # Check if this is a file-based chunk (Phase 3)
-            if chunk.directory_path.startswith('FILE_CHUNK:'):
-                # Parse the chunk metadata: "FILE_CHUNK:offset:limit"
+            if chunk.directory_path.startswith('{'):
+                # New FCP (File Chunk Paths) JSON format
+                try:
+                    chunk_meta = json_module.loads(chunk.directory_path)
+                    if chunk_meta.get('t') == 'FCP':
+                        first_path = chunk_meta['f']
+                        last_path = chunk_meta['l']
+                        # Count pending files in path range
+                        if force_rescan:
+                            files_count = db.session.query(ScanResult).filter(
+                                ScanResult.file_path >= first_path,
+                                ScanResult.file_path <= last_path
+                            ).count()
+                        else:
+                            files_count = db.session.query(ScanResult).filter(
+                                ScanResult.file_path >= first_path,
+                                ScanResult.file_path <= last_path,
+                                ScanResult.scan_status == 'pending'
+                            ).count()
+                        logger.info(f"FCP chunk {chunk.chunk_id}: Found {files_count} files in path range")
+                    else:
+                        logger.error(f"Unknown chunk type: {chunk_meta.get('t')}")
+                        files_count = 0
+                except json_module.JSONDecodeError as e:
+                    logger.error(f"Failed to parse FCP chunk metadata: {e}")
+                    files_count = 0
+            elif chunk.directory_path.startswith('FILE_CHUNK:'):
+                # Legacy: Parse the chunk metadata: "FILE_CHUNK:offset:limit"
                 parts = chunk.directory_path.split(':')
                 offset = int(parts[1])
                 limit = int(parts[2])
-                
+
                 # Get count for this specific chunk
                 files_count = limit  # We know exactly how many files are in this chunk
                 logger.info(f"FILE_CHUNK {chunk.chunk_id}: Processing {files_count} files (offset={offset})")
@@ -2279,8 +2390,33 @@ class ScanService:
                     return
 
                 # Get batch of files
-                if chunk.directory_path.startswith('FILE_CHUNK:'):
-                    # For file-based chunks, adjust offset based on chunk's offset
+                if chunk.directory_path.startswith('{'):
+                    # New FCP (File Chunk Paths) JSON format - query by path range
+                    import json
+                    try:
+                        chunk_meta = json.loads(chunk.directory_path)
+                        if chunk_meta.get('t') == 'FCP':
+                            first_path = chunk_meta['f']
+                            last_path = chunk_meta['l']
+                            if force_rescan:
+                                files_batch = db.session.query(ScanResult).filter(
+                                    ScanResult.file_path >= first_path,
+                                    ScanResult.file_path <= last_path
+                                ).order_by(ScanResult.file_path).offset(batch_offset).limit(batch_size).all()
+                            else:
+                                files_batch = db.session.query(ScanResult).filter(
+                                    ScanResult.file_path >= first_path,
+                                    ScanResult.file_path <= last_path,
+                                    ScanResult.scan_status == 'pending'
+                                ).order_by(ScanResult.file_path).offset(batch_offset).limit(batch_size).all()
+                        else:
+                            logger.error(f"Unknown chunk type in batch processing: {chunk_meta.get('t')}")
+                            files_batch = []
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse chunk metadata in batch: {e}")
+                        files_batch = []
+                elif chunk.directory_path.startswith('FILE_CHUNK:'):
+                    # Legacy: For file-based chunks, adjust offset based on chunk's offset
                     chunk_offset = int(chunk.directory_path.split(':')[1])
                     if force_rescan:
                         # Rescan ALL files, not just pending

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.29] - 2025-12-21
+
+### Bug Fixes
+
+#### Fixed
+
+- **Scan Chunk Pagination Race Condition**: Fixed files being skipped during scan due to pagination bug
+  - Chunks were using OFFSET/LIMIT on pending files query, but as files were scanned their status changed
+  - This caused the result set to shrink, making subsequent chunk offsets skip files
+  - New approach: Capture file path boundaries at chunk creation time (JSON format: FCP)
+  - Query by stable path range (`file_path >= first AND file_path <= last`) instead of offset/limit
+  - Maintains backwards compatibility with legacy FILE_CHUNK format
+  - Files affected: `pixelprobe/services/scan_service.py`
+
+#### Updated Screenshots
+
+- Updated `docs/screenshots/features/scan-schedules.png` with working Font Awesome icons
+
+---
+
 ## [2.5.28] - 2025-12-21
 
 ### Bug Fixes
