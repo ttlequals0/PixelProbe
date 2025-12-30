@@ -125,6 +125,9 @@ class PixelProbe:
         self._db_engine = None
         self._db_session_factory = None
         self._init_database_connection()
+        # Track failed save operations for debugging
+        self.failed_saves = 0
+        self.successful_saves = 0
         
     def _init_database_connection(self):
         """Initialize database connection for thread-local instances"""
@@ -2154,11 +2157,14 @@ class PixelProbe:
             session.commit()
 
             # Only log success AFTER commit succeeds
+            self.successful_saves += 1
             logger.info(f"Successfully saved scan result for {file_path}")
         except Exception as e:
             import traceback
+            self.failed_saves += 1
             logger.error(f"Error saving to cache for {file_path}: {e}")
             logger.error(f"Full traceback: {traceback.format_exc()}")
+            logger.error(f"Failed saves so far: {self.failed_saves}")
             if session:
                 try:
                     session.rollback()
@@ -2170,7 +2176,19 @@ class PixelProbe:
                     session.close()
                 except Exception as close_error:
                     logger.error(f"Error closing session: {close_error}")
-    
+
+    def get_save_stats(self):
+        """Get statistics about successful and failed database saves"""
+        return {
+            'successful_saves': self.successful_saves,
+            'failed_saves': self.failed_saves
+        }
+
+    def reset_save_stats(self):
+        """Reset save statistics counters"""
+        self.successful_saves = 0
+        self.failed_saves = 0
+
     def _check_ignored_patterns(self, error_output):
         """Check if error output contains any ignored patterns"""
         if not self.database_path or not error_output:

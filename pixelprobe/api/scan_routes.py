@@ -497,11 +497,10 @@ def scan():
 
             # Use source as scan_id for scheduled scans, otherwise generate UUID
             # This allows healthcheck completion pings to identify scheduled scans
-            # Add timestamp to make each scheduled scan unique - prevents Celery from
-            # skipping new scans thinking they're retries of completed scans
+            # The scheduler already adds a unique timestamp to the source
+            # (format: scheduled_{schedule_id}_{YYYYMMDD_HHMMSS})
             if source and source.startswith('scheduled_'):
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                scan_id = f"{source}_{timestamp}"
+                scan_id = source  # Already has unique timestamp from scheduler
                 logger.info(f"Using scheduled scan source as scan_id: {scan_id}")
             else:
                 scan_id = str(uuid4())

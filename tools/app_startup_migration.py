@@ -10,6 +10,49 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 logger = logging.getLogger(__name__)
 
 
+def run_scan_id_column_widening(db):
+    """
+    Widen scan_id columns from VARCHAR(36) to VARCHAR(64) (v2.5.47)
+    This allows scheduled scan IDs which include timestamps in format:
+    scheduled_{schedule_id}_{YYYYMMDD_HHMMSS} (up to ~35 chars)
+    """
+    column_changes = [
+        ('scan_state', 'scan_id', 64),
+        ('scan_chunks', 'scan_id', 64),
+        ('cleanup_state', 'scan_id', 64),
+    ]
+
+    try:
+        with db.engine.begin() as conn:
+            for table_name, column_name, new_size in column_changes:
+                try:
+                    # Check current column size (PostgreSQL-specific)
+                    result = conn.execute(text(f"""
+                        SELECT character_maximum_length
+                        FROM information_schema.columns
+                        WHERE table_name = '{table_name}'
+                        AND column_name = '{column_name}'
+                    """))
+                    row = result.fetchone()
+
+                    if row and row[0] and row[0] < new_size:
+                        conn.execute(text(f"""
+                            ALTER TABLE {table_name}
+                            ALTER COLUMN {column_name} TYPE VARCHAR({new_size})
+                        """))
+                        logger.info(f"Widened {table_name}.{column_name} to VARCHAR({new_size})")
+                    else:
+                        logger.debug(f"{table_name}.{column_name} already wide enough or not found")
+                except Exception as e:
+                    # Don't fail startup for column widening errors
+                    logger.warning(f"Could not widen {table_name}.{column_name}: {e}")
+
+        logger.info("Column widening completed successfully")
+    except Exception as e:
+        logger.warning(f"Error during column widening: {e}")
+        # Don't fail startup for column widening errors
+
+
 def run_index_optimizations(db):
     """
     Drop duplicate indexes and add composite indexes (v2.4.160 P0/P1 optimizations)
@@ -184,6 +227,10 @@ def run_startup_migrations(db):
         except Exception as e:
             # Some other error - log it but continue
             logger.warning(f"Error checking {migration['table']}: {e}")
+
+    # Widen scan_id columns from VARCHAR(36) to VARCHAR(64) (v2.5.47)
+    # This allows scheduled scan IDs which include timestamps
+    run_scan_id_column_widening(db)
 
     # Run index optimizations (v2.4.160 - P0/P1 audit fixes)
     run_index_optimizations(db)

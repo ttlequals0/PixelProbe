@@ -144,7 +144,18 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       FLASK_ENV: ${FLASK_ENV:-production}
       MAX_WORKERS: ${MAX_WORKERS:-10}  # Parallel file scanning workers per task
-      
+
+      # Scan configuration (required for scheduler)
+      SCAN_PATHS: ${SCAN_PATHS:-/media}
+      EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
+      EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
+
+      # Scheduled scans (scheduler runs in celery-worker)
+      PERIODIC_SCAN_SCHEDULE: ${PERIODIC_SCAN_SCHEDULE:-}
+      CLEANUP_SCHEDULE: ${CLEANUP_SCHEDULE:-}
+
+      TZ: America/New_York
+
     volumes:
       # Media files access (read-only for scanning)
       - ${MEDIA_PATH:-./media}:/media:ro

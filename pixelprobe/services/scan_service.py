@@ -1325,8 +1325,11 @@ class ScanService:
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
         else:
+            # Retry any files that are still pending before marking complete
+            remaining_pending = self._retry_pending_files(checker, force_rescan)
+
             self.update_progress(total_files_scanned, total_files_to_scan, '', 'completed')
-            
+
             # Thread-safe completion using direct SQL update
             from sqlalchemy import text
             db.session.execute(
@@ -1334,17 +1337,19 @@ class ScanService:
                 {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
             )
             db.session.commit()
-            
+
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
                 scan_type = 'rescan' if force_rescan else 'full_scan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
-                
+
                 logger.info(f"=== SCAN COMPLETED (SEQUENTIAL) ===")
                 logger.info(f"Scan ID: {scan_state_id}")
                 logger.info(f"Total chunks processed: {total_chunks}")
                 logger.info(f"Files scanned: {total_files_scanned}/{total_files_to_scan}")
+                if remaining_pending > 0:
+                    logger.warning(f"Files still pending after retries: {remaining_pending}")
                 logger.info(f"=== END SCAN ===")
     
     def _sequential_scan(self, checker: PixelProbe, files: List[str], 
@@ -1399,8 +1404,11 @@ class ScanService:
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
         else:
+            # Retry any files that are still pending before marking complete
+            remaining_pending = self._retry_pending_files(checker, force_rescan)
+
             self.update_progress(total_files, total_files, '', 'completed')
-            
+
             # Thread-safe completion using direct SQL update
             # Use scan_state_id which is accessible in this closure
             from sqlalchemy import text
@@ -1409,7 +1417,7 @@ class ScanService:
                 {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
             )
             db.session.commit()
-            
+
             # Create scan report
             # Re-fetch scan state to get updated values
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
@@ -1420,7 +1428,14 @@ class ScanService:
                 else:
                     scan_type = 'full_scan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
-    
+
+                logger.info(f"=== SCAN COMPLETED (SEQUENTIAL DIRECT) ===")
+                logger.info(f"Scan ID: {scan_state_id}")
+                logger.info(f"Files scanned: {total_files}")
+                if remaining_pending > 0:
+                    logger.warning(f"Files still pending after retries: {remaining_pending}")
+                logger.info(f"=== END SCAN ===")
+
     def _parallel_scan_chunks(self, checker: PixelProbe, chunks: List[ScanChunk],
                              force_rescan: bool, num_workers: int, scan_state: ScanState, scan_state_id: int):
         """Perform parallel scan of chunks"""
@@ -1614,11 +1629,14 @@ class ScanService:
             if update_scan_progress_redis and scan_id:
                 update_scan_progress_redis(scan_id, total_files_scanned, total_files_to_scan, 'cancelled', '')
         else:
+            # Retry any files that are still pending before marking complete
+            remaining_pending = self._retry_pending_files(checker, force_rescan)
+
             self.update_progress(total_files_scanned, total_files_to_scan, '', 'completed')
             # Update Redis to signal completion
             if update_scan_progress_redis and scan_id:
                 update_scan_progress_redis(scan_id, total_files_scanned, total_files_to_scan, 'completed', '')
-            
+
             # Thread-safe completion using direct SQL update
             from sqlalchemy import text
             db.session.execute(
@@ -1626,18 +1644,20 @@ class ScanService:
                 {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
             )
             db.session.commit()
-            
+
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
                 scan_type = 'rescan' if force_rescan else 'full_scan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
-                
+
                 logger.info(f"=== SCAN COMPLETED (PARALLEL) ===")
                 logger.info(f"Scan ID: {scan_state_id}")
                 logger.info(f"Total chunks processed: {completed_chunks}")
                 logger.info(f"Files scanned: {total_files_scanned}/{total_files_to_scan}")
                 logger.info(f"Workers used: {num_workers}")
+                if remaining_pending > 0:
+                    logger.warning(f"Files still pending after retries: {remaining_pending}")
                 logger.info(f"=== END SCAN ===")
     
     def _parallel_scan(self, checker: PixelProbe, files: List[str],
@@ -1708,13 +1728,16 @@ class ScanService:
                 # Log progress every 10 files for UI debugging
                 if completed % 10 == 0:
                     logger.info(f"Parallel scan progress: {completed}/{total_files} files processed")
-        
+
         # Complete scan
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
         else:
+            # Retry any files that are still pending before marking complete
+            remaining_pending = self._retry_pending_files(checker, force_rescan)
+
             self.update_progress(total_files, total_files, '', 'completed')
-            
+
             # Thread-safe completion using direct SQL update
             # Use scan_state_id which is accessible in this closure
             from sqlalchemy import text
@@ -1723,7 +1746,7 @@ class ScanService:
                 {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
             )
             db.session.commit()
-            
+
             # Create scan report
             # Re-fetch scan state to get updated values
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
@@ -1734,21 +1757,34 @@ class ScanService:
                 else:
                     scan_type = 'full_scan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
-    
+
+                logger.info(f"=== SCAN COMPLETED (PARALLEL DIRECT) ===")
+                logger.info(f"Scan ID: {scan_state_id}")
+                logger.info(f"Files scanned: {total_files}")
+                if remaining_pending > 0:
+                    logger.warning(f"Files still pending after retries: {remaining_pending}")
+                logger.info(f"=== END SCAN ===")
+
     def _create_scan_report(self, scan_state: ScanState, scan_type: str = 'full_scan'):
         """Create a scan report from the completed scan state"""
         try:
             # Get statistics from the database
             from sqlalchemy import func
-            
-            # Count files by status
+
+            # Count files by status (including pending for verification)
             stats = db.session.query(
                 func.count(ScanResult.id).label('total'),
                 func.sum(db.case((ScanResult.is_corrupted == True, 1), else_=0)).label('corrupted'),
                 func.sum(db.case((ScanResult.has_warnings == True, 1), else_=0)).label('warnings'),
                 func.sum(db.case((ScanResult.scan_status == 'error', 1), else_=0)).label('errors'),
-                func.sum(db.case((ScanResult.scan_status == 'completed', 1), else_=0)).label('completed')
+                func.sum(db.case((ScanResult.scan_status == 'completed', 1), else_=0)).label('completed'),
+                func.sum(db.case((ScanResult.scan_status == 'pending', 1), else_=0)).label('pending')
             ).first()
+
+            # Log pending file count for visibility
+            pending_count = stats.pending or 0
+            if pending_count > 0:
+                logger.warning(f"Scan report: {pending_count} files still in 'pending' status after scan completion")
             
             # Calculate duration - handle both timezone-aware and naive datetimes
             duration = None
@@ -1802,7 +1838,78 @@ class ScanService:
 
         except Exception as e:
             logger.error(f"Failed to create scan report: {e}")
-    
+
+    def _retry_pending_files(self, checker: PixelProbe, force_rescan: bool) -> int:
+        """Retry scanning files that are still in 'pending' status.
+
+        This ensures all files get processed in the current scan run before
+        marking the scan as complete.
+
+        Args:
+            checker: PixelProbe instance to use for scanning
+            force_rescan: Whether to force rescan
+
+        Returns:
+            int: Number of files that remain pending after retries
+        """
+        from models import ScanResult
+
+        max_retries = 2
+
+        # Check for pending files
+        pending_files = db.session.query(ScanResult).filter(
+            ScanResult.scan_status == 'pending'
+        ).all()
+
+        if not pending_files:
+            return 0
+
+        initial_pending = len(pending_files)
+        logger.warning(f"Found {initial_pending} files still pending after initial scan pass - starting retry")
+
+        for retry in range(max_retries):
+            pending_count = len(pending_files)
+            logger.info(f"Retry {retry + 1}/{max_retries}: Re-scanning {pending_count} pending files")
+
+            files_retried = 0
+            for pending_file in pending_files:
+                try:
+                    # Check if file still exists before retrying
+                    if not os.path.exists(pending_file.file_path):
+                        logger.warning(f"Pending file no longer exists, marking as missing: {pending_file.file_path}")
+                        pending_file.scan_status = 'error'
+                        pending_file.scan_output = 'File not found during retry'
+                        pending_file.file_exists = False
+                        continue
+
+                    checker.scan_file(pending_file.file_path, force_rescan=True)
+                    files_retried += 1
+                except Exception as e:
+                    logger.error(f"Retry failed for {pending_file.file_path}: {e}")
+
+            db.session.commit()
+            logger.info(f"Retry {retry + 1}: Attempted to rescan {files_retried} files")
+
+            # Re-check for pending files
+            pending_files = db.session.query(ScanResult).filter(
+                ScanResult.scan_status == 'pending'
+            ).all()
+
+            if not pending_files:
+                logger.info(f"All pending files successfully scanned on retry {retry + 1}")
+                return 0
+
+        remaining = len(pending_files)
+        if remaining > 0:
+            # Log details of files that couldn't be processed
+            logger.error(f"CRITICAL: {remaining} files still pending after {max_retries} retries")
+            for pf in pending_files[:10]:  # Log first 10 for debugging
+                logger.error(f"  Still pending: {pf.file_path}")
+            if remaining > 10:
+                logger.error(f"  ... and {remaining - 10} more")
+
+        return remaining
+
     def _handle_scan_cancellation(self, scan_state: ScanState):
         """Handle scan cancellation"""
         logger.info(f"=== SCAN CANCELLATION INITIATED ===")
@@ -2859,8 +2966,11 @@ class ScanService:
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
         else:
+            # Retry any files that are still pending before marking complete
+            remaining_pending = self._retry_pending_files(checker, force_rescan)
+
             self.update_progress(len(selected_files), len(selected_files), '', 'completed')
-            
+
             # Thread-safe completion
             from sqlalchemy import text
             db.session.execute(
@@ -2868,13 +2978,20 @@ class ScanService:
                 {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
             )
             db.session.commit()
-            
+
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
                 scan_type = 'rescan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
-    
+
+            logger.info(f"=== SCAN COMPLETED (SEQUENTIAL SELECTED CHUNKS) ===")
+            logger.info(f"Scan ID: {scan_state_id}")
+            logger.info(f"Files scanned: {len(selected_files)}")
+            if remaining_pending > 0:
+                logger.warning(f"Files still pending after retries: {remaining_pending}")
+            logger.info(f"=== END SCAN ===")
+
     def _parallel_scan_selected_chunks(self, checker: PixelProbe, chunks: List[ScanChunk],
                                      selected_files: List[str], force_rescan: bool, num_workers: int,
                                      scan_state: ScanState, scan_state_id: int):
@@ -2973,8 +3090,11 @@ class ScanService:
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
         else:
+            # Retry any files that are still pending before marking complete
+            remaining_pending = self._retry_pending_files(checker, force_rescan)
+
             self.update_progress(len(selected_files), len(selected_files), '', 'completed')
-            
+
             # Thread-safe completion
             from sqlalchemy import text
             db.session.execute(
@@ -2982,9 +3102,16 @@ class ScanService:
                 {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
             )
             db.session.commit()
-            
+
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
                 scan_type = 'rescan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
+
+            logger.info(f"=== SCAN COMPLETED (PARALLEL SELECTED CHUNKS) ===")
+            logger.info(f"Scan ID: {scan_state_id}")
+            logger.info(f"Files scanned: {len(selected_files)}")
+            if remaining_pending > 0:
+                logger.warning(f"Files still pending after retries: {remaining_pending}")
+            logger.info(f"=== END SCAN ===")

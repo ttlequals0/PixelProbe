@@ -343,7 +343,7 @@ class ScanState(db.Model):
     __tablename__ = 'scan_state'
     
     id = db.Column(db.Integer, primary_key=True)
-    scan_id = db.Column(db.String(36), nullable=False, unique=True, default=lambda: str(uuid.uuid4()))
+    scan_id = db.Column(db.String(64), nullable=False, unique=True, default=lambda: str(uuid.uuid4()))
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     phase = db.Column(db.String(20), nullable=False, default='idle')  # idle, discovering, adding, scanning, completed
     phase_number = db.Column(db.Integer, nullable=False, default=0)
@@ -682,7 +682,7 @@ class ScanChunk(db.Model):
     __tablename__ = 'scan_chunks'
     
     id = db.Column(db.Integer, primary_key=True)
-    scan_id = db.Column(db.String(36), nullable=False, index=True)
+    scan_id = db.Column(db.String(64), nullable=False, index=True)
     chunk_id = db.Column(db.String(100), nullable=False, index=True)  # Removed unique constraint
     directory_path = db.Column(db.String(500), nullable=False)
     phase = db.Column(db.String(20), nullable=False, default='scanning')  # discovering, adding, scanning
@@ -763,7 +763,7 @@ class ScanReport(db.Model):
     error_message = db.Column(db.Text, nullable=True)
     
     # Additional metadata
-    scan_id = db.Column(db.String(36), nullable=True)  # Link to ScanState scan_id
+    scan_id = db.Column(db.String(64), nullable=True)  # Link to ScanState scan_id
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     
     def to_dict(self):

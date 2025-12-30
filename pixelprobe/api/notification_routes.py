@@ -6,6 +6,7 @@ P3 audit fix: Add API endpoints for notification provider management
 from flask import Blueprint, request, jsonify
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 from models import db, NotificationProvider, NotificationRule
 from auth import auth_required
@@ -426,7 +427,7 @@ def delete_rule(rule_id):
 
 # ==================== Helper Functions ====================
 
-def _validate_provider_config(provider_type: str, config: dict) -> str | None:
+def _validate_provider_config(provider_type: str, config: dict) -> Optional[str]:
     """Validate provider-specific configuration
 
     Args:

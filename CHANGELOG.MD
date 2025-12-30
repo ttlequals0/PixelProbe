@@ -5,6 +5,307 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.50] - 2025-12-29
+
+### Bug Fixes
+
+- **Fix scheduler not starting after container restart**: Stale Redis lock prevented scheduler from starting
+  - When container is killed with SIGKILL, Redis scheduler lock is not released
+  - If container restarts within 60s TTL, it sees its own stale lock and skips starting scheduler
+  - Added hostname to lock value format (`hostname:pid:timestamp`) to detect self-locks
+  - Container restart now force-acquires its own stale lock immediately
+  - Maintains backward compatibility with old lock format (`pid:timestamp`)
+  - Files affected: `app.py`
+
+---
+
+## [2.5.49] - 2025-12-28
+
+### Bug Fixes
+
+- **Fix CSP blocking Chart.js source maps**: Added cdn.jsdelivr.net to connect-src directive
+  - Browser was blocking requests to fetch Chart.js source maps from CDN
+  - CSP connect-src only allowed 'self', now includes https://cdn.jsdelivr.net
+  - Files affected: `app.py`
+
+---
+
+## [2.5.48] - 2025-12-28
+
+### Bug Fixes
+
+- **Fix Python 3.9 compatibility**: Type annotation `str | None` not supported in Python 3.9
+  - GitHub Actions runs tests on Python 3.9, which doesn't support PEP 604 union types
+  - Changed `-> str | None` to `-> Optional[str]` in notification_routes.py
+  - Added `from typing import Optional` import
+  - Files affected: `pixelprobe/api/notification_routes.py`
+
+---
+
+## [2.5.47] - 2025-12-28
+
+### Bug Fixes
+
+- **Widen scan_id columns to VARCHAR(64)**: Old queued tasks with 47-char scan_ids were stuck in retry
+  - v2.5.46 fixed new scans but old tasks in Celery queue still had long scan_ids
+  - Widened scan_id columns in scan_state, scan_chunks, cleanup_state from 36 to 64 chars
+  - Added automatic database migration on startup to widen existing columns
+  - This allows old stuck tasks to complete and unblock the scheduler
+  - Files affected: `models.py`, `tools/app_startup_migration.py`
+
+---
+
+## [2.5.46] - 2025-12-28
+
+### Bug Fixes
+
+- **Fix scheduled scan failing with DataError**: scan_id exceeded VARCHAR(36) column limit
+  - Scheduler adds timestamp: `scheduled_{id}_{YYYYMMDD_HHMMSS}` (28 chars)
+  - scan_routes.py was adding ANOTHER timestamp, making it 47 chars
+  - Database column `scan_state.scan_id` is VARCHAR(36)
+  - **Solution**: Removed duplicate timestamp from scan_routes.py
+  - Scheduler's timestamp is already unique per scheduled run
+  - Files affected: `pixelprobe/api/scan_routes.py`
+
+---
+
+## [2.5.45] - 2025-12-28
+
+### Bug Fixes
+
+- **Fix v2.5.44 syntax error**: Fixed `nonlocal` statement that caused app crash
+  - `nonlocal` only works for enclosing function scopes, not block-level scopes
+  - Changed `scheduler_initialized` to use mutable list `[False]` pattern
+  - Files affected: `app.py`
+
+---
+
+## [2.5.44] - 2025-12-28
+
+### Bug Fixes
+
+- **Fix scheduler not starting after container restart**: Scheduler lock has no retry mechanism
+  - When container restarts quickly (~23 seconds), the old Redis lock hasn't expired yet
+  - Lock check only happened ONCE at startup - no retry if acquisition failed
+  - Old lock would expire at 60s, but new celery-worker never rechecked
+  - Result: Scheduler never started, scheduled scans never ran
+  - **Solution**: Added background retry thread that checks for lock every 30 seconds
+  - Retries up to 10 times (~5 minutes) to acquire expired or stale locks
+  - Once acquired, starts normal heartbeat thread to maintain the lock
+  - Files affected: `app.py`
+
+---
+
+## [2.5.43] - 2025-12-28
+
+### Bug Fixes
+
+- **Fix startup race condition in sync_scan_paths_to_db()**: v2.5.41 crashed on startup
+  - Multiple gunicorn workers starting simultaneously caused duplicate key violations
+  - Changed from check-then-insert to PostgreSQL `INSERT ... ON CONFLICT DO NOTHING`
+  - This is an atomic operation that safely handles concurrent inserts
+  - Files affected: `app.py`
+
+- **Deploy scheduler API hostname fix**: Scheduled scans now work from celery-worker
+  - v2.5.42 fix for using `pixelprobe:5000` instead of `localhost:5000` is now deployed
+  - Celery-worker can now reach the main app to trigger scans
+
+---
+
+## [2.5.42] - 2025-12-28
+
+### Bug Fixes
+
+- **Fix scheduler API calls from celery-worker**: Scheduler couldn't reach main app API
+  - In Docker, celery-worker's `localhost:5000` doesn't reach the main pixelprobe container
+  - Added `_get_api_base_url()` method that detects Docker environment
+  - Uses `http://pixelprobe:5000` (Docker service name) instead of `localhost`
+  - Supports `API_BASE_URL` env var override for custom configurations
+  - Files affected: `scheduler.py`
+
+---
+
+## [2.5.41] - 2025-12-28
+
+### Bug Fixes
+
+- **Sync SCAN_PATHS to database**: Fixed scheduler not being able to read scan paths in celery-worker
+  - Main app now syncs SCAN_PATHS from environment to `scan_configurations` database table on startup
+  - Scheduler reads paths from database instead of environment variable
+  - This allows celery-worker to access paths via shared database without needing env var
+  - Fallback to env var if database is empty (backwards compatibility)
+  - Files affected: `app.py`, `scheduler.py`
+
+---
+
+## [2.5.40] - 2025-12-28
+
+### Bug Fixes
+
+- **Missing SCAN_PATHS in celery-worker**: Fixed docker-compose.yml missing scan-related environment variables for celery-worker container
+  - When scheduler was moved to celery-worker in v2.5.28, the SCAN_PATHS env var was never added
+  - Added SCAN_PATHS, EXCLUDED_PATHS, EXCLUDED_EXTENSIONS, PERIODIC_SCAN_SCHEDULE, CLEANUP_SCHEDULE, and TZ to celery-worker
+  - **IMPORTANT**: Users must also add SCAN_PATHS to their production celery-worker container (Portainer/Docker Compose)
+  - Files affected: `docker-compose.yml`
+
+---
+
+## [2.5.39] - 2025-12-28
+
+### Improvements
+
+- **Stale Scheduler Lock Detection**: Added automatic takeover of stale scheduler locks
+  - When celery-worker starts and lock acquisition fails, checks if lock timestamp is >65s old
+  - If lock is stale (heartbeat stopped), forces acquisition and initializes scheduler
+  - Prevents scheduler from being stuck when old worker dies without releasing lock
+  - Logs lock age for debugging: "lock held by: X, age=Ys"
+  - Files affected: `app.py`
+
+---
+
+## [2.5.38] - 2025-12-28
+
+### Bug Fixes
+
+- **Restore v2.5.19 Scheduled Scan Logic**: Fixed all regressions introduced in v2.5.32
+  - Added empty SCAN_PATHS validation with proper error logging
+  - Added empty filtered_paths validation after exclusion filtering
+  - Restored timestamp in scan_id (`scheduled_{id}_{timestamp}`) to prevent false "already completed" detection
+  - Updated schedule_id parsing for healthcheck to handle timestamp format
+  - Root cause: v2.5.32 accidentally reverted fixes from v2.5.19 while trying to fix SQLAlchemy session issues
+  - Files affected: `scheduler.py`
+
+---
+
+## [2.5.37] - 2025-12-28
+
+### Improvements
+
+- **SCAN_PATHS Fallback Debug Logging**: Added logging to diagnose why scheduled scans with empty paths aren't falling back to SCAN_PATHS env var
+  - Logs the raw `scan_paths` value from database
+  - Logs the SCAN_PATHS env var value when fallback is triggered
+  - Files affected: `scheduler.py`
+
+---
+
+## [2.5.36] - 2025-12-28
+
+### Improvements
+
+- **Schedule Debug Logging**: Added detailed logging to show all schedules in database during scheduler startup
+  - Logs total count of schedules in database
+  - Lists each schedule with name, id, is_active status, and cron expression
+  - Helps diagnose why specific schedules may not be loading
+  - Files affected: `scheduler.py`
+
+---
+
+## [2.5.35] - 2025-12-28
+
+### Bug Fixes
+
+#### Fixed
+
+- **Schedule Updates Not Reaching Celery Worker**: Fixed schedule changes in UI not being applied
+  - Root cause: v2.5.33/34 moved scheduler to celery worker, but `scheduler.update_schedules()` was called from gunicorn (Flask) where scheduler doesn't run
+  - The scheduler silently skipped updates since `scheduler.running = False` in gunicorn
+  - Fix: Created `reload_schedules_task` Celery task to trigger schedule reload in the worker
+  - Now when schedules are created/updated/deleted via UI, a Celery task notifies the worker to reload
+  - Files affected: `pixelprobe/tasks.py`, `pixelprobe/api/admin_routes.py`
+
+---
+
+## [2.5.34] - 2025-12-28
+
+### Bug Fixes
+
+#### Fixed
+
+- **HOTFIX: v2.5.33 Missing Import**: Fixed app crash on startup due to missing `import sys`
+  - v2.5.33 added code using `sys.argv` but forgot to import the `sys` module
+  - Files affected: `app.py`
+
+---
+
+## [2.5.33] - 2025-12-28
+
+### Bug Fixes
+
+#### Fixed
+
+- **Scheduler Not Running After Container Restart**: Fixed scheduled scans not executing after container restart
+  - Root cause: v2.5.28 removed unconditional Redis lock deletion, which unintentionally allowed gunicorn workers to acquire the scheduler lock before the Celery worker
+  - Gunicorn's pre-fork model is incompatible with APScheduler's background threads
+  - Fix: Only allow Celery worker to attempt scheduler lock acquisition
+  - Added check for `celery` in `sys.argv[0]` to detect Celery worker context
+  - Non-Celery processes (gunicorn workers) now skip scheduler initialization entirely
+  - This restores all scheduled tasks: periodic scans, cleanup scans, stuck scan checker, and user-defined schedules
+  - Files affected: `app.py`
+
+---
+
+## [2.5.32] - 2025-12-27
+
+### Bug Fixes
+
+#### Fixed
+
+- **Scheduled Scans Running with Empty Paths**: Fixed scheduled scans not scanning any files after container restart
+  - Root cause: SQLAlchemy session expiry after `db.session.commit()` in scheduler
+  - After commits (healthcheck ping update, last_run update), the schedule object expires
+  - When `schedule.scan_paths` was accessed after commit, lazy-loading failed in celery worker context
+  - Fix: Cache `scan_paths`, `scan_type`, and `schedule.name` immediately after loading, before any commits
+  - This issue manifested when the scheduler ran in the celery worker instead of the Flask app
+  - Files affected: `scheduler.py`
+
+---
+
+## [2.5.31] - 2025-12-26
+
+### Bug Fixes
+
+#### Fixed
+
+- **Pending Files Fix Incomplete in v2.5.30**: The retry mechanism was only added to 2 of 6 scan completion paths
+  - Root cause: v2.5.30 added `_retry_pending_files()` to chunk-based scan paths but missed direct file scan paths
+  - Fixed scan paths now include:
+    - `_sequential_scan` - used for small file lists in sequential mode
+    - `_parallel_scan` - used for small file lists in parallel mode
+    - `_sequential_scan_selected_chunks` - used for selected file scans in sequential mode
+    - `_parallel_scan_selected_chunks` - used for selected file scans in parallel mode
+  - Added enhanced logging with scan method identifiers (e.g., "PARALLEL DIRECT", "SEQUENTIAL SELECTED CHUNKS")
+  - Warning logged if any files remain pending after retries
+  - Files affected: `pixelprobe/services/scan_service.py`
+
+---
+
+## [2.5.30] - 2025-12-24
+
+### Bug Fixes
+
+#### Fixed
+
+- **Pending Files Not Processed During Scan**: Fixed scans completing with files left in 'pending' status
+  - Root cause: Scan would iterate through files and mark as "complete" based on iteration count, not actual database saves
+  - Added retry mechanism at scan completion to re-scan any files still in 'pending' status (up to 2 retries)
+  - Ensures all files are processed before marking scan as complete
+  - Added verification warning in logs if any files remain pending after retries
+  - Affects both sequential and parallel scan completion paths
+  - Files affected: `pixelprobe/services/scan_service.py`
+
+- **Silent Database Save Failures**: Added tracking for failed database saves during scanning
+  - Added `failed_saves` and `successful_saves` counters to PixelProbe class
+  - Logs cumulative failed save count for debugging
+  - Added `get_save_stats()` and `reset_save_stats()` methods for monitoring
+  - Files affected: `media_checker.py`
+
+#### Added
+
+- Pending file count now included in scan report statistics query
+- Warning logged when files remain in 'pending' status after scan completion
+
+---
+
 ## [2.5.29] - 2025-12-21
 
 ### Bug Fixes
