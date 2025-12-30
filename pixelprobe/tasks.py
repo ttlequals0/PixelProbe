@@ -1004,3 +1004,32 @@ def run_retention_cleanup(self):
             # Max retries exceeded
             logger.error(f"Retention cleanup task {self.request.id} failed permanently after {self.max_retries} retries")
             raise exc
+
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=5)
+def reload_schedules_task(self):
+    """
+    Reload schedules from database into the running scheduler.
+
+    This task runs in the Celery worker where the scheduler is active,
+    allowing Flask/gunicorn to trigger schedule reloads via Celery message queue.
+
+    Called when schedules are created, updated, or deleted via the admin API.
+    """
+    try:
+        from app import scheduler
+
+        if scheduler and scheduler.scheduler.running:
+            logger.info("Reloading schedules from database via Celery task")
+            scheduler.update_schedules()
+            logger.info("Schedule reload completed successfully")
+            return {'status': 'success', 'message': 'Schedules reloaded'}
+        else:
+            logger.warning("Scheduler not running in this worker, cannot reload schedules")
+            return {'status': 'skipped', 'message': 'Scheduler not running in this worker'}
+
+    except Exception as exc:
+        logger.error(f"Failed to reload schedules: {exc}")
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
+        raise

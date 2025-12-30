@@ -22,9 +22,29 @@ class MediaScheduler:
         self.cleanup_lock = threading.Lock()
         self.excluded_paths = []
         self.excluded_extensions = []
-        
+
         # Load exclusions from environment
         self._load_exclusions()
+
+    def _get_api_base_url(self):
+        """
+        Get the base URL for API calls.
+        In Docker, celery-worker needs to call the main app via service name.
+        """
+        # Allow explicit override via environment
+        api_url = os.environ.get('API_BASE_URL')
+        if api_url:
+            return api_url
+
+        port = self.app.config.get('PORT', os.environ.get('PORT', 5000)) if self.app else 5000
+
+        # Check if we're in Docker by looking for common indicators
+        # In Docker, localhost won't reach the main app - use service name
+        if os.path.exists('/.dockerenv') or os.environ.get('CELERY_BROKER_URL'):
+            # Use Docker service name (from docker-compose)
+            return f'http://pixelprobe:{port}'
+
+        return f'http://localhost:{port}'
         
     def init_app(self, app):
         self.app = app
@@ -133,7 +153,14 @@ class MediaScheduler:
     def _load_saved_schedules(self):
         """Load and activate saved schedules from database"""
         try:
+            # Debug: log all schedules in database before filtering
+            all_schedules = ScanSchedule.query.all()
+            logger.info(f"Total schedules in database: {len(all_schedules)}")
+            for s in all_schedules:
+                logger.info(f"  Schedule '{s.name}' (id={s.id}): is_active={s.is_active}, cron={s.cron_expression}")
+
             schedules = ScanSchedule.query.filter_by(is_active=True).all()
+            logger.info(f"Active schedules to load: {len(schedules)}")
             
             # Deduplicate schedules by cron_expression and scan_paths
             seen_schedules = {}
@@ -237,8 +264,17 @@ class MediaScheduler:
                 if scan_state.is_active and scan_state.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
                     logger.warning(f"Periodic scan skipped - another scan is already running (phase: {scan_state.phase})")
                     return
-                scan_paths_env = os.environ.get('SCAN_PATHS', '')
-                scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
+
+                # Read SCAN_PATHS from database (synced from env on main app startup)
+                from models import ScanConfiguration
+                scan_configs = ScanConfiguration.query.filter_by(is_active=True).all()
+                scan_paths = [config.path for config in scan_configs if config.path]
+
+                if not scan_paths:
+                    # Fallback to environment variable if DB is empty
+                    scan_paths_env = os.environ.get('SCAN_PATHS', '')
+                    scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
+
                 logger.info(f"Starting periodic scan of paths: {scan_paths}")
                 
                 # Filter out excluded paths
@@ -253,9 +289,7 @@ class MediaScheduler:
                     return
                     
                 # Use HTTP self-call to trigger scan
-                # Get the correct port from app config or environment
-                port = self.app.config.get('PORT', os.environ.get('PORT', 5000))
-                base_url = f'http://localhost:{port}'
+                base_url = self._get_api_base_url()
                 
                 # Add internal request header
                 headers = {
@@ -309,6 +343,12 @@ class MediaScheduler:
                 if not schedule or not schedule.is_active:
                     return
 
+                # Cache schedule attributes BEFORE any commits
+                # SQLAlchemy expires objects after commit(), and lazy-loading can fail
+                # in the celery worker context, returning None for these attributes
+                cached_scan_type = getattr(schedule, 'scan_type', 'normal')
+                cached_schedule_name = schedule.name
+
                 # Check for healthcheck configuration and send start ping
                 healthcheck_config = HealthcheckConfig.query.filter_by(schedule_id=schedule_id).first()
                 if healthcheck_config and healthcheck_config.is_active and healthcheck_config.send_start_ping:
@@ -337,30 +377,43 @@ class MediaScheduler:
                         break
                 
                 db.session.commit()
-                
-                # Parse scan paths
-                scan_paths = json.loads(schedule.scan_paths) if schedule.scan_paths else []
+
+                # Read SCAN_PATHS from database (synced from env on main app startup)
+                # This allows celery-worker to access paths without needing env var
+                from models import ScanConfiguration
+                scan_configs = ScanConfiguration.query.filter_by(is_active=True).all()
+                scan_paths = [config.path for config in scan_configs if config.path]
+
                 if not scan_paths:
+                    # Fallback to environment variable if DB is empty (for backwards compat)
                     scan_paths_env = os.environ.get('SCAN_PATHS', '')
                     scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
-                
-                # Get scan type (default to 'normal' for backward compatibility)
-                scan_type = getattr(schedule, 'scan_type', 'normal')
-                    
-                logger.info(f"Running scheduled scan '{schedule.name}' (type: {scan_type}) on paths: {scan_paths}")
-                
+
+                if not scan_paths:
+                    logger.error(f"Scheduled scan {schedule_id}: No scan paths configured in database or SCAN_PATHS env var!")
+                    return
+
+                # Use cached scan_type
+                scan_type = cached_scan_type
+
+                logger.info(f"Running scheduled scan '{cached_schedule_name}' (type: {scan_type}) on paths: {scan_paths}")
+
                 # Filter out excluded paths
                 filtered_paths = []
                 for path in scan_paths:
                     path = path.strip()
                     if not any(path.startswith(exc) for exc in self.excluded_paths):
                         filtered_paths.append(path)
-                        
+
+                # Validate we have paths to scan after filtering
+                if not filtered_paths:
+                    logger.error(f"Scheduled scan {schedule_id} has no valid paths after filtering. "
+                                 f"SCAN_PATHS={scan_paths}, excluded_paths={self.excluded_paths}")
+                    return
+
                 if filtered_paths:
                     # Use HTTP self-calls to trigger scans, avoiding Flask context issues
-                    # Get the correct port from app config or environment
-                    port = self.app.config.get('PORT', os.environ.get('PORT', 5000))
-                    base_url = f'http://localhost:{port}'
+                    base_url = self._get_api_base_url()
                     
                     # Add internal request header for identification
                     headers = {
@@ -383,11 +436,14 @@ class MediaScheduler:
                                                     timeout=60)
                         else:
                             # Default to normal scan with proper payload
+                            # Use timestamp in scan_id to make each scheduled run unique
+                            # This prevents false "already completed" detection between runs
+                            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
                             payload = {
                                 'scan_type': 'full',
                                 'directories': filtered_paths,
                                 'force_rescan': schedule.force_rescan if hasattr(schedule, 'force_rescan') else False,
-                                'source': f'scheduled_{schedule_id}'
+                                'source': f'scheduled_{schedule_id}_{timestamp}'
                             }
                             response = requests.post(f'{base_url}/api/scan', 
                                                     json=payload,
@@ -418,10 +474,8 @@ class MediaScheduler:
         try:
             with self.app.app_context():
                 logger.info("Starting scheduled cleanup of orphaned records")
-                
-                # Get the correct port from app config or environment
-                port = self.app.config.get('PORT', os.environ.get('PORT', 5000))
-                base_url = f'http://localhost:{port}'
+
+                base_url = self._get_api_base_url()
                 
                 # Add internal request header
                 headers = {
@@ -642,11 +696,16 @@ class MediaScheduler:
                     return
 
                 # Try to find associated schedule by matching the scan source
-                # Scan reports from scheduled scans have scan_id like 'scheduled_123'
+                # Scan reports from scheduled scans have scan_id like 'scheduled_1_20251126_000000'
+                # (format: scheduled_{schedule_id}_{timestamp})
                 schedule_id = None
                 if scan_report.scan_id and scan_report.scan_id.startswith('scheduled_'):
                     try:
-                        schedule_id = int(scan_report.scan_id.split('_')[1])
+                        # Split on '_' and get the second element (index 1) which is the schedule ID
+                        # This works for both old format 'scheduled_1' and new 'scheduled_1_20251126_000000'
+                        parts = scan_report.scan_id.split('_')
+                        if len(parts) >= 2:
+                            schedule_id = int(parts[1])
                     except (IndexError, ValueError):
                         logger.debug(f"Could not extract schedule ID from scan_id: {scan_report.scan_id}")
 

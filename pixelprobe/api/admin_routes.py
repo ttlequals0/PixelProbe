@@ -319,10 +319,15 @@ def create_schedule():
         )
         db.session.add(schedule)
         db.session.commit()
-        
-        # Update scheduler
-        if scheduler:
-            scheduler.update_schedules()
+
+        # Trigger schedule reload in Celery worker (where scheduler runs)
+        # Import lazily to avoid circular import (tasks.py -> app.py -> admin_routes.py)
+        try:
+            from pixelprobe.tasks import reload_schedules_task
+            reload_schedules_task.delay()
+        except ImportError as e:
+            # May fail in test environment where Celery isn't fully initialized
+            logger.warning(f"Could not trigger schedule reload (Celery not available): {e}")
 
         return schedule.to_dict(), 201
     except Exception as e:
@@ -367,9 +372,12 @@ def update_schedule(schedule_id):
 
         db.session.commit()
 
-        # Update scheduler (will activate/deactivate jobs in the scheduler worker)
-        if scheduler:
-            scheduler.update_schedules()
+        # Trigger schedule reload in Celery worker (where scheduler runs)
+        try:
+            from pixelprobe.tasks import reload_schedules_task
+            reload_schedules_task.delay()
+        except ImportError as e:
+            logger.warning(f"Could not trigger schedule reload (Celery not available): {e}")
 
         return schedule.to_dict()
     except Exception as e:
@@ -387,11 +395,14 @@ def delete_schedule(schedule_id):
         # Actually delete the schedule from database instead of soft delete
         db.session.delete(schedule)
         db.session.commit()
-        
-        # Update scheduler to remove the job
-        if scheduler:
-            scheduler.update_schedules()
-        
+
+        # Trigger schedule reload in Celery worker (where scheduler runs)
+        try:
+            from pixelprobe.tasks import reload_schedules_task
+            reload_schedules_task.delay()
+        except ImportError as e:
+            logger.warning(f"Could not trigger schedule reload (Celery not available): {e}")
+
         return '', 204
     except Exception as e:
         logger.error(f"Error deleting schedule: {e}")
