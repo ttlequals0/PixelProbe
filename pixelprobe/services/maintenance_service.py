@@ -17,6 +17,70 @@ from utils import ProgressTracker
 
 logger = logging.getLogger(__name__)
 
+
+def safe_task_ready(task, max_retries=3, retry_delay=0.5):
+    """
+    Safely check if a Celery task is ready with retry logic for Redis connection errors.
+
+    Celery's task.ready() uses its internal Redis connection which can get reset.
+    This wrapper adds retry logic to handle transient connection failures.
+
+    Args:
+        task: Celery AsyncResult object
+        max_retries: Number of retry attempts
+        retry_delay: Delay between retries in seconds
+
+    Returns:
+        bool: True if task is ready, False if not ready or on persistent error
+    """
+    import redis
+
+    for attempt in range(max_retries):
+        try:
+            return task.ready()
+        except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Redis connection error checking task status (attempt {attempt + 1}/{max_retries}): {e}")
+                time.sleep(retry_delay)
+            else:
+                logger.error(f"Failed to check task status after {max_retries} attempts: {e}")
+                # Return False to keep task in active list and retry later
+                return False
+        except Exception as e:
+            logger.error(f"Unexpected error checking task status: {e}")
+            return False
+    return False
+
+
+def safe_task_get(task, timeout=1, max_retries=3, retry_delay=0.5):
+    """
+    Safely get a Celery task result with retry logic for Redis connection errors.
+
+    Args:
+        task: Celery AsyncResult object
+        timeout: Timeout for getting the result
+        max_retries: Number of retry attempts
+        retry_delay: Delay between retries in seconds
+
+    Returns:
+        Result dict or None on error
+    """
+    import redis
+
+    for attempt in range(max_retries):
+        try:
+            return task.get(timeout=timeout)
+        except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Redis connection error getting task result (attempt {attempt + 1}/{max_retries}): {e}")
+                time.sleep(retry_delay)
+            else:
+                logger.error(f"Failed to get task result after {max_retries} attempts: {e}")
+                raise
+        except Exception:
+            raise
+    return None
+
 class MaintenanceService:
     """Service for maintenance operations like cleanup and file monitoring"""
     
@@ -326,9 +390,9 @@ class MaintenanceService:
                 # Collect completed tasks and free up slots
                 still_active = []
                 for task in active_tasks:
-                    if task.ready():
+                    if safe_task_ready(task):
                         try:
-                            check_result = task.get(timeout=1)
+                            check_result = safe_task_get(task, timeout=1)
                             total_files_processed += 1
 
                             if not check_result.get('exists'):
@@ -717,9 +781,9 @@ class MaintenanceService:
                 still_active = []
                 for task_info in active_tasks:
                     task, file_size = task_info['task'], task_info['size']
-                    if task.ready():
+                    if safe_task_ready(task):
                         try:
-                            result = task.get(timeout=1)
+                            result = safe_task_get(task, timeout=1)
                             total_files_processed += 1
 
                             # Update last integrity check timestamp for this file

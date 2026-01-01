@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.53] - 2026-01-01
+
+### Bug Fixes
+
+- **Fix Celery task result Redis connection errors**: Integrity scan crashed when checking task results
+  - Root cause: Celery's `task.ready()` and `task.get()` use their own internal Redis connection, separate from our fixed Redis client
+  - When Celery's Redis connection gets reset, task result checking fails with `ConnectionResetError`
+  - Error message: `'Connection' object has no attribute 'register_connect_callback'`
+  - **Solution**: Added wrapper functions with retry logic for Celery task result operations
+    - `safe_task_ready()`: Safely check task status with 3 retries and 0.5s delay
+    - `safe_task_get()`: Safely get task result with 3 retries and 0.5s delay
+    - Both functions catch `redis.ConnectionError`, `redis.TimeoutError`, `ConnectionResetError`, and `AttributeError`
+    - On transient failure, retries before giving up
+  - Files affected: `pixelprobe/services/maintenance_service.py`
+
+---
+
 ## [2.5.52] - 2026-01-01
 
 ### Bug Fixes
