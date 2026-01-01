@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.52] - 2026-01-01
+
+### Bug Fixes
+
+- **Fix HEIC false positive corruption detection for iOS 18 files**: HEIC files from iOS 18 devices were incorrectly flagged as corrupted
+  - Root cause: Older libheif versions (Ubuntu 24.04 ships 1.17.x) don't support iOS 18's use of shared auxiliary images
+  - Error message: `"Too many auxiliary image references (2.0)"` from libheif/ImageMagick
+  - This is a valid HEIF structure per spec, not file corruption (see: github.com/strukturag/libheif/issues/1190)
+  - **Solution**: Detect libheif limitation errors and treat as warnings instead of corruption
+    - Added detection for "auxiliary image" and "too many auxiliary" errors in ImageMagick stderr
+    - Added detection for "cannot identify image file" errors on HEIC files in PIL
+    - Files with this error now show as warning "HEIC validation skipped: libheif version limitation"
+    - Files are no longer incorrectly marked as corrupted
+  - Note: Full iOS 18 HEIC support requires libheif 1.19.8+ (not yet available in Ubuntu repos)
+  - Files affected: `media_checker.py`
+
+---
+
 ## [2.5.51] - 2026-01-01
 
 ### Bug Fixes
