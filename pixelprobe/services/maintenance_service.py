@@ -18,64 +18,82 @@ from utils import ProgressTracker
 logger = logging.getLogger(__name__)
 
 
-def safe_task_ready(task, max_retries=3, retry_delay=0.5):
+def safe_task_ready(task, max_retries=5, base_delay=1.0):
     """
-    Safely check if a Celery task is ready with retry logic for Redis connection errors.
+    Safely check if a Celery task is ready with enhanced retry logic for Redis connection errors.
+
+    v2.5.54: Enhanced with exponential backoff and connection pool reset.
+    When Redis connection pool gets corrupted, all connections are bad.
+    This wrapper resets the pool on first failure and uses exponential backoff.
 
     Celery's task.ready() uses its internal Redis connection which can get reset.
     This wrapper adds retry logic to handle transient connection failures.
 
     Args:
         task: Celery AsyncResult object
-        max_retries: Number of retry attempts
-        retry_delay: Delay between retries in seconds
+        max_retries: Number of retry attempts (default 5 for longer recovery window)
+        base_delay: Base delay between retries in seconds (exponential backoff)
 
     Returns:
         bool: True if task is ready, False if not ready or on persistent error
     """
     import redis
+    from pixelprobe.progress_utils import reset_redis_pool
 
     for attempt in range(max_retries):
         try:
             return task.ready()
         except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
+            # Reset connection pool on first failure to get fresh connections
+            if attempt == 0:
+                reset_redis_pool()
+
             if attempt < max_retries - 1:
-                logger.warning(f"Redis connection error checking task status (attempt {attempt + 1}/{max_retries}): {e}")
-                time.sleep(retry_delay)
+                delay = base_delay * (attempt + 1)  # Exponential backoff: 1s, 2s, 3s, 4s
+                logger.warning(f"Redis error checking task status (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {type(e).__name__}: {e}")
+                time.sleep(delay)
             else:
-                logger.error(f"Failed to check task status after {max_retries} attempts: {e}")
+                logger.error(f"Failed to check task status after {max_retries} attempts: {type(e).__name__}: {e}")
                 # Return False to keep task in active list and retry later
                 return False
         except Exception as e:
-            logger.error(f"Unexpected error checking task status: {e}")
+            logger.error(f"Unexpected error checking task status: {type(e).__name__}: {e}")
             return False
     return False
 
 
-def safe_task_get(task, timeout=1, max_retries=3, retry_delay=0.5):
+def safe_task_get(task, timeout=1, max_retries=5, base_delay=1.0):
     """
-    Safely get a Celery task result with retry logic for Redis connection errors.
+    Safely get a Celery task result with enhanced retry logic for Redis connection errors.
+
+    v2.5.54: Enhanced with exponential backoff and connection pool reset.
 
     Args:
         task: Celery AsyncResult object
         timeout: Timeout for getting the result
-        max_retries: Number of retry attempts
-        retry_delay: Delay between retries in seconds
+        max_retries: Number of retry attempts (default 5 for longer recovery window)
+        base_delay: Base delay between retries in seconds (exponential backoff)
 
     Returns:
         Result dict or None on error
     """
     import redis
+    from pixelprobe.progress_utils import reset_redis_pool
 
     for attempt in range(max_retries):
         try:
             return task.get(timeout=timeout)
         except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
+            # Reset connection pool on first failure to get fresh connections
+            if attempt == 0:
+                reset_redis_pool()
+
             if attempt < max_retries - 1:
-                logger.warning(f"Redis connection error getting task result (attempt {attempt + 1}/{max_retries}): {e}")
-                time.sleep(retry_delay)
+                delay = base_delay * (attempt + 1)  # Exponential backoff: 1s, 2s, 3s, 4s
+                logger.warning(f"Redis error getting task result (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {type(e).__name__}: {e}")
+                time.sleep(delay)
             else:
-                logger.error(f"Failed to get task result after {max_retries} attempts: {e}")
+                logger.error(f"Failed to get task result after {max_retries} attempts: {type(e).__name__}: {e}")
                 raise
         except Exception:
             raise

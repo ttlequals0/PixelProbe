@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.54] - 2026-01-01
+
+### Bug Fixes
+
+- **Fix persistent Redis connection crashes in integrity scan**: Enhanced Celery task result handling
+  - Root cause: v2.5.53 wrappers had insufficient retry logic (3 retries, 0.5s delay)
+  - When Redis connection pool gets corrupted, ALL connections are bad
+  - Hitting the same broken pool 3 times doesn't help
+  - **Solution**: Enhanced safe wrappers with exponential backoff and connection pool reset
+    - `safe_task_ready()`: Now 5 retries with exponential backoff (1s, 2s, 3s, 4s)
+    - `safe_task_get()`: Now 5 retries with exponential backoff
+    - Both now reset the connection pool on first failure to get fresh connections
+    - Added `reset_redis_pool()` function to force-disconnect and recreate pool
+  - **Additional fixes**:
+    - Added `safe_check_task_state()` wrapper for scan_routes.py AsyncResult access
+    - Protected all AsyncResult.state access patterns from Redis crashes
+    - Added Celery transport options for connection stability:
+      - `socket_keepalive: True` to detect dead connections
+      - `health_check_interval: 60` for periodic connection validation
+      - `socket_timeout: 30` and `socket_connect_timeout: 30`
+      - Applied to both broker and result backend transport options
+  - **Regression origin**: v2.4.60 introduced `redis.from_url()` which returns low-level Connection
+    object instead of full Redis client. v2.5.51 fixed app-level Redis, v2.5.53 added Celery wrappers,
+    but wrappers needed enhanced retry logic with pool reset.
+  - Files affected:
+    - `pixelprobe/progress_utils.py` - Added reset_redis_pool()
+    - `pixelprobe/services/maintenance_service.py` - Enhanced safe_task_ready/safe_task_get
+    - `pixelprobe/api/scan_routes.py` - Added safe_check_task_state wrapper
+    - `celery_config.py` - Added transport options for resilience
+
+---
+
 ## [2.5.53] - 2026-01-01
 
 ### Bug Fixes

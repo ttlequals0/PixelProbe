@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def check_celery_available():
     """Check if Celery is available and broker is reachable"""
     celery_enabled = current_app.config.get('CELERY_BROKER_URL') and hasattr(current_app, 'celery')
-    
+
     if celery_enabled:
         # Test Celery broker connection before using
         try:
@@ -30,8 +30,50 @@ def check_celery_available():
         except Exception as e:
             logger.warning(f"Celery broker connection failed: {e}. Falling back to direct scan service.")
             celery_enabled = False
-    
+
     return celery_enabled
+
+
+def safe_check_task_state(celery_task_id, app, max_retries=3, base_delay=0.5):
+    """
+    Safely check Celery task state with retry logic for Redis connection errors.
+
+    v2.5.54: Added to protect AsyncResult.state access from Redis connection crashes.
+
+    Args:
+        celery_task_id: Celery task ID
+        app: Celery application instance
+        max_retries: Number of retry attempts
+        base_delay: Base delay between retries in seconds
+
+    Returns:
+        Task state string or None if unable to determine state
+    """
+    import redis
+    import time
+    from celery.result import AsyncResult
+    from pixelprobe.progress_utils import reset_redis_pool
+
+    for attempt in range(max_retries):
+        try:
+            result = AsyncResult(celery_task_id, app=app)
+            return result.state
+        except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
+            # Reset connection pool on first failure
+            if attempt == 0:
+                reset_redis_pool()
+
+            if attempt < max_retries - 1:
+                delay = base_delay * (attempt + 1)
+                logger.warning(f"Redis error checking task state (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {type(e).__name__}: {e}")
+                time.sleep(delay)
+            else:
+                logger.error(f"Failed to check task state after {max_retries} attempts: {type(e).__name__}: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"Unexpected error checking task state: {type(e).__name__}: {e}")
+            return None
+    return None
 
 
 # Timezone handling via utility module
@@ -116,18 +158,14 @@ def is_scan_running():
                     logger.warning(f"Files processed: {active_scan.files_processed}/{active_scan.estimated_total}")
                     
                     # But first check if Celery task is actually still running before marking as crashed
+                    # v2.5.54: Use safe wrapper to avoid Redis connection crashes
                     if active_scan.celery_task_id and check_celery_available():
-                        try:
-                            from celery.result import AsyncResult
-                            result = AsyncResult(active_scan.celery_task_id, app=current_app.celery)
-                            # Check actual task state
-                            if result.state in ['PENDING', 'STARTED', 'RETRY', 'PROGRESS']:
-                                logger.info(f"Celery task {active_scan.celery_task_id} still active with state: {result.state} - scan is running despite no recent update")
-                                return True  # Task is still running, just slow
-                            else:
-                                logger.warning(f"Celery task {active_scan.celery_task_id} is not active (state: {result.state})")
-                        except Exception as e:
-                            logger.warning(f"Could not check Celery task status: {e}")
+                        task_state = safe_check_task_state(active_scan.celery_task_id, current_app.celery)
+                        if task_state in ['PENDING', 'STARTED', 'RETRY', 'PROGRESS']:
+                            logger.info(f"Celery task {active_scan.celery_task_id} still active with state: {task_state} - scan is running despite no recent update")
+                            return True  # Task is still running, just slow
+                        elif task_state is not None:
+                            logger.warning(f"Celery task {active_scan.celery_task_id} is not active (state: {task_state})")
                     
                     # Mark as crashed and allow new scan
                     active_scan.is_active = False
@@ -137,24 +175,22 @@ def is_scan_running():
                     return False
             
             # Also verify if Celery task is still running for non-stuck scans
+            # v2.5.54: Use safe wrapper to avoid Redis connection crashes
             if active_scan.celery_task_id and check_celery_available():
-                try:
-                    from celery.result import AsyncResult
-                    result = AsyncResult(active_scan.celery_task_id, app=current_app.celery)
-                    # Check actual task state
-                    if result.state in ['PENDING', 'STARTED', 'RETRY', 'PROGRESS']:
-                        return True
-                    elif result.state in ['SUCCESS', 'FAILURE', 'REVOKED']:
-                        # Task completed but scan state not updated - clean up
-                        logger.warning(f"Celery task {active_scan.celery_task_id} in state {result.state} but scan still active - cleaning up")
-                        active_scan.is_active = False
-                        active_scan.phase = 'completed' if result.state == 'SUCCESS' else 'error'
-                        db.session.commit()
-                        return False
-                except Exception as e:
-                    logger.warning(f"Could not check Celery task status: {e}")
-                    # If we can't check the task, don't block forever
+                task_state = safe_check_task_state(active_scan.celery_task_id, current_app.celery)
+                if task_state in ['PENDING', 'STARTED', 'RETRY', 'PROGRESS']:
+                    return True
+                elif task_state in ['SUCCESS', 'FAILURE', 'REVOKED']:
+                    # Task completed but scan state not updated - clean up
+                    logger.warning(f"Celery task {active_scan.celery_task_id} in state {task_state} but scan still active - cleaning up")
+                    active_scan.is_active = False
+                    active_scan.phase = 'completed' if task_state == 'SUCCESS' else 'error'
+                    db.session.commit()
                     return False
+                elif task_state is None:
+                    # Couldn't check task state - assume running to avoid blocking forever
+                    logger.warning(f"Could not check Celery task {active_scan.celery_task_id} state - assuming running")
+                    return True
             
             # If no Celery task ID, it's likely a direct scan - check if thread is alive
             if not active_scan.celery_task_id:

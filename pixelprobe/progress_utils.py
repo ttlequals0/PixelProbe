@@ -3,6 +3,7 @@ Progress tracking utilities for PixelProbe
 Shared between scan_service and tasks to avoid circular imports
 
 v2.5.51: Added robust Redis connection handling with retry logic
+v2.5.54: Added reset_redis_pool() for connection pool recovery
 """
 
 import logging
@@ -14,6 +15,25 @@ logger = logging.getLogger(__name__)
 
 # Connection pool to reuse connections
 _redis_connection_pool = None
+
+
+def reset_redis_pool():
+    """
+    Reset the global Redis connection pool.
+
+    Call this when connections are persistently failing to force
+    creation of a fresh connection pool on the next get_redis_client() call.
+
+    v2.5.54: Added to recover from corrupted connection pools.
+    """
+    global _redis_connection_pool
+    if _redis_connection_pool:
+        try:
+            _redis_connection_pool.disconnect()
+            logger.info("Disconnected and reset Redis connection pool")
+        except Exception as e:
+            logger.warning(f"Error disconnecting Redis pool: {e}")
+    _redis_connection_pool = None
 
 
 def get_redis_client(retry_count=3, retry_delay=1.0):
