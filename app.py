@@ -356,13 +356,14 @@ def get_version():
         logger.warning(f"Could not get Celery version: {e}")
         infrastructure['celery'] = 'unknown'
 
-    # Redis version
+    # Redis version - v2.5.51: Use robust Redis connection from progress_utils
     try:
-        import redis
-        redis_url = app.config.get('CELERY_BROKER_URL', os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
-        r = redis.from_url(redis_url)
-        redis_info = r.info('server')
-        infrastructure['redis'] = redis_info.get('redis_version', 'unknown')
+        from pixelprobe.progress_utils import get_redis_info
+        redis_info = get_redis_info('server')
+        if redis_info:
+            infrastructure['redis'] = redis_info.get('redis_version', 'unknown')
+        else:
+            infrastructure['redis'] = 'unavailable'
     except Exception as e:
         logger.warning(f"Could not get Redis version: {e}")
         infrastructure['redis'] = 'unavailable'

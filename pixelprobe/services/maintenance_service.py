@@ -636,33 +636,34 @@ class MaintenanceService:
             # Solution: Monitor Redis memory usage and adapt task submission dynamically
 
             # Get Redis memory info to determine safe limits
-            import redis
-            from celery import current_app
+            # v2.5.51: Use robust Redis connection from progress_utils
+            from pixelprobe.progress_utils import get_redis_info
 
             try:
-                # Get Redis connection from Celery
-                redis_url = current_app.conf.broker_url
-                r = redis.from_url(redis_url)
-                redis_info = r.info('memory')
+                redis_info = get_redis_info('memory')
 
-                # Get max memory setting (0 means unlimited)
-                max_memory = int(redis_info.get('maxmemory', 0))
-                used_memory = int(redis_info.get('used_memory', 0))
+                if redis_info:
+                    # Get max memory setting (0 means unlimited)
+                    max_memory = int(redis_info.get('maxmemory', 0))
+                    used_memory = int(redis_info.get('used_memory', 0))
 
-                if max_memory > 0:
-                    # Calculate safe threshold (use 80% of max)
-                    safe_memory = max_memory * 0.8
-                    available_memory = safe_memory - used_memory
+                    if max_memory > 0:
+                        # Calculate safe threshold (use 80% of max)
+                        safe_memory = max_memory * 0.8
+                        available_memory = safe_memory - used_memory
 
-                    # Estimate memory per task (approximately 10KB per task in Redis)
-                    memory_per_task = 10 * 1024
-                    max_safe_tasks = max(100, int(available_memory / memory_per_task))
+                        # Estimate memory per task (approximately 10KB per task in Redis)
+                        memory_per_task = 10 * 1024
+                        max_safe_tasks = max(100, int(available_memory / memory_per_task))
+                    else:
+                        # No limit set, use conservative default
+                        max_safe_tasks = 5000
+
+                    logger.info(f"Redis memory: {used_memory/1024/1024:.1f}MB used, "
+                               f"max safe concurrent tasks: {max_safe_tasks}")
                 else:
-                    # No limit set, use conservative default
-                    max_safe_tasks = 5000
-
-                logger.info(f"Redis memory: {used_memory/1024/1024:.1f}MB used, "
-                           f"max safe concurrent tasks: {max_safe_tasks}")
+                    logger.warning("Could not get Redis memory info, using conservative limits")
+                    max_safe_tasks = 1000
             except Exception as e:
                 logger.warning(f"Could not get Redis memory info: {e}, using conservative limits")
                 max_safe_tasks = 1000

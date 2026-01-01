@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.51] - 2026-01-01
+
+### Bug Fixes
+
+- **Fix Redis connection crash in maintenance service**: Application crashed with `ConnectionResetError`
+  - Root cause: `redis.from_url()` returns low-level Connection object, not full Redis client
+  - Error occurred when Redis connection was reset during file changes check
+  - Error message: `'Connection' object has no attribute 'register_connect_callback'`
+  - **Solution**: Created robust Redis connection handling with retry logic
+    - Added connection pooling with health checks (`health_check_interval=30`)
+    - Added automatic retry on connection failures (3 attempts with 1s delay)
+    - Added `socket_keepalive=True` to detect stale connections
+    - Added `retry_on_timeout=True` for transient failures
+  - New utility functions in `progress_utils.py`:
+    - `get_redis_client()`: Returns properly configured Redis client with connection pool
+    - `get_redis_info()`: Safely gets Redis server info with retry logic
+    - `with_redis_retry()`: Decorator for adding retry logic to Redis operations
+  - Updated `maintenance_service.py` to use `get_redis_info()` instead of `redis.from_url()`
+  - Updated `app.py` version endpoint to use `get_redis_info()` instead of `redis.from_url()`
+  - Files affected: `pixelprobe/progress_utils.py`, `pixelprobe/services/maintenance_service.py`, `app.py`
+
+---
+
 ## [2.5.50] - 2025-12-29
 
 ### Bug Fixes
