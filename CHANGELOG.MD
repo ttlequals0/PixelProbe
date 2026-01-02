@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.55] - 2026-01-02
+
+### UI Improvements
+
+- **Rename "File Changes" to "Integrity Scan"**: Consistent terminology throughout the UI
+  - The feature was renamed several versions back but some user-facing text still used the old "File Changes" terminology
+  - Updated scan reports filter dropdown from "File Changes" to "Integrity Scan"
+  - Updated schedule type dropdowns from "Integrity Check" to "Integrity Scan"
+  - Updated all notification messages:
+    - "File Changes Check Progress" -> "Integrity Scan Progress"
+    - "File changes check started..." -> "Integrity scan started..."
+    - "File changes check completed!" -> "Integrity scan completed!"
+    - "File changes check cancelled" -> "Integrity scan cancelled"
+    - "File changes check cancellation requested" -> "Integrity scan cancellation requested"
+    - "Checking for file changes..." -> "Checking file integrity..."
+    - "No file changes detected" -> "No integrity issues detected"
+  - Updated scan type display mapping from "Integrity Check" to "Integrity Scan"
+  - Files affected:
+    - `templates/index.html` - Dropdown option text (3 locations)
+    - `static/js/app.js` - Notification messages and type mapping (8 locations)
+
+---
+
 ## [2.5.54] - 2026-01-01
 
 ### Bug Fixes

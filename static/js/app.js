@@ -387,7 +387,7 @@ class ProgressManager {
                 } else if (this.operationType === 'cleanup') {
                     progressTitle.textContent = 'Cleanup Progress';
                 } else if (this.operationType === 'file-changes') {
-                    progressTitle.textContent = 'File Changes Check Progress';
+                    progressTitle.textContent = 'Integrity Scan Progress';
                 }
             }
             
@@ -736,7 +736,7 @@ class ProgressManager {
                 percentage = 0;
             }
 
-            text = status.progress_message || 'Checking for file changes...';
+            text = status.progress_message || 'Checking file integrity...';
 
             const parts = [];
 
@@ -822,7 +822,7 @@ class ProgressManager {
                 this.app.showNotification('Cleanup cancelled', 'info');
             } else if (operationType === 'file-changes') {
                 this.updateFileChangesButton(false);
-                this.app.showNotification('File changes check cancelled', 'info');
+                this.app.showNotification('Integrity scan cancelled', 'info');
             }
             
             // Refresh stats to update UI
@@ -842,7 +842,7 @@ class ProgressManager {
             this.updateCleanupButton(false); // Re-enable cleanup button
         } else if (operationType === 'file-changes') {
             const changesFound = status?.changes_found || 0;
-            completionMessage = `File changes check completed! Found ${changesFound} changed files.`;
+            completionMessage = `Integrity scan completed! Found ${changesFound} changed files.`;
             this.updateFileChangesButton(false); // Re-enable file changes button
             
             // Show results if any changes were found
@@ -1439,7 +1439,7 @@ class PixelProbeApp {
         const types = {
             'normal': 'Normal Scan',
             'orphan': 'Cleanup',
-            'file_changes': 'Integrity Check'
+            'file_changes': 'Integrity Scan'
         };
         return types[type] || type;
     }
@@ -1612,7 +1612,7 @@ class PixelProbeApp {
             console.log('File changes response:', result);
             
             if (result.status === 'started') {
-                this.showNotification('File changes check started...', 'info');
+                this.showNotification('Integrity scan started...', 'info');
                 // Start monitoring file changes progress
                 this.progress.operationType = 'file-changes';
                 this.progress.startMonitoring('file-changes');
@@ -1622,7 +1622,7 @@ class PixelProbeApp {
                 if (changedCount > 0) {
                     this.showNotification(`Found ${changedCount} files with changes`, 'info');
                 } else {
-                    this.showNotification('No file changes detected', 'success');
+                    this.showNotification('No integrity issues detected', 'success');
                 }
             }
         } catch (error) {
@@ -3459,7 +3459,7 @@ class PixelProbeApp {
                 const status = await this.api.getFileChangesStatus();
                 if (status.is_running) {
                     await this.api.cancelFileChanges();
-                    this.showNotification('File changes check cancellation requested', 'info');
+                    this.showNotification('Integrity scan cancellation requested', 'info');
                 }
             } else {
                 this.showNotification('No operation is currently running', 'warning');
