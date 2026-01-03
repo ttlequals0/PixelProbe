@@ -1088,7 +1088,7 @@ with app.app_context():
             redis_client = None
 
     # Fallback to file lock if Redis unavailable (for local development without Redis)
-    if is_celery_worker and not redis_client and not scheduler_initialized[0]:
+    if not redis_client and not scheduler_initialized[0]:
         import fcntl
         scheduler_lock_file = '/tmp/pixelprobe_scheduler.lock'
 

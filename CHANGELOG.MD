@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.57] - 2026-01-03
+
+### Bug Fixes
+
+- **Fix NameError crash on startup (regression from v2.5.56)**: App failed to start after scheduler fix
+  - Root cause: v2.5.56 removed `is_celery_worker` definition but left a reference at line 1091
+  - Error: `NameError: name 'is_celery_worker' is not defined`
+  - Solution: Remove `is_celery_worker` from the file-lock fallback condition
+  - The file-lock fallback (for local dev without Redis) now works for any process
+  - Files affected: `app.py`
+
+---
+
 ## [2.5.56] - 2026-01-03
 
 ### Bug Fixes
