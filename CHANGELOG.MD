@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.56] - 2026-01-03
+
+### Bug Fixes
+
+- **Fix scheduler not executing jobs**: Revert to v2.5.19 scheduler behavior
+  - Root cause: v2.5.33 added `is_celery_worker` check that forced scheduler to only run in celery-worker
+  - Problem: Celery's prefork model is incompatible with APScheduler's BackgroundScheduler threads
+    - Celery main process loads app and starts scheduler thread
+    - Celery then forks worker processes
+    - Threads don't survive fork - scheduler thread only exists in parent process
+    - Parent process doesn't handle requests, Flask context is broken
+    - Jobs are scheduled but never execute
+  - Solution: Remove `is_celery_worker` check, allow any process to acquire scheduler lock
+    - Gunicorn workers work correctly with APScheduler (each imports app independently)
+    - Redis SETNX ensures only one scheduler runs at a time
+  - Files affected: `app.py`
+
+- **Fix integrity scan reports missing changed files**: Changed files list never populated
+  - Root cause: Local `changed_files` variable was populated but never assigned to `self.changed_files_list`
+  - The instance variable was initialized empty and never updated
+  - Report generation uses `getattr(self, 'changed_files_list', [])` which always returned empty list
+  - Solution: Add `self.changed_files_list = changed_files` after Phase 2a processing
+  - Files affected: `pixelprobe/services/maintenance_service.py`
+
+---
+
 ## [2.5.55] - 2026-01-02
 
 ### UI Improvements

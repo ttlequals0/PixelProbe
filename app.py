@@ -849,15 +849,10 @@ with app.app_context():
     # When container restarts with same hostname, we can detect stale self-locks
     container_hostname = socket.gethostname()
 
-    # IMPORTANT: Only allow Celery worker to run the scheduler
-    # Gunicorn workers also import app.py but their pre-fork model doesn't work well
-    # with APScheduler's background threads. The scheduler must run in the Celery worker
-    # which has persistent processes designed for background tasks.
-    is_celery_worker = 'celery' in sys.argv[0].lower() if sys.argv else False
-
-    if not is_celery_worker:
-        logger.info(f"Skipping scheduler initialization in non-Celery process (pid={os.getpid()}, argv[0]={sys.argv[0] if sys.argv else 'N/A'})")
-    elif redis_client:
+    # Use Redis-based distributed lock for scheduler coordination
+    # Any process can attempt to acquire the lock - first one wins
+    # This allows gunicorn workers to run the scheduler (APScheduler works with gunicorn)
+    if redis_client:
         try:
             # Use Redis SETNX for atomic lock acquisition (60-second expiry for auto-recovery)
             # Short TTL ensures stale locks from crashed containers expire quickly

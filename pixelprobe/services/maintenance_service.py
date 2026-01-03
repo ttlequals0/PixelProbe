@@ -952,7 +952,10 @@ class MaintenanceService:
             db.session.commit()
 
             logger.info(f"Phase 2a complete: Processed {total_files_processed} files, found {len(changed_files)} changed files")
-            
+
+            # Store changed files for report generation
+            self.changed_files_list = changed_files
+
             # Phase 3: Mark changed files for rescan (leverage parallel scanning)
             if changed_files and not self._is_cancelled_file_changes(file_changes_record):
                 file_changes_record.phase = 'marking_for_rescan'
