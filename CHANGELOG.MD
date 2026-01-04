@@ -5,6 +5,167 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.57] - 2026-01-03
+
+### Bug Fixes
+
+- **Fix NameError crash on startup (regression from v2.5.56)**: App failed to start after scheduler fix
+  - Root cause: v2.5.56 removed `is_celery_worker` definition but left a reference at line 1091
+  - Error: `NameError: name 'is_celery_worker' is not defined`
+  - Solution: Remove `is_celery_worker` from the file-lock fallback condition
+  - The file-lock fallback (for local dev without Redis) now works for any process
+  - Files affected: `app.py`
+
+### Cleanup
+
+- **Remove obsolete migration scripts**: Migrations now run automatically on startup
+  - Deleted `tools/migrate_db.py` - v2.2.46/47 migrations now handled by app_startup_migration.py
+  - Deleted `tools/migrate_db_safe.py` - lock handling integrated into automatic migrations
+  - Deleted `tools/run_migration.py` - legacy wrapper no longer needed
+  - Updated documentation to reflect automatic migration system
+  - Files affected: `tools/README.md`, `tools/MIGRATION_GUIDE.md`, `docs/maintenance/TOOLS_AND_SCRIPTS.md`
+
+---
+
+## [2.5.56] - 2026-01-03
+
+### Bug Fixes
+
+- **Fix scheduler not executing jobs**: Revert to v2.5.19 scheduler behavior
+  - Root cause: v2.5.33 added `is_celery_worker` check that forced scheduler to only run in celery-worker
+  - Problem: Celery's prefork model is incompatible with APScheduler's BackgroundScheduler threads
+    - Celery main process loads app and starts scheduler thread
+    - Celery then forks worker processes
+    - Threads don't survive fork - scheduler thread only exists in parent process
+    - Parent process doesn't handle requests, Flask context is broken
+    - Jobs are scheduled but never execute
+  - Solution: Remove `is_celery_worker` check, allow any process to acquire scheduler lock
+    - Gunicorn workers work correctly with APScheduler (each imports app independently)
+    - Redis SETNX ensures only one scheduler runs at a time
+  - Files affected: `app.py`
+
+- **Fix integrity scan reports missing changed files**: Changed files list never populated
+  - Root cause: Local `changed_files` variable was populated but never assigned to `self.changed_files_list`
+  - The instance variable was initialized empty and never updated
+  - Report generation uses `getattr(self, 'changed_files_list', [])` which always returned empty list
+  - Solution: Add `self.changed_files_list = changed_files` after Phase 2a processing
+  - Files affected: `pixelprobe/services/maintenance_service.py`
+
+---
+
+## [2.5.55] - 2026-01-02
+
+### UI Improvements
+
+- **Rename "File Changes" to "Integrity Scan"**: Consistent terminology throughout the UI
+  - The feature was renamed several versions back but some user-facing text still used the old "File Changes" terminology
+  - Updated scan reports filter dropdown from "File Changes" to "Integrity Scan"
+  - Updated schedule type dropdowns from "Integrity Check" to "Integrity Scan"
+  - Updated all notification messages:
+    - "File Changes Check Progress" -> "Integrity Scan Progress"
+    - "File changes check started..." -> "Integrity scan started..."
+    - "File changes check completed!" -> "Integrity scan completed!"
+    - "File changes check cancelled" -> "Integrity scan cancelled"
+    - "File changes check cancellation requested" -> "Integrity scan cancellation requested"
+    - "Checking for file changes..." -> "Checking file integrity..."
+    - "No file changes detected" -> "No integrity issues detected"
+  - Updated scan type display mapping from "Integrity Check" to "Integrity Scan"
+  - Files affected:
+    - `templates/index.html` - Dropdown option text (3 locations)
+    - `static/js/app.js` - Notification messages and type mapping (8 locations)
+
+---
+
+## [2.5.54] - 2026-01-01
+
+### Bug Fixes
+
+- **Fix persistent Redis connection crashes in integrity scan**: Enhanced Celery task result handling
+  - Root cause: v2.5.53 wrappers had insufficient retry logic (3 retries, 0.5s delay)
+  - When Redis connection pool gets corrupted, ALL connections are bad
+  - Hitting the same broken pool 3 times doesn't help
+  - **Solution**: Enhanced safe wrappers with exponential backoff and connection pool reset
+    - `safe_task_ready()`: Now 5 retries with exponential backoff (1s, 2s, 3s, 4s)
+    - `safe_task_get()`: Now 5 retries with exponential backoff
+    - Both now reset the connection pool on first failure to get fresh connections
+    - Added `reset_redis_pool()` function to force-disconnect and recreate pool
+  - **Additional fixes**:
+    - Added `safe_check_task_state()` wrapper for scan_routes.py AsyncResult access
+    - Protected all AsyncResult.state access patterns from Redis crashes
+    - Added Celery transport options for connection stability:
+      - `socket_keepalive: True` to detect dead connections
+      - `health_check_interval: 60` for periodic connection validation
+      - `socket_timeout: 30` and `socket_connect_timeout: 30`
+      - Applied to both broker and result backend transport options
+  - **Regression origin**: v2.4.60 introduced `redis.from_url()` which returns low-level Connection
+    object instead of full Redis client. v2.5.51 fixed app-level Redis, v2.5.53 added Celery wrappers,
+    but wrappers needed enhanced retry logic with pool reset.
+  - Files affected:
+    - `pixelprobe/progress_utils.py` - Added reset_redis_pool()
+    - `pixelprobe/services/maintenance_service.py` - Enhanced safe_task_ready/safe_task_get
+    - `pixelprobe/api/scan_routes.py` - Added safe_check_task_state wrapper
+    - `celery_config.py` - Added transport options for resilience
+
+---
+
+## [2.5.53] - 2026-01-01
+
+### Bug Fixes
+
+- **Fix Celery task result Redis connection errors**: Integrity scan crashed when checking task results
+  - Root cause: Celery's `task.ready()` and `task.get()` use their own internal Redis connection, separate from our fixed Redis client
+  - When Celery's Redis connection gets reset, task result checking fails with `ConnectionResetError`
+  - Error message: `'Connection' object has no attribute 'register_connect_callback'`
+  - **Solution**: Added wrapper functions with retry logic for Celery task result operations
+    - `safe_task_ready()`: Safely check task status with 3 retries and 0.5s delay
+    - `safe_task_get()`: Safely get task result with 3 retries and 0.5s delay
+    - Both functions catch `redis.ConnectionError`, `redis.TimeoutError`, `ConnectionResetError`, and `AttributeError`
+    - On transient failure, retries before giving up
+  - Files affected: `pixelprobe/services/maintenance_service.py`
+
+---
+
+## [2.5.52] - 2026-01-01
+
+### Bug Fixes
+
+- **Fix HEIC false positive corruption detection for iOS 18 files**: HEIC files from iOS 18 devices were incorrectly flagged as corrupted
+  - Root cause: Older libheif versions (Ubuntu 24.04 ships 1.17.x) don't support iOS 18's use of shared auxiliary images
+  - Error message: `"Too many auxiliary image references (2.0)"` from libheif/ImageMagick
+  - This is a valid HEIF structure per spec, not file corruption (see: github.com/strukturag/libheif/issues/1190)
+  - **Solution**: Detect libheif limitation errors and treat as warnings instead of corruption
+    - Added detection for "auxiliary image" and "too many auxiliary" errors in ImageMagick stderr
+    - Added detection for "cannot identify image file" errors on HEIC files in PIL
+    - Files with this error now show as warning "HEIC validation skipped: libheif version limitation"
+    - Files are no longer incorrectly marked as corrupted
+  - Note: Full iOS 18 HEIC support requires libheif 1.19.8+ (not yet available in Ubuntu repos)
+  - Files affected: `media_checker.py`
+
+---
+
+## [2.5.51] - 2026-01-01
+
+### Bug Fixes
+
+- **Fix Redis connection crash in maintenance service**: Application crashed with `ConnectionResetError`
+  - Root cause: `redis.from_url()` returns low-level Connection object, not full Redis client
+  - Error occurred when Redis connection was reset during file changes check
+  - Error message: `'Connection' object has no attribute 'register_connect_callback'`
+  - **Solution**: Created robust Redis connection handling with retry logic
+    - Added connection pooling with health checks (`health_check_interval=30`)
+    - Added automatic retry on connection failures (3 attempts with 1s delay)
+    - Added `socket_keepalive=True` to detect stale connections
+    - Added `retry_on_timeout=True` for transient failures
+  - New utility functions in `progress_utils.py`:
+    - `get_redis_client()`: Returns properly configured Redis client with connection pool
+    - `get_redis_info()`: Safely gets Redis server info with retry logic
+    - `with_redis_retry()`: Decorator for adding retry logic to Redis operations
+  - Updated `maintenance_service.py` to use `get_redis_info()` instead of `redis.from_url()`
+  - Updated `app.py` version endpoint to use `get_redis_info()` instead of `redis.from_url()`
+  - Files affected: `pixelprobe/progress_utils.py`, `pixelprobe/services/maintenance_service.py`, `app.py`
+
+---
+
 ## [2.5.50] - 2025-12-29
 
 ### Bug Fixes

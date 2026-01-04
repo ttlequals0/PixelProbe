@@ -909,14 +909,20 @@ class PixelProbe:
             except Exception as e:
                 pil_load_failed = True
                 pil_load_error = str(e)
+                error_lower = str(e).lower()
                 scan_output.append(f"PIL load/transform: FAILED - {str(e)}")
-                
+
                 # Check for truncation errors - these indicate actual corruption
-                if 'truncated' in str(e).lower() or 'bytes not processed' in str(e).lower():
+                if 'truncated' in error_lower or 'bytes not processed' in error_lower:
                     logger.warning(f"Image truncation detected for {file_path}: {str(e)}")
                     corruption_details.append(f"Image file is truncated: {str(e)}")
                     is_corrupted = True
                     scan_tool = "pil"
+                # HEIC files with "cannot identify" may be due to libheif limitations, not corruption
+                # Don't mark as corrupted here - let ImageMagick verify (which will also catch the libheif error)
+                elif is_heic and 'cannot identify image file' in error_lower:
+                    logger.info(f"HEIC PIL load failed (may be libheif limitation) for {file_path}: {str(e)}")
+                    # Don't mark as corrupted yet - ImageMagick will provide the definitive answer
         
         logger.info(f"Starting ImageMagick verification for: {file_path}")
         
@@ -959,6 +965,15 @@ class PixelProbe:
                     if is_gif and 'improper image header' in stderr_lower and 'readgifimage' in stderr_lower:
                         # This is a common false positive for GIFs that still work
                         logger.info(f"GIF header warning (not corruption) for {file_path}")
+                    # Check for HEIC/HEIF libheif limitation errors (iOS 18 files with shared auxiliary images)
+                    # These are NOT corruption - older libheif versions don't support newer HEIC features
+                    # See: https://github.com/strukturag/libheif/issues/1190
+                    elif is_heic and ('auxiliary image' in stderr_lower or 'too many auxiliary' in stderr_lower):
+                        warning_details.append("HEIC validation skipped: libheif version limitation (file likely valid)")
+                        scan_output.append("ImageMagick HEIC: SKIPPED (libheif limitation - not corruption)")
+                        scan_output.append(f"Note: iOS 18+ HEIC files may use features not supported by older libheif versions")
+                        logger.info(f"HEIC libheif limitation (not corruption) for {file_path}: {result.stderr[:100]}")
+                        # Don't mark as corrupted - this is a tool limitation, not file corruption
                     else:
                         corruption_details.append("ImageMagick pixel validation failed")
                         is_corrupted = True

@@ -356,13 +356,14 @@ def get_version():
         logger.warning(f"Could not get Celery version: {e}")
         infrastructure['celery'] = 'unknown'
 
-    # Redis version
+    # Redis version - v2.5.51: Use robust Redis connection from progress_utils
     try:
-        import redis
-        redis_url = app.config.get('CELERY_BROKER_URL', os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
-        r = redis.from_url(redis_url)
-        redis_info = r.info('server')
-        infrastructure['redis'] = redis_info.get('redis_version', 'unknown')
+        from pixelprobe.progress_utils import get_redis_info
+        redis_info = get_redis_info('server')
+        if redis_info:
+            infrastructure['redis'] = redis_info.get('redis_version', 'unknown')
+        else:
+            infrastructure['redis'] = 'unavailable'
     except Exception as e:
         logger.warning(f"Could not get Redis version: {e}")
         infrastructure['redis'] = 'unavailable'
@@ -848,15 +849,10 @@ with app.app_context():
     # When container restarts with same hostname, we can detect stale self-locks
     container_hostname = socket.gethostname()
 
-    # IMPORTANT: Only allow Celery worker to run the scheduler
-    # Gunicorn workers also import app.py but their pre-fork model doesn't work well
-    # with APScheduler's background threads. The scheduler must run in the Celery worker
-    # which has persistent processes designed for background tasks.
-    is_celery_worker = 'celery' in sys.argv[0].lower() if sys.argv else False
-
-    if not is_celery_worker:
-        logger.info(f"Skipping scheduler initialization in non-Celery process (pid={os.getpid()}, argv[0]={sys.argv[0] if sys.argv else 'N/A'})")
-    elif redis_client:
+    # Use Redis-based distributed lock for scheduler coordination
+    # Any process can attempt to acquire the lock - first one wins
+    # This allows gunicorn workers to run the scheduler (APScheduler works with gunicorn)
+    if redis_client:
         try:
             # Use Redis SETNX for atomic lock acquisition (60-second expiry for auto-recovery)
             # Short TTL ensures stale locks from crashed containers expire quickly
@@ -1092,7 +1088,7 @@ with app.app_context():
             redis_client = None
 
     # Fallback to file lock if Redis unavailable (for local development without Redis)
-    if is_celery_worker and not redis_client and not scheduler_initialized[0]:
+    if not redis_client and not scheduler_initialized[0]:
         import fcntl
         scheduler_lock_file = '/tmp/pixelprobe_scheduler.lock'
 

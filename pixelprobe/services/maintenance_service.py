@@ -17,6 +17,88 @@ from utils import ProgressTracker
 
 logger = logging.getLogger(__name__)
 
+
+def safe_task_ready(task, max_retries=5, base_delay=1.0):
+    """
+    Safely check if a Celery task is ready with enhanced retry logic for Redis connection errors.
+
+    v2.5.54: Enhanced with exponential backoff and connection pool reset.
+    When Redis connection pool gets corrupted, all connections are bad.
+    This wrapper resets the pool on first failure and uses exponential backoff.
+
+    Celery's task.ready() uses its internal Redis connection which can get reset.
+    This wrapper adds retry logic to handle transient connection failures.
+
+    Args:
+        task: Celery AsyncResult object
+        max_retries: Number of retry attempts (default 5 for longer recovery window)
+        base_delay: Base delay between retries in seconds (exponential backoff)
+
+    Returns:
+        bool: True if task is ready, False if not ready or on persistent error
+    """
+    import redis
+    from pixelprobe.progress_utils import reset_redis_pool
+
+    for attempt in range(max_retries):
+        try:
+            return task.ready()
+        except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
+            # Reset connection pool on first failure to get fresh connections
+            if attempt == 0:
+                reset_redis_pool()
+
+            if attempt < max_retries - 1:
+                delay = base_delay * (attempt + 1)  # Exponential backoff: 1s, 2s, 3s, 4s
+                logger.warning(f"Redis error checking task status (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {type(e).__name__}: {e}")
+                time.sleep(delay)
+            else:
+                logger.error(f"Failed to check task status after {max_retries} attempts: {type(e).__name__}: {e}")
+                # Return False to keep task in active list and retry later
+                return False
+        except Exception as e:
+            logger.error(f"Unexpected error checking task status: {type(e).__name__}: {e}")
+            return False
+    return False
+
+
+def safe_task_get(task, timeout=1, max_retries=5, base_delay=1.0):
+    """
+    Safely get a Celery task result with enhanced retry logic for Redis connection errors.
+
+    v2.5.54: Enhanced with exponential backoff and connection pool reset.
+
+    Args:
+        task: Celery AsyncResult object
+        timeout: Timeout for getting the result
+        max_retries: Number of retry attempts (default 5 for longer recovery window)
+        base_delay: Base delay between retries in seconds (exponential backoff)
+
+    Returns:
+        Result dict or None on error
+    """
+    import redis
+    from pixelprobe.progress_utils import reset_redis_pool
+
+    for attempt in range(max_retries):
+        try:
+            return task.get(timeout=timeout)
+        except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
+            # Reset connection pool on first failure to get fresh connections
+            if attempt == 0:
+                reset_redis_pool()
+
+            if attempt < max_retries - 1:
+                delay = base_delay * (attempt + 1)  # Exponential backoff: 1s, 2s, 3s, 4s
+                logger.warning(f"Redis error getting task result (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {type(e).__name__}: {e}")
+                time.sleep(delay)
+            else:
+                logger.error(f"Failed to get task result after {max_retries} attempts: {type(e).__name__}: {e}")
+                raise
+        except Exception:
+            raise
+    return None
+
 class MaintenanceService:
     """Service for maintenance operations like cleanup and file monitoring"""
     
@@ -326,9 +408,9 @@ class MaintenanceService:
                 # Collect completed tasks and free up slots
                 still_active = []
                 for task in active_tasks:
-                    if task.ready():
+                    if safe_task_ready(task):
                         try:
-                            check_result = task.get(timeout=1)
+                            check_result = safe_task_get(task, timeout=1)
                             total_files_processed += 1
 
                             if not check_result.get('exists'):
@@ -636,33 +718,34 @@ class MaintenanceService:
             # Solution: Monitor Redis memory usage and adapt task submission dynamically
 
             # Get Redis memory info to determine safe limits
-            import redis
-            from celery import current_app
+            # v2.5.51: Use robust Redis connection from progress_utils
+            from pixelprobe.progress_utils import get_redis_info
 
             try:
-                # Get Redis connection from Celery
-                redis_url = current_app.conf.broker_url
-                r = redis.from_url(redis_url)
-                redis_info = r.info('memory')
+                redis_info = get_redis_info('memory')
 
-                # Get max memory setting (0 means unlimited)
-                max_memory = int(redis_info.get('maxmemory', 0))
-                used_memory = int(redis_info.get('used_memory', 0))
+                if redis_info:
+                    # Get max memory setting (0 means unlimited)
+                    max_memory = int(redis_info.get('maxmemory', 0))
+                    used_memory = int(redis_info.get('used_memory', 0))
 
-                if max_memory > 0:
-                    # Calculate safe threshold (use 80% of max)
-                    safe_memory = max_memory * 0.8
-                    available_memory = safe_memory - used_memory
+                    if max_memory > 0:
+                        # Calculate safe threshold (use 80% of max)
+                        safe_memory = max_memory * 0.8
+                        available_memory = safe_memory - used_memory
 
-                    # Estimate memory per task (approximately 10KB per task in Redis)
-                    memory_per_task = 10 * 1024
-                    max_safe_tasks = max(100, int(available_memory / memory_per_task))
+                        # Estimate memory per task (approximately 10KB per task in Redis)
+                        memory_per_task = 10 * 1024
+                        max_safe_tasks = max(100, int(available_memory / memory_per_task))
+                    else:
+                        # No limit set, use conservative default
+                        max_safe_tasks = 5000
+
+                    logger.info(f"Redis memory: {used_memory/1024/1024:.1f}MB used, "
+                               f"max safe concurrent tasks: {max_safe_tasks}")
                 else:
-                    # No limit set, use conservative default
-                    max_safe_tasks = 5000
-
-                logger.info(f"Redis memory: {used_memory/1024/1024:.1f}MB used, "
-                           f"max safe concurrent tasks: {max_safe_tasks}")
+                    logger.warning("Could not get Redis memory info, using conservative limits")
+                    max_safe_tasks = 1000
             except Exception as e:
                 logger.warning(f"Could not get Redis memory info: {e}, using conservative limits")
                 max_safe_tasks = 1000
@@ -716,9 +799,9 @@ class MaintenanceService:
                 still_active = []
                 for task_info in active_tasks:
                     task, file_size = task_info['task'], task_info['size']
-                    if task.ready():
+                    if safe_task_ready(task):
                         try:
-                            result = task.get(timeout=1)
+                            result = safe_task_get(task, timeout=1)
                             total_files_processed += 1
 
                             # Update last integrity check timestamp for this file
@@ -869,7 +952,10 @@ class MaintenanceService:
             db.session.commit()
 
             logger.info(f"Phase 2a complete: Processed {total_files_processed} files, found {len(changed_files)} changed files")
-            
+
+            # Store changed files for report generation
+            self.changed_files_list = changed_files
+
             # Phase 3: Mark changed files for rescan (leverage parallel scanning)
             if changed_files and not self._is_cancelled_file_changes(file_changes_record):
                 file_changes_record.phase = 'marking_for_rescan'

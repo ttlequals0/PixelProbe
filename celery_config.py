@@ -73,11 +73,26 @@ def create_celery(app=None):
         'result_persistent': True,
         
         # Redis visibility timeout for long-running tasks
+        # v2.5.54: Added resilience settings for connection stability
         'broker_transport_options': {
             'visibility_timeout': 86400,  # 24 hours for large scans
             'fanout_prefix': True,
             'fanout_patterns': True,
             'priority_steps': [0, 3, 6, 9],  # Enable priority support (0=highest, 9=lowest)
+            'socket_timeout': 30,
+            'socket_keepalive': True,
+            'socket_connect_timeout': 30,
+            'retry_on_timeout': True,
+            'health_check_interval': 60,
+        },
+
+        # v2.5.54: Result backend transport options for connection stability
+        'result_backend_transport_options': {
+            'socket_timeout': 30,
+            'socket_keepalive': True,
+            'socket_connect_timeout': 30,
+            'retry_on_timeout': True,
+            'health_check_interval': 60,
         },
 
         # Task priority settings

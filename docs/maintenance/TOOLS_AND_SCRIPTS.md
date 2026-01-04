@@ -1,6 +1,6 @@
 # PixelProbe Tools and Scripts Documentation
 
-This document provides a comprehensive guide to all tools, scripts, and utilities available in PixelProbe v2.4.48.
+This document provides a comprehensive guide to all tools, scripts, and utilities available in PixelProbe v2.5.57+.
 
 ## Table of Contents
 1. [Migration Scripts](#migration-scripts)
@@ -14,48 +14,36 @@ This document provides a comprehensive guide to all tools, scripts, and utilitie
 
 ## Migration Scripts
 
-### Production Database Migrations
+### Automatic Migrations (v2.5.57+)
 
-#### `migrate_db.py`
-**Location:** `/app/migrate_db.py`  
-**Purpose:** Apply v2.2.46/47 database schema updates  
-**Usage:** 
-```bash
-# Inside container
-python3 migrate_db.py
-```
-**When to use:** After upgrading to v2.2.46 or v2.2.47
+As of v2.5.57, **database migrations run automatically on application startup**. No manual intervention is required.
 
-#### `apply_migration_docker.sh`
-**Location:** `/app/apply_migration_docker.sh`  
-**Purpose:** Docker-compatible migration script that works from host or container  
-**Usage:**
-```bash
-# From host machine
-./apply_migration_docker.sh
-```
+#### `app_startup_migration.py`
+**Location:** `/app/tools/app_startup_migration.py`
+**Purpose:** Automatic runtime migrations on app startup
+**Handles:**
+- Authentication tables (`users`, `api_tokens`)
+- Schema columns (`last_heartbeat`, `last_integrity_check_date`, etc.)
+- Performance indexes
+- Constraint updates
 
-#### `apply_v2_2_46_migration.sh`
-**Location:** `/app/apply_v2_2_46_migration.sh`  
-**Purpose:** Bash migration script for v2.2.46 (requires psql)  
-**Usage:**
-```bash
-# Requires psql client
-./apply_v2_2_46_migration.sh
-```
+> **Note:** This runs automatically - no manual execution needed.
+
+### One-Time Migration Scripts
 
 #### `migrate_to_postgres.py`
-**Location:** `/app/migrate_to_postgres.py`  
-**Purpose:** Migrate from SQLite to PostgreSQL database  
+**Location:** `/app/tools/migrate_to_postgres.py`
+**Purpose:** Migrate from SQLite to PostgreSQL database
 **Usage:**
 ```bash
-python3 migrate_to_postgres.py \
+python3 tools/migrate_to_postgres.py \
   --sqlite-path /path/to/pixelprobe.db \
   --pg-host localhost \
   --pg-port 5432 \
   --pg-database pixelprobe \
   --pg-user pixelprobe
 ```
+**When to use:** One-time migration when moving from SQLite to PostgreSQL
 
 ### Schema Fixes
 
@@ -274,10 +262,7 @@ python3 tests/fixtures/media_samples/download_missing_samples.py
 
 ### Most Common Operations
 
-1. **Apply database migration after upgrade:**
-   ```bash
-   python3 migrate_db.py
-   ```
+1. **Database migrations:** Run automatically on app startup (no manual action needed)
 
 2. **Fix false positives:**
    ```bash
