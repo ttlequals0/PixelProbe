@@ -56,12 +56,11 @@ python tools/script_name.py --execute
 
 | Script | Purpose | Usage |
 |--------|---------|--------|
-| `migrate_to_postgres.py` | Migrate SQLite to PostgreSQL | Full database migration |
-| `migrate_db.py` | Apply v2.2.46/47 schema updates | Inside container |
-| `migrate_db_safe.py` | Safe migration with lock handling | Handles database locks |
-| `apply_migration.sql` | Direct SQL migration | Fallback option |
 | `app_startup_migration.py` | Runtime migrations | Auto-run on startup |
-| `run_migration.py` | Legacy migration runner | Wrapper script |
+| `migrate_to_postgres.py` | Migrate SQLite to PostgreSQL | One-time full database migration |
+| `apply_migration.sql` | Direct SQL migration | Fallback option |
+
+> **Note:** As of v2.5.57, migrations run automatically on app startup via `app_startup_migration.py`. Manual migration scripts are no longer needed.
 
 ###  System Utilities
 

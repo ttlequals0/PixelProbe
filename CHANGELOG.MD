@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The file-lock fallback (for local dev without Redis) now works for any process
   - Files affected: `app.py`
 
+### Cleanup
+
+- **Remove obsolete migration scripts**: Migrations now run automatically on startup
+  - Deleted `tools/migrate_db.py` - v2.2.46/47 migrations now handled by app_startup_migration.py
+  - Deleted `tools/migrate_db_safe.py` - lock handling integrated into automatic migrations
+  - Deleted `tools/run_migration.py` - legacy wrapper no longer needed
+  - Updated documentation to reflect automatic migration system
+  - Files affected: `tools/README.md`, `tools/MIGRATION_GUIDE.md`, `docs/maintenance/TOOLS_AND_SCRIPTS.md`
+
 ---
 
 ## [2.5.56] - 2026-01-03

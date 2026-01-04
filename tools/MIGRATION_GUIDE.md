@@ -1,143 +1,108 @@
-# Migration Guide - Resolving Database Lock Issues
+# Migration Guide
 
-## Problem: Migration Script Hanging with "lock not available"
+## Automatic Migrations (v2.5.57+)
 
-When you see this error:
-```
-2025-08-24 03:18:48.419 UTC [21995] LOG: skipping analyze of "scan_state" --- lock not available
-```
+As of v2.5.57, **database migrations run automatically on application startup**. No manual intervention is required.
 
-The database has active connections that are holding locks on tables we need to modify.
+### How It Works
 
-## Solution: Use the Safe Migration Script
+1. When PixelProbe starts, `app_startup_migration.py` checks the database schema
+2. Missing columns, indexes, and tables are created automatically
+3. The app proceeds to normal operation
 
-### Step 1: Stop the PixelProbe Container
-First, stop the PixelProbe container to prevent new connections:
+### What Gets Migrated
 
-```bash
-docker-compose stop pixelprobe
-```
+The automatic migration handles:
+- Authentication tables (`users`, `api_tokens`)
+- Schema columns (`last_heartbeat`, `last_integrity_check_date`, etc.)
+- Performance indexes (composite indexes for common queries)
+- Constraint updates
 
-### Step 2: Run the Safe Migration Script
+## Migrating from SQLite to PostgreSQL
 
-#### Option A: Run from Host (Recommended)
-```bash
-# Set environment variables
-export POSTGRES_HOST=localhost  # or your postgres host
-export POSTGRES_PORT=5432
-export POSTGRES_DB=pixelprobe
-export POSTGRES_USER=pixelprobe
-export POSTGRES_PASSWORD=your-password-here
-
-# Run the safe migration
-python3 tools/migrate_db_safe.py
-```
-
-#### Option B: Run Inside PostgreSQL Container
-```bash
-# Copy script to postgres container
-docker cp tools/migrate_db_safe.py pixelprobe-postgres-1:/tmp/
-
-# Run inside container
-docker exec -it pixelprobe-postgres-1 bash
-cd /tmp
-python3 migrate_db_safe.py
-```
-
-### Step 3: Handle Blocking Connections
-
-The script will:
-1. Check for blocking connections
-2. Show you what's blocking (PIDs, queries)
-3. Ask if you want to terminate them
-
-Example output:
-```
-Checking for blocking connections...
-Found 2 potentially blocking connections
-  PID 12345: active - SELECT * FROM scan_state WHERE...
-  PID 12346: idle in transaction - BEGIN
-
-Terminate blocking connections? (y/n): y
-Terminated blocking connections
-```
-
-### Step 4: Verify Migration
-
-The script will show verification results:
-```
-5. Verifying migration...
-    scan_state.last_update: OK
-    scan_chunks.files_processed: OK
-
- Migration completed successfully!
-```
-
-### Step 5: Restart PixelProbe
+If you're migrating from SQLite to PostgreSQL, use the one-time migration script:
 
 ```bash
-docker-compose start pixelprobe
+python3 tools/migrate_to_postgres.py \
+  --sqlite-path /path/to/pixelprobe.db \
+  --pg-host localhost \
+  --pg-port 5432 \
+  --pg-database pixelprobe \
+  --pg-user pixelprobe
 ```
 
-## If Migration Still Fails
+## Troubleshooting
 
-### Manual SQL Commands
+### Database Lock Issues
 
-If the script can't apply changes due to persistent locks, run these manually when the database is idle:
+If migrations fail due to database locks:
+
+1. **Stop the PixelProbe container**:
+   ```bash
+   docker-compose stop pixelprobe
+   ```
+
+2. **Check for blocking connections** (in PostgreSQL):
+   ```sql
+   SELECT pid, state, query
+   FROM pg_stat_activity
+   WHERE datname = 'pixelprobe';
+   ```
+
+3. **Terminate blocking connections if needed**:
+   ```sql
+   SELECT pg_terminate_backend(pid)
+   FROM pg_stat_activity
+   WHERE datname = 'pixelprobe'
+   AND pid <> pg_backend_pid();
+   ```
+
+4. **Restart PixelProbe**:
+   ```bash
+   docker-compose start pixelprobe
+   ```
+
+### Manual Column Addition
+
+If automatic migration fails to add a column, you can add it manually:
 
 ```sql
 -- Connect to database
 docker exec -it pixelprobe-postgres-1 psql -U pixelprobe -d pixelprobe
 
--- Add missing columns
+-- Add missing column (example)
 ALTER TABLE scan_state ADD COLUMN IF NOT EXISTS last_update TIMESTAMP;
-ALTER TABLE scan_chunks ADD COLUMN IF NOT EXISTS files_processed INTEGER DEFAULT 0;
+```
 
--- Update existing data
-UPDATE scan_state SET last_update = start_time WHERE last_update IS NULL;
-UPDATE scan_chunks SET files_processed = files_scanned WHERE files_processed = 0;
+### Clean Up Stuck Scans
 
--- Clean up stuck scans
-UPDATE scan_state 
+If scans are stuck after a crash:
+
+```sql
+UPDATE scan_state
 SET phase = 'crashed',
     is_active = FALSE,
     error_message = 'Cleaned up manually',
     end_time = CURRENT_TIMESTAMP
-WHERE is_active = TRUE 
+WHERE is_active = TRUE
 AND start_time < CURRENT_TIMESTAMP - INTERVAL '1 hour';
 ```
 
-## Preventing Future Lock Issues
+## Environment Variables
 
-1. **Always stop PixelProbe before migrations**:
-   ```bash
-   docker-compose stop pixelprobe
-   ```
+The migration system uses these environment variables:
 
-2. **Check for active scans before stopping**:
-   - Visit the web UI
-   - Ensure no scans are running
-   - Wait for any active scans to complete
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_HOST` | localhost | PostgreSQL host |
+| `POSTGRES_PORT` | 5432 | PostgreSQL port |
+| `POSTGRES_DB` | pixelprobe | Database name |
+| `POSTGRES_USER` | pixelprobe | Database user |
+| `POSTGRES_PASSWORD` | - | Database password |
 
-3. **Use the safe migration script** instead of the regular one - it handles locks gracefully
+## Support
 
-## Troubleshooting
-
-### "psql: command not found"
-Use the Python migration scripts instead of bash scripts.
-
-### "Connection refused"
-Check that PostgreSQL is running:
-```bash
-docker-compose ps postgres
-```
-
-### "FATAL: password authentication failed"
-Verify your POSTGRES_PASSWORD environment variable matches your docker-compose.yml.
-
-### Database is completely locked
-As a last resort, restart PostgreSQL:
-```bash
-docker-compose restart postgres
-```
-Then immediately run the migration before PixelProbe reconnects.
+For migration issues:
+1. Check logs: `/app/instance/logs/`
+2. Verify database connectivity
+3. Report issues at: https://github.com/ttlequals0/PixelProbe/issues
