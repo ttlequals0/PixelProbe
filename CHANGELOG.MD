@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.58] - 2026-01-29
+
+### Bug Fixes
+
+- **Fix duplicate scheduler pings (4x pings for scheduled tasks)**: Scheduler lock was being acquired by all 4 Gunicorn workers
+  - Root cause: v2.5.11 fix assumed "same hostname = container restart" and force-acquired locks
+  - Problem: With 4 Gunicorn workers in one container, ALL workers share the same hostname
+    - Worker 1 acquires lock: `pixelprobe-app:pid1:timestamp`
+    - Workers 2-4 see "same hostname" and FORCE ACQUIRE (treating it as stale self-lock)
+    - Result: All 4 workers run schedulers, sending 4x pings for scheduled tasks
+  - Solution: Check BOTH hostname AND PID when deciding whether to force-acquire
+    - Same hostname + same PID = self-lock (refresh/re-acquire - OK)
+    - Same hostname + different PID = sibling worker (only acquire if stale >65s)
+    - Different hostname = remote container (only acquire if stale >65s)
+  - Added helper functions for lock parsing and acquisition logic:
+    - `parse_scheduler_lock()`: Parse lock value into (hostname, pid, timestamp)
+    - `should_force_acquire_lock()`: Decision logic with clear reason codes
+    - `start_scheduler_heartbeat()`: Consolidated heartbeat thread creation (DRY)
+  - Added unit tests for all lock scenarios (7 test cases)
+  - Files affected: `app.py`, `tests/test_scheduler.py`
+
+---
+
 ## [2.5.57] - 2026-01-03
 
 ### Bug Fixes
