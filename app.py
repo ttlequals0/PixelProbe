@@ -849,6 +849,64 @@ with app.app_context():
     # When container restarts with same hostname, we can detect stale self-locks
     container_hostname = socket.gethostname()
 
+    # Helper functions for scheduler lock management
+    def parse_scheduler_lock(lock_value: str) -> tuple:
+        """Parse lock value into (hostname, pid, timestamp_str).
+
+        Lock formats:
+        - New: "hostname:pid:timestamp" (e.g., "pixelprobe-app:123:2026-01-01T00:00:00+00:00")
+        - Old: "pid:timestamp" (e.g., "123:2026-01-01T00:00:00+00:00")
+        """
+        parts = lock_value.split(':')
+        # Detect format: new has 3+ parts where first is not a digit (hostname)
+        if len(parts) >= 3 and not parts[0].isdigit():
+            # New format: hostname:pid:timestamp
+            return parts[0], parts[1], ':'.join(parts[2:])
+        # Old format: pid:timestamp - no hostname
+        return None, parts[0], ':'.join(parts[1:])
+
+    def should_force_acquire_lock(lock_hostname, lock_pid, lock_age,
+                                  my_hostname, my_pid, staleness_threshold=65) -> tuple:
+        """Determine if we should force-acquire an existing lock.
+
+        Returns (should_acquire: bool, reason: str).
+
+        Decision matrix:
+        - Same hostname AND same PID: self-lock (refresh/re-acquire)
+        - Same hostname, different PID: sibling worker (only acquire if stale)
+        - Different hostname: remote container (only acquire if stale)
+        """
+        if lock_hostname == my_hostname and lock_pid == my_pid:
+            return True, "self-lock"
+        if lock_hostname == my_hostname:
+            # Sibling worker in same container - don't steal unless stale
+            if lock_age > staleness_threshold:
+                return True, "stale-sibling"
+            return False, "active-sibling"
+        # Different hostname - remote container
+        if lock_age > staleness_threshold:
+            return True, "stale-remote"
+        return False, "active-remote"
+
+    def start_scheduler_heartbeat(lock_key, redis_client, container_hostname):
+        """Start a daemon thread that refreshes the scheduler lock every 30 seconds."""
+        def heartbeat_loop():
+            import time
+            while True:
+                try:
+                    time.sleep(30)
+                    refresh_value = f"{container_hostname}:{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
+                    redis_client.set(lock_key, refresh_value, ex=60)
+                    logger.debug(f"Refreshed scheduler lock in process {os.getpid()}")
+                except Exception as e:
+                    logger.warning(f"Failed to refresh scheduler lock: {e}")
+                    break  # Stop refreshing if we can't connect to Redis
+
+        import threading
+        heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
+        heartbeat_thread.start()
+        logger.info(f"Started scheduler lock heartbeat thread in process {os.getpid()}")
+
     # Use Redis-based distributed lock for scheduler coordination
     # Any process can attempt to acquire the lock - first one wins
     # This allows gunicorn workers to run the scheduler (APScheduler works with gunicorn)
@@ -872,111 +930,37 @@ with app.app_context():
                 scheduler.init_app(app)
                 scheduler_initialized[0] = True
                 app.scheduler_redis_lock_key = lock_key
-
-                # Start background thread to refresh the lock every 30 seconds
-                # This keeps the lock alive while the scheduler is running
-                def refresh_scheduler_lock():
-                    import time
-                    while True:
-                        try:
-                            time.sleep(30)
-                            # Refresh the lock TTL (using hostname:pid:timestamp format)
-                            new_value = f"{container_hostname}:{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
-                            redis_client.set(lock_key, new_value, ex=60)
-                            logger.debug(f"Refreshed scheduler lock in process {os.getpid()}")
-                        except Exception as e:
-                            logger.warning(f"Failed to refresh scheduler lock: {e}")
-                            break  # Stop refreshing if we can't connect to Redis
-
-                import threading
-                lock_refresh_thread = threading.Thread(target=refresh_scheduler_lock, daemon=True)
-                lock_refresh_thread.start()
-                logger.info(f"Started scheduler lock heartbeat thread in process {os.getpid()}")
+                start_scheduler_heartbeat(lock_key, redis_client, container_hostname)
             else:
-                # Check who has the lock and whether it's stale
+                # Check who has the lock and whether it's stale or from same process
                 existing = redis_client.get(lock_key)
                 if existing:
                     existing = existing.decode('utf-8') if isinstance(existing, bytes) else existing
-                    # Check if lock is stale (heartbeat stopped >65s ago) or from same hostname (container restart)
-                    # Lock value format: "hostname:pid:timestamp" (new) or "pid:timestamp" (old)
                     try:
-                        parts = existing.split(':')
-                        # Detect format: new has 3+ parts (hostname:pid:timestamp), old has 2 (pid:timestamp)
-                        if len(parts) >= 3 and not parts[0].isdigit():
-                            # New format: hostname:pid:timestamp
-                            lock_hostname = parts[0]
-                            lock_timestamp_str = ':'.join(parts[2:])  # Rejoin timestamp (has colons)
-                        else:
-                            # Old format: pid:timestamp - no hostname
-                            lock_hostname = None
-                            lock_timestamp_str = ':'.join(parts[1:])
-
+                        # Parse lock to extract hostname, pid, and timestamp
+                        lock_hostname, lock_pid, lock_timestamp_str = parse_scheduler_lock(existing)
                         lock_timestamp = datetime.fromisoformat(lock_timestamp_str)
                         lock_age = (datetime.now(timezone.utc) - lock_timestamp).total_seconds()
+                        current_pid = str(os.getpid())
 
-                        # CRITICAL FIX: If lock is from same hostname, this is a container restart
-                        # The previous instance died without releasing the lock - force acquire
-                        if lock_hostname == container_hostname:
-                            logger.warning(f"Stale self-lock detected (same hostname: {container_hostname}, age={lock_age:.0f}s), forcing acquisition")
+                        # Determine if we should acquire the lock
+                        should_acquire, reason = should_force_acquire_lock(
+                            lock_hostname, lock_pid, lock_age,
+                            container_hostname, current_pid
+                        )
+
+                        if should_acquire:
+                            logger.warning(f"Acquiring scheduler lock (reason={reason}, age={lock_age:.0f}s, holder={existing})")
                             redis_client.set(lock_key, lock_value, ex=60)
-
-                            logger.info(f"Acquired stale self-lock in process {os.getpid()}, initializing scheduler")
+                            logger.info(f"Acquired scheduler lock in process {os.getpid()}, initializing scheduler")
                             scheduler.init_app(app)
                             scheduler_initialized[0] = True
                             app.scheduler_redis_lock_key = lock_key
-
-                            # Start heartbeat thread
-                            def refresh_scheduler_lock_self():
-                                import time
-                                while True:
-                                    try:
-                                        time.sleep(30)
-                                        new_value = f"{container_hostname}:{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
-                                        redis_client.set(lock_key, new_value, ex=60)
-                                        logger.debug(f"Refreshed scheduler lock in process {os.getpid()}")
-                                    except Exception as e:
-                                        logger.warning(f"Failed to refresh scheduler lock: {e}")
-                                        break
-
-                            import threading
-                            lock_refresh_thread = threading.Thread(target=refresh_scheduler_lock_self, daemon=True)
-                            lock_refresh_thread.start()
-                            logger.info(f"Started scheduler lock heartbeat thread in process {os.getpid()}")
-
-                        elif lock_age > 65:
-                            # Stale lock - heartbeat stopped, force takeover
-                            logger.warning(f"Stale scheduler lock detected (age={lock_age:.0f}s > 65s), forcing acquisition")
-                            redis_client.set(lock_key, lock_value, ex=60)
-
-                            # Initialize scheduler since we now own the lock
-                            logger.info(f"Acquired stale Redis scheduler lock in process {os.getpid()}, initializing scheduler")
-                            scheduler.init_app(app)
-                            scheduler_initialized[0] = True
-                            app.scheduler_redis_lock_key = lock_key
-
-                            # Start heartbeat thread
-                            def refresh_scheduler_lock_stale():
-                                import time
-                                while True:
-                                    try:
-                                        time.sleep(30)
-                                        new_value = f"{container_hostname}:{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
-                                        redis_client.set(lock_key, new_value, ex=60)
-                                        logger.debug(f"Refreshed scheduler lock in process {os.getpid()}")
-                                    except Exception as e:
-                                        logger.warning(f"Failed to refresh scheduler lock: {e}")
-                                        break
-
-                            import threading
-                            lock_refresh_thread = threading.Thread(target=refresh_scheduler_lock_stale, daemon=True)
-                            lock_refresh_thread.start()
-                            logger.info(f"Started scheduler lock heartbeat thread in process {os.getpid()}")
+                            start_scheduler_heartbeat(lock_key, redis_client, container_hostname)
                         else:
-                            logger.info(f"Scheduler already running (lock held by: {existing}, age={lock_age:.0f}s), skipping in process {os.getpid()}")
+                            logger.info(f"Scheduler lock held by sibling/remote (reason={reason}, holder={existing}, age={lock_age:.0f}s), skipping in process {os.getpid()}")
 
-                            # Start background retry thread - lock may expire soon after container restart
-                            # This handles the case where container restarts quickly and the old lock
-                            # hasn't expired yet, but will expire within 60 seconds
+                            # Start background retry thread for stale lock recovery
                             def retry_scheduler_lock():
                                 import time
                                 retry_count = 0
@@ -987,94 +971,51 @@ with app.app_context():
                                     retry_count += 1
 
                                     try:
-                                        # Check if lock is now available or stale
                                         current_lock = redis_client.get(lock_key)
                                         if not current_lock:
                                             # Lock expired, try to acquire
                                             new_value = f"{container_hostname}:{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
-                                            acquired = redis_client.set(lock_key, new_value, nx=True, ex=60)
-                                            if acquired:
+                                            retry_acquired = redis_client.set(lock_key, new_value, nx=True, ex=60)
+                                            if retry_acquired:
                                                 logger.info(f"Retry #{retry_count}: Acquired scheduler lock, initializing scheduler")
                                                 with app.app_context():
                                                     scheduler.init_app(app)
                                                 scheduler_initialized[0] = True
                                                 app.scheduler_redis_lock_key = lock_key
-
-                                                # Start heartbeat thread for the newly acquired lock
-                                                def refresh_lock_retry():
-                                                    import time as time_mod
-                                                    while True:
-                                                        try:
-                                                            time_mod.sleep(30)
-                                                            refresh_value = f"{container_hostname}:{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
-                                                            redis_client.set(lock_key, refresh_value, ex=60)
-                                                            logger.debug(f"Refreshed scheduler lock in process {os.getpid()}")
-                                                        except Exception as refresh_err:
-                                                            logger.warning(f"Failed to refresh scheduler lock: {refresh_err}")
-                                                            break
-
-                                                heartbeat_thread = threading.Thread(target=refresh_lock_retry, daemon=True)
-                                                heartbeat_thread.start()
-                                                logger.info(f"Started scheduler lock heartbeat thread in process {os.getpid()}")
+                                                start_scheduler_heartbeat(lock_key, redis_client, container_hostname)
                                                 break
                                         else:
-                                            # Check if stale - parse both old and new lock formats
+                                            # Check if lock is now stale
                                             lock_str = current_lock.decode('utf-8') if isinstance(current_lock, bytes) else current_lock
-                                            retry_parts = lock_str.split(':')
-                                            # Detect format: new has 3+ parts (hostname:pid:timestamp), old has 2 (pid:timestamp)
-                                            if len(retry_parts) >= 3 and not retry_parts[0].isdigit():
-                                                retry_lock_hostname = retry_parts[0]
-                                                retry_ts_str = ':'.join(retry_parts[2:])
-                                            else:
-                                                retry_lock_hostname = None
-                                                retry_ts_str = ':'.join(retry_parts[1:])
-
+                                            retry_hostname, retry_pid, retry_ts_str = parse_scheduler_lock(lock_str)
                                             lock_ts = datetime.fromisoformat(retry_ts_str)
                                             current_age = (datetime.now(timezone.utc) - lock_ts).total_seconds()
+                                            retry_current_pid = str(os.getpid())
 
-                                            # Check for same-hostname (self-lock) or stale lock
-                                            should_acquire = False
-                                            if retry_lock_hostname == container_hostname:
-                                                logger.info(f"Retry #{retry_count}: Stale self-lock detected (same hostname)")
-                                                should_acquire = True
-                                            elif current_age > 65:
-                                                should_acquire = True
+                                            retry_should_acquire, retry_reason = should_force_acquire_lock(
+                                                retry_hostname, retry_pid, current_age,
+                                                container_hostname, retry_current_pid
+                                            )
 
-                                            if should_acquire:
-                                                # Force acquire stale lock
+                                            if retry_should_acquire:
                                                 new_value = f"{container_hostname}:{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
                                                 redis_client.set(lock_key, new_value, ex=60)
-                                                logger.info(f"Retry #{retry_count}: Acquired stale lock (age={current_age:.0f}s), initializing scheduler")
+                                                logger.info(f"Retry #{retry_count}: Acquired lock (reason={retry_reason}, age={current_age:.0f}s), initializing scheduler")
                                                 with app.app_context():
                                                     scheduler.init_app(app)
                                                 scheduler_initialized[0] = True
                                                 app.scheduler_redis_lock_key = lock_key
-
-                                                # Start heartbeat thread
-                                                def refresh_lock_stale_retry():
-                                                    import time as time_mod
-                                                    while True:
-                                                        try:
-                                                            time_mod.sleep(30)
-                                                            refresh_value = f"{container_hostname}:{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
-                                                            redis_client.set(lock_key, refresh_value, ex=60)
-                                                            logger.debug(f"Refreshed scheduler lock in process {os.getpid()}")
-                                                        except Exception as refresh_err:
-                                                            logger.warning(f"Failed to refresh scheduler lock: {refresh_err}")
-                                                            break
-
-                                                heartbeat_thread = threading.Thread(target=refresh_lock_stale_retry, daemon=True)
-                                                heartbeat_thread.start()
-                                                logger.info(f"Started scheduler lock heartbeat thread in process {os.getpid()}")
+                                                start_scheduler_heartbeat(lock_key, redis_client, container_hostname)
                                                 break
                                             else:
-                                                logger.debug(f"Retry #{retry_count}: Lock still held (age={current_age:.0f}s)")
+                                                logger.debug(f"Retry #{retry_count}: Lock still held (reason={retry_reason}, age={current_age:.0f}s)")
                                     except Exception as retry_err:
                                         logger.warning(f"Retry #{retry_count} failed: {retry_err}")
 
                                 if not scheduler_initialized[0]:
                                     logger.warning("Scheduler lock retry exhausted - another process must have it")
 
+                            import threading
                             retry_thread = threading.Thread(target=retry_scheduler_lock, daemon=True)
                             retry_thread.start()
                             logger.info(f"Started scheduler lock retry thread in process {os.getpid()}")
