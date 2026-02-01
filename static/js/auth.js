@@ -31,7 +31,6 @@ const AuthManager = {
             this.currentUser = data.user;
             this.updateUserDisplay();
         } catch (error) {
-            console.error('Failed to check auth status:', error);
             window.location.href = '/login';
         }
     },
@@ -105,7 +104,6 @@ const AuthManager = {
             // (user might already be logged out)
             window.location.href = '/login';
         } catch (error) {
-            console.error('Logout failed:', error);
             // Redirect anyway - connection issues shouldn't prevent logout
             window.location.href = '/login';
         }
@@ -152,7 +150,6 @@ const AuthManager = {
                 usersList.appendChild(userItem);
             });
         } catch (error) {
-            console.error('Failed to load users:', error);
         }
     },
 
@@ -263,7 +260,6 @@ const AuthManager = {
                 tokensList.appendChild(tokenItem);
             });
         } catch (error) {
-            console.error('Failed to load tokens:', error);
         }
     },
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-PixelProbe uses SQLAlchemy ORM with SQLite as the default database. The schema is designed to efficiently track media file scans, their results, and system configuration.
+PixelProbe uses SQLAlchemy ORM with PostgreSQL as the required database. The schema is designed to efficiently track media file scans, their results, and system configuration.
 
 ## Entity Relationship Diagram
 
@@ -257,6 +257,6 @@ When adding columns to existing tables:
 - Query result caching for statistics
 
 ### Scaling
-- SQLite handles up to 10M+ records efficiently
-- For larger deployments, PostgreSQL/MySQL supported via DATABASE_URL
+- PostgreSQL handles large datasets efficiently with proper indexing
+- Connection pooling configured for production workloads
 - Partitioning strategies available for very large datasets

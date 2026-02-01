@@ -4,41 +4,59 @@ from datetime import datetime, timezone
 
 class TestScanManagementEndpoints:
     """Test scan management endpoints"""
-    
-    def test_reset_stuck_scans(self, authenticated_client, app, db):
-        """Test resetting stuck scans"""
+
+    def test_scan_recovery_with_active_scans(self, authenticated_client, app, db):
+        """Test scan recovery cleans up active scans"""
         with app.app_context():
-            # Create stuck scan results
-            for i in range(3):
-                result = ScanResult(
-                    file_path=f'/test/stuck{i}.mp4',
-                    scan_status='scanning',
-                    scan_date=datetime.now(timezone.utc)
-                )
-                db.session.add(result)
+            # Create an active scan state
+            scan_state = ScanState.get_or_create()
+            scan_state.is_active = True
+            scan_state.phase = 'scanning'
+            scan_state.start_time = datetime.now(timezone.utc)
             db.session.commit()
-            
-            # Reset stuck scans
-            response = authenticated_client.post('/api/reset-stuck-scans')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['count'] == 3
-            assert 'Reset 3 stuck files' in data['message']
-            
-            # Verify reset
-            stuck_count = ScanResult.query.filter_by(scan_status='scanning').count()
-            assert stuck_count == 0
-            pending_count = ScanResult.query.filter_by(scan_status='pending').count()
-            assert pending_count == 3
-    
-    def test_reset_stuck_scans_none_found(self, authenticated_client, db):
-        """Test resetting when no stuck scans"""
-        response = authenticated_client.post('/api/reset-stuck-scans')
-        assert response.status_code == 200
-        data = response.get_json()
-        assert data['count'] == 0
-        assert 'Reset 0 stuck files' in data['message']
-    
+
+            # Mock scan service to report scan as not running
+            original_is_running = app.scan_service.is_scan_running
+            app.scan_service.is_scan_running = lambda: False
+
+            try:
+                # Use scan recovery endpoint
+                response = authenticated_client.post('/api/scan/recovery')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['status'] == 'success'
+                assert 'cleaned_count' in data
+                assert data['cleaned_count'] >= 1
+
+                # Verify recovery
+                db.session.refresh(scan_state)
+                assert scan_state.is_active is False
+                assert scan_state.phase == 'crashed'
+            finally:
+                app.scan_service.is_scan_running = original_is_running
+
+    def test_scan_recovery_none_active(self, authenticated_client, app, db):
+        """Test scan recovery when no active scans"""
+        with app.app_context():
+            # Ensure no active scans
+            scan_state = ScanState.get_or_create()
+            scan_state.is_active = False
+            scan_state.phase = 'idle'
+            db.session.commit()
+
+            # Mock scan service
+            original_is_running = app.scan_service.is_scan_running
+            app.scan_service.is_scan_running = lambda: False
+
+            try:
+                response = authenticated_client.post('/api/scan/recovery')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['status'] == 'success'
+                assert data['cleaned_count'] == 0
+            finally:
+                app.scan_service.is_scan_running = original_is_running
+
     def test_reset_for_rescan_single_file(self, authenticated_client, app, db):
         """Test resetting single file for rescan"""
         with app.app_context():
@@ -90,51 +108,6 @@ class TestScanManagementEndpoints:
         response = authenticated_client.post('/api/reset-files-by-path', json={})
         assert response.status_code == 400
         assert 'No file paths provided' in response.get_json()['error']
-    
-    def test_recover_stuck_scan(self, authenticated_client, app, db):
-        """Test recovering a stuck scan"""
-        with app.app_context():
-            # Create active scan state
-            scan_state = ScanState.get_or_create()
-            scan_state.is_active = True
-            scan_state.phase = 'scanning'
-            scan_state.files_processed = 100  # Add files processed to make it stuck
-            scan_state.start_time = datetime.now(timezone.utc)
-            db.session.commit()
-            
-            # Mock scan service to report scan as not running (stuck)
-            original_is_running = app.scan_service.is_scan_running
-            app.scan_service.is_scan_running = lambda: False
-            
-            try:
-                # Recover scan
-                response = authenticated_client.post('/api/recover-stuck-scan')
-                assert response.status_code == 200
-                data = response.get_json()
-                assert 'Scan state recovered' in data['message']
-                assert data['stuck_files_reset'] >= 0
-                
-                # Verify recovery
-                db.session.refresh(scan_state)
-                assert scan_state.is_active is False
-                assert scan_state.phase == 'error'
-            finally:
-                # Restore original method
-                app.scan_service.is_scan_running = original_is_running
-    
-    def test_recover_stuck_scan_not_stuck(self, authenticated_client, app, db):
-        """Test recovering when scan not stuck"""
-        with app.app_context():
-            # Create idle scan state
-            scan_state = ScanState.get_or_create()
-            scan_state.is_active = False
-            scan_state.phase = 'idle'
-            db.session.commit()
-            
-            # Try to recover
-            response = authenticated_client.post('/api/recover-stuck-scan')
-            assert response.status_code == 200
-            # The endpoint always returns success even if no scan was stuck
 
 
 class TestScanCancellationEndpoint:

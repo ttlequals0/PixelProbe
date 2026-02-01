@@ -2,7 +2,6 @@
 
 import logging
 import time
-from functools import wraps
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -104,30 +103,6 @@ class ProgressTracker:
         else:
             return f"{phase_name}: {files_processed} of {total_files:,} files{eta_str}"
 
-
-def handle_db_errors(rollback_func=None):
-    """Decorator to handle database errors consistently
-    
-    This eliminates the redundant try-except patterns throughout the codebase.
-    """
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                logger.error(f"Database error in {func.__name__}: {str(e)}")
-                if rollback_func:
-                    try:
-                        rollback_func()
-                        logger.info("Database rollback completed")
-                    except:
-                        logger.error("Failed to rollback database")
-                raise
-        return wrapper
-    return decorator
-
-
 def log_operation_status(operation_type, status, details=None):
     """Centralized operation status logging
     
@@ -197,21 +172,6 @@ def create_state_dict(state_obj, extra_fields=None):
                 base_dict[field] = value
     
     return base_dict
-
-
-def update_state_progress(state_obj, files_processed=None, current_file=None, message=None):
-    """Common method to update progress tracking fields
-    
-    This eliminates redundant progress update code across operations.
-    """
-    if files_processed is not None:
-        state_obj.files_processed = files_processed
-        state_obj.phase_current = files_processed
-    if current_file is not None:
-        state_obj.current_file = current_file
-    if message is not None:
-        state_obj.progress_message = message
-    return state_obj
 
 
 def mark_operation_complete(state_obj, message=None):

@@ -921,16 +921,13 @@ def cancel_scan():
         return {'error': str(e)}, 400
 
 @scan_bp.route('/force-cleanup-scan', methods=['POST'])
-@scan_bp.route('/scan/recovery', methods=['POST'])  # New consolidated endpoint
+@scan_bp.route('/scan/recovery', methods=['POST'])
 @rate_limit("5 per minute")
 @auth_required
 def force_cleanup_scan():
     """Force cleanup of stuck scan states - emergency recovery endpoint
-    
-    Note: This consolidates multiple recovery endpoints:
-    - /reset-stuck-scans (deprecated)
-    - /recover-stuck-scan (deprecated)
-    - /force-cleanup-scan (kept for compatibility)
+
+    Available at both /force-cleanup-scan (legacy) and /scan/recovery endpoints.
     """
     logger.warning("Force cleanup scan endpoint called - emergency recovery")
     try:
@@ -1124,48 +1121,6 @@ def scan_files_parallel():
     except ValueError as e:
         return {'error': str(e)}, 400
 
-@scan_bp.route('/reset-stuck-scans', methods=['POST'])
-@rate_limit("5 per minute")
-@auth_required
-def reset_stuck_scans():
-    """[DEPRECATED - Use /scan/recovery instead] Reset files that are stuck in 'scanning' state and clear active scan state"""
-    try:
-        # CRITICAL: Also reset any active scan state to allow new scans
-        active_scans = ScanState.query.filter_by(is_active=True).all()
-        scan_state_count = 0
-        
-        for scan in active_scans:
-            logger.warning(f"Resetting stuck scan state {scan.scan_id} in phase {scan.phase}")
-            scan.is_active = False
-            scan.phase = 'crashed'
-            scan.error_message = 'Reset due to stuck scan'
-            scan.end_time = datetime.now(timezone.utc)
-            scan_state_count += 1
-        
-        # Find all results stuck in 'scanning' state
-        stuck_results = ScanResult.query.filter_by(scan_status='scanning').all()
-        count = len(stuck_results)
-        
-        # Reset them to 'pending'
-        for result in stuck_results:
-            result.scan_status = 'pending'
-            result.error_message = 'Reset from stuck scanning state'
-        
-        db.session.commit()
-        
-        # Also ensure the scan service knows no scan is running
-        if hasattr(current_app, 'scan_service'):
-            current_app.scan_service.current_scan_id = None
-
-        return {
-            'message': f'Reset {count} stuck files and {scan_state_count} active scans',
-            'count': count,
-            'scan_states_reset': scan_state_count
-        }
-    except Exception as e:
-        logger.error(f"Error resetting stuck scans: {e}")
-        return {'error': str(e)}, 500
-
 @scan_bp.route('/reset-for-rescan', methods=['POST'])
 @rate_limit("5 per minute")
 @auth_required
@@ -1228,63 +1183,6 @@ def reset_for_rescan():
 
     except Exception as e:
         logger.error(f"Error resetting files for rescan: {e}")
-        return {'error': str(e)}, 500
-
-@scan_bp.route('/recover-stuck-scan', methods=['POST'])
-@rate_limit("5 per minute")
-@auth_required
-def recover_stuck_scan():
-    """[DEPRECATED - Use /scan/recovery instead] Attempt to recover from a stuck scan state"""
-    try:
-        # Check if scan is actually stuck (has progress but not running)
-        is_running = current_app.scan_service.is_scan_running()
-        scan_state = ScanState.get_or_create()
-        
-        # A scan is stuck if:
-        # 1. Database says it's active but service says it's not running
-        # 2. It's in scanning phase with files processed > 0
-        is_stuck = (scan_state.is_active and not is_running and 
-                   scan_state.phase in ['discovering', 'adding', 'scanning'] and
-                   scan_state.files_processed > 0)
-        
-        if not is_stuck:
-            return {
-                'message': 'No stuck scan detected',
-                'is_active': scan_state.is_active,
-                'is_running': is_running,
-                'phase': scan_state.phase
-            }
-        
-        logger.warning(f"Recovering stuck scan: phase={scan_state.phase}, files_processed={scan_state.files_processed}")
-        
-        # Mark the scan as errored
-        scan_state.error_scan('Scan was stuck and has been recovered')
-        db.session.commit()
-        
-        # Reset any files stuck in 'scanning' status
-        stuck_results = ScanResult.query.filter_by(scan_status='scanning').all()
-        stuck_count = len(stuck_results)
-        for result in stuck_results:
-            result.scan_status = 'pending'
-            result.error_message = 'Reset from stuck scanning state'
-        
-        if stuck_count > 0:
-            db.session.commit()
-            logger.info(f"Reset {stuck_count} files from 'scanning' to 'pending' status")
-        
-        # Clear the service's internal state
-        current_app.scan_service.scan_cancelled = False
-        current_app.scan_service.current_scan_thread = None
-        
-        return {
-            'message': 'Scan state recovered successfully',
-            'stuck_files_reset': stuck_count,
-            'previous_phase': scan_state.phase,
-            'files_processed': scan_state.files_processed
-        }
-        
-    except Exception as e:
-        logger.error(f"Error recovering stuck scan: {e}")
         return {'error': str(e)}, 500
 
 @scan_bp.route('/force-scan-pending', methods=['POST'])

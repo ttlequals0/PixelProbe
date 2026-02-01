@@ -3,66 +3,17 @@
 This document provides a comprehensive guide to all tools, scripts, and utilities available in PixelProbe v2.5.57+.
 
 ## Table of Contents
-1. [Migration Scripts](#migration-scripts)
-2. [Database Tools](#database-tools)
-3. [False Positive Fixes](#false-positive-fixes)
-4. [Development Scripts](#development-scripts)
-5. [Testing Tools](#testing-tools)
-6. [Docker Scripts](#docker-scripts)
-
----
-
-## Migration Scripts
-
-### Automatic Migrations (v2.5.57+)
-
-As of v2.5.57, **database migrations run automatically on application startup**. No manual intervention is required.
-
-#### `app_startup_migration.py`
-**Location:** `/app/tools/app_startup_migration.py`
-**Purpose:** Automatic runtime migrations on app startup
-**Handles:**
-- Authentication tables (`users`, `api_tokens`)
-- Schema columns (`last_heartbeat`, `last_integrity_check_date`, etc.)
-- Performance indexes
-- Constraint updates
-
-> **Note:** This runs automatically - no manual execution needed.
-
-### One-Time Migration Scripts
-
-#### `migrate_to_postgres.py`
-**Location:** `/app/tools/migrate_to_postgres.py`
-**Purpose:** Migrate from SQLite to PostgreSQL database
-**Usage:**
-```bash
-python3 tools/migrate_to_postgres.py \
-  --sqlite-path /path/to/pixelprobe.db \
-  --pg-host localhost \
-  --pg-port 5432 \
-  --pg-database pixelprobe \
-  --pg-user pixelprobe
-```
-**When to use:** One-time migration when moving from SQLite to PostgreSQL
-
-### Schema Fixes
-
-#### `migrations/fix_v2_2_46_issues.py`
-**Purpose:** Fix schema issues introduced in v2.2.46  
-**Adds:** last_update column, files_processed column  
-
-#### `migrations/fix_scan_issues_v2.2.6.py`
-**Purpose:** Historical migration for v2.2.6 scan issues  
-
-#### `migrations/add_celery_task_id_column.py`
-**Purpose:** Add Celery task tracking column  
-
-#### `migrations/add_exclusions_table.py`
-**Purpose:** Create exclusions table for path/extension filtering  
+1. [Database Tools](#database-tools)
+2. [False Positive Fixes](#false-positive-fixes)
+3. [Development Scripts](#development-scripts)
+4. [Testing Tools](#testing-tools)
+5. [Docker Scripts](#docker-scripts)
 
 ---
 
 ## Database Tools
+
+> **Note:** Database migrations run automatically on application startup via `app_startup_migration.py`. No manual intervention is required.
 
 ### Maintenance Scripts
 
@@ -262,9 +213,7 @@ python3 tests/fixtures/media_samples/download_missing_samples.py
 
 ### Most Common Operations
 
-1. **Database migrations:** Run automatically on app startup (no manual action needed)
-
-2. **Fix false positives:**
+1. **Fix false positives:**
    ```bash
    python3 tools/fix_nal_warnings.py
    python3 tools/fix_gif_header_false_positives.py

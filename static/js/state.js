@@ -60,7 +60,6 @@ class AppState {
                 this.activeTab = state.activeTab || 'dashboard';
             }
         } catch (e) {
-            console.warn('Failed to load persisted state:', e);
         }
     }
     
@@ -75,7 +74,6 @@ class AppState {
             };
             localStorage.setItem('pixelprobe_state', JSON.stringify(stateToPersist));
         } catch (e) {
-            console.warn('Failed to persist state:', e);
         }
     }
     
@@ -102,7 +100,6 @@ class AppState {
             try {
                 callback(data);
             } catch (e) {
-                console.error(`Error in listener for ${event}:`, e);
             }
         });
     }
@@ -424,7 +421,6 @@ class AppState {
                 errorFiles: data.error_files || 0
             });
         } catch (error) {
-            console.error('Failed to fetch stats:', error);
             this.setError('Failed to fetch statistics');
         }
     }
@@ -442,7 +438,6 @@ class AppState {
             const data = await response.json();
             this.notifyListeners('files:refreshed', data);
         } catch (error) {
-            console.error('Failed to refresh file list:', error);
             this.setError('Failed to refresh file list');
         }
     }
@@ -464,15 +459,12 @@ window.appState = new AppState();
 document.addEventListener('DOMContentLoaded', function() {
     // Set up initial subscriptions
     window.appState.subscribe('scan:started', (data) => {
-        console.log('Scan started:', data);
     });
     
     window.appState.subscribe('scan:completed', (data) => {
-        console.log('Scan completed:', data);
     });
     
     window.appState.subscribe('error:occurred', (data) => {
-        console.error('Application error:', data);
     });
     
     // Load initial stats
