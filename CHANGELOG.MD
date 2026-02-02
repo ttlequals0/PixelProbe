@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.61] - 2026-02-02
+
+### Bug Fixes
+
+- **Fix file changes scan SQLAlchemy detached instance error**: Long-running integrity scans (20+ hours for 1M+ files) would crash at ~99.95% with "Instance has been deleted" errors
+  - Root cause: ORM objects held in memory for the entire scan duration get expired by `db.session.commit()` calls
+  - If concurrent jobs (e.g., "Check for stuck scans" every 5 minutes) delete database rows, subsequent attribute access on expired objects crashes
+  - Solution: Load only needed columns and convert to plain Python dictionaries immediately after query
+  - Dictionaries are immune to SQLAlchemy session expiration and concurrent database changes
+  - Files affected: `pixelprobe/services/maintenance_service.py`
+
+---
+
 ## [2.5.60] - 2026-02-01
 
 ### Cleanup
