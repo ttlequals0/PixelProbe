@@ -303,12 +303,12 @@ class TestScanExecution:
 
 class TestScanStateRecovery:
     """Test scan state recovery mechanisms"""
-    
-    def test_stuck_scan_recovery_endpoint(self, authenticated_client, app, db):
-        """Test that stuck scan recovery endpoint works"""
+
+    def test_scan_recovery_endpoint(self, authenticated_client, app, db):
+        """Test that scan recovery endpoint works"""
         with app.app_context():
             from datetime import datetime, timezone, timedelta
-            
+
             # Create a stuck scan from over an hour ago
             stuck_scan = ScanState(
                 scan_id='stuck-scan',
@@ -321,26 +321,23 @@ class TestScanStateRecovery:
             )
             db.session.add(stuck_scan)
             db.session.commit()
-            
+
             # Ensure scan service thinks no scan is running
             app.scan_service.current_scan_thread = None
-            
-            # Try recovery
-            response = authenticated_client.post('/api/recover-stuck-scan')
+
+            # Try recovery using the consolidated endpoint
+            response = authenticated_client.post('/api/scan/recovery')
             assert response.status_code == 200
-            
+
             data = response.get_json()
-            assert 'message' in data
-            
-            # Check if it was detected as stuck and recovered
-            if 'recovered successfully' in data.get('message', ''):
-                # Verify scan is no longer stuck
-                scan = ScanState.query.filter_by(scan_id='stuck-scan').first()
-                assert scan.is_active is False or scan.phase in ['completed', 'error', 'crashed']
-            else:
-                # If not detected as stuck, that's also acceptable for test purposes
-                # since the endpoint's stuck detection logic may vary
-                assert 'No stuck scan detected' in data.get('message', '')
+            assert data['status'] == 'success'
+            assert 'cleaned_count' in data
+            assert data['cleaned_count'] >= 1
+
+            # Verify scan is cleaned up
+            scan = ScanState.query.filter_by(scan_id='stuck-scan').first()
+            assert scan.is_active is False
+            assert scan.phase == 'crashed'
     
     def test_force_cleanup_endpoint(self, authenticated_client, app, db, test_data_dir):
         """Test force cleanup of all active scans"""

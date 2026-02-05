@@ -197,7 +197,6 @@ Fine-tune scanning behavior by excluding specific paths and file types:
 - [Docker Setup Guide](docs/DOCKER_SETUP.md) - Complete Docker Compose setup with container explanations
 - [Installation Guide](docs/INSTALLATION.md) - Detailed installation instructions
 - [Configuration Guide](docs/CONFIGURATION.md) - Environment variables and configuration options
-- [Migration Guides](docs/migration/) - Upgrading from previous versions
 
 ### System & Architecture
 - [System Architecture](docs/SYSTEM_ARCHITECTURE.md) - Container architecture, Celery queues, and data flow
@@ -287,51 +286,7 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
 ##  Requirements
 
-**Important**: PixelProbe requires PostgreSQL. SQLite is no longer supported.
-
-### Quick Migration from SQLite
-
-1. **Backup your data**:
-   ```bash
-   cp /path/to/instance/pixelprobe.db /path/to/instance/pixelprobe.db.backup
-   ```
-
-2. **Update Docker Compose** - Add PostgreSQL and Redis services:
-   ```yaml
-   services:
-     postgres:
-       image: postgres:15-alpine
-       environment:
-         POSTGRES_DB: pixelprobe
-         POSTGRES_USER: pixelprobe
-         POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-       volumes:
-         - postgres_data:/var/lib/postgresql/data
-   
-     mediachecker:
-       image: ttlequals0/pixelprobe:2.4.0
-       environment:
-         POSTGRES_HOST: postgres
-         POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-         # ... other settings
-   ```
-
-3. **Run migration**:
-   ```bash
-   docker-compose up -d postgres
-   sleep 15
-   
-   # Migrate existing SQLite data
-   docker run --rm \
-     --network pixelprobe_pixelprobe-network \
-     -v "/path/to/instance/pixelprobe.db:/app/pixelprobe.db:ro" \
-     -e POSTGRES_HOST=postgres \
-     -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
-     ttlequals0/pixelprobe:2.4.0 \
-     python migrate_to_postgres.py --sqlite-path /app/pixelprobe.db
-   ```
-
-For detailed migration instructions, see [MIGRATION_v2.2.0.md](MIGRATION_v2.2.0.md).
+**Important**: PixelProbe requires PostgreSQL.
 
 ## Configuration
 

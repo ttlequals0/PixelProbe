@@ -52,17 +52,7 @@ python tools/script_name.py --execute
 | `analyze_gif_header_errors.py` | Analyze GIF error patterns | Statistics and patterns |
 | `analyze_webp_errors.py` | Analyze WebP issues | Error distribution |
 
-### 🔄 Migration Scripts
-
-| Script | Purpose | Usage |
-|--------|---------|--------|
-| `app_startup_migration.py` | Runtime migrations | Auto-run on startup |
-| `migrate_to_postgres.py` | Migrate SQLite to PostgreSQL | One-time full database migration |
-| `apply_migration.sql` | Direct SQL migration | Fallback option |
-
-> **Note:** As of v2.5.57, migrations run automatically on app startup via `app_startup_migration.py`. Manual migration scripts are no longer needed.
-
-###  System Utilities
+### System Utilities
 
 | Script | Purpose | Usage |
 |--------|---------|--------|

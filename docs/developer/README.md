@@ -16,7 +16,7 @@
 
 - Python 3.8+
 - FFmpeg and ImageMagick installed
-- SQLite3 (for development)
+- PostgreSQL (required)
 - Git
 
 ### Local Development Setup
@@ -87,7 +87,7 @@ docker-compose up -d
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Web Client    │────▶│   Flask API     │────▶│   SQLite DB     │
+│   Web Client    │────▶│   Flask API     │────▶│  PostgreSQL DB  │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
                                │
                                ▼
@@ -502,9 +502,9 @@ Regular backups of:
    - Ensure FFmpeg is in PATH
    - Install with package manager
 
-3. **Database locked errors**
-   - Check for concurrent access
-   - Consider PostgreSQL for production
+3. **Database connection issues**
+   - Check PostgreSQL service is running
+   - Verify DATABASE_URL environment variable
 
 4. **Memory issues with large scans**
    - Increase worker memory limits

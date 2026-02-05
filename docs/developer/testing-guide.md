@@ -164,7 +164,7 @@ def db(app):
 @pytest.fixture
 def scan_service(db):
     """Create ScanService instance"""
-    return ScanService(database_uri='sqlite:///:memory:')
+    return ScanService()
 
 @pytest.fixture
 def mock_scan_result():
@@ -256,10 +256,10 @@ ffmpeg -f lavfi -i testsrc=duration=1:size=320x240:rate=30 \
 
 ### Test Database
 
-Tests use an in-memory SQLite database that's created fresh for each test:
+Tests use a PostgreSQL test database that's created fresh for each test run:
 - No persistence between tests
-- Fast execution
 - Identical schema to production
+- Configure via `TEST_DATABASE_URL` environment variable
 
 ## Continuous Integration
 

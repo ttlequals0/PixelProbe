@@ -9,8 +9,8 @@
 - `SYSTEM_INFO_TIMEOUT=30` - Timeout for system info operations (default: 30 seconds)
 
 ### Database Performance
-- `DATABASE_URL=sqlite:///media_checker.db` - Database connection string
-- SQLite connection pooling is automatically configured with:
+- `DATABASE_URL=postgresql://user:pass@host/pixelprobe` - Database connection string
+- PostgreSQL connection pooling is automatically configured with:
   - Pool pre-ping: enabled
   - Pool recycle: 300 seconds
   - Connection timeout: 15 seconds
@@ -54,8 +54,8 @@ docker stats pixelprobe
 ### Database Performance
 Check database size and indexes:
 ```bash
-sqlite3 media_checker.db ".schema"
-sqlite3 media_checker.db ".indexes"
+psql $DATABASE_URL -c "\dt+"
+psql $DATABASE_URL -c "\di+"
 ```
 
 ### Scanning Performance
@@ -69,7 +69,7 @@ docker logs pixelprobe | grep "Scan completed"
 ### For 1M+ Files
 - Increase `MAX_SCAN_WORKERS` to 8-16 (based on CPU cores)
 - Set `RESET_BATCH_SIZE` to 1000-2000
-- Consider using PostgreSQL instead of SQLite for better concurrent performance
+- Ensure PostgreSQL is tuned for high concurrent workloads
 
 ### For Memory-Constrained Environments
 - Reduce `MAX_SCAN_WORKERS` to 2-4

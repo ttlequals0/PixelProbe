@@ -173,10 +173,8 @@ class APIClient {
         } catch (error) {
             // Handle network/connection errors silently for stats updates
             if (endpoint === '/stats' || endpoint === '/system-info') {
-                console.warn('Stats update failed (server may be restarting):', error.message);
                 return null;
             }
-            console.error('API request failed:', error);
             throw error;
         }
     }
@@ -261,16 +259,13 @@ class APIClient {
 
     // Cancel operations
     async cancelScan() {
-        console.log('Calling /api/cancel-scan endpoint...');
         try {
             const result = await this.request('/cancel-scan', {
                 method: 'POST',
                 body: JSON.stringify({})
             });
-            console.log('Cancel scan response:', result);
             return result;
         } catch (error) {
-            console.error('Error cancelling scan:', error);
             throw error;
         }
     }
@@ -326,7 +321,6 @@ class StatsDashboard {
             }
         } catch (error) {
             // Silently handle stats update failures (likely during server restart)
-            console.debug('Stats update skipped:', error.message);
         }
     }
 
@@ -374,10 +368,8 @@ class ProgressManager {
     }
 
     show() {
-        console.log('ProgressManager.show() called, container exists:', !!this.progressContainer);
         if (this.progressContainer) {
             this.progressContainer.style.display = 'block';
-            console.log('Progress container display set to block');
             
             // Update progress title based on operation type
             const progressTitle = this.progressContainer.querySelector('.progress-title');
@@ -468,19 +460,16 @@ class ProgressManager {
                     
                     if (progressChanged) {
                         // Progress is still changing, not actually stuck
-                        console.log('Progress changed, not stuck:', lastProgress.current, '->', status.current);
                         this._stuckCounter = 0;
                     } else {
                         // Progress hasn't changed, increment stuck counter
                         this._stuckCounter = (this._stuckCounter || 0) + 1;
-                        console.log('Progress unchanged, stuck counter:', this._stuckCounter);
                     }
                     
                     // Only consider it stuck if progress hasn't changed for multiple checks
                     const reallyStuck = this._stuckCounter >= 5; // 5 seconds of no progress
                     
                     if (reallyStuck) {
-                        console.warn('Scan confirmed stuck after', this._stuckCounter, 'checks:', status);
                         // Treat stuck scan as still running so UI shows progress
                         isRunning = true;
                         // Add stuck indicator to progress message
@@ -528,12 +517,10 @@ class ProgressManager {
                 }
             }
         } catch (error) {
-            console.error('Failed to check progress:', error);
         }
     }
 
     async startMonitoring(operationType = 'scan') {
-        console.log(`Starting monitoring for ${operationType}`);
         this.operationType = operationType;
         this.show();
         
@@ -807,7 +794,6 @@ class ProgressManager {
         let completionMessage = '';
         
         // Debug log the status on completion
-        console.log(`${operationType} complete with status:`, status);
         
         // Handle cancelled operations
         if (status?.phase === 'cancelled') {
@@ -1046,7 +1032,6 @@ class TableManager {
             this.renderTable(data);
             this.updatePagination(data);
         } catch (error) {
-            console.error('Failed to load table data:', error);
         }
     }
 
@@ -1445,18 +1430,11 @@ class PixelProbeApp {
     }
     
     handleVideoError(fileId) {
-        console.error(`Video failed to load for file ${fileId}`);
         const video = document.getElementById(`video-player-${fileId}`);
         const errorDiv = document.getElementById(`video-error-${fileId}`);
         
         if (video) {
             // Log detailed error information
-            console.error('Video error details:', {
-                error: video.error,
-                networkState: video.networkState,
-                readyState: video.readyState,
-                currentSrc: video.currentSrc
-            });
             
             video.style.display = 'none';
         }
@@ -1475,12 +1453,10 @@ class PixelProbeApp {
         try {
             // Check for ongoing scan
             const scanStatus = await this.api.getScanStatus();
-            console.log('Page load - Scan status:', scanStatus);
             
             // Check for active scan (remove stuck detection on page load - it will be handled by monitoring)
             if (scanStatus.is_scanning || scanStatus.is_running || 
                 (scanStatus.phase === 'scanning' && scanStatus.current > 0)) {
-                console.log('Active scan detected on page load, starting monitoring...');
                 this.progress.operationType = 'scan';
                 this.progress.startMonitoring('scan');
                 return; // Only monitor one operation at a time
@@ -1502,8 +1478,47 @@ class PixelProbeApp {
                 return; // Only monitor one operation at a time
             }
         } catch (error) {
-            console.error('Failed to check operation status on init:', error);
         }
+
+        // Start background detection for scheduled scans
+        this.startBackgroundScanDetection();
+    }
+
+    startBackgroundScanDetection() {
+        // Check every 30 seconds for any running operations
+        // This catches scheduled scans that start after page load
+        this.scanDetectionInterval = setInterval(async () => {
+            // Skip if already monitoring an operation
+            if (this.progress.checkInterval) {
+                return;
+            }
+
+            try {
+                // Check for any running operations
+                const scanStatus = await this.api.getScanStatus();
+                if (scanStatus.is_scanning) {
+                    this.progress.operationType = 'scan';
+                    this.progress.startMonitoring('scan');
+                    return;
+                }
+
+                const cleanupStatus = await this.api.getCleanupStatus();
+                if (cleanupStatus.is_running) {
+                    this.progress.operationType = 'cleanup';
+                    this.progress.startMonitoring('cleanup');
+                    return;
+                }
+
+                const fileChangesStatus = await this.api.getFileChangesStatus();
+                if (fileChangesStatus.is_running) {
+                    this.progress.operationType = 'file-changes';
+                    this.progress.startMonitoring('file-changes');
+                    return;
+                }
+            } catch (error) {
+                // Silent fail - will retry on next interval
+            }
+        }, 30000); // 30 seconds
     }
 
     // Public methods for inline event handlers
@@ -1528,57 +1543,49 @@ class PixelProbeApp {
     async recoverStuckScan() {
         try {
             this.showNotification('Attempting to recover stuck scan...', 'info');
-            const response = await fetch('/api/recover-stuck-scan', {
+            const response = await fetch('/api/scan/recovery', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 }
             });
-            
+
             if (!response.ok) {
                 throw new Error(`Failed to recover scan: ${response.statusText}`);
             }
-            
+
             const result = await response.json();
             this.showNotification(result.message || 'Scan recovered successfully', 'success');
-            
+
             // Reload the page to reset the UI
             setTimeout(() => {
                 window.location.reload();
             }, 2000);
         } catch (error) {
-            console.error('Failed to recover stuck scan:', error);
             this.showNotification(error.message || 'Failed to recover scan', 'error');
         }
     }
 
     async cleanupOrphaned() {
-        console.log('cleanupOrphaned() called');
         try {
             // Use custom confirmation modal for better mobile support
             const confirmed = await this.showConfirmModal(
                 'Confirm Cleanup',
                 'Remove database entries for files that no longer exist on disk?'
             );
-            console.log('Modal confirmed:', confirmed);
 
             if (!confirmed) {
-                console.log('User cancelled cleanup');
                 return;
             }
 
-            console.log('Proceeding with cleanup...');
         } catch (error) {
-            console.error('Error showing confirm modal:', error);
             return;
         }
 
         try {
             const result = await this.api.cleanupOrphaned();
-            console.log('Cleanup response:', result);
             
             if (result.status === 'started') {
-                console.log('Starting progress monitoring for cleanup');
                 this.showNotification('Cleanup started...', 'info');
                 // Start monitoring cleanup progress
                 this.progress.operationType = 'cleanup';
@@ -1588,20 +1595,16 @@ class PixelProbeApp {
                 setTimeout(async () => {
                     try {
                         const status = await this.api.getCleanupStatus();
-                        console.log('Cleanup status after 1s:', status);
                     } catch (e) {
-                        console.error('Failed to get cleanup status:', e);
                     }
                 }, 1000);
             } else {
                 // This is the old synchronous response - still handle it
-                console.log('Got synchronous response, not async');
                 this.showNotification(`Cleaned up ${result.deleted_count || 0} orphaned entries`, 'success');
                 await this.stats.updateStats();
                 await this.table.loadData();
             }
         } catch (error) {
-            console.error('Cleanup error:', error);
             this.showNotification('Failed to cleanup orphaned entries', 'error');
         }
     }
@@ -1609,7 +1612,6 @@ class PixelProbeApp {
     async checkFileChanges() {
         try {
             const result = await this.api.checkFileChanges();
-            console.log('File changes response:', result);
             
             if (result.status === 'started') {
                 this.showNotification('Integrity scan started...', 'info');
@@ -1626,7 +1628,6 @@ class PixelProbeApp {
                 }
             }
         } catch (error) {
-            console.error('File changes error:', error);
             this.showNotification('Failed to perform integrity check', 'error');
         }
     }
@@ -1670,7 +1671,7 @@ class PixelProbeApp {
                            controls
                            preload="metadata"
                            style="width: 100%; display: block;"
-                           onloadedmetadata="console.log('Video metadata loaded for file ${file.id}'); this.volume = 1.0;"
+                           onloadedmetadata="this.volume = 1.0;"
                            onerror="app.handleVideoError(${file.id})">
                         <source src="${videoUrl}" type="${fileType}">
                         <source src="${videoUrl}" type="video/mp4">
@@ -1878,7 +1879,6 @@ class PixelProbeApp {
             const messageEl = document.getElementById('confirm-message');
 
             if (!modal || !titleEl || !messageEl) {
-                console.error('Confirm modal elements not found');
                 resolve(false);
                 return;
             }
@@ -1919,7 +1919,6 @@ class PixelProbeApp {
             const info = await this.api.getSystemInfo();
             this.showSystemStatsModal(info);
         } catch (error) {
-            console.error('System info error:', error);
             this.showNotification('Failed to load system info', 'error');
         }
     }
@@ -1933,7 +1932,6 @@ class PixelProbeApp {
             ]);
             this.showTrendsModal(trendsData, histogramData);
         } catch (error) {
-            console.error('Trends error:', error);
             this.showNotification('Failed to load trends data', 'error');
         }
     }
@@ -2574,7 +2572,6 @@ class PixelProbeApp {
                 const data = await response.json();
                 this.showReportDetails(data);
             } catch (error) {
-                console.error('Error viewing report:', error);
                 this.showNotification('Failed to load report', 'error');
             }
         }
@@ -2758,7 +2755,6 @@ class PixelProbeApp {
             this.updateScanReportsPagination(data.page, data.pages, data.total);
             
         } catch (error) {
-            console.error('Failed to load scan reports:', error);
             this.showNotification('Failed to load scan reports', 'error');
         }
     }
@@ -2858,7 +2854,6 @@ class PixelProbeApp {
             };
             
         } catch (error) {
-            console.error('Failed to view report:', error);
             this.showNotification('Failed to load report details', 'error');
         }
     }
@@ -2878,7 +2873,6 @@ class PixelProbeApp {
             this.showNotification(`Exporting report as ${format.toUpperCase()}...`, 'info');
             
         } catch (error) {
-            console.error('Failed to export report:', error);
             this.showNotification('Failed to export report', 'error');
         }
     }
@@ -2904,7 +2898,6 @@ class PixelProbeApp {
             await this.loadScanReports();
             
         } catch (error) {
-            console.error('Failed to delete report:', error);
             this.showNotification('Failed to delete report', 'error');
         }
     }
@@ -3005,7 +2998,6 @@ class PixelProbeApp {
             const dropdown = document.getElementById('bulk-download-menu');
             if (dropdown) dropdown.style.display = 'none';
         } catch (error) {
-            console.error('Download error:', error);
             this.showNotification('Failed to download reports', 'error');
         }
     }
@@ -3038,7 +3030,6 @@ class PixelProbeApp {
             if (selectAllCheckbox) selectAllCheckbox.checked = false;
             await this.loadScanReports();
         } catch (error) {
-            console.error('Delete error:', error);
             this.showNotification('Failed to delete reports', 'error');
         }
     }
@@ -3362,7 +3353,6 @@ class PixelProbeApp {
                 this.showNotification('Failed to load scan output', 'error');
             }
         } catch (error) {
-            console.error('Error loading scan output:', error);
             this.showNotification('Failed to load scan output', 'error');
         }
     }
@@ -3431,22 +3421,16 @@ class PixelProbeApp {
     }
 
     async cancelCurrentOperation() {
-        console.log('Cancel button clicked');
         try {
             // Determine which operation is currently running and cancel it
             const operationType = this.progress.operationType;
-            console.log('Current operation type:', operationType);
             
             if (operationType === 'scan') {
                 const status = await this.api.getScanStatus();
-                console.log('Scan status:', status);
                 if (status.is_scanning || status.is_running || status.is_active) {
-                    console.log('Calling cancel API...');
                     const result = await this.api.cancelScan();
-                    console.log('Cancel result:', result);
                     this.showNotification('Scan cancellation requested', 'info');
                 } else {
-                    console.log('No scan running to cancel');
                     this.showNotification('No scan is currently running', 'warning');
                 }
             } else if (operationType === 'cleanup') {
@@ -3465,7 +3449,6 @@ class PixelProbeApp {
                 this.showNotification('No operation is currently running', 'warning');
             }
         } catch (error) {
-            console.error('Failed to cancel operation:', error);
             this.showNotification('Failed to cancel operation', 'error');
         }
     }
@@ -3534,7 +3517,6 @@ class PixelProbeApp {
                 listContainer.innerHTML = '<p class="text-muted">No schedules configured.</p>';
             }
         } catch (error) {
-            console.error('Failed to load schedules:', error);
             this.showNotification('Failed to load schedules', 'error');
         }
     }
@@ -3624,7 +3606,6 @@ class PixelProbeApp {
 
             this.openModal('edit-schedule-modal');
         } catch (error) {
-            console.error('Failed to load schedule for editing:', error);
             this.showNotification('Failed to load schedule', 'error');
         }
     }
@@ -3672,7 +3653,6 @@ class PixelProbeApp {
                 throw new Error(error.error || 'Failed to update schedule');
             }
         } catch (error) {
-            console.error('Failed to save schedule:', error);
             this.showNotification(`Failed to update schedule: ${error.message}`, 'error');
         }
     }
@@ -3692,7 +3672,6 @@ class PixelProbeApp {
                 throw new Error('Failed to update schedule');
             }
         } catch (error) {
-            console.error('Failed to toggle schedule:', error);
             this.showNotification('Failed to update schedule', 'error');
         }
     }
@@ -3712,7 +3691,6 @@ class PixelProbeApp {
                 throw new Error('Failed to delete schedule');
             }
         } catch (error) {
-            console.error('Failed to delete schedule:', error);
             this.showNotification('Failed to delete schedule', 'error');
         }
     }
@@ -3783,7 +3761,6 @@ class PixelProbeApp {
                 if (statusDiv) statusDiv.style.display = 'none';
             }
         } catch (error) {
-            console.error('Failed to load healthcheck config:', error);
         }
     }
 
@@ -3827,7 +3804,6 @@ class PixelProbeApp {
                 throw new Error(error.error || 'Failed to save configuration');
             }
         } catch (error) {
-            console.error('Failed to save healthcheck config:', error);
             this.showNotification(`Failed to save: ${error.message}`, 'error');
         }
     }
@@ -3847,7 +3823,6 @@ class PixelProbeApp {
                 throw new Error('Failed to delete configuration');
             }
         } catch (error) {
-            console.error('Failed to delete healthcheck config:', error);
             this.showNotification('Failed to delete configuration', 'error');
         }
     }
@@ -3880,7 +3855,6 @@ class PixelProbeApp {
                 this.showNotification(`Test ping failed: ${result.message}`, 'error');
             }
         } catch (error) {
-            console.error('Failed to test healthcheck:', error);
             this.showNotification('Failed to send test ping', 'error');
         }
     }
@@ -3933,7 +3907,6 @@ class PixelProbeApp {
                 }
             }
         } catch (error) {
-            console.error('Failed to load exclusions:', error);
             this.showNotification('Failed to load exclusions', 'error');
         }
     }
@@ -3961,7 +3934,6 @@ class PixelProbeApp {
                 throw new Error('Failed to add exclusion');
             }
         } catch (error) {
-            console.error('Failed to add exclusion:', error);
             this.showNotification('Failed to add exclusion', 'error');
         }
     }
@@ -3983,7 +3955,6 @@ class PixelProbeApp {
                 throw new Error('Failed to remove exclusion');
             }
         } catch (error) {
-            console.error('Failed to remove exclusion:', error);
             this.showNotification('Failed to remove exclusion', 'error');
         }
     }
@@ -4068,7 +4039,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     throw new Error(error.error || 'Failed to create schedule');
                 }
             } catch (error) {
-                console.error('Failed to create schedule:', error);
                 app.showNotification(error.message || 'Failed to create schedule', 'error');
             }
         });

@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.61] - 2026-02-02
+
+### Bug Fixes
+
+- **Fix file changes scan SQLAlchemy detached instance error**: Long-running integrity scans (20+ hours for 1M+ files) would crash at ~99.95% with "Instance has been deleted" errors
+  - Root cause: ORM objects held in memory for the entire scan duration get expired by `db.session.commit()` calls
+  - If concurrent jobs (e.g., "Check for stuck scans" every 5 minutes) delete database rows, subsequent attribute access on expired objects crashes
+  - Solution: Load only needed columns and convert to plain Python dictionaries immediately after query
+  - Dictionaries are immune to SQLAlchemy session expiration and concurrent database changes
+  - Files affected: `pixelprobe/services/maintenance_service.py`
+
+---
+
+## [2.5.60] - 2026-02-01
+
+### Cleanup
+
+- **Repository slop cleanup**: Remove ~500+ lines of dead code and outdated documentation
+  - Remove unused tool scripts: `fix_database_schema_v2.py`, `fix_hevc_warnings.py`, `fix_nal_unit_false_positives.py` (377 lines)
+  - Remove unused utility functions: `handle_db_errors()` decorator and `update_state_progress()` helper from `utils.py`
+  - Remove deprecated API endpoints: `/reset-stuck-scans` and `/recover-stuck-scan` (use `/scan/recovery` instead)
+  - Remove orphaned Docker files: `docker-compose.simple.yml`, `docs/docker/Dockerfile.modern*`, `docs/docker/docker-compose.*.yml`
+  - Remove all console.log/error/debug statements from JavaScript files (~78 statements)
+  - Update documentation: Fix SQLite references to PostgreSQL (now required), remove dead documentation link
+  - Delete `audit_reports/` directory - historical data preserved in CHANGELOG.md
+  - Files affected: `utils.py`, `pixelprobe/api/scan_routes.py`, `static/js/app.js`, `static/js/state.js`, `static/js/auth.js`, various docs
+
+---
+
+## [2.5.59] - 2026-02-01
+
+### Bug Fixes
+
+- **Fix UI not showing scheduled scan progress**: Add background scan detection
+  - Root cause: UI only checked for running scans on page load
+  - If user opens page after a scheduled scan starts, no progress was shown
+  - Solution: Added 30-second background interval to detect running scans
+  - Automatically starts progress monitoring when a scan is detected
+  - Affects all scan types: regular scans, cleanup, and integrity scans
+  - Files affected: `static/js/app.js`
+
+---
+
 ## [2.5.58] - 2026-01-29
 
 ### Bug Fixes

@@ -706,12 +706,41 @@ class MaintenanceService:
             logger.info(f"Loading all {total_files} files from database in a single query...")
 
             # Get database entries - either all or filtered by file_paths (same as cleanup)
+            # CRITICAL FIX v2.5.61: Load only needed columns as dictionaries to avoid
+            # detached instance errors during long-running scans (20+ hours for 1M+ files).
+            # ORM objects held in memory get expired by db.session.commit() calls, and if
+            # concurrent jobs delete rows, subsequent attribute access crashes with
+            # "Instance has been deleted" errors.
             if file_paths:
-                all_results = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
-                logger.info(f"Loaded {len(all_results)} specific files from database")
+                results_query = db.session.query(
+                    ScanResult.id,
+                    ScanResult.file_path,
+                    ScanResult.file_hash,
+                    ScanResult.file_size,
+                    ScanResult.last_modified
+                ).filter(ScanResult.file_path.in_(file_paths)).all()
+                logger.info(f"Loaded {len(results_query)} specific files from database")
             else:
-                all_results = ScanResult.query.all()
-                logger.info(f"Loaded all {len(all_results)} files from database")
+                results_query = db.session.query(
+                    ScanResult.id,
+                    ScanResult.file_path,
+                    ScanResult.file_hash,
+                    ScanResult.file_size,
+                    ScanResult.last_modified
+                ).all()
+                logger.info(f"Loaded all {len(results_query)} files from database")
+
+            # Convert to list of dicts immediately - immune to session expiration
+            all_results = [
+                {
+                    'id': r.id,
+                    'file_path': r.file_path,
+                    'file_hash': r.file_hash,
+                    'file_size': r.file_size,
+                    'last_modified': r.last_modified
+                }
+                for r in results_query
+            ]
 
             # CRITICAL FIX v2.4.60: Adaptive memory-aware task management
             # Problem: Files vary from 1KB to 40GB, systems vary in resources
@@ -777,7 +806,7 @@ class MaintenanceService:
 
             # Sort files by size for better batch management (small files first)
             # Handle NULL file_size by treating as 0 for sorting
-            all_results_sorted = sorted(all_results, key=lambda x: x.file_size if x.file_size else 0)
+            all_results_sorted = sorted(all_results, key=lambda x: x['file_size'] if x['file_size'] else 0)
 
             file_index = 0
             while file_index < len(all_results_sorted) or active_tasks:
@@ -853,17 +882,17 @@ class MaintenanceService:
                     result = all_results_sorted[file_index]
 
                     # Use file_size from DB (it's a BigInteger field, might be NULL)
-                    file_size = result.file_size if result.file_size else 0
+                    file_size = result['file_size'] if result['file_size'] else 0
 
                     if file_size == 0:
                         # If size not in DB, use OS to check (more accurate than estimates)
                         try:
-                            file_size = os.path.getsize(result.file_path)
+                            file_size = os.path.getsize(result['file_path'])
                         except:
                             # If file doesn't exist or can't access, estimate based on path
-                            if 'thumbnail' in result.file_path or 'thumb' in result.file_path:
+                            if 'thumbnail' in result['file_path'] or 'thumb' in result['file_path']:
                                 file_size = 50 * 1024  # 50KB estimate for thumbnails
-                            elif 'preview' in result.file_path:
+                            elif 'preview' in result['file_path']:
                                 file_size = 500 * 1024  # 500KB for previews
                             else:
                                 file_size = 10 * 1024 * 1024  # 10MB default
@@ -888,22 +917,22 @@ class MaintenanceService:
                         break
 
                     # Submit the task
-                    stored_modified_iso = result.last_modified.isoformat() if result.last_modified else None
+                    stored_modified_iso = result['last_modified'].isoformat() if result['last_modified'] else None
                     try:
                         task_result = calculate_file_hash_task.apply_async(
-                            args=[result.id, result.file_path, result.file_hash, stored_modified_iso]
+                            args=[result['id'], result['file_path'], result['file_hash'], stored_modified_iso]
                         )
-                        active_tasks.append({'task': task_result, 'size': file_size, 'path': result.file_path})
+                        active_tasks.append({'task': task_result, 'size': file_size, 'path': result['file_path']})
                         task_results.append(task_result)
                         files_queued += 1
                         file_index += 1
 
                         # Update progress immediately when processing single files
                         if len(all_results) == 1:
-                            file_changes_record.progress_message = f'Phase 2 of 3: Processing {result.file_path.split("/")[-1]}...'
+                            file_changes_record.progress_message = f'Phase 2 of 3: Processing {result["file_path"].split("/")[-1]}...'
                             db.session.commit()
                     except Exception as e:
-                        logger.error(f"Error submitting task for {result.file_path}: {e}")
+                        logger.error(f"Error submitting task for {result['file_path']}: {e}")
                         if "maxmemory" in str(e):
                             logger.warning("Redis memory full, waiting for tasks to complete...")
                             break  # Wait for active tasks to complete

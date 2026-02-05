@@ -2446,7 +2446,7 @@ paths:
     post:
       summary: Vacuum database
       description: |
-        Vacuum the SQLite database to optimize storage.
+        Vacuum the database to optimize storage (PostgreSQL VACUUM command).
 
         **Example:**
         ```bash
