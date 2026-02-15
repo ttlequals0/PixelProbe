@@ -565,83 +565,116 @@ def create_tables():
             # Don't stop the application for table creation errors
             # The tables might already exist and be functional
 
-def migrate_database():
-    """Run database migrations - uses file lock to ensure only one worker runs migrations"""
-    import fcntl
+MIGRATION_ADVISORY_LOCK_ID = 7283945162
 
-    migration_lock_file = '/tmp/pixelprobe_migration.lock'
+def _run_all_migrations():
+    """Execute all database migrations. Called by migrate_database() after acquiring lock."""
+    from tools.app_startup_migration import run_startup_migrations
 
+    # Run startup migrations
+    logger.info("Running startup migrations...")
     try:
-        # Try to acquire exclusive lock (non-blocking)
-        lock_file = open(migration_lock_file, 'w')
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        run_startup_migrations(db)
+        logger.info("Startup migrations completed successfully")
+    except Exception as e:
+        logger.error(f"Startup migration failed: {e}")
 
-        # We got the lock, so we're the migration process
-        logger.info(f"Acquired migration lock in process {os.getpid()}, running migrations")
+    # Run authentication tables migration for v2.4.0
+    logger.info("Checking authentication tables...")
+    try:
+        run_auth_migration()
+        logger.info("Authentication tables verified")
+    except Exception as e:
+        logger.error(f"Authentication migration failed: {e}")
 
-        try:
-            # Run startup migrations
-            logger.info("Running startup migrations...")
-            from tools.app_startup_migration import run_startup_migrations
+    # Run v2.4.35 migration
+    logger.info("Running v2.4.35 migration...")
+    try:
+        run_v2_4_35_migrations()
+        logger.info("v2.4.35 migration completed successfully")
+    except Exception as e:
+        logger.error(f"v2.4.35 migration failed: {e}")
+
+    # Run v2.4.113 migration
+    logger.info("Running v2.4.113 migration...")
+    try:
+        run_v2_4_113_migrations()
+        logger.info("v2.4.113 migration completed successfully")
+    except Exception as e:
+        logger.error(f"v2.4.113 migration failed: {e}")
+
+    # Create performance indexes
+    logger.info("Creating performance indexes...")
+    try:
+        create_performance_indexes()
+        logger.info("Performance indexes created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create performance indexes: {e}")
+
+    logger.info("Database initialization completed")
+
+def migrate_database():
+    """Run database migrations - uses PostgreSQL advisory lock to coordinate across containers.
+
+    Advisory locks work across all connections to the same database, unlike file locks
+    which are scoped to a single container's filesystem. This prevents the
+    'duplicate key value violates unique constraint pg_class_relname_nsp_index' errors
+    that occurred when app and celery-worker containers raced during CREATE INDEX.
+    """
+    from sqlalchemy import text
+
+    lock_conn = None
+    try:
+        # Get a dedicated connection for the advisory lock
+        lock_conn = db.engine.connect()
+
+        # Try non-blocking lock acquisition
+        result = lock_conn.execute(
+            text("SELECT pg_try_advisory_lock(:lock_id)"),
+            {"lock_id": MIGRATION_ADVISORY_LOCK_ID}
+        )
+        acquired = result.scalar()
+
+        if acquired:
+            # We are the migration leader
+            logger.info(f"Acquired PostgreSQL advisory lock in process {os.getpid()}, running migrations")
             try:
-                run_startup_migrations(db)
-                logger.info("Startup migrations completed successfully")
-            except Exception as e:
-                logger.error(f"Startup migration failed: {e}")
-
-            # Run authentication tables migration for v2.4.0
-            logger.info("Checking authentication tables...")
-            try:
-                run_auth_migration()
-                logger.info("Authentication tables verified")
-            except Exception as e:
-                logger.error(f"Authentication migration failed: {e}")
-
-            # Run v2.4.35 migration
-            logger.info("Running v2.4.35 migration...")
-            try:
-                run_v2_4_35_migrations()
-                logger.info("v2.4.35 migration completed successfully")
-            except Exception as e:
-                logger.error(f"v2.4.35 migration failed: {e}")
-
-            # Run v2.4.113 migration
-            logger.info("Running v2.4.113 migration...")
-            try:
-                run_v2_4_113_migrations()
-                logger.info("v2.4.113 migration completed successfully")
-            except Exception as e:
-                logger.error(f"v2.4.113 migration failed: {e}")
-
-            # Create performance indexes
-            logger.info("Creating performance indexes...")
-            try:
-                create_performance_indexes()
-                logger.info("Performance indexes created successfully")
-            except Exception as e:
-                logger.error(f"Failed to create performance indexes: {e}")
-
-            logger.info("Database initialization completed")
-
-        finally:
-            # Release the lock
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            lock_file.close()
-
-    except (IOError, OSError) as e:
-        # Another process has the lock - wait for it to complete
-        logger.info(f"Migrations already running in another process {os.getpid()}, waiting for completion...")
-
-        # Wait for the lock to be available (blocking)
-        try:
-            lock_file = open(migration_lock_file, 'w')
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)  # This blocks until lock is available
-            # Lock acquired means migrations are done
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            lock_file.close()
+                _run_all_migrations()
+            except Exception as mig_err:
+                logger.error(f"Migration error (lock held): {mig_err}")
+            finally:
+                lock_conn.execute(
+                    text("SELECT pg_advisory_unlock(:lock_id)"),
+                    {"lock_id": MIGRATION_ADVISORY_LOCK_ID}
+                )
+                logger.info("Released PostgreSQL advisory lock")
+        else:
+            # Another process holds the lock - wait for it to finish
+            logger.info(f"Migrations already running in another process, waiting for completion (process {os.getpid()})...")
+            lock_conn.execute(
+                text("SELECT pg_advisory_lock(:lock_id)"),
+                {"lock_id": MIGRATION_ADVISORY_LOCK_ID}
+            )
+            # Lock acquired means the leader finished; release immediately
+            lock_conn.execute(
+                text("SELECT pg_advisory_unlock(:lock_id)"),
+                {"lock_id": MIGRATION_ADVISORY_LOCK_ID}
+            )
             logger.info(f"Migrations completed by another process, continuing startup in process {os.getpid()}")
-        except Exception as wait_error:
-            logger.warning(f"Could not wait for migration lock: {wait_error}")
+
+    except Exception as e:
+        # Advisory lock failed (e.g., connection error, non-PostgreSQL database)
+        # Fall back to running migrations uncoordinated - each DDL statement
+        # already has its own idempotency handling (IF NOT EXISTS, try/except)
+        logger.warning(f"Could not use advisory lock ({e}), running migrations without coordination")
+        _run_all_migrations()
+
+    finally:
+        if lock_conn is not None:
+            try:
+                lock_conn.close()
+            except Exception:
+                pass
 
 def run_auth_migration():
     """Run authentication tables migration for v2.4.0"""
