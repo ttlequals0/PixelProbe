@@ -325,9 +325,9 @@ def create_schedule():
         try:
             from pixelprobe.tasks import reload_schedules_task
             reload_schedules_task.delay()
-        except ImportError as e:
-            # May fail in test environment where Celery isn't fully initialized
-            logger.warning(f"Could not trigger schedule reload (Celery not available): {e}")
+        except Exception as e:
+            # May fail if Celery/Redis unavailable (ImportError, ConnectionError, etc.)
+            logger.warning(f"Could not trigger schedule reload: {e}")
 
         return schedule.to_dict(), 201
     except Exception as e:
@@ -376,8 +376,8 @@ def update_schedule(schedule_id):
         try:
             from pixelprobe.tasks import reload_schedules_task
             reload_schedules_task.delay()
-        except ImportError as e:
-            logger.warning(f"Could not trigger schedule reload (Celery not available): {e}")
+        except Exception as e:
+            logger.warning(f"Could not trigger schedule reload: {e}")
 
         return schedule.to_dict()
     except Exception as e:
@@ -400,8 +400,8 @@ def delete_schedule(schedule_id):
         try:
             from pixelprobe.tasks import reload_schedules_task
             reload_schedules_task.delay()
-        except ImportError as e:
-            logger.warning(f"Could not trigger schedule reload (Celery not available): {e}")
+        except Exception as e:
+            logger.warning(f"Could not trigger schedule reload: {e}")
 
         return '', 204
     except Exception as e:
