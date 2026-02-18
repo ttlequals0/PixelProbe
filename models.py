@@ -13,10 +13,17 @@ logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
 
-# Timezone handling moved to pixelprobe.utils.timezone
 
-# Import shared utilities after models are loaded
-# This will be imported in app.py to avoid circular imports
+def convert_to_tz(dt):
+    """Return datetime as ISO string for display.
+    If datetime is naive, assume it's UTC.
+    Timezone conversion is handled in API routes.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
 
 class ScanResult(db.Model):
     __tablename__ = 'scan_results'
@@ -52,8 +59,7 @@ class ScanResult(db.Model):
     media_info = db.Column(db.Text, nullable=True)  # JSON string of media metadata
     file_exists = db.Column(db.Boolean, nullable=False, default=True, index=True)  # Whether file exists on disk
     
-    # Temporary: Keep deep_scan column until migration is run (will be removed in v2.2.90)
-    # This prevents insert failures in production environments that haven't run the migration yet
+    # Legacy column kept for backward compatibility with older database schemas
     deep_scan = db.Column(db.Boolean, nullable=True, default=False, server_default='false')
     
     # Output rotation tracking
@@ -68,16 +74,6 @@ class ScanResult(db.Model):
     )
 
     def to_dict(self):
-        def convert_to_tz(dt):
-            """Return datetime as ISO string for display"""
-            if dt is None:
-                return None
-            # If datetime is naive, assume it's UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            # Return as ISO string - timezone conversion handled in API routes
-            return dt.isoformat()
-
         return {
             'id': self.id,
             'file_path': self.file_path,
@@ -151,20 +147,10 @@ class IgnoredErrorPattern(db.Model):
     pattern = db.Column(db.String(200), nullable=False, unique=True)
     description = db.Column(db.String(500))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    created_date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)  # Keep for backward compatibility
+    created_date = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))  # Keep for backward compatibility
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     
     def to_dict(self):
-        def convert_to_tz(dt):
-            """Return datetime as ISO string for display"""
-            if dt is None:
-                return None
-            # If datetime is naive, assume it's UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            # Return as ISO string - timezone conversion handled in API routes
-            return dt.isoformat()
-        
         return {
             'id': self.id,
             'pattern': self.pattern,
@@ -188,16 +174,6 @@ class Exclusion(db.Model):
     )
     
     def to_dict(self):
-        def convert_to_tz(dt):
-            """Return datetime as ISO string for display"""
-            if dt is None:
-                return None
-            # If datetime is naive, assume it's UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            # Return as ISO string - timezone conversion handled in API routes
-            return dt.isoformat()
-        
         return {
             'id': self.id,
             'type': self.exclusion_type,
@@ -220,19 +196,9 @@ class ScanSchedule(db.Model):
     last_run = db.Column(db.DateTime, nullable=True)
     next_run = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    created_date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)  # Keep for backward compatibility
+    created_date = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))  # Keep for backward compatibility
     
     def to_dict(self):
-        def convert_to_tz(dt):
-            """Return datetime as ISO string for display"""
-            if dt is None:
-                return None
-            # If datetime is naive, assume it's UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            # Return as ISO string - timezone conversion handled in API routes
-            return dt.isoformat()
-        
         return {
             'id': self.id,
             'name': self.name,
@@ -269,16 +235,6 @@ class HealthcheckConfig(db.Model):
     schedule = db.relationship('ScanSchedule', backref=db.backref('healthcheck_config', uselist=False, cascade='all, delete-orphan'))
 
     def to_dict(self):
-        def convert_to_tz(dt):
-            """Return datetime as ISO string for display"""
-            if dt is None:
-                return None
-            # If datetime is naive, assume it's UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            # Return as ISO string - timezone conversion handled in API routes
-            return dt.isoformat()
-
         return {
             'id': self.id,
             'schedule_id': self.schedule_id,
@@ -302,7 +258,7 @@ class ScanConfiguration(db.Model):
     key = db.Column(db.String(50), nullable=True, unique=True)
     value = db.Column(db.Text, nullable=True)
     description = db.Column(db.String(200))
-    updated_date = db.Column(db.DateTime, nullable=True, default=datetime.utcnow)
+    updated_date = db.Column(db.DateTime, nullable=True, default=lambda: datetime.now(timezone.utc))
     
     # New structure expected by API and repositories
     path = db.Column(db.String(500), nullable=True, unique=True)
@@ -310,16 +266,6 @@ class ScanConfiguration(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=True, default=lambda: datetime.now(timezone.utc))
     
     def to_dict(self):
-        def convert_to_tz(dt):
-            """Return datetime as ISO string for display"""
-            if dt is None:
-                return None
-            # If datetime is naive, assume it's UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            # Return as ISO string - timezone conversion handled in API routes
-            return dt.isoformat()
-        
         # Support both old and new structures
         if self.path is not None:
             # New path-based structure
@@ -352,7 +298,7 @@ class ScanState(db.Model):
     files_processed = db.Column(db.Integer, nullable=False, default=0)
     estimated_total = db.Column(db.Integer, nullable=False, default=0)
     discovery_count = db.Column(db.Integer, nullable=False, default=0)
-    start_time = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    start_time = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     end_time = db.Column(db.DateTime, nullable=True)
     current_file = db.Column(db.String(500), nullable=True)
     progress_message = db.Column(db.String(1000), nullable=True)  # Increased from 200
@@ -701,16 +647,6 @@ class ScanChunk(db.Model):
     __table_args__ = (db.UniqueConstraint('scan_id', 'chunk_id', name='uq_scan_chunks_scan_chunk'),)
     
     def to_dict(self):
-        def convert_to_tz(dt):
-            """Return datetime as ISO string for display"""
-            if dt is None:
-                return None
-            # If datetime is naive, assume it's UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            # Return as ISO string - timezone conversion handled in API routes
-            return dt.isoformat()
-        
         return {
             'id': self.id,
             'scan_id': self.scan_id,
@@ -767,16 +703,6 @@ class ScanReport(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     
     def to_dict(self):
-        def convert_to_tz(dt):
-            """Return datetime as ISO string for display"""
-            if dt is None:
-                return None
-            # If datetime is naive, assume it's UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            # Return as ISO string - timezone conversion handled in API routes
-            return dt.isoformat()
-        
         return {
             'id': self.id,
             'report_id': self.report_id,
@@ -786,11 +712,11 @@ class ScanReport(db.Model):
             'duration_seconds': self.duration_seconds,
             'directories_scanned': json.loads(self.directories_scanned) if self.directories_scanned else [],
             'force_rescan': self.force_rescan,
-            'num_workers': getattr(self, 'num_workers', 1),
+            'num_workers': self.num_workers,
             'total_files_discovered': self.total_files_discovered,
             'files_scanned': self.files_scanned,
-            'files_added': getattr(self, 'files_added', 0),
-            'files_updated': getattr(self, 'files_updated', 0),
+            'files_added': self.files_added,
+            'files_updated': self.files_updated,
             'files_corrupted': self.files_corrupted,
             'files_with_warnings': self.files_with_warnings,
             'files_error': self.files_error,

@@ -6,6 +6,15 @@ from celery import Celery
 import os
 
 
+def _make_context_task(celery_instance, flask_app):
+    """Create a ContextTask class that runs Celery tasks inside a Flask app context."""
+    class ContextTask(celery_instance.Task):
+        def __call__(self, *args, **kwargs):
+            with flask_app.app_context():
+                return self.run(*args, **kwargs)
+    celery_instance.Task = ContextTask
+
+
 def create_celery(app=None):
     """
     Create and configure Celery instance for PixelProbe
@@ -116,15 +125,7 @@ def create_celery(app=None):
 
     # Flask app context integration
     if app:
-        class ContextTask(celery.Task):
-            """Make celery tasks work with Flask app context"""
-            def __call__(self, *args, **kwargs):
-                with app.app_context():
-                    return self.run(*args, **kwargs)
-        
-        celery.Task = ContextTask
-        
-        # Update configuration from Flask app
+        _make_context_task(celery, app)
         celery.conf.update(app.config)
     
     return celery
@@ -138,14 +139,7 @@ def _create_worker_celery():
 
     # Import Flask app and set up context task for workers
     from app import app
-
-    class ContextTask(celery.Task):
-        """Make celery tasks work with Flask app context"""
-        def __call__(self, *args, **kwargs):
-            with app.app_context():
-                return self.run(*args, **kwargs)
-
-    celery.Task = ContextTask
+    _make_context_task(celery, app)
     return celery
 
 celery_app = _create_worker_celery()
@@ -154,12 +148,5 @@ celery_app = _create_worker_celery()
 def init_celery(app, celery):
     """Initialize Celery with Flask app"""
     celery.conf.update(app.config)
-    
-    class ContextTask(celery.Task):
-        """Make celery tasks work with Flask app context"""
-        def __call__(self, *args, **kwargs):
-            with app.app_context():
-                return self.run(*args, **kwargs)
-    
-    celery.Task = ContextTask
+    _make_context_task(celery, app)
     return celery

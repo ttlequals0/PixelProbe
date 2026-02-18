@@ -7,6 +7,7 @@ from pixelprobe.utils.timezone import from_utc_to_configured
 
 from media_checker import PixelProbe, load_exclusions
 from models import db, ScanResult, ScanState
+from pixelprobe.constants import TERMINAL_SCAN_PHASES
 from version import __version__
 from auth import auth_required
 
@@ -19,19 +20,7 @@ from pixelprobe.utils.security import (
 logger = logging.getLogger(__name__)
 
 
-def check_celery_available():
-    """Check if Celery is available and broker is reachable"""
-    celery_enabled = current_app.config.get('CELERY_BROKER_URL') and hasattr(current_app, 'celery')
-
-    if celery_enabled:
-        # Test Celery broker connection before using
-        try:
-            current_app.celery.control.ping(timeout=1.0)
-        except Exception as e:
-            logger.warning(f"Celery broker connection failed: {e}. Falling back to direct scan service.")
-            celery_enabled = False
-
-    return celery_enabled
+from pixelprobe.utils.celery_utils import check_celery_available
 
 
 def safe_check_task_state(celery_task_id, app, max_retries=3, base_delay=0.5):
@@ -80,41 +69,7 @@ def safe_check_task_state(celery_task_id, app, max_retries=3, base_delay=0.5):
 
 scan_bp = Blueprint('scan', __name__, url_prefix='/api')
 
-# Import limiter from main app
-from functools import wraps
-
-# Create rate limit decorators that work with Flask-Limiter
-def rate_limit(limit_string):
-    """Decorator to apply rate limits using the app's limiter"""
-    def decorator(f):
-        @wraps(f)
-        def wrapped(*args, **kwargs):
-            # Get the limiter from the current app
-            limiter = current_app.extensions.get('flask-limiter')
-            if limiter:
-                # Apply the rate limit dynamically
-                limited_func = limiter.limit(limit_string, exempt_when=lambda: False)(f)
-                return limited_func(*args, **kwargs)
-            else:
-                # If no limiter, just call the function
-                return f(*args, **kwargs)
-        return wrapped
-    return decorator
-
-def exempt_from_rate_limit(f):
-    """Decorator to exempt a function from rate limiting"""
-    @wraps(f)
-    def wrapped(*args, **kwargs):
-        # Get the limiter from the current app
-        limiter = current_app.extensions.get('flask-limiter')
-        if limiter:
-            # Apply exemption dynamically
-            exempt_func = limiter.exempt(f)
-            return exempt_func(*args, **kwargs)
-        else:
-            # If no limiter, just call the function
-            return f(*args, **kwargs)
-    return wrapped
+from pixelprobe.utils.rate_limiting import rate_limit, exempt_from_rate_limit
 
 def is_scan_running():
     """Check if a scan is currently running (thread or Celery)"""
@@ -125,7 +80,7 @@ def is_scan_running():
     # Check database for active Celery-based scans
     try:
         active_scan = ScanState.query.filter_by(is_active=True).first()
-        if active_scan and active_scan.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
+        if active_scan and active_scan.phase not in TERMINAL_SCAN_PHASES:
             # Check if scan is stale (no progress update)
             from datetime import datetime, timezone, timedelta
             
@@ -467,7 +422,7 @@ def scan():
             scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
 
         # Check if a scan is already running while we hold the lock
-        if scan_state.is_active and scan_state.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
+        if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
             phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
             db.session.rollback()
             return {
@@ -496,16 +451,9 @@ def scan():
     
     # If no directories provided, use configured ones
     if not scan_dirs:
-        from models import ScanConfiguration
-        configs = ScanConfiguration.query.filter_by(is_active=True).all()
-        scan_dirs = [config.path for config in configs]
-        
-        # If no database config, fall back to environment variable
-        if not scan_dirs:
-            scan_paths_env = os.environ.get('SCAN_PATHS', '')
-            scan_dirs = [path.strip() for path in scan_paths_env.split(',') if path.strip()]
-            logger.info(f"Using SCAN_PATHS from environment: {scan_dirs}")
-    
+        from pixelprobe.utils.helpers import get_configured_scan_paths
+        scan_dirs = get_configured_scan_paths()
+
     if not scan_dirs:
         return {'error': 'No directories configured for scanning. Set SCAN_PATHS environment variable or configure paths in the admin interface.'}, 400
     
@@ -1042,16 +990,9 @@ def scan_files_parallel():
     # Otherwise scan directories
     # If no directories provided, use configured ones
     if not scan_dirs:
-        from models import ScanConfiguration
-        configs = ScanConfiguration.query.filter_by(is_active=True).all()
-        scan_dirs = [config.path for config in configs]
-        
-        # If no database config, fall back to environment variable
-        if not scan_dirs:
-            scan_paths_env = os.environ.get('SCAN_PATHS', '')
-            scan_dirs = [path.strip() for path in scan_paths_env.split(',') if path.strip()]
-            logger.info(f"Using SCAN_PATHS from environment: {scan_dirs}")
-    
+        from pixelprobe.utils.helpers import get_configured_scan_paths
+        scan_dirs = get_configured_scan_paths()
+
     if not scan_dirs:
         return {'error': 'No directories configured for scanning. Set SCAN_PATHS environment variable or configure paths in the admin interface.'}, 400
     

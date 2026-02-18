@@ -5,8 +5,8 @@ Validators for PixelProbe
 import os
 import re
 
-def validate_file_path(file_path):
-    """Validate a file path"""
+def validate_file_path_format(file_path):
+    """Validate a file path format (simple format check, no path traversal prevention)"""
     if not file_path:
         return False, "File path is required"
     

@@ -68,40 +68,30 @@ def load_exclusions():
         return default_excluded_paths, default_excluded_extensions
 
 def load_exclusions_with_patterns():
-    """Load exclusion patterns including filename patterns
-    
+    """Load exclusion patterns including filename patterns.
+
+    Reads exclusions.json once and returns all exclusion data.
+
     Returns:
         tuple: (excluded_paths, excluded_extensions, excluded_patterns)
     """
-    paths, extensions = load_exclusions()
-    
-    # Get default patterns
     default_patterns = get_default_filename_patterns()
-    
-    # Load user patterns from file if exists
-    user_patterns = []
+
     try:
         exclusions_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'exclusions.json')
         if os.path.exists(exclusions_file):
             with open(exclusions_file, 'r') as f:
                 data = json.load(f)
+                paths = list(set(data.get('paths', [])))
+                extensions = list(set(data.get('extensions', [])))
                 user_patterns = data.get('filename_patterns', [])
+                excluded_patterns = list(set(default_patterns + user_patterns))
+                return paths, extensions, excluded_patterns
     except Exception as e:
-        logger.error(f"Error loading filename patterns: {e}")
-    
-    # Combine patterns
-    excluded_patterns = list(set(default_patterns + user_patterns))
-    
-    return paths, extensions, excluded_patterns
+        logger.error(f"Error loading exclusions.json: {e}")
 
-def truncate_scan_output(output_lines, max_lines=None, max_chars=None):
-    """Return scan output without truncation - users need full output for debugging"""
-    if not output_lines:
-        return []
+    return [], [], default_patterns
 
-    # No truncation - return full output
-    # Users need complete ffmpeg output to diagnose issues
-    return output_lines
 
 class PixelProbe:
     def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None, database_path=None, excluded_patterns=None):
@@ -1140,7 +1130,7 @@ class PixelProbe:
                 # Clear corruption details since we're treating it as a warning
                 corruption_details = []
         
-        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+        return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
     
     def _check_video_corruption(self, file_path):
         corruption_details = []
@@ -1171,7 +1161,7 @@ class PixelProbe:
                 is_corrupted = True
                 scan_output.append("FFmpeg probe: No streams found")
                 logger.warning(f"No streams found in {file_path}")
-                return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+                return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
             
             video_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
             if not video_stream:
@@ -1411,7 +1401,7 @@ class PixelProbe:
                 scan_output.extend(hevc_output)
         
         # Return warning details as well
-        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+        return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
     
     def _check_audio_corruption(self, file_path):
         """Check audio files for corruption using FFmpeg and format-specific tools"""
@@ -1433,7 +1423,7 @@ class PixelProbe:
                 is_corrupted = True
                 scan_output.append("FFmpeg probe: No streams found")
                 logger.warning(f"No streams found in {file_path}")
-                return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+                return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
             
             audio_stream = next((s for s in probe['streams'] if s['codec_type'] == 'audio'), None)
             if not audio_stream:
@@ -1441,7 +1431,7 @@ class PixelProbe:
                 is_corrupted = True
                 scan_output.append("FFmpeg probe: No audio stream")
                 logger.warning(f"No audio stream found in {file_path}")
-                return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+                return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
                 
             # Check audio stream properties
             codec_name = audio_stream.get('codec_name', 'unknown')
@@ -1472,7 +1462,7 @@ class PixelProbe:
                     scan_tool = "ffmpeg"
             scan_output.append(f"FFprobe: FAILED - {stderr[:200]}")
             logger.error(f"FFprobe error on audio {file_path}: {stderr[:200]}")
-            return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+            return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
         
         # Step 2: Attempt to decode audio to check for corruption
         logger.info(f"Performing comprehensive audio validation for: {file_path}")
@@ -1589,7 +1579,7 @@ class PixelProbe:
             except Exception as e:
                 logger.debug(f"FLAC test error: {str(e)}")
         
-        return is_corrupted, corruption_details, scan_tool, truncate_scan_output(scan_output), warning_details
+        return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
     
     def _check_hevc_main10_issues(self, file_path):
         """Check for HEVC Main 10 specific issues that cause green tint/freezing"""

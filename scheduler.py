@@ -7,6 +7,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from models import db, ScanSchedule, ScanResult, ScanState, HealthcheckConfig, ScanReport
+from pixelprobe.constants import TERMINAL_SCAN_PHASES
 from sqlalchemy import text
 import threading
 import requests
@@ -25,6 +26,48 @@ class MediaScheduler:
 
         # Load exclusions from environment
         self._load_exclusions()
+
+    def _filter_excluded_paths(self, scan_paths):
+        """Filter out excluded paths and return the remaining ones."""
+        return [
+            p.strip() for p in scan_paths
+            if not any(p.strip().startswith(exc) for exc in self.excluded_paths)
+        ]
+
+    def _execute_scan_request(self, endpoint, payload, scan_label, timeout=30):
+        """Execute an HTTP scan request against the local API.
+
+        Args:
+            endpoint: API path (e.g. '/api/scan')
+            payload: JSON payload dict
+            scan_label: Human-readable label for logging (e.g. 'Periodic scan')
+            timeout: Request timeout in seconds
+
+        Returns:
+            The requests.Response object, or None on connection error.
+        """
+        base_url = self._get_api_base_url()
+        headers = {
+            'X-Internal-Request': 'scheduler',
+            'Content-Type': 'application/json'
+        }
+        try:
+            response = requests.post(
+                f'{base_url}{endpoint}',
+                json=payload,
+                headers=headers,
+                timeout=timeout
+            )
+            if response.status_code == 200:
+                logger.info(f"{scan_label} started successfully")
+            elif response.status_code == 409:
+                logger.warning(f"{scan_label} skipped - another scan is already running")
+            else:
+                logger.error(f"{scan_label} API call failed: {response.status_code} - {response.text}")
+            return response
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to call API for {scan_label}: {e}")
+            return None
 
     def _get_api_base_url(self):
         """
@@ -261,64 +304,31 @@ class MediaScheduler:
             with self.app.app_context():
                 # Check if ANY scan is already running before proceeding
                 scan_state = ScanState.get_or_create()
-                if scan_state.is_active and scan_state.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
+                if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
                     logger.warning(f"Periodic scan skipped - another scan is already running (phase: {scan_state.phase})")
                     return
 
-                # Read SCAN_PATHS from database (synced from env on main app startup)
-                from models import ScanConfiguration
-                scan_configs = ScanConfiguration.query.filter_by(is_active=True).all()
-                scan_paths = [config.path for config in scan_configs if config.path]
-
-                if not scan_paths:
-                    # Fallback to environment variable if DB is empty
-                    scan_paths_env = os.environ.get('SCAN_PATHS', '')
-                    scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
+                from pixelprobe.utils.helpers import get_configured_scan_paths
+                scan_paths = get_configured_scan_paths()
 
                 logger.info(f"Starting periodic scan of paths: {scan_paths}")
-                
-                # Filter out excluded paths
-                filtered_paths = []
-                for path in scan_paths:
-                    path = path.strip()
-                    if not any(path.startswith(exc) for exc in self.excluded_paths):
-                        filtered_paths.append(path)
-                        
+
+                filtered_paths = self._filter_excluded_paths(scan_paths)
                 if not filtered_paths:
                     logger.warning("No paths to scan after exclusions")
                     return
-                    
-                # Use HTTP self-call to trigger scan
-                base_url = self._get_api_base_url()
-                
-                # Add internal request header
-                headers = {
-                    'X-Internal-Request': 'scheduler',
-                    'Content-Type': 'application/json'
-                }
-                
-                try:
-                    # Run scan with deep check to detect changes
-                    payload = {
+
+                self._execute_scan_request(
+                    '/api/scan',
+                    {
                         'scan_type': 'full',
                         'directories': filtered_paths,
                         'force_rescan': False,
                         'source': 'scheduled_periodic'
-                    }
-                    response = requests.post(f'{base_url}/api/scan',
-                                          json=payload,
-                                          headers=headers,
-                                          timeout=30)
-                    
-                    if response.status_code == 200:
-                        logger.info("Periodic scan started successfully")
-                    elif response.status_code == 409:
-                        logger.warning("Periodic scan skipped - another scan is already running")
-                    else:
-                        logger.error(f"Periodic scan API call failed: {response.status_code} - {response.text}")
-                        
-                except requests.exceptions.RequestException as e:
-                    logger.error(f"Failed to call API for periodic scan: {e}")
+                    },
+                    'Periodic scan',
+                    timeout=30
+                )
                 
         except Exception as e:
             logger.error(f"Failed to run periodic scan: {e}")
@@ -335,7 +345,7 @@ class MediaScheduler:
             with self.app.app_context():
                 # Check if ANY scan is already running before proceeding
                 scan_state = ScanState.get_or_create()
-                if scan_state.is_active and scan_state.phase not in ['idle', 'completed', 'error', 'crashed', 'cancelled']:
+                if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
                     logger.warning(f"Scheduled scan {schedule_id} skipped - another scan is already running (phase: {scan_state.phase})")
                     return
 
@@ -378,16 +388,8 @@ class MediaScheduler:
                 
                 db.session.commit()
 
-                # Read SCAN_PATHS from database (synced from env on main app startup)
-                # This allows celery-worker to access paths without needing env var
-                from models import ScanConfiguration
-                scan_configs = ScanConfiguration.query.filter_by(is_active=True).all()
-                scan_paths = [config.path for config in scan_configs if config.path]
-
-                if not scan_paths:
-                    # Fallback to environment variable if DB is empty (for backwards compat)
-                    scan_paths_env = os.environ.get('SCAN_PATHS', '')
-                    scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
+                from pixelprobe.utils.helpers import get_configured_scan_paths
+                scan_paths = get_configured_scan_paths()
 
                 if not scan_paths:
                     logger.error(f"Scheduled scan {schedule_id}: No scan paths configured in database or SCAN_PATHS env var!")
@@ -398,67 +400,37 @@ class MediaScheduler:
 
                 logger.info(f"Running scheduled scan '{cached_schedule_name}' (type: {scan_type}) on paths: {scan_paths}")
 
-                # Filter out excluded paths
-                filtered_paths = []
-                for path in scan_paths:
-                    path = path.strip()
-                    if not any(path.startswith(exc) for exc in self.excluded_paths):
-                        filtered_paths.append(path)
-
-                # Validate we have paths to scan after filtering
+                filtered_paths = self._filter_excluded_paths(scan_paths)
                 if not filtered_paths:
                     logger.error(f"Scheduled scan {schedule_id} has no valid paths after filtering. "
                                  f"SCAN_PATHS={scan_paths}, excluded_paths={self.excluded_paths}")
                     return
 
-                if filtered_paths:
-                    # Use HTTP self-calls to trigger scans, avoiding Flask context issues
-                    base_url = self._get_api_base_url()
-                    
-                    # Add internal request header for identification
-                    headers = {
-                        'X-Internal-Request': 'scheduler',
-                        'Content-Type': 'application/json'
-                    }
-                    
-                    try:
-                        if scan_type == 'orphan':
-                            # Run orphan cleanup with longer timeout since it can take time
-                            response = requests.post(f'{base_url}/api/cleanup-orphaned',
-                                                    json={'schedule_id': schedule_id},
-                                                    headers=headers,
-                                                    timeout=60)
-                        elif scan_type == 'file_changes':
-                            # Run file changes scan with longer timeout
-                            response = requests.post(f'{base_url}/api/file-changes',
-                                                    json={'schedule_id': schedule_id},
-                                                    headers=headers,
-                                                    timeout=60)
-                        else:
-                            # Default to normal scan with proper payload
-                            # Use timestamp in scan_id to make each scheduled run unique
-                            # This prevents false "already completed" detection between runs
-                            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-                            payload = {
-                                'scan_type': 'full',
-                                'directories': filtered_paths,
-                                'force_rescan': schedule.force_rescan if hasattr(schedule, 'force_rescan') else False,
-                                'source': f'scheduled_{schedule_id}_{timestamp}'
-                            }
-                            response = requests.post(f'{base_url}/api/scan', 
-                                                    json=payload,
-                                                    headers=headers,
-                                                    timeout=60)
-                        
-                        if response.status_code == 200:
-                            logger.info(f"Scheduled scan {schedule_id} started successfully")
-                        elif response.status_code == 409:
-                            logger.warning(f"Scheduled scan {schedule_id} skipped - another scan is already running")
-                        else:
-                            logger.error(f"Scheduled scan {schedule_id} API call failed: {response.status_code} - {response.text}")
-                            
-                    except requests.exceptions.RequestException as e:
-                        logger.error(f"Failed to call API for scheduled scan {schedule_id}: {e}")
+                scan_label = f"Scheduled scan {schedule_id}"
+                if scan_type == 'orphan':
+                    self._execute_scan_request(
+                        '/api/cleanup-orphaned',
+                        {'schedule_id': schedule_id},
+                        scan_label, timeout=60
+                    )
+                elif scan_type == 'file_changes':
+                    self._execute_scan_request(
+                        '/api/file-changes',
+                        {'schedule_id': schedule_id},
+                        scan_label, timeout=60
+                    )
+                else:
+                    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+                    self._execute_scan_request(
+                        '/api/scan',
+                        {
+                            'scan_type': 'full',
+                            'directories': filtered_paths,
+                            'force_rescan': schedule.force_rescan if hasattr(schedule, 'force_rescan') else False,
+                            'source': f'scheduled_{schedule_id}_{timestamp}'
+                        },
+                        scan_label, timeout=60
+                    )
                     
         except Exception as e:
             logger.error(f"Failed to run scheduled scan {schedule_id}: {e}")
@@ -635,7 +607,7 @@ class MediaScheduler:
                 # Find active scans
                 stuck_scans = ScanState.query.filter(
                     ScanState.is_active == True,
-                    ScanState.phase.notin_(['idle', 'completed', 'error', 'crashed', 'cancelled'])
+                    ScanState.phase.notin_(TERMINAL_SCAN_PHASES)
                 ).all()
                 
                 scans_to_mark = []

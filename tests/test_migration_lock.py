@@ -1,10 +1,7 @@
 """
-Tests for PostgreSQL advisory lock migration coordination in app.py
+Tests for PostgreSQL advisory lock migration coordination.
 
-NOTE: These tests avoid 'from app import ...' because importing the app module
-triggers Celery/Redis initialization at module level, which poisons the Redis
-connection state for subsequent schedule integration tests. Instead, we read
-the constant from source and test migrate_database via its module reference.
+The migration logic now lives in pixelprobe.migrations.startup.
 """
 
 import re
@@ -14,37 +11,36 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 
-def _get_app_module():
-    """Get the app module if already imported (by conftest/fixtures), else skip."""
-    mod = sys.modules.get('app')
-    if mod is None:
-        pytest.skip("app module not imported (test isolation)")
-    return mod
+def _get_migrations_module():
+    """Import the migrations startup module directly (safe, no Celery side effects)."""
+    from pixelprobe.migrations import startup
+    return startup
 
 
 def test_advisory_lock_id_is_stable():
     """MIGRATION_ADVISORY_LOCK_ID must never change -- other running containers
     depend on the same value to coordinate."""
-    app_source = Path(__file__).parent.parent / 'app.py'
-    content = app_source.read_text()
+    source = Path(__file__).parent.parent / 'pixelprobe' / 'migrations' / 'startup.py'
+    content = source.read_text()
     match = re.search(r'MIGRATION_ADVISORY_LOCK_ID\s*=\s*(\d+)', content)
-    assert match is not None, "MIGRATION_ADVISORY_LOCK_ID not found in app.py"
+    assert match is not None, "MIGRATION_ADVISORY_LOCK_ID not found in pixelprobe/migrations/startup.py"
     assert int(match.group(1)) == 7283945162
 
 
 def test_migrate_database_falls_back_on_advisory_lock_failure(app):
     """When advisory lock acquisition fails (e.g., SQLite test DB), migrations
     still run via the fallback path."""
-    app_mod = _get_app_module()
+    mig_mod = _get_migrations_module()
     with app.app_context():
-        with patch.object(app_mod, '_run_all_migrations') as mock_migrations:
-            app_mod.migrate_database()
+        with patch.object(mig_mod, '_run_all_migrations') as mock_migrations:
+            from models import db
+            mig_mod.migrate_database(db)
             mock_migrations.assert_called_once()
 
 
 def test_migrate_database_releases_lock_on_success(app):
     """Advisory lock is released after migrations complete successfully."""
-    app_mod = _get_app_module()
+    mig_mod = _get_migrations_module()
     with app.app_context():
         mock_conn = MagicMock()
         mock_scalar = MagicMock(return_value=True)
@@ -55,11 +51,11 @@ def test_migrate_database_releases_lock_on_success(app):
         mock_engine = MagicMock()
         mock_engine.connect.return_value = mock_conn
 
-        with patch.object(app_mod, '_run_all_migrations') as mock_migrations, \
-             patch.object(app_mod, 'db') as mock_db:
-            mock_db.engine = mock_engine
+        mock_db = MagicMock()
+        mock_db.engine = mock_engine
 
-            app_mod.migrate_database()
+        with patch.object(mig_mod, '_run_all_migrations') as mock_migrations:
+            mig_mod.migrate_database(mock_db)
 
             mock_migrations.assert_called_once()
             assert mock_conn.execute.call_count == 2
@@ -70,7 +66,7 @@ def test_migrate_database_releases_lock_on_success(app):
 
 def test_migrate_database_releases_lock_on_migration_failure(app):
     """Advisory lock is released even if migrations raise an exception."""
-    app_mod = _get_app_module()
+    mig_mod = _get_migrations_module()
     with app.app_context():
         mock_conn = MagicMock()
         mock_scalar = MagicMock(return_value=True)
@@ -81,11 +77,11 @@ def test_migrate_database_releases_lock_on_migration_failure(app):
         mock_engine = MagicMock()
         mock_engine.connect.return_value = mock_conn
 
-        with patch.object(app_mod, '_run_all_migrations', side_effect=RuntimeError("migration boom")) as mock_migrations, \
-             patch.object(app_mod, 'db') as mock_db:
-            mock_db.engine = mock_engine
+        mock_db = MagicMock()
+        mock_db.engine = mock_engine
 
-            app_mod.migrate_database()
+        with patch.object(mig_mod, '_run_all_migrations', side_effect=RuntimeError("migration boom")) as mock_migrations:
+            mig_mod.migrate_database(mock_db)
 
             mock_migrations.assert_called_once()
             assert mock_conn.execute.call_count == 2
@@ -96,7 +92,7 @@ def test_migrate_database_releases_lock_on_migration_failure(app):
 
 def test_migrate_database_waiter_path(app):
     """When another process holds the lock, we wait then skip migrations."""
-    app_mod = _get_app_module()
+    mig_mod = _get_migrations_module()
     with app.app_context():
         mock_conn = MagicMock()
 
@@ -113,11 +109,11 @@ def test_migrate_database_waiter_path(app):
         mock_engine = MagicMock()
         mock_engine.connect.return_value = mock_conn
 
-        with patch.object(app_mod, '_run_all_migrations') as mock_migrations, \
-             patch.object(app_mod, 'db') as mock_db:
-            mock_db.engine = mock_engine
+        mock_db = MagicMock()
+        mock_db.engine = mock_engine
 
-            app_mod.migrate_database()
+        with patch.object(mig_mod, '_run_all_migrations') as mock_migrations:
+            mig_mod.migrate_database(mock_db)
 
             mock_migrations.assert_not_called()
             assert call_count[0] == 3

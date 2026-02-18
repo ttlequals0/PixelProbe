@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.63] - 2026-02-18
+
+### Code Simplification
+
+- **Deduplicate `convert_to_tz()` in models.py**: Extract 8 identical inline copies into a single module-level function
+- **Consolidate `rate_limit()` / `exempt_from_rate_limit()`**: Update canonical `pixelprobe/utils/rate_limiting.py` to match inline implementation, replace 5 inline copies in route files with imports
+- **Deduplicate Bearer token extraction in auth.py**: Extract `_extract_bearer_token()` helper, replace 4 inline token-parsing blocks, remove dead `token = token` no-ops
+- **Unify file extension lists**: Remove divergent extension sets from `pixelprobe/utils/helpers.py`, import canonical lists from `pixelprobe/constants.py`
+- **Rename ambiguous `validate_file_path`**: Rename `validators.py` version to `validate_file_path_format()` to distinguish from security.py's path traversal prevention
+- **Deduplicate `check_celery_available()`**: Move to new `pixelprobe/utils/celery_utils.py`, replace copies in `scan_routes.py` and `scan_routes_parallel.py`
+- **Deduplicate `ContextTask` in celery_config.py**: Extract `_make_context_task()` factory, replace 3 identical inner class definitions
+- **Replace deprecated `datetime.utcnow()`**: Use `datetime.now(timezone.utc)` in `models.py` (4 locations) and `security.py` (2 locations)
+- **Extract `get_configured_scan_paths()`**: Create shared helper in `pixelprobe/utils/helpers.py`, replace 6+ inline DB-fallback-to-env patterns
+- **Use `TERMINAL_SCAN_PHASES` constant**: Replace 5 hardcoded `['idle', 'completed', 'error', 'crashed', 'cancelled']` lists with import from `pixelprobe/constants.py`
+- **Consolidate scheduler scan methods**: Extract `_filter_excluded_paths()` and `_execute_scan_request()` helpers in `scheduler.py`
+- **Remove dead `truncate_scan_output()`**: Remove no-op function from `media_checker.py`, replace 7 call sites with direct variable reference
+- **Merge `load_exclusions_with_patterns()`**: Read `exclusions.json` once instead of twice
+- **Remove unnecessary `getattr()` calls**: Use direct attribute access in `ScanReport.to_dict()`
+- **Break up `app.py`** (1137 -> 541 lines):
+  - Extract migration functions to `pixelprobe/migrations/startup.py`
+  - Extract scheduler lock management to `pixelprobe/scheduler_lock.py`
+  - Extract startup cleanup routines to `pixelprobe/startup.py`
+  - Simplify v2.2.68 column migration with loop
+- Files affected: `models.py`, `auth.py`, `app.py`, `scheduler.py`, `celery_config.py`, `media_checker.py`, `version.py`, `pixelprobe/utils/rate_limiting.py`, `pixelprobe/utils/helpers.py`, `pixelprobe/utils/validators.py`, `pixelprobe/utils/celery_utils.py` (new), `pixelprobe/utils/__init__.py`, `pixelprobe/constants.py`, `pixelprobe/migrations/startup.py` (new), `pixelprobe/scheduler_lock.py` (new), `pixelprobe/startup.py` (new), `pixelprobe/api/admin_routes.py`, `pixelprobe/api/scan_routes.py`, `pixelprobe/api/scan_routes_parallel.py`, `pixelprobe/api/maintenance_routes.py`, `pixelprobe/api/stats_routes.py`, `pixelprobe/services/stats_service.py`
+
+---
+
+## [2.5.63] - 2026-02-18
+
+### Code Simplification
+
+- **Deduplicate `convert_to_tz()` in models.py**: Extracted 8 identical inline copies into a single module-level function
+- **Consolidate `rate_limit()` / `exempt_from_rate_limit()`**: Updated canonical `pixelprobe/utils/rate_limiting.py` to match inline implementations and replaced all 4 inline copies in route files
+- **Deduplicate Bearer token extraction in auth.py**: Extracted `_extract_bearer_token()` helper, replaced 4 inline copies, removed `token = token` no-ops
+- **Unify file extension lists**: Removed divergent inline sets from `helpers.py`, now imports from `pixelprobe/constants.py`
+- **Break up `app.py`**: Extracted 600+ lines into focused modules:
+  - `pixelprobe/migrations/startup.py` -- all DB migration functions
+  - `pixelprobe/scheduler_lock.py` -- Redis distributed lock management
+  - `pixelprobe/startup.py` -- startup cleanup routines
+  - Reduced `app.py` from 1137 to 541 lines
+- **Deduplicate `check_celery_available()`**: Moved to `pixelprobe/utils/celery_utils.py`, replaced copies in `scan_routes.py` and `scan_routes_parallel.py`
+- **Deduplicate `ContextTask` in `celery_config.py`**: Extracted `_make_context_task()` factory, replaced 3 identical class definitions
+- **Replace deprecated `datetime.utcnow()`**: All occurrences in `models.py` and `security.py` now use `datetime.now(timezone.utc)`
+- **Extract `get_configured_scan_paths()`**: Created shared helper in `pixelprobe/utils/helpers.py`, replaced 6+ inline "read from DB, fallback to env var" patterns
+- **Use `TERMINAL_SCAN_PHASES` constant**: Replaced 5 hardcoded `['idle', 'completed', 'error', 'crashed', 'cancelled']` lists with the constant from `pixelprobe/constants.py`
+- **Consolidate scheduler scan methods**: Extracted `_filter_excluded_paths()` and `_execute_scan_request()` helpers, reducing duplication between `_run_periodic_scan` and `_run_scheduled_scan`
+- **Rename ambiguous `validate_file_path`**: Renamed validators.py version to `validate_file_path_format()` to avoid confusion with the security.py version
+- **Remove dead `truncate_scan_output()`**: Was a no-op (returned input unchanged), replaced 7 call sites with direct variable usage
+- **Merge `load_exclusions_with_patterns()`**: Now reads `exclusions.json` once instead of twice
+- **Remove unnecessary `getattr()` calls**: `ScanReport.to_dict()` now accesses `num_workers`, `files_added`, `files_updated` directly
+- **Update stale `deep_scan` comment**: Replaced outdated version-specific comment with generic backward-compat note
+- Files affected: `models.py`, `auth.py`, `app.py`, `scheduler.py`, `celery_config.py`, `media_checker.py`, `pixelprobe/utils/rate_limiting.py`, `pixelprobe/utils/helpers.py`, `pixelprobe/utils/validators.py`, `pixelprobe/utils/celery_utils.py` (new), `pixelprobe/utils/security.py`, `pixelprobe/utils/__init__.py`, `pixelprobe/api/admin_routes.py`, `pixelprobe/api/scan_routes.py`, `pixelprobe/api/scan_routes_parallel.py`, `pixelprobe/api/maintenance_routes.py`, `pixelprobe/api/stats_routes.py`, `pixelprobe/services/stats_service.py`, `pixelprobe/migrations/startup.py` (new), `pixelprobe/scheduler_lock.py` (new), `pixelprobe/startup.py` (new)
+
+---
+
 ## [2.5.62] - 2026-02-14
 
 ### Bug Fixes
