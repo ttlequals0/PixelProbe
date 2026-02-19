@@ -40,6 +40,7 @@ def create_test_app():
     test_app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     test_app.config['SQLALCHEMY_EXPIRE_ON_COMMIT'] = False  # Prevent detached instance errors in tests
     test_app.config['WTF_CSRF_ENABLED'] = False
+    test_app.config['INTERNAL_API_SECRET'] = 'test-internal-secret'
     
     # Initialize extensions
     _db.init_app(test_app)
@@ -86,8 +87,11 @@ def create_test_app():
     scheduler.scheduler.start()  # Start the scheduler
     set_scheduler(scheduler)
     
-    # Add basic routes
+    # Add basic routes (with auth_required to match production app)
+    from auth import auth_required as _auth_required
+
     @test_app.route('/health')
+    @_auth_required
     def health_check():
         from datetime import datetime, timezone
         return {
@@ -95,8 +99,9 @@ def create_test_app():
             'version': '1.0.0',
             'timestamp': datetime.now(timezone.utc).isoformat()
         }
-    
+
     @test_app.route('/api/version')
+    @_auth_required
     def get_version():
         return {
             'version': '1.0.0',

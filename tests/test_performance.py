@@ -295,8 +295,8 @@ class TestPerformance:
 
         response_times = {}
 
-        # Use internal scheduler header to bypass authentication in tests
-        headers = {'X-Internal-Request': 'scheduler'}
+        # Use internal secret header to bypass authentication in tests
+        headers = {'X-Internal-Secret': app.config.get('INTERNAL_API_SECRET', 'test-internal-secret')}
 
         with app.test_client() as client:
             for endpoint, method, data in endpoints:

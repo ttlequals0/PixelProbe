@@ -11,6 +11,7 @@ import logging
 import requests
 from typing import Dict, Optional, List
 from datetime import datetime, timezone
+from pixelprobe.utils.security import validate_safe_url, create_safe_session
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ class NotificationService:
     """Service for sending notifications via various providers"""
 
     def __init__(self):
-        self.session = requests.Session()
+        self.session = create_safe_session()
         self.session.headers.update({'User-Agent': 'PixelProbe-Notification/1.0'})
         self.timeout = 10
 
@@ -171,6 +172,12 @@ class NotificationService:
         if token:
             headers['Authorization'] = f'Bearer {token}'
 
+        # SSRF protection: validate URL before making request
+        ntfy_url = f"{server_url}/{topic}"
+        is_safe, error = validate_safe_url(ntfy_url)
+        if not is_safe:
+            return False, f"ntfy URL blocked by security policy: {error}"
+
         try:
             response = self.session.post(
                 f"{server_url}/{topic}",
@@ -287,6 +294,11 @@ class NotificationService:
 
         headers = {'Content-Type': 'application/json'}
         headers.update(custom_headers)
+
+        # SSRF protection: validate URL before making request
+        is_safe, error = validate_safe_url(webhook_url)
+        if not is_safe:
+            return False, f"Webhook URL blocked by security policy: {error}"
 
         try:
             if method == 'POST':

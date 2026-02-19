@@ -4,9 +4,9 @@ Simple tests for the main app endpoints
 
 import pytest
 
-def test_health_endpoint(client):
+def test_health_endpoint(authenticated_client):
     """Test the health check endpoint"""
-    response = client.get('/health')
+    response = authenticated_client.get('/health')
     assert response.status_code == 200
     data = response.get_json()
     assert data['status'] == 'healthy'

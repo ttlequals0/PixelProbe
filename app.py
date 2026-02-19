@@ -71,6 +71,13 @@ config_name = os.getenv('FLASK_ENV', 'development')
 config_class = get_config(config_name)
 config_class.init_app(app)
 
+# Auto-generate INTERNAL_API_SECRET if not set via environment
+# This secret is used for scheduler-to-app internal authentication
+if not app.config.get('INTERNAL_API_SECRET'):
+    import secrets
+    app.config['INTERNAL_API_SECRET'] = secrets.token_urlsafe(32)
+    logger.info("Auto-generated INTERNAL_API_SECRET for internal request authentication")
+
 # Backward compatibility - keep old environment variable support
 if not app.config.get('SECRET_KEY'):
     SECRET_KEY = os.environ.get('SECRET_KEY')

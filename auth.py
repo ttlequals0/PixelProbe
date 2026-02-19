@@ -3,11 +3,12 @@ Authentication module for PixelProbe
 Handles user authentication, session management, and API token validation
 """
 
+import hmac
 import logging
 from functools import wraps
 from datetime import datetime, timezone
 
-from flask import jsonify, request, redirect, url_for, session
+from flask import jsonify, request, redirect, url_for, session, current_app
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_restx import abort as restx_abort
 from models import User, APIToken, db
@@ -113,8 +114,10 @@ def auth_required(f):
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Allow internal scheduler requests without authentication
-        if request.headers.get('X-Internal-Request') == 'scheduler':
+        # Allow internal scheduler requests authenticated by shared secret
+        internal_secret = request.headers.get('X-Internal-Secret', '')
+        expected_secret = current_app.config.get('INTERNAL_API_SECRET', '')
+        if internal_secret and expected_secret and hmac.compare_digest(internal_secret, expected_secret):
             return f(*args, **kwargs)
 
         # Check if user is authenticated via session
@@ -142,8 +145,10 @@ def check_auth():
     Returns True if authenticated, False otherwise.
     Use this inside Flask-RESTX Resource methods instead of the decorator.
     """
-    # Allow internal scheduler requests without authentication
-    if request.headers.get('X-Internal-Request') == 'scheduler':
+    # Allow internal scheduler requests authenticated by shared secret
+    internal_secret = request.headers.get('X-Internal-Secret', '')
+    expected_secret = current_app.config.get('INTERNAL_API_SECRET', '')
+    if internal_secret and expected_secret and hmac.compare_digest(internal_secret, expected_secret):
         return True
 
     # Check if user is authenticated via session

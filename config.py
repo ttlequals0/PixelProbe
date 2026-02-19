@@ -15,6 +15,10 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY')
     if not SECRET_KEY:
         raise ValueError("SECRET_KEY environment variable must be set")
+
+    # Internal API secret for scheduler-to-app authentication
+    # If not set, app.py will auto-generate one at startup
+    INTERNAL_API_SECRET = os.environ.get('INTERNAL_API_SECRET', '')
     
     # PostgreSQL configuration
     POSTGRES_HOST = os.getenv('POSTGRES_HOST', 'localhost')
