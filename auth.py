@@ -16,6 +16,30 @@ logger = logging.getLogger(__name__)
 
 login_manager = LoginManager()
 
+
+def _extract_bearer_token(req):
+    """Extract a Bearer token from the Authorization header.
+
+    Supports both 'Bearer <token>' and raw token formats (for Swagger UI).
+    Returns None if no valid token is found.
+    """
+    auth_header = req.headers.get('Authorization')
+    if not auth_header:
+        return None
+
+    if ' ' in auth_header:
+        try:
+            scheme, token = auth_header.split(' ', 1)
+            if scheme.lower() == 'bearer':
+                return token
+        except ValueError:
+            pass
+        return None
+    else:
+        # No space means it's just the token (from Swagger UI)
+        return auth_header
+
+
 def init_auth(app):
     """Initialize authentication for the Flask app"""
     login_manager.init_app(app)
@@ -69,31 +93,15 @@ def init_auth(app):
     @login_manager.request_loader
     def load_user_from_request(request):
         # Check for API token in Authorization header
-        auth_header = request.headers.get('Authorization')
-        if auth_header:
-            try:
-                token = None
-                # Check if it has Bearer prefix
-                if ' ' in auth_header:
-                    scheme, token = auth_header.split(' ', 1)
-                    if scheme.lower() == 'bearer':
-                        token = token
-                else:
-                    # No space means it's just the token (from Swagger UI)
-                    token = auth_header
-
-                if token:
-                    api_token = APIToken.query.filter_by(token=token, is_active=True).first()
-                    if api_token and api_token.is_valid():
-                        api_token.update_last_used()
-                        return api_token.user
-            except Exception as e:
-                logger.error(f"Error loading user from API token: {e}")
-
-        # SECURITY: API tokens in query parameters removed per P0 security audit
-        # Tokens in URLs are logged and exposed in browser history
-        # API tokens MUST be sent via Authorization header only
-        # If you need to authenticate, use: Authorization: Bearer <token>
+        try:
+            token = _extract_bearer_token(request)
+            if token:
+                api_token = APIToken.query.filter_by(token=token, is_active=True).first()
+                if api_token and api_token.is_valid():
+                    api_token.update_last_used()
+                    return api_token.user
+        except Exception as e:
+            logger.error(f"Error loading user from API token: {e}")
 
         return None
 
@@ -114,31 +122,11 @@ def auth_required(f):
             return f(*args, **kwargs)
 
         # Check for API token
-        auth_header = request.headers.get('Authorization')
-        token = None
-
-        if auth_header:
-            # Check if it has Bearer prefix
-            if ' ' in auth_header:
-                try:
-                    scheme, token = auth_header.split(' ', 1)
-                    if scheme.lower() != 'bearer':
-                        token = None
-                except ValueError:
-                    pass
-            else:
-                # No space means it's just the token (from Swagger UI)
-                token = auth_header
-
-        # SECURITY: API tokens in query parameters removed per P0 security audit
-        # Tokens in URLs are logged and exposed in browser history
-        # API tokens MUST be sent via Authorization header only
-
+        token = _extract_bearer_token(request)
         if token:
             api_token = APIToken.query.filter_by(token=token, is_active=True).first()
             if api_token and api_token.is_valid():
                 api_token.update_last_used()
-                # Temporarily set current_user for this request
                 request.current_user = api_token.user
                 return f(*args, **kwargs)
 
@@ -163,31 +151,11 @@ def check_auth():
         return True
 
     # Check for API token
-    auth_header = request.headers.get('Authorization')
-    token = None
-
-    if auth_header:
-        # Check if it has Bearer prefix
-        if ' ' in auth_header:
-            try:
-                scheme, token = auth_header.split(' ', 1)
-                if scheme.lower() != 'bearer':
-                    token = None
-            except ValueError:
-                pass
-        else:
-            # No space means it's just the token (from Swagger UI)
-            token = auth_header
-
-    # SECURITY: API tokens in query parameters removed per P0 security audit
-    # Tokens in URLs are logged and exposed in browser history
-    # API tokens MUST be sent via Authorization header only
-
+    token = _extract_bearer_token(request)
     if token:
         api_token = APIToken.query.filter_by(token=token, is_active=True).first()
         if api_token and api_token.is_valid():
             api_token.update_last_used()
-            # Store user in request context
             request.current_user = api_token.user
             return True
 
@@ -258,30 +226,10 @@ def get_authenticated_user(request):
         return current_user
 
     # Check for API token in header
-    auth_header = request.headers.get('Authorization')
-    if auth_header:
-        token = None
-        # Check if it has Bearer prefix
-        if ' ' in auth_header:
-            try:
-                scheme, token = auth_header.split(' ', 1)
-                if scheme.lower() == 'bearer':
-                    token = token
-                else:
-                    token = None
-            except ValueError:
-                pass
-        else:
-            # No space means it's just the token (from Swagger UI)
-            token = auth_header
-
-        if token:
-            api_token = APIToken.query.filter_by(token=token, is_active=True).first()
-            if api_token and api_token.is_valid():
-                return api_token.user
-
-    # SECURITY: API tokens in query parameters removed per P0 security audit
-    # Tokens in URLs are logged and exposed in browser history
-    # API tokens MUST be sent via Authorization header only
+    token = _extract_bearer_token(request)
+    if token:
+        api_token = APIToken.query.filter_by(token=token, is_active=True).first()
+        if api_token and api_token.is_valid():
+            return api_token.user
 
     return None

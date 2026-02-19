@@ -19,25 +19,7 @@ logger = logging.getLogger(__name__)
 parallel_scan_bp = Blueprint('parallel_scan', __name__, url_prefix='/api')
 
 
-def check_celery_available():
-    """Check if Celery is available and configured"""
-    try:
-        if not hasattr(current_app, 'celery'):
-            return False
-        
-        # Check if broker URL is configured
-        broker_url = current_app.config.get('CELERY_BROKER_URL')
-        if not broker_url:
-            return False
-        
-        # Try to get worker stats
-        from celery import current_app as celery_app
-        stats = celery_app.control.inspect().stats()
-        return stats is not None and len(stats) > 0
-        
-    except Exception as e:
-        logger.debug(f"Celery not available: {e}")
-        return False
+from pixelprobe.utils.celery_utils import check_celery_available
 
 
 @parallel_scan_bp.route('/scan-parallel', methods=['POST'])

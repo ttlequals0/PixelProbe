@@ -174,9 +174,8 @@ class StatsService:
     def _get_monitored_paths(self) -> List[Dict]:
         """Get information about monitored paths"""
         try:
-            # Get configured scan paths (no hardcoded defaults)
-            scan_paths_env = os.environ.get('SCAN_PATHS', '')
-            scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]
+            from pixelprobe.utils.helpers import get_configured_scan_paths
+            scan_paths = get_configured_scan_paths()
             
             if not scan_paths:
                 # No scan paths configured

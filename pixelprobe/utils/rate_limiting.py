@@ -1,28 +1,43 @@
 """Rate limiting configuration for the application"""
-from flask import Flask
+from flask import Flask, current_app
 from flask_limiter import Limiter
 from functools import wraps
 import logging
 
 logger = logging.getLogger(__name__)
 
+
 def rate_limit(limit_string):
-    """
-    Decorator to mark endpoints for rate limiting
-    
+    """Decorator to apply rate limits using the app's limiter.
+
     Args:
         limit_string: Rate limit string (e.g., "10 per minute", "100 per hour")
     """
     def decorator(f):
-        # Mark the function with rate limit metadata
-        f._rate_limit = limit_string
-        return f
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            limiter = current_app.extensions.get('flask-limiter')
+            if limiter:
+                limited_func = limiter.limit(limit_string, exempt_when=lambda: False)(f)
+                return limited_func(*args, **kwargs)
+            else:
+                return f(*args, **kwargs)
+        return wrapped
     return decorator
 
+
 def exempt_from_rate_limit(f):
-    """Decorator to exempt an endpoint from rate limiting"""
-    f._rate_limit_exempt = True
-    return f
+    """Decorator to exempt a function from rate limiting"""
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        limiter = current_app.extensions.get('flask-limiter')
+        if limiter:
+            exempt_func = limiter.exempt(f)
+            return exempt_func(*args, **kwargs)
+        else:
+            return f(*args, **kwargs)
+    return wrapped
+
 
 def apply_rate_limits(app: Flask, limiter: Limiter):
     """Apply rate limits to blueprint endpoints after registration"""

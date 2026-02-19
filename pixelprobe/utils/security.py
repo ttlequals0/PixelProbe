@@ -5,7 +5,7 @@ import os
 import re
 import logging
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import request, jsonify, current_app
 from werkzeug.security import safe_join
 from models import db, ScanConfiguration
@@ -237,7 +237,7 @@ class AuditLogger:
             ip_address = request.remote_addr
         
         log_entry = {
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'action': action,
             'user': user or 'anonymous',
             'ip_address': ip_address,
@@ -261,7 +261,7 @@ class AuditLogger:
             severity: Severity level (info, warning, error, critical)
         """
         log_entry = {
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'event_type': event_type,
             'message': message,
             'severity': severity,

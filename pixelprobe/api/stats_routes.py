@@ -4,7 +4,6 @@ import os
 import time
 import logging
 from datetime import datetime, timezone
-from functools import wraps
 
 from models import db, ScanResult
 from version import __version__
@@ -16,20 +15,7 @@ logger = logging.getLogger(__name__)
 
 stats_bp = Blueprint('stats', __name__, url_prefix='/api')
 
-def exempt_from_rate_limit(f):
-    """Decorator to exempt a function from rate limiting"""
-    @wraps(f)
-    def wrapped(*args, **kwargs):
-        # Get the limiter from the current app
-        limiter = current_app.extensions.get('flask-limiter')
-        if limiter:
-            # Apply exemption dynamically
-            exempt_func = limiter.exempt(f)
-            return exempt_func(*args, **kwargs)
-        else:
-            # If no limiter, just call the function
-            return f(*args, **kwargs)
-    return wrapped
+from pixelprobe.utils.rate_limiting import exempt_from_rate_limit
 
 @stats_bp.route('/stats')
 @exempt_from_rate_limit
@@ -344,10 +330,9 @@ def get_system_info():
         monitored_paths = []
         total_filesystem_files = db_total_files  # Use DB total since all files are scanned
         
-        # Get configured scan paths from environment (no hardcoded defaults)
-        scan_paths_env = os.environ.get('SCAN_PATHS', '')
-        scan_paths = [p.strip() for p in scan_paths_env.split(',') if p.strip()]  # Remove empty strings
-        
+        from pixelprobe.utils.helpers import get_configured_scan_paths
+        scan_paths = get_configured_scan_paths()
+
         if not scan_paths:
             # No scan paths configured - use empty path counts
             path_counts = {}

@@ -15,27 +15,8 @@ logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/api')
 
-# Import limiter from main app
 from flask import current_app
-from functools import wraps
-
-# Create rate limit decorators that work with Flask-Limiter
-def rate_limit(limit_string):
-    """Decorator to apply rate limits using the app's limiter"""
-    def decorator(f):
-        @wraps(f)
-        def wrapped(*args, **kwargs):
-            # Get the limiter from the current app
-            limiter = current_app.extensions.get('flask-limiter')
-            if limiter:
-                # Apply the rate limit dynamically
-                limited_func = limiter.limit(limit_string, exempt_when=lambda: False)(f)
-                return limited_func(*args, **kwargs)
-            else:
-                # If no limiter, just call the function
-                return f(*args, **kwargs)
-        return wrapped
-    return decorator
+from pixelprobe.utils.rate_limiting import rate_limit
 
 # Get scheduler instance (will be initialized in app context)
 scheduler = None

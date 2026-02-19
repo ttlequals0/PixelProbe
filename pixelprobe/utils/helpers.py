@@ -4,6 +4,7 @@ Helper utilities for PixelProbe
 
 import os
 import logging
+from pixelprobe.constants import VIDEO_EXTENSIONS, IMAGE_EXTENSIONS, AUDIO_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -17,31 +18,23 @@ def format_file_size(size_bytes):
 
 def is_media_file(file_path):
     """Check if file is a supported media file"""
-    # Video extensions
-    video_extensions = {
-        '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', 
-        '.mpeg', '.3gp', '.3g2', '.mxf', '.roq', '.nsv', '.f4v', '.f4p', '.f4a', 
-        '.f4b', '.mts', '.m2ts', '.ts', '.vob', '.ogv', '.drc', '.gif', '.gifv', 
-        '.mng', '.qt', '.yuv', '.rm', '.rmvb', '.asf', '.amv', '.m2v', '.svi', 
-        '.mpc', '.mpv', '.mpe', '.m1v', '.m2p', '.m2t', '.m2ts', '.mts', '.mt2s',
-        '.rec', '.divx', '.xvid', '.evo', '.fli', '.flc', '.tod', '.avchd'
-    }
-    
-    # Image extensions  
-    image_extensions = {
-        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp', '.ico',
-        '.heic', '.heif', '.raw', '.arw', '.cr2', '.cr3', '.nef', '.nrw', '.orf',
-        '.rw2', '.pef', '.srw', '.x3f', '.erf', '.kdc', '.dcs', '.rw1', '.raw',
-        '.dng', '.raf', '.dcr', '.ptx', '.pxn', '.bay', '.crw', '.3fr', '.sr2',
-        '.srf', '.mef', '.mos', '.gpr', '.mrw', '.mdc', '.rwl', '.iiq', '.cap'
-    }
-    
-    # Audio extensions
-    audio_extensions = {
-        '.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus', '.ape',
-        '.ac3', '.dts', '.alac', '.aiff', '.au', '.m4b', '.m4p', '.m4r', '.mka',
-        '.mpa', '.mpc', '.mp2', '.ra', '.tta', '.voc', '.vox', '.wv', '.8svx'
-    }
-    
     ext = os.path.splitext(file_path)[1].lower()
-    return ext in video_extensions or ext in image_extensions or ext in audio_extensions
+    return ext in VIDEO_EXTENSIONS or ext in IMAGE_EXTENSIONS or ext in AUDIO_EXTENSIONS
+
+
+def get_configured_scan_paths():
+    """Read scan paths from DB (ScanConfiguration), falling back to SCAN_PATHS env var.
+
+    Returns a list of path strings. May be empty if nothing is configured.
+    """
+    try:
+        from models import ScanConfiguration
+        configs = ScanConfiguration.query.filter_by(is_active=True).all()
+        paths = [config.path for config in configs if config.path]
+        if paths:
+            return paths
+    except Exception:
+        pass
+
+    scan_paths_env = os.environ.get('SCAN_PATHS', '')
+    return [p.strip() for p in scan_paths_env.split(',') if p.strip()]

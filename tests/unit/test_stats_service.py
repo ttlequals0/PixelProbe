@@ -119,14 +119,13 @@ class TestStatsService:
         assert stats['audio/mp3']['corrupted'] == 0
         assert stats['audio/mp3']['corruption_rate'] == 0.0
     
+    @patch('pixelprobe.utils.helpers.get_configured_scan_paths', return_value=['/movies', '/tv', '/originals'])
     @patch('pixelprobe.services.stats_service.os')
     @patch('pixelprobe.services.stats_service.db')
-    def test_get_monitored_paths(self, mock_db, mock_os, stats_service):
+    def test_get_monitored_paths(self, mock_db, mock_os, mock_get_paths, stats_service):
         """Test monitored paths retrieval"""
-        # Mock environment
-        mock_os.environ.get.return_value = '/movies,/tv,/originals'
         mock_os.path.exists.side_effect = [True, True, False]  # originals doesn't exist
-        
+
         # Mock database results
         mock_results = [
             ('/movies', 50),
@@ -134,14 +133,14 @@ class TestStatsService:
             ('other', 10)
         ]
         mock_db.session.execute.return_value.fetchall.return_value = mock_results
-        
+
         paths = stats_service._get_monitored_paths()
-        
+
         assert len(paths) == 3
         assert paths[0]['path'] == '/movies'
         assert paths[0]['exists'] == True
         assert paths[0]['file_count'] == 50
-        
+
         assert paths[2]['path'] == '/originals'
         assert paths[2]['exists'] == False
         assert paths[2]['file_count'] == 0
