@@ -73,10 +73,39 @@ config_class.init_app(app)
 
 # Auto-generate INTERNAL_API_SECRET if not set via environment
 # This secret is used for scheduler-to-app internal authentication
+# In multi-worker/multi-container setups, the secret is shared via Redis
+# so all gunicorn workers and the celery worker use the same value.
 if not app.config.get('INTERNAL_API_SECRET'):
     import secrets
-    app.config['INTERNAL_API_SECRET'] = secrets.token_urlsafe(32)
-    logger.info("Auto-generated INTERNAL_API_SECRET for internal request authentication")
+    _REDIS_SECRET_KEY = 'pixelprobe:internal_api_secret'
+    _secret_loaded = False
+    try:
+        from pixelprobe.progress_utils import get_redis_client
+        _redis = get_redis_client()
+        if _redis:
+            _existing = _redis.get(_REDIS_SECRET_KEY)
+            if _existing:
+                app.config['INTERNAL_API_SECRET'] = _existing.decode('utf-8') if isinstance(_existing, bytes) else _existing
+                _secret_loaded = True
+                logger.info("Loaded INTERNAL_API_SECRET from Redis (shared across workers)")
+            else:
+                _new_secret = secrets.token_urlsafe(32)
+                # Use SETNX to avoid race conditions between workers
+                if _redis.set(_REDIS_SECRET_KEY, _new_secret, nx=True):
+                    app.config['INTERNAL_API_SECRET'] = _new_secret
+                    logger.info("Generated and stored INTERNAL_API_SECRET in Redis")
+                else:
+                    # Another worker beat us to it, read theirs
+                    _existing = _redis.get(_REDIS_SECRET_KEY)
+                    app.config['INTERNAL_API_SECRET'] = _existing.decode('utf-8') if isinstance(_existing, bytes) else _existing
+                    logger.info("Loaded INTERNAL_API_SECRET from Redis (set by sibling worker)")
+                _secret_loaded = True
+    except Exception as e:
+        logger.warning(f"Could not use Redis for INTERNAL_API_SECRET: {e}")
+
+    if not _secret_loaded:
+        app.config['INTERNAL_API_SECRET'] = secrets.token_urlsafe(32)
+        logger.info("Auto-generated INTERNAL_API_SECRET (Redis unavailable, single-worker mode)")
 
 # Backward compatibility - keep old environment variable support
 if not app.config.get('SECRET_KEY'):
