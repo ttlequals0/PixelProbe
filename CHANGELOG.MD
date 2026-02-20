@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.65] - 2026-02-20
+
+### Fixed
+
+- **Share INTERNAL_API_SECRET via Redis across gunicorn workers**: The auto-generated secret was unique per gunicorn worker, causing scheduler internal requests to fail with 401 when routed to a different worker. Now uses Redis `SETNX` to generate the secret once and share it across all workers and the celery container.
+- Files affected: `app.py`, `version.py`
+
+---
+
 ## [2.5.64] - 2026-02-19
 
 ### Security
