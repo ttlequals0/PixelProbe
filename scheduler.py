@@ -48,7 +48,7 @@ class MediaScheduler:
         """
         base_url = self._get_api_base_url()
         headers = {
-            'X-Internal-Request': 'scheduler',
+            'X-Internal-Secret': self.app.config.get('INTERNAL_API_SECRET', ''),
             'Content-Type': 'application/json'
         }
         try:
@@ -449,9 +449,9 @@ class MediaScheduler:
 
                 base_url = self._get_api_base_url()
                 
-                # Add internal request header
+                # Add internal request header with cryptographic secret
                 headers = {
-                    'X-Internal-Request': 'scheduler',
+                    'X-Internal-Secret': self.app.config.get('INTERNAL_API_SECRET', ''),
                     'Content-Type': 'application/json'
                 }
                 

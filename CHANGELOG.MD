@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.65] - 2026-02-20
+
+### Fixed
+
+- **Share INTERNAL_API_SECRET via Redis across gunicorn workers**: The auto-generated secret was unique per gunicorn worker, causing scheduler internal requests to fail with 401 when routed to a different worker. Now uses Redis `SETNX` to generate the secret once and share it across all workers and the celery container.
+- Files affected: `app.py`, `version.py`
+
+---
+
+## [2.5.64] - 2026-02-19
+
+### Security
+
+- **Fix authentication bypass via X-Internal-Request header**: Replace trivially spoofable static string check (`X-Internal-Request: scheduler`) with cryptographic HMAC validation using a shared secret (`X-Internal-Secret`). Secret is auto-generated at startup if not set via `INTERNAL_API_SECRET` environment variable.
+- **Fix SSRF in healthcheck and notification services**: Add `validate_safe_url()` function that resolves hostnames and blocks requests to private/reserved IP ranges (RFC 1918, link-local, loopback, cloud metadata 169.254.x.x). Applied to healthcheck pings, webhook notifications, and ntfy notifications.
+- **Add redirect-safe HTTP session**: New `create_safe_session()` creates a `requests.Session` with a response hook that validates redirect `Location` headers against the same private IP blocklist, preventing SSRF via DNS rebinding or redirect chains.
+- **Fix ntfy config field name mismatch**: `_validate_provider_config()` now accepts both `server_url` (canonical, matching notification_service.py) and `server` (legacy) field names for backward compatibility.
+- Files affected: `auth.py`, `config.py`, `app.py`, `scheduler.py`, `pixelprobe/utils/security.py`, `pixelprobe/services/healthcheck_service.py`, `pixelprobe/services/notification_service.py`, `pixelprobe/api/notification_routes.py`, `version.py`
+
+---
+
 ## [2.5.63] - 2026-02-18
 
 ### Code Simplification

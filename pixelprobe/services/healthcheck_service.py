@@ -8,6 +8,7 @@ import logging
 import requests
 from typing import Optional, Dict
 from datetime import datetime
+from pixelprobe.utils.security import validate_safe_url, create_safe_session
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class HealthcheckService:
     """Service for managing healthchecks.io integrations"""
 
     def __init__(self):
-        self.session = requests.Session()
+        self.session = create_safe_session()
         self.session.headers.update({
             'User-Agent': 'PixelProbe-Healthcheck/1.0'
         })
@@ -33,6 +34,12 @@ class HealthcheckService:
         try:
             if not healthcheck_url:
                 logger.warning("No healthcheck URL provided")
+                return False
+
+            # SSRF protection: validate URL before making request
+            is_safe, error = validate_safe_url(healthcheck_url)
+            if not is_safe:
+                logger.warning(f"Healthcheck start ping blocked (SSRF): {error}")
                 return False
 
             # Healthchecks.io uses /start slug for start signals
@@ -68,6 +75,12 @@ class HealthcheckService:
         try:
             if not healthcheck_url:
                 logger.warning("No healthcheck URL provided")
+                return False
+
+            # SSRF protection: validate URL before making request
+            is_safe, error = validate_safe_url(healthcheck_url)
+            if not is_safe:
+                logger.warning(f"Healthcheck success ping blocked (SSRF): {error}")
                 return False
 
             logger.info(f"Sending healthcheck success ping to: {healthcheck_url}")
@@ -133,6 +146,12 @@ class HealthcheckService:
         try:
             if not healthcheck_url:
                 logger.warning("No healthcheck URL provided")
+                return False
+
+            # SSRF protection: validate URL before making request
+            is_safe, error = validate_safe_url(healthcheck_url)
+            if not is_safe:
+                logger.warning(f"Healthcheck failure ping blocked (SSRF): {error}")
                 return False
 
             # Healthchecks.io uses /fail slug for failure signals
@@ -229,6 +248,11 @@ class HealthcheckService:
         # Basic URL validation
         if not healthcheck_url.startswith(('http://', 'https://')):
             return False, "Healthcheck URL must start with http:// or https://"
+
+        # SSRF protection: validate against private IP ranges
+        is_safe, ssrf_error = validate_safe_url(healthcheck_url)
+        if not is_safe:
+            return False, f"URL blocked by security policy: {ssrf_error}"
 
         # Log the URL format for debugging
         # Supports both public hc-ping.com and self-hosted instances

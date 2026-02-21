@@ -3,12 +3,17 @@ Security utilities for PixelProbe
 """
 import os
 import re
+import socket
+import ipaddress
 import logging
+import urllib.parse
 from functools import wraps
 from datetime import datetime, timezone
+from typing import Optional, Tuple
 from flask import request, jsonify, current_app
 from werkzeug.security import safe_join
 from models import db, ScanConfiguration
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -329,3 +334,102 @@ def validate_json_input(schema):
             return f(*args, **kwargs)
         return decorated_function
     return decorator
+
+
+# SSRF protection
+
+# Private/reserved IP networks that should never be targeted by outbound requests
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network('127.0.0.0/8'),       # Loopback
+    ipaddress.ip_network('10.0.0.0/8'),         # RFC 1918
+    ipaddress.ip_network('172.16.0.0/12'),      # RFC 1918
+    ipaddress.ip_network('192.168.0.0/16'),     # RFC 1918
+    ipaddress.ip_network('169.254.0.0/16'),     # Link-local / cloud metadata
+    ipaddress.ip_network('0.0.0.0/8'),          # "This" network
+    ipaddress.ip_network('::1/128'),            # IPv6 loopback
+    ipaddress.ip_network('fc00::/7'),           # IPv6 unique local
+    ipaddress.ip_network('fe80::/10'),          # IPv6 link-local
+]
+
+
+def validate_safe_url(url: str) -> Tuple[bool, Optional[str]]:
+    """Validate that a URL does not target private/internal IP ranges (SSRF protection).
+
+    Args:
+        url: The URL to validate
+
+    Returns:
+        Tuple of (is_safe, error_message). is_safe is True if URL is safe to request.
+    """
+    if not url or not url.strip():
+        return False, "URL is empty"
+
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False, "Invalid URL format"
+
+    # Validate scheme
+    if parsed.scheme not in ('http', 'https'):
+        return False, f"URL scheme must be http or https, got: {parsed.scheme or 'none'}"
+
+    # Reject embedded credentials (user:pass@host)
+    if parsed.username or parsed.password:
+        return False, "URLs with embedded credentials are not allowed"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "URL has no hostname"
+
+    # Resolve hostname and check all resolved IPs
+    try:
+        addr_infos = socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == 'https' else 80))
+    except socket.gaierror:
+        return False, f"Could not resolve hostname: {hostname}"
+
+    for addr_info in addr_infos:
+        ip_str = addr_info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+
+        for network in _BLOCKED_NETWORKS:
+            if ip in network:
+                AuditLogger.log_security_event(
+                    'ssrf_blocked',
+                    f"Blocked outbound request to private IP: {url} resolved to {ip_str}",
+                    severity='warning'
+                )
+                return False, f"URL resolves to a private/reserved IP address ({ip_str})"
+
+    return True, None
+
+
+def create_safe_session(max_redirects: int = 5) -> requests.Session:
+    """Create a requests.Session that validates redirect targets against private IP ranges.
+
+    Args:
+        max_redirects: Maximum number of redirects to follow
+
+    Returns:
+        A requests.Session configured with SSRF-safe redirect handling
+    """
+    session = requests.Session()
+    session.max_redirects = max_redirects
+
+    def _check_redirect(response, *args, **kwargs):
+        """Response hook that validates redirect Location headers."""
+        if response.is_redirect or response.is_permanent_redirect:
+            location = response.headers.get('Location')
+            if location:
+                # Resolve relative redirects against the request URL
+                redirect_url = urllib.parse.urljoin(response.url, location)
+                is_safe, error = validate_safe_url(redirect_url)
+                if not is_safe:
+                    raise requests.ConnectionError(
+                        f"Redirect blocked by SSRF protection: {error}"
+                    )
+
+    session.hooks['response'].append(_check_redirect)
+    return session

@@ -11,6 +11,7 @@ from typing import Optional
 from models import db, NotificationProvider, NotificationRule
 from auth import auth_required
 from pixelprobe.services.notification_service import NotificationService
+from pixelprobe.utils.security import validate_safe_url
 
 logger = logging.getLogger(__name__)
 
@@ -446,11 +447,21 @@ def _validate_provider_config(provider_type: str, config: dict) -> Optional[str]
     elif provider_type == 'ntfy':
         if not config.get('topic'):
             return 'ntfy topic is required'
-        if not config.get('server'):
+        # Support both 'server_url' (canonical) and 'server' (legacy) field names
+        server_url = config.get('server_url') or config.get('server')
+        if not server_url:
             return 'ntfy server URL is required'
+        # SSRF protection: validate server URL
+        is_safe, error = validate_safe_url(f"{server_url}/{config.get('topic')}")
+        if not is_safe:
+            return f'ntfy server URL blocked by security policy: {error}'
 
     elif provider_type == 'webhook':
         if not config.get('webhook_url'):
             return 'Webhook URL is required'
+        # SSRF protection: validate webhook URL
+        is_safe, error = validate_safe_url(config['webhook_url'])
+        if not is_safe:
+            return f'Webhook URL blocked by security policy: {error}'
 
     return None
