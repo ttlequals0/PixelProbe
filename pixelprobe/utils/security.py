@@ -9,7 +9,7 @@ import logging
 import urllib.parse
 from functools import wraps
 from datetime import datetime, timezone
-from typing import Optional, Set, Tuple
+from typing import Optional, Set, Tuple, Union
 from flask import request, jsonify, current_app
 from werkzeug.security import safe_join
 from models import db, ScanConfiguration
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Trusted internal hosts cache (lazy-loaded from TRUSTED_INTERNAL_HOSTS env var)
 _trusted_hostnames: Optional[Set[str]] = None
-_trusted_networks: Optional[Set[ipaddress.IPv4Network | ipaddress.IPv6Network]] = None
+_trusted_networks: Optional[Set[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]] = None
 
 
 def _load_trusted_hosts():
