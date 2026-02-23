@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.66] - 2026-02-23
+
+### Fixed
+
+- **Healthcheck pings blocked by SSRF protection**: Since v2.5.64, healthcheck pings for scheduled scans could fail when the healthcheck server resolves to a private IP address. Added `TRUSTED_INTERNAL_HOSTS` environment variable that lets admins allowlist hostnames and/or CIDR ranges that should bypass SSRF private-IP blocking. Accepts comma-separated values (e.g., `myhost.local,192.168.5.0/24`). SSRF protection remains fully active for non-trusted hosts.
+- Files affected: `pixelprobe/utils/security.py`, `config.py`, `version.py`, `docker-compose.yml`, `docs/CONFIGURATION.md`, `tests/test_security_fixes.py`
+
+---
+
 ## [2.5.65] - 2026-02-20
 
 ### Fixed

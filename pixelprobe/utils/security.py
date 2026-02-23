@@ -9,13 +9,81 @@ import logging
 import urllib.parse
 from functools import wraps
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Optional, Set, Tuple
 from flask import request, jsonify, current_app
 from werkzeug.security import safe_join
 from models import db, ScanConfiguration
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+# Trusted internal hosts cache (lazy-loaded from TRUSTED_INTERNAL_HOSTS env var)
+_trusted_hostnames: Optional[Set[str]] = None
+_trusted_networks: Optional[Set[ipaddress.IPv4Network | ipaddress.IPv6Network]] = None
+
+
+def _load_trusted_hosts():
+    """Parse TRUSTED_INTERNAL_HOSTS env var into hostname and network sets.
+
+    Format: comma-separated list of hostnames and/or CIDR ranges.
+    Example: "healthcheck.internal.local,192.168.5.0/24,10.0.0.1"
+
+    Results are cached on first call. Call _reset_trusted_hosts() to clear
+    the cache (useful for testing).
+    """
+    global _trusted_hostnames, _trusted_networks
+
+    if _trusted_hostnames is not None:
+        return
+
+    _trusted_hostnames = set()
+    _trusted_networks = set()
+
+    raw = os.environ.get('TRUSTED_INTERNAL_HOSTS', '').strip()
+    if not raw:
+        return
+
+    for entry in raw.split(','):
+        entry = entry.strip()
+        if not entry:
+            continue
+        # Try parsing as an IP network (CIDR or bare IP)
+        try:
+            network = ipaddress.ip_network(entry, strict=False)
+            _trusted_networks.add(network)
+            logger.info(f"Trusted internal network: {network}")
+        except ValueError:
+            # Not a valid network -- treat as a hostname
+            _trusted_hostnames.add(entry.lower())
+            logger.info(f"Trusted internal hostname: {entry.lower()}")
+
+
+def _reset_trusted_hosts():
+    """Clear the trusted hosts cache (for testing)."""
+    global _trusted_hostnames, _trusted_networks
+    _trusted_hostnames = None
+    _trusted_networks = None
+
+
+def _is_trusted(hostname: str, ip_str: str) -> bool:
+    """Check whether a hostname or resolved IP is in the trusted allowlist."""
+    _load_trusted_hosts()
+
+    # Check hostname
+    if hostname and hostname.lower() in _trusted_hostnames:
+        return True
+
+    # Check IP against trusted networks
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        for network in _trusted_networks:
+            if ip in network:
+                return True
+    except ValueError:
+        pass
+
+    return False
 
 class SecurityError(Exception):
     """Base exception for security-related errors"""
@@ -396,6 +464,13 @@ def validate_safe_url(url: str) -> Tuple[bool, Optional[str]]:
 
         for network in _BLOCKED_NETWORKS:
             if ip in network:
+                # Check trusted allowlist before blocking
+                if _is_trusted(hostname, ip_str):
+                    logger.debug(
+                        f"Allowing trusted internal request: {url} "
+                        f"(resolved to {ip_str}, hostname={hostname})"
+                    )
+                    break  # Trusted -- skip remaining blocked networks for this IP
                 AuditLogger.log_security_event(
                     'ssrf_blocked',
                     f"Blocked outbound request to private IP: {url} resolved to {ip_str}",

@@ -87,6 +87,11 @@ class Config:
     ENABLE_MONITORING = os.getenv('ENABLE_MONITORING', 'false').lower() == 'true'
     METRICS_PORT = int(os.getenv('METRICS_PORT', '9090'))
 
+    # SSRF trusted hosts -- hostnames and/or CIDR ranges that bypass private-IP blocking.
+    # Read directly from env by security.py (works outside Flask app context too).
+    # Example: "healthcheck.internal.local,192.168.5.0/24"
+    TRUSTED_INTERNAL_HOSTS = os.getenv('TRUSTED_INTERNAL_HOSTS', '')
+
     # P2 Data Retention Configuration
     # Configurable retention periods for automated cleanup
     # Note: scan_output archival is DISABLED - keeps all scan_results data forever

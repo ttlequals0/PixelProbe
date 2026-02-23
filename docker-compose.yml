@@ -94,7 +94,10 @@ services:
       # Scheduled scans
       PERIODIC_SCAN_SCHEDULE: ${PERIODIC_SCAN_SCHEDULE:-}
       CLEANUP_SCHEDULE: ${CLEANUP_SCHEDULE:-}
-      
+
+      # SSRF trusted hosts (hostnames/CIDRs that bypass private-IP blocking)
+      TRUSTED_INTERNAL_HOSTS: ${TRUSTED_INTERNAL_HOSTS:-}
+
     volumes:
       # Media files to scan
       - ${MEDIA_PATH:-./media}:/media:ro
@@ -153,6 +156,9 @@ services:
       # Scheduled scans (scheduler runs in celery-worker)
       PERIODIC_SCAN_SCHEDULE: ${PERIODIC_SCAN_SCHEDULE:-}
       CLEANUP_SCHEDULE: ${CLEANUP_SCHEDULE:-}
+
+      # SSRF trusted hosts (hostnames/CIDRs that bypass private-IP blocking)
+      TRUSTED_INTERNAL_HOSTS: ${TRUSTED_INTERNAL_HOSTS:-}
 
       TZ: America/New_York
 
