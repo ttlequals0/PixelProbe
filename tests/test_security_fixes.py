@@ -1,9 +1,11 @@
 """
-Tests for security fixes in v2.5.64:
+Tests for security fixes in v2.5.64+:
 - Authentication bypass via X-Internal-Request header
 - SSRF via healthcheck and webhook URLs
+- Trusted internal hosts allowlist (v2.5.66)
 """
 
+import os
 import pytest
 from unittest.mock import patch, MagicMock
 import requests
@@ -224,3 +226,115 @@ class TestNotificationRoutesValidation:
             'webhook_url': 'https://hooks.slack.com/services/T00/B00/xxxx'
         })
         assert error is None
+
+
+# ==================== Trusted Internal Hosts Tests (v2.5.66) ====================
+
+
+class TestTrustedInternalHosts:
+    """Tests for TRUSTED_INTERNAL_HOSTS allowlist bypassing SSRF private-IP blocking"""
+
+    def setup_method(self):
+        """Reset the trusted hosts cache before each test"""
+        from pixelprobe.utils.security import _reset_trusted_hosts
+        _reset_trusted_hosts()
+
+    def teardown_method(self):
+        """Reset the cache and env var after each test"""
+        from pixelprobe.utils.security import _reset_trusted_hosts
+        _reset_trusted_hosts()
+        os.environ.pop('TRUSTED_INTERNAL_HOSTS', None)
+
+    @patch('pixelprobe.utils.security.socket.getaddrinfo')
+    def test_trusted_hostname_bypasses_ssrf_block(self, mock_getaddrinfo):
+        """A hostname in TRUSTED_INTERNAL_HOSTS should be allowed even if it resolves to a private IP"""
+        from pixelprobe.utils.security import validate_safe_url
+        os.environ['TRUSTED_INTERNAL_HOSTS'] = 'healthcheck.internal.local'
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, '', ('192.168.5.33', 80))
+        ]
+        is_safe, error = validate_safe_url('http://healthcheck.internal.local/ping/abc')
+        assert is_safe, f"Expected safe but got error: {error}"
+        assert error is None
+
+    @patch('pixelprobe.utils.security.socket.getaddrinfo')
+    def test_trusted_cidr_bypasses_ssrf_block(self, mock_getaddrinfo):
+        """An IP within a trusted CIDR range should be allowed"""
+        from pixelprobe.utils.security import validate_safe_url
+        os.environ['TRUSTED_INTERNAL_HOSTS'] = '192.168.5.0/24'
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, '', ('192.168.5.33', 80))
+        ]
+        is_safe, error = validate_safe_url('http://internal-service.local/api')
+        assert is_safe, f"Expected safe but got error: {error}"
+        assert error is None
+
+    @patch('pixelprobe.utils.security.socket.getaddrinfo')
+    def test_trusted_bare_ip_bypasses_ssrf_block(self, mock_getaddrinfo):
+        """A single trusted IP (no CIDR suffix) should be treated as /32 and allowed"""
+        from pixelprobe.utils.security import validate_safe_url
+        os.environ['TRUSTED_INTERNAL_HOSTS'] = '10.0.0.5'
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, '', ('10.0.0.5', 443))
+        ]
+        is_safe, error = validate_safe_url('https://10.0.0.5/webhook')
+        assert is_safe, f"Expected safe but got error: {error}"
+        assert error is None
+
+    @patch('pixelprobe.utils.security.socket.getaddrinfo')
+    def test_non_trusted_private_ip_still_blocked(self, mock_getaddrinfo):
+        """Private IPs NOT in the trusted list must still be blocked"""
+        from pixelprobe.utils.security import validate_safe_url
+        os.environ['TRUSTED_INTERNAL_HOSTS'] = 'healthcheck.internal.local'
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, '', ('192.168.1.1', 80))
+        ]
+        is_safe, error = validate_safe_url('http://evil.internal/')
+        assert not is_safe
+        assert 'private' in error.lower() or 'reserved' in error.lower()
+
+    @patch('pixelprobe.utils.security.socket.getaddrinfo')
+    def test_empty_trusted_hosts_preserves_blocking(self, mock_getaddrinfo):
+        """When TRUSTED_INTERNAL_HOSTS is empty/unset, all private IPs should be blocked"""
+        from pixelprobe.utils.security import validate_safe_url
+        os.environ.pop('TRUSTED_INTERNAL_HOSTS', None)
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, '', ('192.168.5.33', 80))
+        ]
+        is_safe, error = validate_safe_url('http://healthcheck.internal.local/ping/abc')
+        assert not is_safe
+        assert 'private' in error.lower() or 'reserved' in error.lower()
+
+    @patch('pixelprobe.utils.security.socket.getaddrinfo')
+    def test_trusted_hostname_case_insensitive(self, mock_getaddrinfo):
+        """Hostname matching should be case-insensitive"""
+        from pixelprobe.utils.security import validate_safe_url
+        os.environ['TRUSTED_INTERNAL_HOSTS'] = 'HealthCheck.Internal.Local'
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, '', ('192.168.5.33', 80))
+        ]
+        is_safe, error = validate_safe_url('http://healthcheck.internal.local/ping/abc')
+        assert is_safe, f"Expected safe but got error: {error}"
+
+    @patch('pixelprobe.utils.security.socket.getaddrinfo')
+    def test_multiple_trusted_entries(self, mock_getaddrinfo):
+        """Multiple comma-separated entries should all be recognized"""
+        from pixelprobe.utils.security import validate_safe_url
+        os.environ['TRUSTED_INTERNAL_HOSTS'] = 'healthcheck.internal.local, ntfy.internal, 10.0.0.0/8'
+        # Test hostname match
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, '', ('192.168.5.33', 80))
+        ]
+        is_safe, _ = validate_safe_url('http://healthcheck.internal.local/ping')
+        assert is_safe
+
+    @patch('pixelprobe.utils.security.socket.getaddrinfo')
+    def test_ip_outside_trusted_cidr_still_blocked(self, mock_getaddrinfo):
+        """An IP outside the trusted CIDR range must still be blocked"""
+        from pixelprobe.utils.security import validate_safe_url
+        os.environ['TRUSTED_INTERNAL_HOSTS'] = '192.168.5.0/24'
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, '', ('192.168.6.1', 80))
+        ]
+        is_safe, error = validate_safe_url('http://other.internal/')
+        assert not is_safe

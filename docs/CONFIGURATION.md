@@ -483,6 +483,33 @@ python tools/data_retention.py --dry-run
 
 ## Security Configuration
 
+### SSRF Trusted Hosts
+
+PixelProbe includes SSRF protection that blocks outbound requests to private/reserved IP ranges. If you use internal services for healthchecks, notifications (ntfy, webhooks), or similar integrations that resolve to private IPs, you can allowlist them:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRUSTED_INTERNAL_HOSTS` | (empty) | Comma-separated hostnames and/or CIDR ranges that bypass SSRF private-IP blocking |
+
+**Examples:**
+```bash
+# Single hostname
+TRUSTED_INTERNAL_HOSTS=healthcheck.internal.local
+
+# Hostname + subnet
+TRUSTED_INTERNAL_HOSTS=healthcheck.internal.local,192.168.5.0/24
+
+# Multiple entries
+TRUSTED_INTERNAL_HOSTS=healthcheck.internal.local,ntfy.internal.local,10.0.0.0/8
+```
+
+**Notes:**
+- Hostname matching is case-insensitive
+- CIDR ranges apply to resolved IPs regardless of hostname
+- A bare IP (e.g., `10.0.0.5`) is treated as a `/32` single-host range
+- Must be set in both `pixelprobe` and `celery-worker` containers (or via shared `.env`)
+- Public IPs are always allowed; this setting only affects private/reserved ranges
+
 ### Secret Key Generation
 
 Generate a secure secret key:
