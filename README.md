@@ -42,7 +42,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 
 ### Web Interface
 - Modern responsive design with dark/light theme support
-- Real-time scan progress with WebSocket updates
+- Real-time scan progress with live polling updates
 - Advanced filtering and search capabilities
 - Bulk file selection and management with shift-click range selection
 - Mobile-optimized touch interface
@@ -474,7 +474,7 @@ curl http://localhost:5000/api/stats \
 ### Command Line Usage
 
 ```python
-from media_checker import PixelProbe
+from pixelprobe.media_checker import PixelProbe
 
 checker = PixelProbe()
 

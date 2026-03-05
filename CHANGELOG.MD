@@ -12,7 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fix stuck scan bug**: Scans could get permanently stuck as "active" after a Celery task crash (e.g., `psycopg2.DatabaseError`). The crash recovery handler in `scan_service.py` attempted to mark the scan as crashed but failed because the DB session was in a rolled-back state. Added `db.session.rollback()` before recovery writes and re-query the scan state with a fresh session.
 - **Fix stuck scan detection for lost Celery tasks**: When Celery task state is `None` (task lost/unreachable), the `is_scan_running()` check previously assumed the scan was still running indefinitely. Now falls through to time-based detection -- if no update for over 1 hour with unknown task state, marks as crashed.
 - **Fix scheduler stuck scan checker**: The `_check_stuck_scans` scheduler job now also verifies Celery task state. If a Celery task is gone AND no progress update for 5+ minutes, the scan is marked as crashed (previously only relied on 30-minute time threshold).
-- Files affected: `pixelprobe/services/scan_service.py`, `pixelprobe/api/scan_routes.py`, `scheduler.py`
+- **Fix Phase 3 progress display appearing frozen**: The scan-status API endpoint now reads real-time progress from Redis (instead of only PostgreSQL) when a scan is active. Redis is updated by the Celery scan worker on every file, while PostgreSQL lagged behind, causing the UI to show stale values like "97/397" or appear stuck.
+- **Fix final progress not reflected in DB on scan completion**: All scan completion paths now write `files_processed` and `estimated_total` in the same SQL UPDATE that marks the scan as completed. Previously, the completion UPDATE only set `phase` and `is_active`, leaving stale progress values in PostgreSQL.
+- **Fix UI worker exiting without final sync**: The `ui_progress_update_task` now performs a final Redis-to-PostgreSQL sync of progress values before exiting when it detects the scan is complete or inactive.
+- Files affected: `pixelprobe/services/scan_service.py`, `pixelprobe/api/scan_routes.py`, `pixelprobe/scheduler.py`, `pixelprobe/tasks.py`, `pixelprobe/progress_utils.py`
+
+### Added
+
+- **`get_scan_progress_redis()` in `pixelprobe/progress_utils.py`**: Read function for fetching real-time scan progress from Redis, used by the scan-status API endpoint.
+- **`_mark_scan_completed()` in `pixelprobe/services/scan_service.py`**: Extracted helper that consolidates all scan completion SQL into a single method, replacing 7 duplicated SQL blocks.
 
 ### Changed
 

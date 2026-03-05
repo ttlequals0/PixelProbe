@@ -241,10 +241,14 @@ Worker1  Worker2  Worker3  Worker4  Worker5         Worker1  Worker2  Worker3  W
 ### Real-time Updates
 
 ```
-Scanner Progress → Progress Lock → Shared State
-                                      ↓
-                   Client ← API ← Status Endpoint
+Celery Worker → Redis (scan_progress:{id}) → API Status Endpoint → Client
+                       ↓ (on completion)
+                  PostgreSQL (final sync)
 ```
+
+Progress counters are written to Redis on every file processed. The scan-status API
+reads from Redis for active scans (fresh data) and falls back to PostgreSQL for
+completed/inactive scans. A final Redis-to-DB sync occurs at scan completion.
 
 ## Security Architecture
 

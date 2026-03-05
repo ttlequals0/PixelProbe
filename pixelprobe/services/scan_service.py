@@ -580,13 +580,7 @@ class ScanService:
                         self.update_progress(0, 0, '', 'completed')
                         
                         # Complete scan using thread-safe database update
-                        # Use the scan_state_id we captured before threading
-                        from sqlalchemy import text
-                        db.session.execute(
-                            text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                            {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
-                        )
-                        db.session.commit()
+                        self._mark_scan_completed(scan_state_id, files_processed=0, estimated_total=0)
                         
                         # Create scan report even for empty scans
                         completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
@@ -1332,12 +1326,7 @@ class ScanService:
             self.update_progress(total_files_scanned, total_files_to_scan, '', 'completed')
 
             # Thread-safe completion using direct SQL update
-            from sqlalchemy import text
-            db.session.execute(
-                text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
-            )
-            db.session.commit()
+            self._mark_scan_completed(scan_state_id, total_files_scanned, total_files_to_scan)
 
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
@@ -1411,23 +1400,12 @@ class ScanService:
             self.update_progress(total_files, total_files, '', 'completed')
 
             # Thread-safe completion using direct SQL update
-            # Use scan_state_id which is accessible in this closure
-            from sqlalchemy import text
-            db.session.execute(
-                text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
-            )
-            db.session.commit()
+            self._mark_scan_completed(scan_state_id, total_files, total_files)
 
             # Create scan report
-            # Re-fetch scan state to get updated values
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
-                # Determine scan type based on flags
-                if force_rescan:
-                    scan_type = 'rescan'
-                else:
-                    scan_type = 'full_scan'
+                scan_type = 'rescan' if force_rescan else 'full_scan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
 
                 logger.info(f"=== SCAN COMPLETED (SEQUENTIAL DIRECT) ===")
@@ -1639,12 +1617,7 @@ class ScanService:
                 update_scan_progress_redis(scan_id, total_files_scanned, total_files_to_scan, 'completed', '')
 
             # Thread-safe completion using direct SQL update
-            from sqlalchemy import text
-            db.session.execute(
-                text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
-            )
-            db.session.commit()
+            self._mark_scan_completed(scan_state_id, total_files_scanned, total_files_to_scan)
 
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
@@ -1740,23 +1713,12 @@ class ScanService:
             self.update_progress(total_files, total_files, '', 'completed')
 
             # Thread-safe completion using direct SQL update
-            # Use scan_state_id which is accessible in this closure
-            from sqlalchemy import text
-            db.session.execute(
-                text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
-            )
-            db.session.commit()
+            self._mark_scan_completed(scan_state_id, total_files, total_files)
 
             # Create scan report
-            # Re-fetch scan state to get updated values
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
             if completed_scan_state:
-                # Determine scan type based on flags
-                if force_rescan:
-                    scan_type = 'rescan'
-                else:
-                    scan_type = 'full_scan'
+                scan_type = 'rescan' if force_rescan else 'full_scan'
                 self._create_scan_report(completed_scan_state, scan_type=scan_type)
 
                 logger.info(f"=== SCAN COMPLETED (PARALLEL DIRECT) ===")
@@ -1765,6 +1727,22 @@ class ScanService:
                 if remaining_pending > 0:
                     logger.warning(f"Files still pending after retries: {remaining_pending}")
                 logger.info(f"=== END SCAN ===")
+
+    def _mark_scan_completed(self, scan_state_id, files_processed, estimated_total):
+        """Thread-safe scan completion using direct SQL update."""
+        db.session.execute(
+            text("""UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time,
+                    files_processed = :files_processed, estimated_total = :estimated_total,
+                    progress_message = 'Scan completed'
+                WHERE id = :id"""),
+            {
+                'end_time': datetime.now(timezone.utc),
+                'id': scan_state_id,
+                'files_processed': files_processed,
+                'estimated_total': estimated_total,
+            }
+        )
+        db.session.commit()
 
     def _create_scan_report(self, scan_state: ScanState, scan_type: str = 'full_scan'):
         """Create a scan report from the completed scan state"""
@@ -2973,12 +2951,7 @@ class ScanService:
             self.update_progress(len(selected_files), len(selected_files), '', 'completed')
 
             # Thread-safe completion
-            from sqlalchemy import text
-            db.session.execute(
-                text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
-            )
-            db.session.commit()
+            self._mark_scan_completed(scan_state_id, len(selected_files), len(selected_files))
 
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
@@ -3097,12 +3070,7 @@ class ScanService:
             self.update_progress(len(selected_files), len(selected_files), '', 'completed')
 
             # Thread-safe completion
-            from sqlalchemy import text
-            db.session.execute(
-                text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': datetime.now(timezone.utc), 'id': scan_state_id}
-            )
-            db.session.commit()
+            self._mark_scan_completed(scan_state_id, len(selected_files), len(selected_files))
 
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()

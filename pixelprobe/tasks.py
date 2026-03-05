@@ -766,6 +766,46 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
             }
 
 
+def _final_sync_redis_to_db(scan_id, scan_state, ui_session):
+    """
+    Final sync of Redis progress values to PostgreSQL when UI worker exits.
+    Ensures the DB reflects the true final progress, not a stale partial value.
+    """
+    try:
+        from pixelprobe.progress_utils import get_scan_progress_redis
+        redis_progress = get_scan_progress_redis(scan_id)
+        if not redis_progress:
+            return
+
+        redis_files = redis_progress.get('files_processed', 0)
+        redis_total = redis_progress.get('estimated_total', 0)
+        db_files = scan_state.files_processed or 0
+        db_total = scan_state.estimated_total or 0
+
+        # Only update if Redis has higher/better values
+        needs_update = False
+        if redis_files > db_files:
+            scan_state.files_processed = redis_files
+            needs_update = True
+        if redis_total > 0 and redis_total != db_total:
+            scan_state.estimated_total = redis_total
+            needs_update = True
+
+        if needs_update:
+            ui_session.commit()
+            logger.info(f"Final Redis->DB sync for scan {scan_id}: "
+                       f"files_processed={scan_state.files_processed}, "
+                       f"estimated_total={scan_state.estimated_total}")
+        else:
+            logger.debug(f"No final sync needed for scan {scan_id}: DB already up to date")
+    except Exception as e:
+        logger.warning(f"Failed final Redis->DB sync for scan {scan_id}: {e}")
+        try:
+            ui_session.rollback()
+        except Exception:
+            pass
+
+
 @celery_app.task(bind=True, priority=9)
 def ui_progress_update_task(self, scan_id, update_interval=1.0):
     """
@@ -838,11 +878,15 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
 
                     # Check if scan is complete
                     if scan_state.phase in ['completed', 'error', 'cancelled', 'crashed']:
+                        # Final sync: ensure DB has latest Redis progress values
+                        _final_sync_redis_to_db(scan_id, scan_state, ui_session)
                         logger.info(f"Scan {scan_id} finished with phase: {scan_state.phase}")
                         break
 
                     # Check if scan is still active
                     if not scan_state.is_active:
+                        # Final sync: ensure DB has latest Redis progress values
+                        _final_sync_redis_to_db(scan_id, scan_state, ui_session)
                         logger.info(f"Scan {scan_id} is no longer active, stopping UI worker")
                         break
 

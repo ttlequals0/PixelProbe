@@ -10,6 +10,7 @@ from pixelprobe.models import db, ScanResult, ScanState
 from pixelprobe.constants import TERMINAL_SCAN_PHASES
 from pixelprobe.version import __version__
 from pixelprobe.auth import auth_required
+from pixelprobe.progress_utils import get_scan_progress_redis
 
 from pixelprobe.utils.security import (
     validate_file_path, validate_directory_path,
@@ -595,13 +596,36 @@ def get_scan_status():
     logger.debug(f"Service is_running: {is_running}")
     logger.debug(f"Service status: {service_status}")
     logger.debug(f"Database state_dict phase: {state_dict.get('phase', 'idle')}")
-    
+
     # Prioritize database state when scan is active, fall back to service values
     current_phase = state_dict.get('phase', 'idle')
-    
+
     # Use database values primarily, with service as fallback
     current_progress = state_dict.get('files_processed', service_status.get('current', 0))
     total_progress = state_dict.get('estimated_total', service_status.get('total', 0))
+
+    # When scan is active, read real-time progress from Redis (much fresher than PostgreSQL)
+    if scan_state and scan_state.is_active and scan_state.scan_id:
+        try:
+            redis_progress = get_scan_progress_redis(scan_state.scan_id)
+            if redis_progress:
+                redis_files = redis_progress.get('files_processed', 0)
+                redis_total = redis_progress.get('estimated_total', 0)
+                redis_phase = redis_progress.get('phase', '')
+                redis_file = redis_progress.get('current_file', '')
+                # Use Redis values if they are more up-to-date (higher progress count)
+                if redis_files >= current_progress:
+                    current_progress = redis_files
+                if redis_total > 0:
+                    total_progress = redis_total
+                if redis_phase and redis_phase not in ('', 'idle'):
+                    current_phase = redis_phase
+                # Override current_file in state_dict for downstream use
+                if redis_file:
+                    state_dict['current_file'] = redis_file
+                logger.debug(f"Using Redis progress: {current_progress}/{total_progress} phase={current_phase}")
+        except Exception as e:
+            logger.warning(f"Failed to read Redis progress, using DB values: {e}")
     
     # Determine status based on phase and progress
     if is_running:

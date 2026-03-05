@@ -187,10 +187,14 @@ Web UI → API Request → Flask Route → Scan Service → Celery Task → Redi
 
 ### Progress Update Flow
 ```
-Celery Worker → Update Database → Redis (Cache) → API Poll → Web UI
-        ↓
-   Log Progress
+Celery Worker → Redis (scan_progress:{id}) → API Poll → Web UI
+        ↓ (periodic + on completion)
+   PostgreSQL (final sync via _mark_scan_completed / _final_sync_redis_to_db)
 ```
+
+Redis is the primary real-time progress store. Workers write counters to Redis on every
+file processed. The API reads Redis for active scans and PostgreSQL for completed scans.
+PostgreSQL is updated periodically by the UI worker task and at scan completion.
 
 ### Result Storage Flow
 ```
