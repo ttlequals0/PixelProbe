@@ -626,7 +626,7 @@ def get_scan_status():
                 logger.debug(f"Using Redis progress: {current_progress}/{total_progress} phase={current_phase}")
         except Exception as e:
             logger.warning(f"Failed to read Redis progress, using DB values: {e}")
-    
+
     # Determine status based on phase and progress
     if is_running:
         if current_phase in ['discovering', 'adding', 'scanning']:

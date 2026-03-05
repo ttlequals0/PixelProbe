@@ -15,12 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fix Phase 3 progress display appearing frozen**: The scan-status API endpoint now reads real-time progress from Redis (instead of only PostgreSQL) when a scan is active. Redis is updated by the Celery scan worker on every file, while PostgreSQL lagged behind, causing the UI to show stale values like "97/397" or appear stuck.
 - **Fix final progress not reflected in DB on scan completion**: All scan completion paths now write `files_processed` and `estimated_total` in the same SQL UPDATE that marks the scan as completed. Previously, the completion UPDATE only set `phase` and `is_active`, leaving stale progress values in PostgreSQL.
 - **Fix UI worker exiting without final sync**: The `ui_progress_update_task` now performs a final Redis-to-PostgreSQL sync of progress values before exiting when it detects the scan is complete or inactive.
+- **Fix ORM staleness in final Redis-to-DB sync**: Added `ui_session.refresh(scan_state)` before comparing Redis vs DB progress values in `_final_sync_redis_to_db()`. After `_mark_scan_completed()` writes via raw SQL, the ORM object could have stale values, causing unnecessary or missed updates.
+- **Fix trailing whitespace in scan_routes.py**: Removed trailing whitespace on blank line.
+- **Move inline import to module level in tasks.py**: `get_scan_progress_redis` was imported inline at line 775 despite being available from the existing module-level import.
 - Files affected: `pixelprobe/services/scan_service.py`, `pixelprobe/api/scan_routes.py`, `pixelprobe/scheduler.py`, `pixelprobe/tasks.py`, `pixelprobe/progress_utils.py`
 
 ### Added
 
 - **`get_scan_progress_redis()` in `pixelprobe/progress_utils.py`**: Read function for fetching real-time scan progress from Redis, used by the scan-status API endpoint.
 - **`_mark_scan_completed()` in `pixelprobe/services/scan_service.py`**: Extracted helper that consolidates all scan completion SQL into a single method, replacing 7 duplicated SQL blocks.
+- **Unit tests for new functions**: Added `tests/unit/test_progress_utils.py` with 12 tests covering `get_scan_progress_redis()`, `_final_sync_redis_to_db()` sync logic, and `_mark_scan_completed()` SQL behavior.
 
 ### Changed
 

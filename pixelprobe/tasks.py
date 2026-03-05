@@ -16,7 +16,7 @@ from contextlib import contextmanager
 
 from pixelprobe.celery_config import celery_app
 from pixelprobe.services.scan_service import ScanService
-from pixelprobe.progress_utils import get_redis_client, update_scan_progress_redis
+from pixelprobe.progress_utils import get_redis_client, get_scan_progress_redis, update_scan_progress_redis
 from pixelprobe.models import db, ScanState, ScanResult, ScanReport
 
 
@@ -772,13 +772,14 @@ def _final_sync_redis_to_db(scan_id, scan_state, ui_session):
     Ensures the DB reflects the true final progress, not a stale partial value.
     """
     try:
-        from pixelprobe.progress_utils import get_scan_progress_redis
         redis_progress = get_scan_progress_redis(scan_id)
         if not redis_progress:
             return
 
         redis_files = redis_progress.get('files_processed', 0)
         redis_total = redis_progress.get('estimated_total', 0)
+        # Refresh ORM object to get latest DB values (may be stale after raw SQL updates)
+        ui_session.refresh(scan_state)
         db_files = scan_state.files_processed or 0
         db_total = scan_state.estimated_total or 0
 
