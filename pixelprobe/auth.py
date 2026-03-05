@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from flask import jsonify, request, redirect, url_for, session, current_app
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_restx import abort as restx_abort
-from models import User, APIToken, db
+from pixelprobe.models import User, APIToken, db
 
 logger = logging.getLogger(__name__)
 

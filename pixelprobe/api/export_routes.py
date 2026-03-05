@@ -6,8 +6,8 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from models import db, ScanResult
-from auth import auth_required
+from pixelprobe.models import db, ScanResult
+from pixelprobe.auth import auth_required
 
 logger = logging.getLogger(__name__)
 

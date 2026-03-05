@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 def cleanup_stuck_operations(db):
     """Clean up any stuck operations from previous runs"""
     try:
-        from models import FileChangesState, CleanupState
+        from pixelprobe.models import FileChangesState, CleanupState
 
         active_file_changes = FileChangesState.query.filter_by(is_active=True).all()
         for file_change in active_file_changes:
@@ -43,7 +43,7 @@ def cleanup_stuck_operations(db):
 def cleanup_stuck_scans(db):
     """Clean up ALL active scans from previous runs - they can't still be running after restart."""
     try:
-        from models import ScanState
+        from pixelprobe.models import ScanState
         stuck_scans = ScanState.query.filter(
             ScanState.is_active == True
         ).all()
@@ -69,7 +69,7 @@ def cleanup_bloated_scan_results(db):
     efficient storage format.
     """
     try:
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
         bloated_results = db.session.query(ScanResult).filter(
             db.or_(
                 db.func.length(ScanResult.scan_output) > 50000,

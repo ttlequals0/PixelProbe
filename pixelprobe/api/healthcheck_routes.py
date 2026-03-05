@@ -6,8 +6,8 @@ from flask import Blueprint, request, jsonify
 import logging
 from datetime import datetime, timezone
 
-from models import db, HealthcheckConfig, ScanSchedule
-from auth import auth_required
+from pixelprobe.models import db, HealthcheckConfig, ScanSchedule
+from pixelprobe.auth import auth_required
 from pixelprobe.services.healthcheck_service import HealthcheckService
 
 logger = logging.getLogger(__name__)

@@ -46,7 +46,7 @@ class TestExclusionsPersistence:
     def test_exclusions_use_database(self, authenticated_client, app, db):
         """Test that exclusions are saved to database"""
         with app.app_context():
-            from models import Exclusion
+            from pixelprobe.models import Exclusion
             
             # Clean up any existing exclusions
             Exclusion.query.delete()

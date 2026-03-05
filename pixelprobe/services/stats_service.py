@@ -8,9 +8,9 @@ from typing import Dict, List
 from datetime import datetime, timedelta
 from sqlalchemy import text, func
 
-from models import db, ScanResult, ScanReport
+from pixelprobe.models import db, ScanResult, ScanReport
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone
-from version import __version__
+from pixelprobe.version import __version__
 
 logger = logging.getLogger(__name__)
 

@@ -17,7 +17,7 @@ import argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import create_app
-from models import db, ScanResult
+from pixelprobe.models import db, ScanResult
 from sqlalchemy import or_
 
 def reset_incomplete_scans(dry_run=False):

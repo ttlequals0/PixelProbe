@@ -1,5 +1,5 @@
 import pytest
-from models import db, CleanupState, FileChangesState
+from pixelprobe.models import db, CleanupState, FileChangesState
 import time
 
 class TestMaintenanceCancelEndpoints:

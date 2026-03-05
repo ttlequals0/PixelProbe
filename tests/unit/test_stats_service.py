@@ -90,7 +90,7 @@ class TestStatsService:
                     info = stats_service.get_system_info()
 
                     # Version now comes from version.py dynamically
-                    from version import __version__
+                    from pixelprobe.version import __version__
                     assert info['version'] == __version__
                     assert info['database']['total_files'] == 100
                     assert len(info['monitored_paths']) == 2

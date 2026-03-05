@@ -59,7 +59,7 @@ class TestConcurrency:
     
     def test_concurrent_file_updates(self, app, db):
         """Test concurrent updates to the same file record"""
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
         
         # Create a test file record
         test_file = ScanResult(
@@ -129,7 +129,7 @@ class TestConcurrency:
                 # Use app context for database operations
                 with app.app_context():
                     # Simulate acquiring a database connection
-                    from models import db
+                    from pixelprobe.models import db
                     # Test if we can execute a query
                     result = db.session.execute(db.text("SELECT 1"))
                     connections.append(result)
@@ -176,7 +176,7 @@ class TestConcurrency:
     
     def test_scheduled_scan_overlap(self, app):
         """Test that scheduled scans don't overlap"""
-        from scheduler import MediaScheduler
+        from pixelprobe.scheduler import MediaScheduler
         
         scheduler = MediaScheduler(app)
         
@@ -205,7 +205,7 @@ class TestConcurrency:
     
     def test_cleanup_and_scan_mutual_exclusion(self, app, db):
         """Test that cleanup and scan operations are mutually exclusive"""
-        from models import ScanState
+        from pixelprobe.models import ScanState
         
         # Ensure scan_state table exists
         db.create_all()
@@ -241,7 +241,7 @@ class TestConcurrency:
     
     def test_scan_state_consistency_under_load(self, app, db):
         """Test scan state consistency under concurrent read/write load"""
-        from models import ScanState
+        from pixelprobe.models import ScanState
         
         # Initialize scan state
         scan_state = ScanState.get_or_create()

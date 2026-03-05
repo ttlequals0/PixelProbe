@@ -8,9 +8,9 @@ from io import BytesIO
 import base64
 import pytz
 
-from models import db, ScanReport
+from pixelprobe.models import db, ScanReport
 from pixelprobe.utils.security import validate_json_input
-from auth import auth_required
+from pixelprobe.auth import auth_required
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +170,7 @@ def export_scan_report(report_id):
     report_dict['created_at'] = convert_to_timezone(report.created_at)
     
     # Add scan results - handle cleanup reports differently
-    from models import ScanResult
+    from pixelprobe.models import ScanResult
 
     if report.scan_type == 'cleanup' and report.directories_scanned:
         # For cleanup reports, the orphaned files list is stored in directories_scanned field
@@ -319,7 +319,7 @@ def generate_pdf_report(scan_type, scan_id):
         elements.append(Spacer(1, 0.2*inch))
         
         # Query scan results based on scan type
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
         if scan_type == 'rescan' and '_' in scan_id:
             # For rescan, parse the file path from scan_id
             file_path = scan_id.replace('_', '/')
@@ -661,7 +661,7 @@ def export_scan_report_pdf(report_id):
                 elements.append(Paragraph("Scanned Files", heading_style))
             
             # Query files based on scan type
-            from models import ScanResult
+            from pixelprobe.models import ScanResult
 
             if report.scan_type == 'cleanup':
                 # For cleanup reports, the orphaned files list is stored in directories_scanned field as JSON
@@ -905,7 +905,7 @@ def export_scan_report_pdf(report_id):
         
         # Add scanned files list for scan reports
         if report.scan_type in ['full_scan', 'rescan']:
-            from models import ScanResult
+            from pixelprobe.models import ScanResult
             scanned_files = ScanResult.query.filter(
                 ScanResult.scan_date >= report.start_time,
                 ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
@@ -1148,7 +1148,7 @@ def download_multiple_reports():
                     # Add scanned files if available for scan reports
                     if report.scan_type in ['full_scan', 'rescan']:
                         # Query scan results for this report's time period
-                        from models import ScanResult
+                        from pixelprobe.models import ScanResult
                         scanned_files = ScanResult.query.filter(
                             ScanResult.scan_date >= report.start_time,
                             ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))

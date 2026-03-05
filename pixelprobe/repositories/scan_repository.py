@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Tuple
 from datetime import datetime
 from sqlalchemy import text, and_, or_
 
-from models import ScanResult, ScanState
+from pixelprobe.models import ScanResult, ScanState
 from .base_repository import BaseRepository
 
 class ScanRepository(BaseRepository[ScanResult]):

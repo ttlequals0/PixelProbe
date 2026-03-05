@@ -12,7 +12,7 @@ PixelProbe uses 4 main containers:
 |-----------|---------|-------|--------------|
 | **postgres** | Database storage | 5432 | None |
 | **redis** | Message queue | 6379 | None |
-| **mediachecker** | Web UI & API | 5000 | postgres, redis |
+| **pixelprobe** | Web UI & API | 5000 | postgres, redis |
 | **celery-worker** | Background processing | None | postgres, redis |
 
 ## Complete Docker Compose File
@@ -55,7 +55,7 @@ services:
     restart: unless-stopped
 
   # Main Web Application - Serves UI and API
-  mediachecker:
+  pixelprobe:
     image: ttlequals0/pixelprobe:latest
     container_name: pixelprobe-web
     ports:
@@ -263,11 +263,11 @@ volumes:
 ```
 
 **IMPORTANT - User Permissions:**
-Both the `mediachecker` (web app) and `celery-worker` containers **MUST run as the same user** to access mounted media files. Add the `user:` directive to both services:
+Both the `pixelprobe` (web app) and `celery-worker` containers **MUST run as the same user** to access mounted media files. Add the `user:` directive to both services:
 
 ```yaml
 services:
-  mediachecker:
+  pixelprobe:
     # ... other settings ...
     user: "1000:1000"  # Use your host user's UID:GID
     volumes:
@@ -275,7 +275,7 @@ services:
 
   celery-worker:
     # ... other settings ...
-    user: "1000:1000"  # MUST match mediachecker user
+    user: "1000:1000"  # MUST match pixelprobe user
     volumes:
       - /media/movies:/movies:ro
 ```
@@ -312,7 +312,7 @@ docker exec pixelprobe-postgres pg_dump -U pixelprobe pixelprobe > backup.sql
 All containers communicate on an internal Docker network:
 
 ```
-mediachecker:5000 ←→ redis:6379 ←→ celery-worker
+pixelprobe:5000 ←→ redis:6379 ←→ celery-worker
        ↓                              ↓
        └────→ postgres:5432 ←────────┘
 ```

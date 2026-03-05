@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional, Set, Tuple, Union
 from flask import request, jsonify, current_app
 from werkzeug.security import safe_join
-from models import db, ScanConfiguration
+from pixelprobe.models import db, ScanConfiguration
 import requests
 
 logger = logging.getLogger(__name__)
@@ -151,7 +151,7 @@ def validate_file_path(file_path, allowed_paths=None):
     # If still no paths, this is likely a rescan operation - check if file exists in database
     if not allowed_paths:
         # Import here to avoid circular dependency
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
         existing = ScanResult.query.filter_by(file_path=normalized).first()
         if existing:
             # File already in database - trust it for rescan

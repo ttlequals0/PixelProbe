@@ -6,7 +6,7 @@ These tests verify that scans can actually start, run, and complete properly.
 import pytest
 import time
 from unittest.mock import patch, Mock
-from models import db, ScanState, ScanResult, ScanChunk
+from pixelprobe.models import db, ScanState, ScanResult, ScanChunk
 
 
 class TestScanExecution:

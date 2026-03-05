@@ -1,5 +1,5 @@
 import pytest
-from models import db, ScanResult, ScanState
+from pixelprobe.models import db, ScanResult, ScanState
 from datetime import datetime, timezone
 
 class TestScanManagementEndpoints:

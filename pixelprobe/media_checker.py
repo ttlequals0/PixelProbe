@@ -2055,7 +2055,7 @@ class PixelProbe:
             
         session = None
         try:
-            from models import ScanResult
+            from pixelprobe.models import ScanResult
             session = self._get_db_session()
             if not session:
                 return None
@@ -2107,7 +2107,7 @@ class PixelProbe:
 
         session = None
         try:
-            from models import ScanResult
+            from pixelprobe.models import ScanResult
             from datetime import datetime, timezone
             import traceback
 
@@ -2201,7 +2201,7 @@ class PixelProbe:
             
         session = None
         try:
-            from models import IgnoredErrorPattern
+            from pixelprobe.models import IgnoredErrorPattern
             session = self._get_db_session()
             if not session:
                 return False

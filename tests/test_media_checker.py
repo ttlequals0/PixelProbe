@@ -8,7 +8,7 @@ import time
 import threading
 from unittest.mock import Mock, patch, MagicMock
 
-from media_checker import PixelProbe
+from pixelprobe.media_checker import PixelProbe
 
 class TestMediaChecker:
     """Test the core PixelProbe media checking functionality"""
@@ -143,7 +143,7 @@ class TestMediaChecker:
     def test_scan_date_update_on_rescan(self, mock_exists, db, app):
         """Test that scan_date is updated when rescanning a file"""
         with app.app_context():
-            from models import ScanResult
+            from pixelprobe.models import ScanResult
             from datetime import datetime, timezone, timedelta
             
             # Create a scan result with old scan date
@@ -284,7 +284,7 @@ class TestMediaChecker:
         def mock_load_exclusions():
             return ['/excluded'], ['.tmp', '.cache']
         
-        monkeypatch.setattr('media_checker.load_exclusions', mock_load_exclusions)
+        monkeypatch.setattr('pixelprobe.media_checker.load_exclusions', mock_load_exclusions)
         
         # Create checker with exclusions
         excluded_paths, excluded_extensions = mock_load_exclusions()
@@ -369,7 +369,7 @@ class TestMediaChecker:
     
     def test_error_pattern_ignoring(self, test_data_dir, db, app):
         """Test that ignored error patterns work correctly"""
-        from models import IgnoredErrorPattern
+        from pixelprobe.models import IgnoredErrorPattern
         
         # Add ignored pattern
         pattern = IgnoredErrorPattern(

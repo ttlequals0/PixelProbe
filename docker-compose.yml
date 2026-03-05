@@ -40,7 +40,7 @@ services:
     networks:
       - pixelprobe-network
 
-  # Redis for P1 Celery implementation
+  # Redis for Celery task broker
   # Performance settings for large task queues (file changes check with 1M+ files):
   # - REDIS_MAX_MEMORY: Total memory for task queue (default: 2gb, recommended: 1-4gb)
   redis:
@@ -62,7 +62,7 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: pixelprobe:test-v2.4.93
+    image: ttlequals0/pixelprobe:2.5.67
     container_name: pixelprobe-app
     environment:
       # Security
@@ -75,7 +75,7 @@ services:
       POSTGRES_USER: pixelprobe
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       
-      # P1 Celery configuration (scaffolded for future implementation)
+      # Celery configuration
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       
@@ -126,7 +126,7 @@ services:
 
   # P1 Celery Worker for distributed task processing
   celery-worker:
-    image: pixelprobe:test-v2.4.93
+    image: ttlequals0/pixelprobe:2.5.67
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:

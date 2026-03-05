@@ -257,7 +257,7 @@ Fine-tune scanning behavior by excluding specific paths and file types:
    ```
 
 4. **Access the web interface**:
-   Open http://localhost:5001 in your browser
+   Open http://localhost:5000 in your browser
 
 5. **Initial Setup** (IMPORTANT - First Run Only):
 
@@ -265,12 +265,12 @@ Fine-tune scanning behavior by excluding specific paths and file types:
 
    ```bash
    # Create admin user with your chosen password
-   curl -X POST http://localhost:5001/api/auth/setup \
+   curl -X POST http://localhost:5000/api/auth/setup \
      -H "Content-Type: application/json" \
      -d '{"password":"YourSecurePassword123"}'
    ```
 
-   Or visit http://localhost:5001/login and follow the first-run setup wizard.
+   Or visit http://localhost:5000/login and follow the first-run setup wizard.
 
    **Security Note**: No default admin account exists. You must explicitly create it on first run.
 
@@ -341,7 +341,7 @@ export MEDIA_PATH=/mnt/all-media  # Contains subdirs: movies/, tv/, backup/
 
 ### Web Interface
 
-1. **Access the Dashboard**: Navigate to http://localhost:5001
+1. **Access the Dashboard**: Navigate to http://localhost:5000
 2. **Start a Scan**: Click "Scan All Files" to begin scanning your media directories
 3. **View Results**: Results appear in the table below with corruption status
 4. **Filter Results**: Use the filter buttons to show only corrupted or healthy files

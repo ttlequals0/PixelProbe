@@ -5,11 +5,11 @@ import logging
 from datetime import datetime, timezone, timedelta
 from pixelprobe.utils.timezone import from_utc_to_configured
 
-from media_checker import PixelProbe, load_exclusions
-from models import db, ScanResult, ScanState
+from pixelprobe.media_checker import PixelProbe, load_exclusions
+from pixelprobe.models import db, ScanResult, ScanState
 from pixelprobe.constants import TERMINAL_SCAN_PHASES
-from version import __version__
-from auth import auth_required
+from pixelprobe.version import __version__
+from pixelprobe.auth import auth_required
 
 from pixelprobe.utils.security import (
     validate_file_path, validate_directory_path,
@@ -143,8 +143,17 @@ def is_scan_running():
                     db.session.commit()
                     return False
                 elif task_state is None:
-                    # Couldn't check task state - assume running to avoid blocking forever
-                    logger.warning(f"Could not check Celery task {active_scan.celery_task_id} state - assuming running")
+                    # Can't check task state -- fall through to time-based stuck detection
+                    # instead of assuming the scan is running indefinitely
+                    if check_time and (datetime.now(timezone.utc) - check_time) > timedelta(hours=1):
+                        logger.warning(f"Scan {active_scan.scan_id} task state unknown and no update for over 1 hour - marking crashed")
+                        active_scan.is_active = False
+                        active_scan.phase = 'crashed'
+                        active_scan.error_message = 'Celery task state unknown - worker may have crashed'
+                        db.session.commit()
+                        return False
+                    # Give benefit of the doubt for shorter periods
+                    logger.warning(f"Could not check Celery task {active_scan.celery_task_id} state - assuming running (last update: {check_time})")
                     return True
             
             # If no Celery task ID, it's likely a direct scan - check if thread is alive
@@ -509,7 +518,7 @@ def scan():
         else:
             # Fallback to direct scan service (backward compatibility)
             logger.info("Celery not available, using direct scan service")
-            from config import Config
+            from pixelprobe.config import Config
             result = current_app.scan_service.scan_directories(
                 validated_dirs,
                 force_rescan=force_rescan,
@@ -637,7 +646,7 @@ def get_scan_status():
             import os
             filename = os.path.basename(current_file)
             # Generate fresh progress message with current data
-            from utils import ProgressTracker
+            from pixelprobe.utils.helpers import ProgressTracker
             progress_tracker = ProgressTracker('scan')
             # Use the actual scan start time if available
             if state_dict.get('start_time'):
@@ -1176,7 +1185,7 @@ def force_scan_pending():
             }
         else:
             # Fallback to direct scan service
-            from config import Config
+            from pixelprobe.config import Config
             result = current_app.scan_service.scan_directories(
                 directories=['PENDING_FILES_SCAN'],  # Special marker
                 force_rescan=False,

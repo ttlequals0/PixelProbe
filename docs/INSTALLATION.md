@@ -274,9 +274,7 @@ After installation, you must create the admin account.
 
 ### Option 1: Web Setup Wizard
 
-1. Open your browser and navigate to:
-   - Docker: http://localhost:5001
-   - Manual: http://localhost:5000
+1. Open your browser and navigate to http://localhost:5000
 
 2. You should be redirected to the first-run setup page
 3. Create your admin account with a secure password (minimum 8 characters)
@@ -288,12 +286,6 @@ After installation, you must create the admin account.
 Create the admin account via API:
 
 ```bash
-# Docker installation (port 5001)
-curl -X POST http://localhost:5001/api/auth/setup \
-  -H "Content-Type: application/json" \
-  -d '{"password":"YourSecurePassword123"}'
-
-# Manual installation (port 5000)
 curl -X POST http://localhost:5000/api/auth/setup \
   -H "Content-Type: application/json" \
   -d '{"password":"YourSecurePassword123"}'
@@ -305,9 +297,7 @@ curl -X POST http://localhost:5000/api/auth/setup \
 
 ### 1. Check Web Interface
 
-Open your browser:
-- Docker: http://localhost:5001
-- Manual: http://localhost:5000
+Open your browser at http://localhost:5000
 
 You should see the login page. Log in with:
 - Username: `admin`
@@ -316,10 +306,6 @@ You should see the login page. Log in with:
 ### 2. Check API Health
 
 ```bash
-# Docker
-curl http://localhost:5001/health
-
-# Manual
 curl http://localhost:5000/health
 ```
 
@@ -406,7 +392,7 @@ Common installation issues:
 - FFmpeg/ImageMagick not found: Ensure they're installed and in PATH
 - Database connection errors: Check PostgreSQL is running and credentials are correct
 - Permission errors: Ensure user has read access to media directories (Docker: use `user:` directive)
-- Port conflicts: Change PORT in .env if 5000/5001 is already in use
+- Port conflicts: Change PORT in .env if 5000 is already in use
 
 ## Getting Help
 

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from flask import send_file, Response
 
-from models import db, ScanResult
+from pixelprobe.models import db, ScanResult
 
 logger = logging.getLogger(__name__)
 

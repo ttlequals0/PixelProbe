@@ -49,7 +49,7 @@ def fix_database():
         logger.info("=" * 50)
         
         # Import after setting environment variables
-        from models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration
+        from pixelprobe.models import db, ScanResult, IgnoredErrorPattern, ScanSchedule, ScanConfiguration
         from app import app
         
         logger.info(f"Database URL: {app.config.get('SQLALCHEMY_DATABASE_URI', 'NOT SET')}")

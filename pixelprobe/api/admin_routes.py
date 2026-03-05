@@ -6,10 +6,10 @@ from datetime import datetime, timezone, timedelta
 
 from apscheduler.triggers.cron import CronTrigger
 
-from models import db, ScanResult, IgnoredErrorPattern, ScanConfiguration, ScanSchedule
-from scheduler import MediaScheduler
+from pixelprobe.models import db, ScanResult, IgnoredErrorPattern, ScanConfiguration, ScanSchedule
+from pixelprobe.scheduler import MediaScheduler
 from pixelprobe.utils.security import validate_json_input, AuditLogger, validate_directory_path
-from auth import auth_required
+from pixelprobe.auth import auth_required
 
 logger = logging.getLogger(__name__)
 
@@ -395,7 +395,7 @@ def delete_schedule(schedule_id):
 def get_exclusions():
     """Get current exclusion settings from database"""
     try:
-        from models import Exclusion
+        from pixelprobe.models import Exclusion
         
         # Get all active exclusions
         path_exclusions = Exclusion.query.filter_by(
@@ -423,7 +423,7 @@ def update_exclusions():
     data = request.get_json()
     
     try:
-        from models import Exclusion
+        from pixelprobe.models import Exclusion
         
         # Validate data structure
         if not isinstance(data.get('paths', []), list) or not isinstance(data.get('extensions', []), list):
@@ -463,7 +463,7 @@ def add_exclusion(exclusion_type):
         return {'error': 'Value is required'}, 400
     
     try:
-        from models import Exclusion
+        from pixelprobe.models import Exclusion
         
         # Check if already exists
         existing = Exclusion.query.filter_by(
@@ -508,7 +508,7 @@ def remove_exclusion(exclusion_type):
         return {'error': 'Value is required'}, 400
     
     try:
-        from models import Exclusion
+        from pixelprobe.models import Exclusion
         
         # Find the exclusion
         exclusion = Exclusion.query.filter_by(

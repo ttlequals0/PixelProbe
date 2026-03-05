@@ -4,7 +4,7 @@ Applies authentication requirement to all API endpoints
 """
 
 from functools import wraps
-from auth import auth_required
+from pixelprobe.auth import auth_required
 
 def apply_auth_to_blueprint(blueprint):
     """

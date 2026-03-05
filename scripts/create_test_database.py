@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app import app, db
-from models import ScanResult, ScanState, ScanConfiguration
+from pixelprobe.models import ScanResult, ScanState, ScanConfiguration
 
 # Test database path
 TEST_DB_PATH = os.path.abspath("test_media_checker.db")

@@ -12,9 +12,9 @@ import time
 from typing import List, Dict, Optional, Tuple
 
 from flask import current_app
-from media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
-from models import db, ScanResult, ScanState, ScanReport, ScanChunk
-from utils import ProgressTracker
+from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
+from pixelprobe.models import db, ScanResult, ScanState, ScanReport, ScanChunk
+from pixelprobe.utils.helpers import ProgressTracker
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 import hashlib
@@ -288,7 +288,7 @@ class ScanService:
                     progress_tracker = ProgressTracker('scan')
                     
                     # Import ScanResult model (needed for both regular and pending scans)
-                    from models import ScanResult
+                    from pixelprobe.models import ScanResult
                     
                     # Log scan start
                     logger.info(f"=== SCAN STARTED ===")
@@ -656,26 +656,27 @@ class ScanService:
                     
                     # Enhanced crash recovery tracking
                     try:
+                        # CRITICAL: Clear the failed transaction before attempting recovery writes.
+                        # Without this, the session may be in a rolled-back state (e.g. after
+                        # psycopg2.DatabaseError) and all subsequent writes will silently fail,
+                        # leaving the scan stuck as "active" forever.
+                        db.session.rollback()
+
                         if scan_state:
-                            # Re-attach scan_state if it's detached to prevent secondary errors
-                            try:
-                                # Test if scan_state is attached by accessing a property
-                                _ = scan_state.id
-                            except Exception:
-                                # Re-attach the detached instance
-                                scan_state = db.session.merge(scan_state)
-                                logger.info("Re-attached detached scan_state for crash recovery")
-                            
-                            # Update crash info (temporarily without new columns until migration completes)
-                            scan_state.error_message = str(e)[:1000]  # Truncate to avoid VARCHAR limit
-                            
-                            # Mark scan as crashed instead of just error
-                            scan_state.is_active = False
-                            scan_state.phase = 'crashed'
-                            scan_state.end_time = datetime.now(timezone.utc)
-                            
-                            db.session.commit()
-                            logger.info(f"Scan marked as crashed")
+                            # Re-query scan_state with a fresh session instead of merge,
+                            # since the old object is stale after rollback
+                            scan_state = db.session.query(ScanState).get(scan_state_id)
+                            if scan_state:
+                                # Update crash info
+                                scan_state.error_message = str(e)[:1000]  # Truncate to avoid VARCHAR limit
+
+                                # Mark scan as crashed instead of just error
+                                scan_state.is_active = False
+                                scan_state.phase = 'crashed'
+                                scan_state.end_time = datetime.now(timezone.utc)
+
+                                db.session.commit()
+                                logger.info(f"Scan marked as crashed")
                     except Exception as recovery_error:
                         logger.error(f"Failed to update crash recovery info: {recovery_error}")
                     
@@ -708,7 +709,7 @@ class ScanService:
                 if final_scan_state:
                     # Get corrupted file count from ScanResult table with retry logic
                     # Note: ScanResult doesn't have scan_id, so we query all corrupted files
-                    from models import ScanResult
+                    from pixelprobe.models import ScanResult
 
                     # Retry logic for database connection issues
                     max_retries = 3
@@ -958,7 +959,7 @@ class ScanService:
                 if final_scan_state:
                     # Get corrupted file count from ScanResult table with retry logic
                     # Note: ScanResult doesn't have scan_id, so we query all corrupted files
-                    from models import ScanResult
+                    from pixelprobe.models import ScanResult
 
                     # Retry logic for database connection issues
                     max_retries = 3
@@ -1126,7 +1127,7 @@ class ScanService:
         
         # Step 1: Kill ALL Celery tasks (nuclear option)
         try:
-            from celery_config import celery_app
+            from pixelprobe.celery_config import celery_app
             
             logger.info("Step 1: Killing ALL Celery tasks")
             
@@ -1168,7 +1169,7 @@ class ScanService:
         logger.info("Step 2: Cleaning up database state")
         
         try:
-            from models import ScanChunk
+            from pixelprobe.models import ScanChunk
             
             # Mark ALL chunks as cancelled
             chunks_updated = db.session.query(ScanChunk).filter(
@@ -1831,7 +1832,7 @@ class ScanService:
 
             # Send healthcheck completion ping for scheduled scans
             try:
-                from scheduler import MediaScheduler
+                from pixelprobe.scheduler import MediaScheduler
                 MediaScheduler.send_healthcheck_completion(report.id)
             except Exception as hc_error:
                 logger.error(f"Failed to send healthcheck completion ping: {hc_error}")
@@ -1852,7 +1853,7 @@ class ScanService:
         Returns:
             int: Number of files that remain pending after retries
         """
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
 
         max_retries = 2
 
@@ -1929,7 +1930,7 @@ class ScanService:
         scan_state.cancel_scan()
         
         # Clean up any files stuck in 'scanning' state
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
         stuck_count = ScanResult.query.filter_by(scan_status='scanning').update(
             {'scan_status': 'pending'},
             synchronize_session=False
@@ -1950,7 +1951,7 @@ class ScanService:
         import os
         import magic
         from datetime import datetime
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
         from sqlalchemy.exc import IntegrityError
         
         added_count = 0
@@ -2060,7 +2061,7 @@ class ScanService:
         Each chunk stores the first and last file_path it should process, making queries
         stable even as files change status during scanning.
         """
-        from models import ScanChunk
+        from pixelprobe.models import ScanChunk
         import json
         chunks = []
 
@@ -2482,7 +2483,7 @@ class ScanService:
                 scanned_lock = threading.Lock()
 
                 # Get exclusions for creating thread-local PixelProbe instances
-                from media_checker import load_exclusions_with_patterns
+                from pixelprobe.media_checker import load_exclusions_with_patterns
                 excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
 
             # Process files in batches to avoid loading all into memory
@@ -2579,7 +2580,7 @@ class ScanService:
                                 # and threading.local() storage persists across batches
                                 if not hasattr(thread_local, 'checker'):
                                     logger.info(f"[Thread {current_thread_name}/{current_thread_id}] Creating NEW PixelProbe instance for this thread")
-                                    from media_checker import PixelProbe
+                                    from pixelprobe.media_checker import PixelProbe
                                     thread_local.checker = PixelProbe(
                                         database_path=self.database_uri,
                                         excluded_paths=excluded_paths,
@@ -2704,7 +2705,7 @@ class ScanService:
                                         updated_files_processed = row[0] if row else current_total
 
                                         # Update progress message
-                                        from utils import ProgressTracker
+                                        from pixelprobe.utils.helpers import ProgressTracker
                                         progress_tracker = ProgressTracker('scan')
                                         progress_message = progress_tracker.get_progress_message(
                                             f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
@@ -2806,7 +2807,7 @@ class ScanService:
                                         scan_state.last_update = datetime.now(timezone.utc)
 
                                     # Update progress message with current file info
-                                    from utils import ProgressTracker
+                                    from pixelprobe.utils.helpers import ProgressTracker
                                     progress_tracker = ProgressTracker('scan')
                                     scan_state.progress_message = progress_tracker.get_progress_message(
                                         f'Phase 3 of 3: Scanning files',

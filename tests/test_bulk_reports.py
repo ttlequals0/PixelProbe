@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import tempfile
 import zipfile
 import io
-from models import ScanResult, ScanReport
+from pixelprobe.models import ScanResult, ScanReport
 
 
 class TestBulkReportOperations:

@@ -108,7 +108,7 @@ class TestPerformance:
     
     def test_bulk_insert_performance(self, app, db, performance_monitor):
         """Test performance of bulk database inserts"""
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
         from pixelprobe.services.scan_executor import BatchProcessor
         
         num_records = 1000  # Reduced for CI/CD performance
@@ -165,7 +165,7 @@ class TestPerformance:
         from pixelprobe.services.scan_executor import ScanExecutor
         
         # Create test files in database
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
         
         num_files = 1000
         for i in range(num_files):
@@ -202,7 +202,7 @@ class TestPerformance:
         file_paths = [f.file_path for f in files]
         
         # Execute scan with memory monitoring
-        with patch('media_checker.PixelProbe.scan_file', mock_check_file):
+        with patch('pixelprobe.media_checker.PixelProbe.scan_file', mock_check_file):
             stats = executor.execute(file_paths, mock_check_file, parallel=True)
         
         results = performance_monitor.get_results()
@@ -274,7 +274,7 @@ class TestPerformance:
     
     def test_api_response_time(self, app, db):
         """Test API endpoint response times"""
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
 
         # Create test data
         for i in range(100):

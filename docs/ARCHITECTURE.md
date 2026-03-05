@@ -4,7 +4,7 @@
 
 ## Overview
 
-PixelProbe v2.4.48 is a distributed media file corruption detection system built with a modular, layered architecture. The system leverages Celery for distributed processing, Redis for message queuing, and PostgreSQL for persistent storage.
+PixelProbe is a distributed media file corruption detection system built with a modular, layered architecture. The system leverages Celery for distributed processing, Redis for message queuing, and PostgreSQL for persistent storage.
 
 ## System Components
 
@@ -44,7 +44,7 @@ PixelProbe v2.4.48 is a distributed media file corruption detection system built
                 ▼              ▼              ▼
 ┌─────────────────────┐ ┌─────────────┐ ┌─────────────────────┐
 │   Celery Workers    │ │    Redis    │ │   Task Scheduler    │
-│ (8+ Parallel Tasks) │ │   (Queue)   │ │   (APScheduler)     │
+│  (Parallel Tasks)   │ │   (Queue)   │ │   (APScheduler)     │
 └─────────────────────┘ └─────────────┘ └─────────────────────┘
         │                                         │
         ▼                                         ▼
@@ -163,7 +163,7 @@ api/
 
 ### Data Layer
 
-**Technology**: SQLite (Development), PostgreSQL (Production)
+**Technology**: PostgreSQL (required since v2.2.0)
 
 **Models**:
 - `ScanResult`: File scan results
@@ -215,7 +215,7 @@ class MediaScheduler:
 
 ## Data Flow
 
-### Scan Request Flow (v2.4.48 Distributed)
+### Scan Request Flow (Distributed)
 
 ```
 Client Request → API Endpoint → Validation → Service Layer
@@ -310,22 +310,19 @@ Request → Rate Limiter → CSRF Check → Input Validation
 
 ## Deployment Architecture
 
-### Development
+### Docker Compose (Standard)
 ```
-Docker Container
-    ├── Flask Development Server
-    ├── SQLite Database
-    └── Local File System
+Docker Compose
+    ├── pixelprobe-app (Gunicorn + Flask)
+    ├── pixelprobe-celery-worker (Celery)
+    ├── pixelprobe-postgres (PostgreSQL 15)
+    └── pixelprobe-redis (Redis 7)
 ```
 
-### Production
+### Production (with reverse proxy)
 ```
-Load Balancer
-    ├── Web Server (Nginx)
-    │   └── Gunicorn Workers
-    │       └── Flask Application
-    ├── PostgreSQL Database
-    └── Shared Storage (NFS/S3)
+Load Balancer / Nginx
+    └── Docker Compose stack (as above)
 ```
 
 ## Extension Points
@@ -371,18 +368,9 @@ Load Balancer
 
 ## Future Enhancements
 
-### Planned Features
-1. **Distributed Scanning**: Multiple scanner nodes
-2. **Cloud Storage Support**: S3, Azure Blob
-3. **Machine Learning**: Corruption prediction
-4. **WebSocket Support**: Real-time updates
-5. **Plugin Architecture**: Custom scanners
-
-### Scalability Path
-1. **Horizontal Scaling**: Multiple API instances
-2. **Queue-based Processing**: Redis/RabbitMQ
-3. **Microservices**: Separate scanner service
-4. **Caching Layer**: Redis for results
+1. **Cloud Storage Support**: S3, Azure Blob
+2. **WebSocket Support**: Real-time updates
+3. **Plugin Architecture**: Custom scanners
 
 ## Technology Stack
 

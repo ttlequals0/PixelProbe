@@ -44,8 +44,8 @@ PixelProbe is a distributed media corruption detection system built on a microse
 
 ### Container Descriptions
 
-#### 1. Web Application Container (`mediachecker`)
-- **Image**: `ttlequals0/pixelprobe:2.4.48`
+#### 1. Web Application Container (`pixelprobe-app`)
+- **Image**: `ttlequals0/pixelprobe:latest`
 - **Purpose**: Serves the web UI and REST API
 - **Responsibilities**:
   - Handle HTTP requests from users
@@ -59,7 +59,7 @@ PixelProbe is a distributed media corruption detection system built on a microse
   - APScheduler for scheduled tasks
 
 #### 2. Celery Worker Container (`celery-worker`)
-- **Image**: `ttlequals0/pixelprobe:2.4.48` (same image, different entry point)
+- **Image**: `ttlequals0/pixelprobe:latest` (same image, different entry point)
 - **Purpose**: Process background tasks in parallel
 - **Responsibilities**:
   - Execute media scanning tasks
@@ -273,7 +273,7 @@ BATCH_SIZE: 100
 1. **Add More Workers**:
 ```yaml
 celery-worker-2:
-  image: ttlequals0/pixelprobe:2.2.47
+  image: ttlequals0/pixelprobe:latest
   command: celery -A celery_app worker
   scale: 4  # Creates 4 instances
 ```
@@ -411,8 +411,8 @@ services:
       timeout: 5s
       retries: 5
 
-  mediachecker:
-    image: ttlequals0/pixelprobe:2.2.47
+  pixelprobe:
+    image: ttlequals0/pixelprobe:latest
     ports:
       - "5000:5000"
     environment:
@@ -430,7 +430,7 @@ services:
         condition: service_healthy
 
   celery-worker:
-    image: ttlequals0/pixelprobe:2.2.47
+    image: ttlequals0/pixelprobe:latest
     command: celery -A celery_app worker --loglevel=info --concurrency=8
     environment:
       POSTGRES_HOST: postgres

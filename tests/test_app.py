@@ -22,7 +22,7 @@ def test_version_endpoint(authenticated_client):
 def test_scan_status_endpoint(authenticated_client, db):
     """Test the scan status endpoint"""
     # Ensure ScanState table exists and has a default entry
-    from models import ScanState
+    from pixelprobe.models import ScanState
     db.create_all()
 
     response = authenticated_client.get('/api/scan-status')

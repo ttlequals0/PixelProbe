@@ -1,6 +1,6 @@
 import pytest
-from scheduler import MediaScheduler
-from models import db, ScanSchedule
+from pixelprobe.scheduler import MediaScheduler
+from pixelprobe.models import db, ScanSchedule
 
 
 class TestSchedulerLockHelpers:

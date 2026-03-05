@@ -14,10 +14,10 @@ from datetime import datetime, timezone, timedelta
 import redis
 from contextlib import contextmanager
 
-from celery_config import celery_app
+from pixelprobe.celery_config import celery_app
 from pixelprobe.services.scan_service import ScanService
 from pixelprobe.progress_utils import get_redis_client, update_scan_progress_redis
-from models import db, ScanState, ScanResult, ScanReport
+from pixelprobe.models import db, ScanState, ScanResult, ScanReport
 
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             # because the scheduler already sent a start ping and expects a completion signal
             if scan_id.startswith('scheduled_'):
                 try:
-                    from scheduler import MediaScheduler
+                    from pixelprobe.scheduler import MediaScheduler
                     # Find the existing scan report for this scan
                     existing_report = ScanReport.query.filter_by(scan_id=scan_id).order_by(ScanReport.end_time.desc()).first()
                     if existing_report:
@@ -219,7 +219,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
         # Execute scan based on type
         if scan_type in ['full', 'parallel', 'pending']:
             # Use configured MAX_WORKERS instead of hardcoded 1
-            from config import Config
+            from pixelprobe.config import Config
             import os
             num_workers = Config.MAX_WORKERS
             logger.info(f"Celery task using MAX_WORKERS={num_workers} (env var: {os.getenv('MAX_WORKERS', 'NOT SET')})")
@@ -253,7 +253,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             # Discovery is handled internally by scan_directories
             # There's no separate discover_files method in ScanService
             # Run a regular scan which includes discovery phase
-            from config import Config
+            from pixelprobe.config import Config
             result = scan_service.scan_directories(
                 directories=paths,
                 force_rescan=False,  # Don't force rescan for discovery
@@ -442,7 +442,7 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
     try:
         from pixelprobe.services.scan_service import ScanService
         from flask import current_app
-        from config import Config
+        from pixelprobe.config import Config
 
         database_uri = current_app.config['SQLALCHEMY_DATABASE_URI']
         scan_service = ScanService(database_uri)
@@ -539,7 +539,7 @@ def scheduled_scan_task(schedule_id, scan_type='full'):
     logger.info(f"Executing scheduled scan for schedule_id: {schedule_id}")
     
     try:
-        from models import ScanSchedule
+        from pixelprobe.models import ScanSchedule
         from uuid import uuid4
         
         # Get schedule details
@@ -792,7 +792,7 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from app import app, db as flask_db
     from sqlalchemy.orm import scoped_session, sessionmaker
-    from models import ScanState
+    from pixelprobe.models import ScanState
 
     # Use distributed lock to ensure only one UI worker per scan
     lock_name = f'pixelprobe:ui_worker:{scan_id}'
