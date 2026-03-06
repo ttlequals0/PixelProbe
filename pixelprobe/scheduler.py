@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from models import db, ScanSchedule, ScanResult, ScanState, HealthcheckConfig, ScanReport
+from pixelprobe.models import db, ScanSchedule, ScanResult, ScanState, HealthcheckConfig, ScanReport
 from pixelprobe.constants import TERMINAL_SCAN_PHASES
 from sqlalchemy import text
 import threading
@@ -617,17 +617,38 @@ class MediaScheduler:
                     last_update = scan.last_update
                     if last_update and last_update.tzinfo is None:
                         last_update = last_update.replace(tzinfo=timezone.utc)
-                    
+
                     start_time = scan.start_time
                     if start_time and start_time.tzinfo is None:
                         start_time = start_time.replace(tzinfo=timezone.utc)
-                    
+
+                    # Secondary check: if scan has a Celery task, verify task is still alive.
+                    # A lost/crashed Celery task with a stale last_update is a definitive indicator.
+                    celery_task_gone = False
+                    if scan.celery_task_id:
+                        try:
+                            from pixelprobe.utils.celery_utils import check_celery_available, safe_check_task_state
+                            from flask import current_app
+                            if check_celery_available():
+                                task_state = safe_check_task_state(scan.celery_task_id, current_app.celery)
+                                if task_state in ['SUCCESS', 'FAILURE', 'REVOKED'] or task_state is None:
+                                    celery_task_gone = True
+                        except Exception:
+                            pass  # Celery check failed, rely on time-based detection
+
                     # Check if scan has been running for more than 30 minutes without update
                     if last_update and last_update < stuck_threshold:
                         logger.warning(f"Marking stuck scan {scan.scan_id} as crashed - no update since {last_update}")
                         scan.is_active = False
                         scan.phase = 'crashed'
                         scan.error_message = f"Scan appears stuck - no activity for over 30 minutes (last update: {last_update})"
+                        scans_to_mark.append(scan)
+                    elif celery_task_gone and last_update and last_update < (current_time - timedelta(minutes=5)):
+                        # Celery task is gone AND no update for 5+ minutes -- crashed
+                        logger.warning(f"Marking scan {scan.scan_id} as crashed - Celery task gone and no update since {last_update}")
+                        scan.is_active = False
+                        scan.phase = 'crashed'
+                        scan.error_message = f"Celery task lost and no progress since {last_update}"
                         scans_to_mark.append(scan)
                     elif not last_update and start_time and start_time < stuck_threshold:
                         # No last_update field but scan started over 30 minutes ago

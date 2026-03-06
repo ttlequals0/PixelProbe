@@ -2,7 +2,7 @@
 PixelProbe - Media file corruption detection tool
 """
 
-from version import __version__
+from pixelprobe.version import __version__
 
 from . import api
 from . import services

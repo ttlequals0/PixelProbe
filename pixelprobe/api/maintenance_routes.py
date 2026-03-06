@@ -7,10 +7,10 @@ import uuid
 from datetime import datetime, timezone
 import pytz
 
-from models import db, ScanResult, CleanupState, FileChangesState
-from media_checker import PixelProbe
-from auth import auth_required
-from utils import ProgressTracker
+from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState
+from pixelprobe.media_checker import PixelProbe
+from pixelprobe.auth import auth_required
+from pixelprobe.utils.helpers import ProgressTracker
 from pixelprobe.services.maintenance_service import MaintenanceService
 
 logger = logging.getLogger(__name__)
@@ -475,7 +475,7 @@ def check_file_changes():
     scan_state = None
     if file_paths and len(file_paths) == 1:
         try:
-            from models import ScanState
+            from pixelprobe.models import ScanState
             scan_state = ScanState.create_new_scan()
             scan_state.scan_id = check_id
             scan_state.start_scan(file_paths, force_rescan=False)

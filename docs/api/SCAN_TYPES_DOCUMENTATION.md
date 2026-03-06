@@ -6,7 +6,7 @@ PixelProbe offers multiple scan types to handle different use cases for media fi
 ## Scan Types
 
 ### 1. Full Scan (`full`)
-**Endpoint**: `/api/scan`
+**Endpoint**: `POST /api/scan`
 **Purpose**: Complete scan of specified directories
 **When to use**: 
 - Initial setup of PixelProbe
@@ -30,13 +30,12 @@ PixelProbe offers multiple scan types to handle different use cases for media fi
 POST /api/scan
 {
   "directories": ["/media/movies", "/media/photos"],
-  "scan_type": "full",
   "force_rescan": false
 }
 ```
 
 ### 2. Parallel Scan (`parallel`)
-**Endpoint**: `/api/scan-parallel` or `/api/scan-parallel-v2`
+**Endpoint**: `POST /api/scan-parallel`
 **Purpose**: High-performance scanning using multiple workers
 **When to use**:
 - Large media libraries (100k+ files)
@@ -62,7 +61,7 @@ POST /api/scan
 
 **Example**:
 ```json
-POST /api/scan-parallel-v2
+POST /api/scan-parallel
 {
   "directories": ["/media"],
   "num_workers": 8
@@ -70,7 +69,7 @@ POST /api/scan-parallel-v2
 ```
 
 ### 3. Pending Scan (`pending`)
-**Endpoint**: `/api/force-scan-pending`
+**Endpoint**: `POST /api/force-scan-pending`
 **Purpose**: Scan only files marked as pending
 **When to use**:
 - After interrupted scans
@@ -95,7 +94,7 @@ POST /api/force-scan-pending
 ```
 
 ### 4. File Changes Scan (`file_changes`)
-**Endpoint**: `/api/file-changes`
+**Endpoint**: `GET/POST /api/file-changes`
 **Purpose**: Detect and scan modified files
 **When to use**:
 - Regular maintenance scans
@@ -120,7 +119,7 @@ POST /api/file-changes
 ```
 
 ### 5. Cleanup (`cleanup`)
-**Endpoint**: `/api/cleanup-orphaned`
+**Endpoint**: `POST /api/cleanup-orphaned`
 **Purpose**: Remove database entries for deleted files
 **When to use**:
 - After deleting media files
@@ -144,7 +143,7 @@ POST /api/cleanup-orphaned
 ```
 
 ### 6. Single File Scan (`single`)
-**Endpoint**: `/api/scan-file`
+**Endpoint**: `POST /api/scan-file`
 **Purpose**: Scan a specific file
 **When to use**:
 - Testing scan functionality

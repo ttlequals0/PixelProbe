@@ -33,7 +33,7 @@ def test_migrate_database_falls_back_on_advisory_lock_failure(app):
     mig_mod = _get_migrations_module()
     with app.app_context():
         with patch.object(mig_mod, '_run_all_migrations') as mock_migrations:
-            from models import db
+            from pixelprobe.models import db
             mig_mod.migrate_database(db)
             mock_migrations.assert_called_once()
 

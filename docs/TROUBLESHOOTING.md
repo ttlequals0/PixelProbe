@@ -36,7 +36,7 @@ docker-compose logs pixelprobe-postgres --tail=50
 docker-compose logs pixelprobe-redis --tail=50
 
 # Check health status
-curl http://localhost:5001/health
+curl http://localhost:5000/health
 ```
 
 ### Manual Installation
@@ -417,7 +417,7 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c \
   "SELECT COUNT(*) FROM scan_results;"
 
 # Check scan state
-curl http://localhost:5001/api/scan-status
+curl http://localhost:5000/api/scan-status
 ```
 
 **Solutions:**
@@ -596,7 +596,7 @@ docker-compose logs pixelprobe-app | grep SECRET_KEY
 
 1. **Verify token format:**
 ```bash
-curl http://localhost:5001/api/stats \
+curl http://localhost:5000/api/stats \
   -H "Authorization: Bearer your-token-here"
 ```
 
@@ -922,7 +922,7 @@ docker-compose ps
 docker-compose logs --tail=100 > logs.txt
 
 # Health check
-curl http://localhost:5001/health
+curl http://localhost:5000/health
 
 # Database status
 docker exec pixelprobe-postgres psql -U pixelprobe -c \

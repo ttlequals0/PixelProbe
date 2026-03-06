@@ -13,6 +13,8 @@ from functools import wraps
 
 logger = logging.getLogger(__name__)
 
+_PROGRESS_KEY_PREFIX = 'scan_progress'
+
 # Connection pool to reuse connections
 _redis_connection_pool = None
 
@@ -177,6 +179,45 @@ def with_redis_retry(max_retries=3, delay=0.5):
     return decorator
 
 
+def get_scan_progress_redis(scan_id):
+    """
+    Read current scan progress from Redis.
+
+    Args:
+        scan_id (str): The scan ID
+
+    Returns:
+        dict with progress data or None if unavailable
+    """
+    redis_client = get_redis_client()
+    if not redis_client:
+        return None
+
+    progress_key = f"{_PROGRESS_KEY_PREFIX}:{scan_id}"
+    try:
+        data = redis_client.hgetall(progress_key)
+        if not data:
+            return None
+        # Redis returns bytes, decode them
+        decoded = {}
+        for k, v in data.items():
+            key = k.decode('utf-8') if isinstance(k, bytes) else k
+            val = v.decode('utf-8') if isinstance(v, bytes) else v
+            decoded[key] = val
+        # Convert numeric fields
+        result = {
+            'files_processed': int(decoded.get('files_processed', 0)),
+            'estimated_total': int(decoded.get('estimated_total', 0)),
+            'phase': decoded.get('phase', ''),
+            'current_file': decoded.get('current_file', ''),
+            'last_update': decoded.get('last_update', ''),
+        }
+        return result
+    except Exception as e:
+        logger.warning(f"Failed to read Redis progress for scan {scan_id}: {e}")
+        return None
+
+
 def update_scan_progress_redis(scan_id, files_processed=0, estimated_total=0, phase='scanning', current_file=''):
     """
     Update scan progress in Redis for the UI worker to read.
@@ -193,7 +234,7 @@ def update_scan_progress_redis(scan_id, files_processed=0, estimated_total=0, ph
         logger.debug("Redis not available for progress updates")
         return
 
-    progress_key = f"scan_progress:{scan_id}"
+    progress_key = f"{_PROGRESS_KEY_PREFIX}:{scan_id}"
     progress_data = {
         'files_processed': str(files_processed),
         'estimated_total': str(estimated_total),

@@ -1,5 +1,8 @@
 # Fixing Incomplete Scans
 
+> **Historical document**: This describes a fix for a bug in versions before v2.2.59.
+> If you are running v2.2.59 or later, this issue has been resolved and no action is needed.
+
 ## Problem
 Due to the chunk query bug in versions before v2.2.59, some files were marked as "completed" but were never actually scanned. These files show:
 - Tool Details: N/A

@@ -8,7 +8,7 @@ import threading
 import time
 
 from pixelprobe.services.scan_service import ScanService
-from models import ScanResult, ScanState
+from pixelprobe.models import ScanResult, ScanState
 
 class TestScanService:
     """Test the scan service business logic"""
@@ -252,7 +252,7 @@ class TestScanService:
     @patch('pixelprobe.services.scan_service.db')
     def test_reset_stuck_scans(self, mock_db, scan_service, db):
         """Test resetting stuck scans"""
-        from models import ScanResult
+        from pixelprobe.models import ScanResult
         
         # Create stuck scan results
         stuck1 = ScanResult(file_path='/test/stuck1.mp4', scan_status='scanning')

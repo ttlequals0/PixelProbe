@@ -11,10 +11,10 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 
 # Import models first to ensure they're registered with SQLAlchemy
-from models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport, Exclusion, User, APIToken
+from pixelprobe.models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport, Exclusion, User, APIToken
 
 # Import models to ensure they're available
-from models import ScanState, ScanResult
+from pixelprobe.models import ScanState, ScanResult
 
 # Add missing total_files property for ScanState (still needed for utils.py)
 def _total_files(self):
@@ -48,7 +48,7 @@ def create_test_app():
     csrf = CSRFProtect(test_app)
 
     # Initialize authentication
-    from auth import init_auth
+    from pixelprobe.auth import init_auth
     init_auth(test_app)
     
     # Import and register blueprints
@@ -60,7 +60,7 @@ def create_test_app():
     from pixelprobe.api.reports_routes import reports_bp
     from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
     from pixelprobe.api.auth_routes import auth_bp
-    from scheduler import MediaScheduler
+    from pixelprobe.scheduler import MediaScheduler
 
     test_app.register_blueprint(scan_bp)
     test_app.register_blueprint(auth_bp)
@@ -88,7 +88,7 @@ def create_test_app():
     set_scheduler(scheduler)
     
     # Add basic routes (with auth_required to match production app)
-    from auth import auth_required as _auth_required
+    from pixelprobe.auth import auth_required as _auth_required
 
     @test_app.route('/health')
     @_auth_required
@@ -139,7 +139,7 @@ def client(app):
 def authenticated_client(app, client):
     """Create an authenticated test client with a test user"""
     with app.app_context():
-        from models import db, User
+        from pixelprobe.models import db, User
         db.create_all()
 
         # Create a test admin user
@@ -171,7 +171,7 @@ def db(app):
     """Create database for testing"""
     with app.app_context():
         # Ensure all models are loaded
-        from models import (ScanResult, ScanState, CleanupState, FileChangesState, 
+        from pixelprobe.models import (ScanResult, ScanState, CleanupState, FileChangesState, 
                             ScanConfiguration, IgnoredErrorPattern, ScanSchedule, 
                             ScanReport, Exclusion, ScanChunk)
         
@@ -180,7 +180,7 @@ def db(app):
         
         try:
             # First, mark any active cleanup as cancelled to stop background threads
-            from models import CleanupState, ScanState
+            from pixelprobe.models import CleanupState, ScanState
             try:
                 cleanup_states = CleanupState.query.filter_by(is_active=True).all()
                 for cleanup in cleanup_states:
@@ -336,7 +336,7 @@ def test_data_dir():
 @pytest.fixture
 def mock_scan_result(db):
     """Create a mock scan result"""
-    from models import ScanResult
+    from pixelprobe.models import ScanResult
     from datetime import datetime, timezone
     
     result = ScanResult(
@@ -359,8 +359,8 @@ def mock_scan_result(db):
 @pytest.fixture
 def real_scan_results(db, test_data_dir):
     """Scan real media files into test database"""
-    from models import ScanResult
-    from media_checker import PixelProbe
+    from pixelprobe.models import ScanResult
+    from pixelprobe.media_checker import PixelProbe
     from datetime import datetime, timezone
     
     checker = PixelProbe()
@@ -418,7 +418,7 @@ def real_scan_results(db, test_data_dir):
 @pytest.fixture
 def mock_corrupted_result(db):
     """Create a mock corrupted scan result"""
-    from models import ScanResult
+    from pixelprobe.models import ScanResult
     from datetime import datetime, timezone
     
     result = ScanResult(
@@ -444,7 +444,7 @@ def mock_corrupted_result(db):
 @pytest.fixture
 def mock_scan_configuration(db):
     """Create mock scan configuration"""
-    from models import ScanConfiguration
+    from pixelprobe.models import ScanConfiguration
     from datetime import datetime, timezone
     
     # Create a configuration using the new path-based structure

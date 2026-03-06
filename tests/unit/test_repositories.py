@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pixelprobe.repositories import ScanRepository, ConfigurationRepository
 from pixelprobe.repositories.scan_repository import ScanStateRepository
 from pixelprobe.repositories.config_repository import IgnoredPatternRepository, ScheduleRepository
-from models import ScanResult, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanState
+from pixelprobe.models import ScanResult, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanState
 
 class TestScanRepository:
     """Test the scan repository"""

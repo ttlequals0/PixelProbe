@@ -1,7 +1,7 @@
 import pytest
 import json
 from datetime import datetime, timezone, timedelta
-from models import db, ScanSchedule, IgnoredErrorPattern
+from pixelprobe.models import db, ScanSchedule, IgnoredErrorPattern
 
 class TestScheduleEndpoints:
     """Test schedule management endpoints"""
@@ -234,7 +234,7 @@ class TestExclusionEndpoints:
     
     def test_add_path_exclusion(self, authenticated_client, db, app):
         """Test adding a path exclusion"""
-        from models import Exclusion
+        from pixelprobe.models import Exclusion
         
         with app.app_context():
             response = authenticated_client.post('/api/exclusions/path',
@@ -252,7 +252,7 @@ class TestExclusionEndpoints:
     
     def test_add_extension_exclusion(self, authenticated_client, db, app):
         """Test adding an extension exclusion"""
-        from models import Exclusion
+        from pixelprobe.models import Exclusion
         
         with app.app_context():
             response = authenticated_client.post('/api/exclusions/extension',
@@ -270,7 +270,7 @@ class TestExclusionEndpoints:
     
     def test_add_duplicate_exclusion(self, authenticated_client, db, app):
         """Test adding duplicate exclusion"""
-        from models import Exclusion
+        from pixelprobe.models import Exclusion
         
         with app.app_context():
             # Create existing exclusion
@@ -290,7 +290,7 @@ class TestExclusionEndpoints:
     
     def test_remove_path_exclusion(self, authenticated_client, db, app):
         """Test removing a path exclusion"""
-        from models import Exclusion
+        from pixelprobe.models import Exclusion
         
         with app.app_context():
             # Create exclusion to remove

@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import uuid
 
-from media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
-from models import db, ScanResult, CleanupState, FileChangesState, ScanReport
-from utils import ProgressTracker
+from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
+from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState, ScanReport
+from pixelprobe.utils.helpers import ProgressTracker
 
 logger = logging.getLogger(__name__)
 
@@ -621,7 +621,7 @@ class MaintenanceService:
             # Send healthcheck completion ping if this was a scheduled cleanup
             if schedule_id:
                 try:
-                    from scheduler import MediaScheduler
+                    from pixelprobe.scheduler import MediaScheduler
                     MediaScheduler.send_healthcheck_completion(report.id)
                 except Exception as hc_error:
                     logger.error(f"Failed to send healthcheck completion ping: {hc_error}")
@@ -849,7 +849,7 @@ class MaintenanceService:
 
                                 # Also update ScanState for UI progress bar
                                 try:
-                                    from models import ScanState
+                                    from pixelprobe.models import ScanState
                                     scan_state = ScanState.query.filter_by(scan_id=check_id).first()
                                     if scan_state:
                                         scan_state.files_processed = 1
@@ -1068,7 +1068,7 @@ class MaintenanceService:
 
             # Complete ScanState if this was a single file integrity check
             try:
-                from models import ScanState
+                from pixelprobe.models import ScanState
                 scan_state = ScanState.query.filter_by(scan_id=check_id).first()
                 if scan_state:
                     scan_state.complete_scan()
@@ -1254,7 +1254,7 @@ class MaintenanceService:
             # Send healthcheck completion ping if this was a scheduled file changes check
             if schedule_id:
                 try:
-                    from scheduler import MediaScheduler
+                    from pixelprobe.scheduler import MediaScheduler
                     MediaScheduler.send_healthcheck_completion(report.id)
                 except Exception as hc_error:
                     logger.error(f"Failed to send healthcheck completion ping: {hc_error}")

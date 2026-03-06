@@ -15,7 +15,7 @@ from pathlib import Path
 # Add the parent directory to the path to import models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models import db, ScanResult
+from pixelprobe.models import db, ScanResult
 from flask import Flask
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError

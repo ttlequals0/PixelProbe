@@ -8,8 +8,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from models import db, NotificationProvider, NotificationRule
-from auth import auth_required
+from pixelprobe.models import db, NotificationProvider, NotificationRule
+from pixelprobe.auth import auth_required
 from pixelprobe.services.notification_service import NotificationService
 from pixelprobe.utils.security import validate_safe_url
 

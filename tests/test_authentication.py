@@ -5,8 +5,8 @@ Test suite for authentication functionality
 import pytest
 import json
 from datetime import datetime, timedelta, timezone
-from models import db, User, APIToken
-from auth import authenticate_user, check_first_run, create_initial_admin
+from pixelprobe.models import db, User, APIToken
+from pixelprobe.auth import authenticate_user, check_first_run, create_initial_admin
 
 
 @pytest.fixture

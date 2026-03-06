@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.67] - 2026-03-05
+
+### Fixed
+
+- **Fix stuck scan bug**: Scans could get permanently stuck as "active" after a Celery task crash (e.g., `psycopg2.DatabaseError`). The crash recovery handler in `scan_service.py` attempted to mark the scan as crashed but failed because the DB session was in a rolled-back state. Added `db.session.rollback()` before recovery writes and re-query the scan state with a fresh session.
+- **Fix stuck scan detection for lost Celery tasks**: When Celery task state is `None` (task lost/unreachable), the `is_scan_running()` check previously assumed the scan was still running indefinitely. Now falls through to time-based detection -- if no update for over 1 hour with unknown task state, marks as crashed.
+- **Fix scheduler stuck scan checker**: The `_check_stuck_scans` scheduler job now also verifies Celery task state. If a Celery task is gone AND no progress update for 5+ minutes, the scan is marked as crashed (previously only relied on 30-minute time threshold).
+- **Fix Phase 3 progress display appearing frozen**: The scan-status API endpoint now reads real-time progress from Redis (instead of only PostgreSQL) when a scan is active. Redis is updated by the Celery scan worker on every file, while PostgreSQL lagged behind, causing the UI to show stale values like "97/397" or appear stuck.
+- **Fix final progress not reflected in DB on scan completion**: All scan completion paths now write `files_processed` and `estimated_total` in the same SQL UPDATE that marks the scan as completed. Previously, the completion UPDATE only set `phase` and `is_active`, leaving stale progress values in PostgreSQL.
+- **Fix UI worker exiting without final sync**: The `ui_progress_update_task` now performs a final Redis-to-PostgreSQL sync of progress values before exiting when it detects the scan is complete or inactive.
+- **Fix ORM staleness in final Redis-to-DB sync**: Added `ui_session.refresh(scan_state)` before comparing Redis vs DB progress values in `_final_sync_redis_to_db()`. After `_mark_scan_completed()` writes via raw SQL, the ORM object could have stale values, causing unnecessary or missed updates.
+- **Fix trailing whitespace in scan_routes.py**: Removed trailing whitespace on blank line.
+- **Move inline import to module level in tasks.py**: `get_scan_progress_redis` was imported inline at line 775 despite being available from the existing module-level import.
+- Files affected: `pixelprobe/services/scan_service.py`, `pixelprobe/api/scan_routes.py`, `pixelprobe/scheduler.py`, `pixelprobe/tasks.py`, `pixelprobe/progress_utils.py`
+
+### Added
+
+- **`get_scan_progress_redis()` in `pixelprobe/progress_utils.py`**: Read function for fetching real-time scan progress from Redis, used by the scan-status API endpoint.
+- **`_mark_scan_completed()` in `pixelprobe/services/scan_service.py`**: Extracted helper that consolidates all scan completion SQL into a single method, replacing 7 duplicated SQL blocks.
+- **Unit tests for new functions**: Added `tests/unit/test_progress_utils.py` with 12 tests covering `get_scan_progress_redis()`, `_final_sync_redis_to_db()` sync logic, and `_mark_scan_completed()` SQL behavior.
+
+### Changed
+
+- **Move all application modules into `pixelprobe/` package**: Moved `models.py`, `auth.py`, `config.py`, `media_checker.py`, `scheduler.py`, `celery_config.py`, `version.py` from root into the `pixelprobe/` package. Root now only contains entry points (`app.py`, `celery_worker.py`) and build/config files. Updated 73+ import statements across 43 files.
+- **Move root `utils.py` into `pixelprobe/utils/helpers.py`**: Consolidated shared utilities (`ProgressTracker`, `create_state_dict`, `batch_process`, etc.) into the package.
+- **Documentation cleanup**: Fixed port 5001 references (should be 5000), updated stale version references (v2.4.48/v2.4.93), fixed SQLite references (PostgreSQL-only since v2.2.0), rewrote PROJECT_STRUCTURE.md, fixed container name references.
+- **Repository cleanup**: Removed legacy files (`database_migrations.py`, `init_db.py`, `operation_handlers.py`, `utils.py`, `migrations/` directory, broken shell scripts, obsolete patches, outdated development docs).
+- Updated docker-compose.yml image tags from `pixelprobe:test-v2.4.93` to `ttlequals0/pixelprobe:2.5.67`.
+- Updated `.env.example` with correct PostgreSQL defaults and added missing env vars.
+
+---
+
 ## [2.5.66] - 2026-02-23
 
 ### Fixed

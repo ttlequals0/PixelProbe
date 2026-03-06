@@ -4,7 +4,7 @@ Tests using real media samples from FFmpeg
 
 import pytest
 import os
-from models import ScanResult
+from pixelprobe.models import ScanResult
 
 
 @pytest.mark.real_media

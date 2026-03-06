@@ -5,11 +5,11 @@ import time
 import logging
 from datetime import datetime, timezone
 
-from models import db, ScanResult
-from version import __version__
+from pixelprobe.models import db, ScanResult
+from pixelprobe.version import __version__
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone_name
 from pixelprobe.services.stats_service import StatsService
-from auth import auth_required
+from pixelprobe.auth import auth_required
 
 logger = logging.getLogger(__name__)
 
@@ -452,7 +452,7 @@ def get_system_info():
                 logger.warning(f"SQLite fallback also failed, using basic query: {e2}")
                 # Final fallback to basic ORM queries
                 try:
-                    from models import ScanReport
+                    from pixelprobe.models import ScanReport
                     total_scans = ScanReport.query.filter_by(status='completed').count()
                 except:
                     total_scans = 0

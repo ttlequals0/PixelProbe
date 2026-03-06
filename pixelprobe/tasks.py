@@ -14,10 +14,10 @@ from datetime import datetime, timezone, timedelta
 import redis
 from contextlib import contextmanager
 
-from celery_config import celery_app
+from pixelprobe.celery_config import celery_app
 from pixelprobe.services.scan_service import ScanService
-from pixelprobe.progress_utils import get_redis_client, update_scan_progress_redis
-from models import db, ScanState, ScanResult, ScanReport
+from pixelprobe.progress_utils import get_redis_client, get_scan_progress_redis, update_scan_progress_redis
+from pixelprobe.models import db, ScanState, ScanResult, ScanReport
 
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             # because the scheduler already sent a start ping and expects a completion signal
             if scan_id.startswith('scheduled_'):
                 try:
-                    from scheduler import MediaScheduler
+                    from pixelprobe.scheduler import MediaScheduler
                     # Find the existing scan report for this scan
                     existing_report = ScanReport.query.filter_by(scan_id=scan_id).order_by(ScanReport.end_time.desc()).first()
                     if existing_report:
@@ -219,7 +219,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
         # Execute scan based on type
         if scan_type in ['full', 'parallel', 'pending']:
             # Use configured MAX_WORKERS instead of hardcoded 1
-            from config import Config
+            from pixelprobe.config import Config
             import os
             num_workers = Config.MAX_WORKERS
             logger.info(f"Celery task using MAX_WORKERS={num_workers} (env var: {os.getenv('MAX_WORKERS', 'NOT SET')})")
@@ -253,7 +253,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             # Discovery is handled internally by scan_directories
             # There's no separate discover_files method in ScanService
             # Run a regular scan which includes discovery phase
-            from config import Config
+            from pixelprobe.config import Config
             result = scan_service.scan_directories(
                 directories=paths,
                 force_rescan=False,  # Don't force rescan for discovery
@@ -442,7 +442,7 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
     try:
         from pixelprobe.services.scan_service import ScanService
         from flask import current_app
-        from config import Config
+        from pixelprobe.config import Config
 
         database_uri = current_app.config['SQLALCHEMY_DATABASE_URI']
         scan_service = ScanService(database_uri)
@@ -539,7 +539,7 @@ def scheduled_scan_task(schedule_id, scan_type='full'):
     logger.info(f"Executing scheduled scan for schedule_id: {schedule_id}")
     
     try:
-        from models import ScanSchedule
+        from pixelprobe.models import ScanSchedule
         from uuid import uuid4
         
         # Get schedule details
@@ -766,6 +766,47 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
             }
 
 
+def _final_sync_redis_to_db(scan_id, scan_state, ui_session):
+    """
+    Final sync of Redis progress values to PostgreSQL when UI worker exits.
+    Ensures the DB reflects the true final progress, not a stale partial value.
+    """
+    try:
+        redis_progress = get_scan_progress_redis(scan_id)
+        if not redis_progress:
+            return
+
+        redis_files = redis_progress.get('files_processed', 0)
+        redis_total = redis_progress.get('estimated_total', 0)
+        # Refresh ORM object to get latest DB values (may be stale after raw SQL updates)
+        ui_session.refresh(scan_state)
+        db_files = scan_state.files_processed or 0
+        db_total = scan_state.estimated_total or 0
+
+        # Only update if Redis has higher/better values
+        needs_update = False
+        if redis_files > db_files:
+            scan_state.files_processed = redis_files
+            needs_update = True
+        if redis_total > 0 and redis_total != db_total:
+            scan_state.estimated_total = redis_total
+            needs_update = True
+
+        if needs_update:
+            ui_session.commit()
+            logger.info(f"Final Redis->DB sync for scan {scan_id}: "
+                       f"files_processed={scan_state.files_processed}, "
+                       f"estimated_total={scan_state.estimated_total}")
+        else:
+            logger.debug(f"No final sync needed for scan {scan_id}: DB already up to date")
+    except Exception as e:
+        logger.warning(f"Failed final Redis->DB sync for scan {scan_id}: {e}")
+        try:
+            ui_session.rollback()
+        except Exception:
+            pass
+
+
 @celery_app.task(bind=True, priority=9)
 def ui_progress_update_task(self, scan_id, update_interval=1.0):
     """
@@ -792,7 +833,7 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from app import app, db as flask_db
     from sqlalchemy.orm import scoped_session, sessionmaker
-    from models import ScanState
+    from pixelprobe.models import ScanState
 
     # Use distributed lock to ensure only one UI worker per scan
     lock_name = f'pixelprobe:ui_worker:{scan_id}'
@@ -838,11 +879,15 @@ def ui_progress_update_task(self, scan_id, update_interval=1.0):
 
                     # Check if scan is complete
                     if scan_state.phase in ['completed', 'error', 'cancelled', 'crashed']:
+                        # Final sync: ensure DB has latest Redis progress values
+                        _final_sync_redis_to_db(scan_id, scan_state, ui_session)
                         logger.info(f"Scan {scan_id} finished with phase: {scan_state.phase}")
                         break
 
                     # Check if scan is still active
                     if not scan_state.is_active:
+                        # Final sync: ensure DB has latest Redis progress values
+                        _final_sync_redis_to_db(scan_id, scan_state, ui_session)
                         logger.info(f"Scan {scan_id} is no longer active, stopping UI worker")
                         break
 

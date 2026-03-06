@@ -1,115 +1,107 @@
 # PixelProbe Project Structure
 
-## Overview
-This document describes the organization of the PixelProbe codebase after the v2.0 UI overhaul.
-
 ## Directory Structure
 
 ```
 PixelProbe/
-├── app.py                    # Main Flask application
-├── media_checker.py          # Core media scanning logic
-├── models.py                 # SQLAlchemy database models
-├── version.py                # Version information
-├── requirements.txt          # Python dependencies
-├── Dockerfile                # Production Docker image
-├── docker-compose.yml        # Production Docker Compose
-├── docker-compose.simple.yml # Simplified Docker Compose
+├── app.py                    # Flask WSGI entry point (Gunicorn: app:app)
+├── celery_worker.py          # Celery worker entry point
+├── openapi.yaml              # OpenAPI spec (served by app)
 │
-├── static/                   # Static assets
+├── pixelprobe/               # Main application package
+│   ├── __init__.py
+│   ├── auth.py               # Authentication (session + Bearer token)
+│   ├── celery_config.py      # Celery setup with _make_context_task() factory
+│   ├── config.py             # Config classes selected via FLASK_ENV
+│   ├── constants.py          # Canonical extension lists, scan phase constants
+│   ├── media_checker.py      # Core FFmpeg/ImageMagick/PIL validation logic
+│   ├── models.py             # All SQLAlchemy models
+│   ├── scheduler.py          # APScheduler for periodic/scheduled scans
+│   ├── scheduler_lock.py     # Redis distributed lock for scheduler
+│   ├── startup.py            # Startup cleanup routines
+│   ├── version.py            # Single source of truth for version string
+│   ├── tasks.py              # Celery task definitions
+│   ├── tasks_parallel.py     # Parallel scan Celery tasks
+│   ├── progress_utils.py     # Progress tracking utilities
+│   │
+│   ├── api/                  # Route blueprints
+│   │   ├── admin_routes.py       # Configurations, schedules, exclusions, ignored patterns
+│   │   ├── auth_routes.py        # Login, logout, users, tokens
+│   │   ├── export_routes.py      # CSV/data export, file viewer
+│   │   ├── healthcheck_routes.py # Healthcheck integration
+│   │   ├── maintenance_routes.py # Cleanup, file-changes, vacuum
+│   │   ├── notification_routes.py # Notification providers and rules
+│   │   ├── reports_routes.py     # Scan reports, PDF generation
+│   │   ├── scan_routes.py        # Core scan operations
+│   │   ├── scan_routes_parallel.py # Parallel scan endpoint
+│   │   └── stats_routes.py       # Statistics, trends, system info
+│   │
+│   ├── services/             # Business logic layer
+│   │   ├── db_optimization.py
+│   │   ├── export_service.py
+│   │   ├── healthcheck_service.py
+│   │   ├── maintenance_service.py
+│   │   ├── notification_service.py
+│   │   ├── scan_executor.py
+│   │   ├── scan_service.py
+│   │   └── stats_service.py
+│   │
+│   ├── repositories/         # Data access layer
+│   │   ├── base_repository.py
+│   │   ├── config_repository.py
+│   │   └── scan_repository.py
+│   │
+│   ├── utils/                # Shared utilities
+│   │   ├── celery_utils.py       # check_celery_available, safe_check_task_state
+│   │   ├── decorators.py
+│   │   ├── helpers.py            # ProgressTracker, batch_process, state utilities
+│   │   ├── rate_limiting.py      # rate_limit, exempt_from_rate_limit
+│   │   ├── security.py           # Path validation, SSRF protection, safe subprocess
+│   │   ├── timezone.py           # Timezone conversion utilities
+│   │   └── validators.py         # Input validation helpers
+│   │
+│   └── migrations/
+│       └── startup.py            # DB migrations run at startup
+│
+├── static/                   # Frontend assets
 │   ├── css/
-│   │   ├── desktop.css      # Desktop styles (Modern design)
-│   │   ├── mobile.css       # Mobile-specific styles
-│   │   └── logo-styles.css  # Logo animations
-│   ├── js/
-│   │   └── app.js           # Modern ES6+ JavaScript application
-│   └── images/
-│       ├── pixelprobe-logo.png
-│       └── favicon files
+│   ├── dist/                 # Webpack build output (gitignored)
+│   └── src/                  # Webpack source (JS entry points)
 │
 ├── templates/                # Jinja2 templates
-│   ├── index.html           # Modern UI template
-│   └── api_docs.html        # API documentation page
+│   ├── index.html
+│   └── api_docs.html
 │
-├── docker/                   # Docker development files
-│   ├── Dockerfile.modern
-│   ├── Dockerfile.modern-simple
-│   ├── docker-compose.modern.yml
-│   └── docker-compose.dev.yml
+├── tests/                    # Test suite
 │
-├── scripts/                  # Utility scripts
-│   ├── docker-run-modern.sh
-│   ├── run_modern_ui.sh
-│   ├── run_test_ui.sh
-│   ├── setup_and_run_local.sh
-│   ├── setup_test_env.sh
-│   ├── create_test_database.py
-│   ├── test_database.py
-│   ├── check_db_integrity.py
-│   └── create_indexes.py
+├── tools/                    # Maintenance and utility scripts
 │
-├── tools/                    # Database maintenance tools
-│   ├── analyze_*.py         # Various analysis scripts
-│   ├── fix_*.py            # Database fix scripts
-│   └── README.md           # Tools documentation
+├── scripts/                  # Shell scripts
 │
 ├── docs/                     # Documentation
-│   └── screenshots/         # UI screenshots for README
-│       ├── desktop-*.png
-│       ├── mobile-*.png
-│       └── *-modal.png
+│   ├── api/                  # API documentation
+│   ├── examples/             # Client examples (Python, Node.js, Bash)
+│   └── ...
 │
-├── instance/                 # Flask instance folder (gitignored)
-│   └── media_checker.db     # SQLite database
-│
-└── venv/                     # Python virtual environment (gitignored)
+├── Dockerfile                # Production Docker image (linux/amd64)
+├── docker-compose.yml        # Production Docker Compose stack
+├── package.json              # Node.js dependencies (webpack build)
+├── webpack.config.js         # Webpack configuration
+├── requirements.txt          # Python production dependencies
+├── requirements-test.txt     # Python test dependencies
+├── pytest.ini                # Pytest configuration
+├── .env.example              # Environment variable template
+├── README.md                 # Project README
+└── CHANGELOG.md              # Version changelog
 ```
 
-## Key Files
+## Key Architecture Notes
 
-### Application Core
-- `app.py` - Flask routes and API endpoints
-- `media_checker.py` - Media file scanning implementation
-- `models.py` - Database schema definitions
-
-### Modern UI (v2.0+)
-- `static/js/app.js` - Modular JavaScript with classes for:
-  - ThemeManager - Dark/light mode handling
-  - SidebarManager - Mobile navigation
-  - APIClient - Centralized API communication
-  - ProgressManager - 3-phase progress tracking
-  - TableManager - Advanced data display
-  - PixelProbeApp - Main application controller
-
-- `static/css/desktop.css` - Modern desktop styles
-- `static/css/mobile.css` - Responsive mobile overrides
-- `templates/index.html` - Modern UI template
-
-### Configuration
-- `docker-compose.yml` - Production deployment
-- `docker-compose.simple.yml` - Simplified deployment
-- `Dockerfile` - Production container image
-
-## Development Notes
-
-### UI Architecture
-The v2.0 UI uses a modern, modular JavaScript architecture with:
-- ES6+ classes for organization
-- CSS variables for theming
-- Separate desktop/mobile stylesheets
-- Sidebar navigation layout
-- Modern color scheme (#1ce783)
-
-### API Endpoints
-All API endpoints are prefixed with `/api/`:
-- `/api/scan-results` - Get/search scan results
-- `/api/scan-all` - Start full scan
-- `/api/scan-status` - Get current scan status
-- `/api/stats` - Get system statistics
-- `/api/system-info` - Get detailed system information
-- `/api/export-csv` - Export results to CSV
-
-### Docker Deployment
-- Production: `docker-compose up -d`
-- Development: `docker-compose -f docker/docker-compose.dev.yml up`
-- Simple mode: `docker-compose -f docker-compose.simple.yml up -d`
+- **PostgreSQL only** since v2.2.0 (no SQLite support)
+- **Celery** handles all scan tasks via Redis broker
+- **APScheduler** runs in the celery-worker container for scheduled scans
+- Extension lists are canonical in `pixelprobe/constants.py`
+- DB migrations run automatically at startup via `pixelprobe/migrations/startup.py`
+- Multi-worker startup uses PostgreSQL advisory locks for migration coordination
+- Root contains only entry points (`app.py`, `celery_worker.py`) and build/config files
+- All application code lives inside the `pixelprobe/` package

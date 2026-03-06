@@ -5,7 +5,7 @@ Repository for configuration-related database operations
 from typing import List, Optional
 from datetime import datetime, timezone
 
-from models import ScanConfiguration, IgnoredErrorPattern, ScanSchedule
+from pixelprobe.models import ScanConfiguration, IgnoredErrorPattern, ScanSchedule
 from .base_repository import BaseRepository
 
 class ConfigurationRepository(BaseRepository[ScanConfiguration]):

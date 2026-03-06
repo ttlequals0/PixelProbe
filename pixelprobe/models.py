@@ -326,7 +326,7 @@ class ScanState(db.Model):
     
     def to_dict(self):
         # Import here to avoid circular imports
-        from utils import create_state_dict
+        from pixelprobe.utils.helpers import create_state_dict
         return create_state_dict(self, extra_fields=['estimated_total', 'discovery_count'])
     
     @staticmethod
@@ -590,7 +590,7 @@ class CleanupState(db.Model):
     
     def to_dict(self):
         # Import here to avoid circular imports
-        from utils import create_state_dict
+        from pixelprobe.utils.helpers import create_state_dict
         return create_state_dict(self, extra_fields=['orphaned_found'])
 
 class FileChangesState(db.Model):
@@ -618,7 +618,7 @@ class FileChangesState(db.Model):
     
     def to_dict(self):
         # Import here to avoid circular imports
-        from utils import create_state_dict
+        from pixelprobe.utils.helpers import create_state_dict
         result = create_state_dict(self, extra_fields=['changes_found', 'corrupted_found'])
         # Handle special case for changed_files JSON field
         result['changed_files'] = json.loads(self.changed_files) if self.changed_files else []

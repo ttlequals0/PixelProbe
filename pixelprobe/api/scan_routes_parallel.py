@@ -11,8 +11,8 @@ import logging
 
 from pixelprobe.utils.security import validate_directory_path, AuditLogger, PathTraversalError, validate_json_input
 from pixelprobe.utils.rate_limiting import rate_limit
-from auth import auth_required
-from models import ScanState
+from pixelprobe.auth import auth_required
+from pixelprobe.models import ScanState
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ def get_parallel_scan_status(scan_id):
     - Files processed per worker
     """
     try:
-        from models import ScanState, ScanChunk
+        from pixelprobe.models import ScanState, ScanChunk
         from celery import current_app as celery_app
         
         # Get scan state

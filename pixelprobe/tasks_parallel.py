@@ -12,9 +12,9 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 
-from celery_config import celery_app
-from models import db, ScanState, ScanResult, ScanChunk
-from media_checker import PixelProbe
+from pixelprobe.celery_config import celery_app
+from pixelprobe.models import db, ScanState, ScanResult, ScanChunk
+from pixelprobe.media_checker import PixelProbe
 from pixelprobe.services.scan_service import ScanService
 
 logger = logging.getLogger(__name__)
@@ -400,7 +400,7 @@ def discover_directory_task(self, directory: str, scan_id: str,
         import os
         import time
         from celery.exceptions import SoftTimeLimitExceeded
-        from media_checker import PixelProbe
+        from pixelprobe.media_checker import PixelProbe
         
         discovered_files = []
         excluded_paths = excluded_paths or []
@@ -535,7 +535,7 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
                 raise ValueError("Paths required for full/parallel scan")
             
             # Load exclusions from database
-            from models import Exclusion
+            from pixelprobe.models import Exclusion
             exclusions = Exclusion.query.filter_by(is_active=True).all()
             excluded_paths = [exc.pattern for exc in exclusions if exc.exclusion_type == 'path']
             excluded_extensions = [exc.pattern for exc in exclusions if exc.exclusion_type == 'extension']

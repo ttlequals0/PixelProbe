@@ -4,7 +4,7 @@ Base repository class for data access layer
 
 from typing import TypeVar, Generic, List, Optional, Dict, Any
 from sqlalchemy.orm import Query
-from models import db
+from pixelprobe.models import db
 
 T = TypeVar('T')
 

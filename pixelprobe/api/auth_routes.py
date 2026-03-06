@@ -11,8 +11,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, request, jsonify, session, render_template, redirect, url_for
 from flask_login import login_user, logout_user, login_required, current_user
-from models import db, User, APIToken
-from auth import authenticate_user, check_first_run, create_initial_admin, auth_required, admin_required, get_authenticated_user
+from pixelprobe.models import db, User, APIToken
+from pixelprobe.auth import authenticate_user, check_first_run, create_initial_admin, auth_required, admin_required, get_authenticated_user
 
 logger = logging.getLogger(__name__)
 

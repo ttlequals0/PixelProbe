@@ -19,9 +19,9 @@ from pathlib import Path
 import json
 
 # Import database and models
-from models import db
-from version import __version__, __github_url__
-from scheduler import MediaScheduler
+from pixelprobe.models import db
+from pixelprobe.version import __version__, __github_url__
+from pixelprobe.scheduler import MediaScheduler
 
 # Import blueprints from new modular structure
 from pixelprobe.api.scan_routes import scan_bp
@@ -36,7 +36,7 @@ from pixelprobe.api.notification_routes import notification_bp  # P3 audit: Noti
 from pixelprobe.api.auth_routes import auth_api_bp, auth_ui_bp, auth_bp  # auth_bp for backward compat
 
 # Import authentication module
-from auth import init_auth, auth_required
+from pixelprobe.auth import init_auth, auth_required
 
 # OpenAPI documentation is available as openapi.yaml in the project root
 
@@ -66,7 +66,7 @@ app = Flask(__name__)
 # Configure app
 # Require SECRET_KEY in production - no insecure fallback
 # Load configuration from config module
-from config import get_config
+from pixelprobe.config import get_config
 config_name = os.getenv('FLASK_ENV', 'development')
 config_class = get_config(config_name)
 config_class.init_app(app)
@@ -128,7 +128,7 @@ db.init_app(app)
 init_auth(app)
 
 # P1 Implementation: Initialize Celery task queue
-from celery_config import create_celery, init_celery
+from pixelprobe.celery_config import create_celery, init_celery
 celery = create_celery(app)
 init_celery(app, celery)
 # CRITICAL: Attach celery to app so scan_routes can find it
@@ -247,7 +247,7 @@ def sync_scan_paths_to_db():
     Uses INSERT ... ON CONFLICT DO NOTHING to handle race conditions when
     multiple gunicorn workers start simultaneously.
     """
-    from models import ScanConfiguration
+    from pixelprobe.models import ScanConfiguration
     from sqlalchemy.dialects.postgresql import insert
 
     scan_paths = app.config.get('SCAN_PATHS', [])

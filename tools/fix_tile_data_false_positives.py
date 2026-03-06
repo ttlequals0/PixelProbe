@@ -17,8 +17,8 @@ from sqlalchemy.orm import sessionmaker
 # Add the current directory to the path to import app modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from models import db, ScanResult
-from media_checker import MediaChecker
+from pixelprobe.models import db, ScanResult
+from pixelprobe.media_checker import MediaChecker
 from app import create_app
 
 # Set up logging

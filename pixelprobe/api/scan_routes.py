@@ -5,11 +5,12 @@ import logging
 from datetime import datetime, timezone, timedelta
 from pixelprobe.utils.timezone import from_utc_to_configured
 
-from media_checker import PixelProbe, load_exclusions
-from models import db, ScanResult, ScanState
+from pixelprobe.media_checker import PixelProbe, load_exclusions
+from pixelprobe.models import db, ScanResult, ScanState
 from pixelprobe.constants import TERMINAL_SCAN_PHASES
-from version import __version__
-from auth import auth_required
+from pixelprobe.version import __version__
+from pixelprobe.auth import auth_required
+from pixelprobe.progress_utils import get_scan_progress_redis
 
 from pixelprobe.utils.security import (
     validate_file_path, validate_directory_path,
@@ -143,8 +144,17 @@ def is_scan_running():
                     db.session.commit()
                     return False
                 elif task_state is None:
-                    # Couldn't check task state - assume running to avoid blocking forever
-                    logger.warning(f"Could not check Celery task {active_scan.celery_task_id} state - assuming running")
+                    # Can't check task state -- fall through to time-based stuck detection
+                    # instead of assuming the scan is running indefinitely
+                    if check_time and (datetime.now(timezone.utc) - check_time) > timedelta(hours=1):
+                        logger.warning(f"Scan {active_scan.scan_id} task state unknown and no update for over 1 hour - marking crashed")
+                        active_scan.is_active = False
+                        active_scan.phase = 'crashed'
+                        active_scan.error_message = 'Celery task state unknown - worker may have crashed'
+                        db.session.commit()
+                        return False
+                    # Give benefit of the doubt for shorter periods
+                    logger.warning(f"Could not check Celery task {active_scan.celery_task_id} state - assuming running (last update: {check_time})")
                     return True
             
             # If no Celery task ID, it's likely a direct scan - check if thread is alive
@@ -509,7 +519,7 @@ def scan():
         else:
             # Fallback to direct scan service (backward compatibility)
             logger.info("Celery not available, using direct scan service")
-            from config import Config
+            from pixelprobe.config import Config
             result = current_app.scan_service.scan_directories(
                 validated_dirs,
                 force_rescan=force_rescan,
@@ -586,14 +596,37 @@ def get_scan_status():
     logger.debug(f"Service is_running: {is_running}")
     logger.debug(f"Service status: {service_status}")
     logger.debug(f"Database state_dict phase: {state_dict.get('phase', 'idle')}")
-    
+
     # Prioritize database state when scan is active, fall back to service values
     current_phase = state_dict.get('phase', 'idle')
-    
+
     # Use database values primarily, with service as fallback
     current_progress = state_dict.get('files_processed', service_status.get('current', 0))
     total_progress = state_dict.get('estimated_total', service_status.get('total', 0))
-    
+
+    # When scan is active, read real-time progress from Redis (much fresher than PostgreSQL)
+    if scan_state and scan_state.is_active and scan_state.scan_id:
+        try:
+            redis_progress = get_scan_progress_redis(scan_state.scan_id)
+            if redis_progress:
+                redis_files = redis_progress.get('files_processed', 0)
+                redis_total = redis_progress.get('estimated_total', 0)
+                redis_phase = redis_progress.get('phase', '')
+                redis_file = redis_progress.get('current_file', '')
+                # Use Redis values if they are more up-to-date (higher progress count)
+                if redis_files >= current_progress:
+                    current_progress = redis_files
+                if redis_total > 0:
+                    total_progress = redis_total
+                if redis_phase and redis_phase not in ('', 'idle'):
+                    current_phase = redis_phase
+                # Override current_file in state_dict for downstream use
+                if redis_file:
+                    state_dict['current_file'] = redis_file
+                logger.debug(f"Using Redis progress: {current_progress}/{total_progress} phase={current_phase}")
+        except Exception as e:
+            logger.warning(f"Failed to read Redis progress, using DB values: {e}")
+
     # Determine status based on phase and progress
     if is_running:
         if current_phase in ['discovering', 'adding', 'scanning']:
@@ -637,7 +670,7 @@ def get_scan_status():
             import os
             filename = os.path.basename(current_file)
             # Generate fresh progress message with current data
-            from utils import ProgressTracker
+            from pixelprobe.utils.helpers import ProgressTracker
             progress_tracker = ProgressTracker('scan')
             # Use the actual scan start time if available
             if state_dict.get('start_time'):
@@ -1176,7 +1209,7 @@ def force_scan_pending():
             }
         else:
             # Fallback to direct scan service
-            from config import Config
+            from pixelprobe.config import Config
             result = current_app.scan_service.scan_directories(
                 directories=['PENDING_FILES_SCAN'],  # Special marker
                 force_rescan=False,

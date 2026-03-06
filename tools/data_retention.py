@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import text
-from models import db, ScanResult, ScanReport, ScanState
+from pixelprobe.models import db, ScanResult, ScanReport, ScanState
 
 logger = logging.getLogger(__name__)
 
