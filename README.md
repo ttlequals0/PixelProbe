@@ -1,7 +1,7 @@
 # PixelProbe
 
 <div align="center">
-  <img src="static/images/pixelprobe-logo.png" alt="PixelProbe Logo" width="200" height="200">
+  <img src="static/images/pixelprobe-logo.svg" alt="PixelProbe Logo" width="200" height="200">
 </div>
 
 ## Overview
