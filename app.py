@@ -482,12 +482,12 @@ def favicon():
     """Serve favicon"""
     return send_file('static/images/favicon-32x32.png', mimetype='image/png')
 
-@app.route('/static/images/pixelprobe-logo.png')
+@app.route('/static/images/pixelprobe-logo.svg')
 def logo():
     """Serve logo"""
-    logo_path = os.path.join(app.root_path, 'static', 'images', 'pixelprobe-logo.png')
+    logo_path = os.path.join(app.root_path, 'static', 'images', 'pixelprobe-logo.svg')
     if os.path.exists(logo_path):
-        return send_file(logo_path, mimetype='image/png')
+        return send_file(logo_path, mimetype='image/svg+xml')
     return '', 404
 
 def create_tables():
