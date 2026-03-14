@@ -4,7 +4,7 @@
 
 ## Overview
 
-PixelProbe is a distributed media file corruption detection system built with a modular, layered architecture. The system leverages Celery for distributed processing, Redis for message queuing, and PostgreSQL for persistent storage.
+PixelProbe is a distributed media file corruption detection system built with a modular, layered architecture. The system uses Celery for distributed processing, Redis for message queuing, and PostgreSQL for persistent storage.
 
 ## System Components
 

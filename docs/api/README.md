@@ -500,18 +500,7 @@ GET /api/error-files
 
 Retrieve a list of all files that failed to scan, with detailed error information. Rate limited to 10 requests per minute.
 
-**Why use this endpoint:**
-- Monitor and track files that encountered errors during scanning
-- Identify patterns in scan failures (e.g., specific file types, corrupted metadata)
-- Bulk retry or investigate problematic files
-- Generate error reports for troubleshooting
-- Clean up or move files that consistently fail to scan
-
-**When to use this endpoint:**
-- After a scan completes, to review any failures
-- During troubleshooting to identify which files are causing issues
-- When implementing automated error handling workflows
-- To monitor scan health over time
+Use this to review scan failures, identify error patterns, or find files to retry.
 
 **Query Parameters:**
 - `page` (integer): Page number (default: 1)
@@ -588,14 +577,6 @@ print(f"Found {error_files['total']} files with errors")
 for file in error_files['error_files']:
     print(f"{file['file_path']}: {file['error_message']}")
 ```
-
-**Common Use Cases:**
-
-1. **Monitoring scan health**: Check for errors after each scan run
-2. **Bulk retry**: Get list of error files, reset them, and rescan
-3. **Error pattern analysis**: Group by error_message to identify common failures
-4. **Storage cleanup**: Identify and remove files that can't be processed
-5. **Troubleshooting**: Investigate specific file types or paths that fail consistently
 
 **Note**: Files with scan_status='error' indicate the scanning process failed, not that the file is corrupted. These errors may be due to:
 - Database connection issues (temporary)

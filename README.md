@@ -6,20 +6,12 @@
 
 ## Overview
 
-PixelProbe is a comprehensive media file corruption detection tool with a modern web interface. It helps you identify and manage corrupted video, image, and audio files across your media libraries.
-
-### Why PixelProbe?
-
-- **Protect Your Media**: Automatically detect corrupted files before they cause playback issues
-- **Save Time**: Batch scan entire media libraries instead of checking files individually  
-- **Prevent Data Loss**: Identify failing drives by detecting corruption patterns
-- **Professional Grade**: Uses industry-standard tools (FFmpeg, ImageMagick) for accurate detection
-- **Set and Forget**: Schedule automated scans to continuously monitor your media health
+PixelProbe detects corrupted video, image, and audio files across your media libraries. It uses FFmpeg, ImageMagick, and PIL to validate files, and provides a web interface for browsing results, scheduling scans, and managing exclusions.
 
 ## Features
 
 ### Media Support
-- Comprehensive video format support (MP4, MKV, AVI, MOV, WebM, FLV, etc.)
+- Video format support (MP4, MKV, AVI, MOV, WebM, FLV, etc.)
 - Image format detection (JPEG, PNG, GIF, BMP, TIFF, WebP, etc.)
 - Audio file validation (MP3, FLAC, WAV, AAC, OGG, etc.)
 - Large file support (tested with 50GB+ Bluray remux files)
@@ -53,7 +45,7 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 - **PostgreSQL database**: Reliable ACID-compliant data storage
 - **Redis-backed task queue**: Background processing with Celery workers
 - **Docker deployment**: Multi-container architecture (web, workers, database, queue)
-- **REST API**: Comprehensive OpenAPI/Swagger documentation
+- **REST API**: Full OpenAPI/Swagger documentation
 - **Monitoring & Reports**: Real-time statistics, trend analytics, storage projections, PDF/JSON exports, complete audit trail
 - **Performance optimized**: Production-tested with millions of files
 
@@ -72,59 +64,34 @@ PixelProbe is a comprehensive media file corruption detection tool with a modern
 #### Login Screen
 ![Login Screen](docs/screenshots/auth/login.png)
 
-Secure login interface with:
-- Username/password authentication
-- Remember me functionality
-- Dark mode support
-- First-run setup detection
+Username/password login with remember-me and first-run setup detection.
 
 #### User Management
 ![User Management](docs/screenshots/auth/user_management.png)
 
-Comprehensive user administration:
-- Create new users with email and admin privileges
-- View and manage existing users
-- Delete user accounts (admin only)
-- Role-based access control
+Create, view, and delete user accounts with role-based access control.
 
 #### API Token Management
 ![API Tokens](docs/screenshots/auth/api_tokens.png)
 
-Programmatic access management:
-- Generate API tokens with descriptions
-- Optional expiration dates
-- View and revoke existing tokens
-- Bearer token authentication
+Generate and revoke API tokens for programmatic access.
 
 #### Password Management
 ![Change Password](docs/screenshots/auth/change_password.png)
 
-Secure password changes:
-- Current password verification
-- New password confirmation
-- Minimum 8 character requirement
-- Bcrypt hashing for security
+Change password with current-password verification.
 
 ### Desktop Interface
 
 #### Light Mode
 ![Desktop Light Mode](docs/screenshots/desktop-light.png)
 
-Features visible in the interface:
-- **Statistics Dashboard**: Real-time display of 1M+ scanned files with health status
-- **Sidebar Navigation**: Quick access to Dashboard, API Documentation, Tools (Start Scan, Cleanup, Integrity Check, Schedules, Exclusions), System (Stats, Reports, Build Info), and Account (User Management, API Tokens, Change Password)
-- **File Results Table**: Sortable columns for status, file path, size, type, scan date with bulk actions
-- **Filtering Options**: All Files, Corrupted Only, Warnings Only, Healthy Only
-- **Action Buttons**: Mark as Good, Rescan, Download, Export functionality
+Statistics dashboard, sortable results table with bulk actions, and sidebar navigation.
 
 #### Dark Mode
 ![Desktop Dark Mode](docs/screenshots/desktop-dark.png)
 
-Dark mode features:
-- **High Contrast Theme**: Green accent colors for better visibility in low-light environments
-- **Full Feature Parity**: All light mode features available with optimized dark color scheme
-- **Persistent Theme**: Settings toggle remembers preference across sessions
-- **Account Section**: Shows logged-in user (admin) with logout option
+Full feature parity with a high-contrast dark theme. Preference persists across sessions.
 
 ### Mobile Interface
 
@@ -144,52 +111,27 @@ The mobile interface is fully responsive and touch-optimized:
 #### Scan Reports
 ![Scan Reports](docs/screenshots/features/scan-reports.png)
 
-Comprehensive scan reporting with history and analytics:
-- View all past scan operations with detailed statistics
-- Filter by scan type (full scan, rescan, deep scan, cleanup, file changes)
-- Export reports as JSON for data analysis or PDF for documentation
+View past scan operations with statistics, filter by scan type, and export as JSON or PDF.
 
 #### Scheduled Scanning
 ![Scan Schedules](docs/screenshots/features/scan-schedules.png)
 
-Create and manage automated scan schedules:
-- Support for both cron expressions and simple intervals
-- Multiple scan types: Normal Scan, Cleanup, Integrity Check
-- View next run times and last execution status
+Set up automated scans using cron expressions or simple intervals. Supports normal scan, cleanup, and integrity check types.
 
 #### Healthcheck Monitoring
 ![Healthcheck Configuration](docs/screenshots/features/healthcheck-config.png)
 
-Integrate with [Healthchecks.io](https://healthchecks.io/) or self-hosted instances for monitoring:
-- **Start Ping**: Notify when a scheduled scan begins (uses `/start` slug)
-- **Success Ping**: Notify when scan completes successfully with optional report data
-- **Failure Ping**: Alert when a scan fails (uses `/fail` slug)
-- **Report Data**: Include scan summary (files scanned, corrupted, duration) in success pings
-- **Self-Hosted Support**: Works with both public hc-ping.com and self-hosted Healthchecks.io instances
-- **Per-Schedule Config**: Configure different healthcheck URLs for each scan schedule
+Integrate with [Healthchecks.io](https://healthchecks.io/) or self-hosted instances. Sends start, success, and failure pings per schedule, with optional scan summary data.
 
 #### Trend Analytics
 ![Trend Analytics](docs/screenshots/features/trends-analytics.png)
 
-Comprehensive analytics and insights over multiple time periods:
-- **Multi-period Analysis**: View trends across 30 days, 60 days, 90 days, and 1 year
-- **Corruption Trends**: Track corruption rates, total scanned files, corrupted files, and files with warnings
-- **Top Corrupted Types**: Identify which file types have the most corruption issues
-- **Storage Analytics**: Monitor total storage, growth rates, and storage projections
-- **Growth Projections**: Predict storage needs for the next 30 days and 1 year based on historical data
-- **Performance Metrics**: Track average scan duration, files per day, and file types scanned
-- **Visual Charts**: Interactive horizontal bar charts showing storage distribution by file type with log scale
-- **File Type Breakdown**: Complete listing of all file types with file counts and storage sizes
+Corruption rates, storage growth, and performance metrics across 30/60/90-day and 1-year windows. Includes per-type breakdowns, growth projections, and interactive charts.
 
 #### Exclusions Management
 ![Exclusions Management](docs/screenshots/features/exclusions-management.png)
 
-Fine-tune scanning behavior by excluding specific paths and file types:
-- **Excluded Paths**: Skip entire directories (e.g., `/media/temp`, `/media/.thumbnails`, backup folders)
-- **Excluded Extensions**: Ignore specific file types (e.g., `.tmp`, `.part`, `.download`)
-- **Interactive UI**: Add and remove exclusions without restarting the application
-- **Real-time Updates**: Changes take effect immediately on the next scan
-- **Performance Optimization**: Reduce scan times by excluding non-media directories
+Skip specific directories or file extensions. Changes take effect on the next scan without a restart.
 
 ## Documentation
 
@@ -207,7 +149,7 @@ Fine-tune scanning behavior by excluding specific paths and file types:
 ### API & Integration
 - [API Documentation](docs/api/README.md) - Complete REST API reference with authentication guide
 - [OpenAPI Specification](openapi.yaml) - OpenAPI 3.0 spec for API documentation
-- [Scan Types Documentation](docs/api/SCAN_TYPES_DOCUMENTATION.md) - Comprehensive guide to all scan types
+- [Scan Types Documentation](docs/api/SCAN_TYPES_DOCUMENTATION.md) - Guide to all scan types
 - [Integration Guide](docs/examples/integration-guide.md) - Best practices for integrating with PixelProbe
 
 ### Client Examples
@@ -226,7 +168,7 @@ Fine-tune scanning behavior by excluding specific paths and file types:
 - [Database Schema](docs/developer/database-schema.md) - Complete database structure documentation
 - [Complete Documentation Index](docs/README.md) - Full documentation directory with organized links
 
-##  Quick Start
+## Quick Start
 
 ### Using Docker (Recommended)
 
@@ -284,7 +226,7 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
 - **`ttlequals0/pixelprobe:latest`** - Latest stable release
 
-##  Requirements
+## Requirements
 
 **Important**: PixelProbe requires PostgreSQL.
 
@@ -359,7 +301,7 @@ export MEDIA_PATH=/mnt/all-media  # Contains subdirs: movies/, tv/, backup/
 
 ### API Documentation
 
-PixelProbe provides a comprehensive REST API with OpenAPI/Swagger documentation.
+PixelProbe provides a REST API with OpenAPI/Swagger documentation.
 
 #### Interactive API Documentation
 - **Swagger UI**: Available at `/api/v1/docs` when logged in

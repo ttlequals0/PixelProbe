@@ -1,6 +1,6 @@
 # PixelProbe Tools and Scripts Documentation
 
-This document provides a comprehensive guide to all tools, scripts, and utilities available in PixelProbe v2.5.57+.
+All tools, scripts, and utilities available in PixelProbe v2.5.57+.
 
 ## Table of Contents
 1. [Database Tools](#database-tools)
