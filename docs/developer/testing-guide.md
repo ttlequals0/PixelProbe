@@ -2,7 +2,7 @@
 
 ## Overview
 
-PixelProbe uses pytest as its testing framework with comprehensive test coverage across unit, integration, and performance tests. The test suite ensures reliability and catches regressions before deployment.
+PixelProbe uses pytest with unit, integration, and performance tests.
 
 ## Test Structure
 
