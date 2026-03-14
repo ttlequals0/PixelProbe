@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgraded supporting packages**: pillow-heif 0.22.0, SQLAlchemy 2.0.41, psycopg2-binary 2.9.10, celery 5.4.0, redis 5.2.1, reportlab 4.2.5, PyYAML 6.0.2, bcrypt 4.3.0, APScheduler 3.11.0
 - **Upgraded test dependencies**: pytest 8.3.5, pytest-cov 6.1.1, types-requests 2.32.x
 - Updated docker-compose.yml image tags to 2.5.69
+- Updated CI test matrix from Python 3.9/3.10/3.11 to 3.10/3.11/3.12 (Pillow 12 requires Python >= 3.10; Python 3.9 is EOL)
 
 ---
 
