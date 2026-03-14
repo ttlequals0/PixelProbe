@@ -299,7 +299,7 @@ def get_scan_results():
 @auth_required
 def get_scan_result(result_id):
     """Get a single scan result by ID"""
-    result = ScanResult.query.get_or_404(result_id)
+    result = db.get_or_404(ScanResult, result_id)
     result_dict = result.to_dict()
     
     # Convert timestamps to configured timezone for display
@@ -1609,7 +1609,7 @@ def get_worker_status():
 @auth_required
 def get_scan_output(result_id):
     """Get the detailed scan output for a specific result"""
-    result = ScanResult.query.get_or_404(result_id)
+    result = db.get_or_404(ScanResult, result_id)
     
     return {
         'id': result.id,

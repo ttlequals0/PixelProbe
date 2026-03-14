@@ -17,7 +17,7 @@ class BaseRepository(Generic[T]):
     
     def get_by_id(self, id: int) -> Optional[T]:
         """Get a single record by ID"""
-        return self.session.query(self.model_class).get(id)
+        return self.session.get(self.model_class, id)
     
     def get_all(self) -> List[T]:
         """Get all records"""

@@ -65,7 +65,7 @@ class TestScheduleEndpoints:
             assert response.status_code == 204
             
             # Verify hard deleted (schedule no longer exists)
-            schedule = ScanSchedule.query.get(schedule_id)
+            schedule = db.session.get(ScanSchedule, schedule_id)
             assert schedule is None
     
     def test_delete_nonexistent_schedule(self, authenticated_client, db):
@@ -389,7 +389,7 @@ class TestIgnoredPatternsEndpoints:
             assert 'deleted successfully' in response.get_json()['message']
             
             # Verify soft deleted
-            pattern = IgnoredErrorPattern.query.get(pattern_id)
+            pattern = db.session.get(IgnoredErrorPattern, pattern_id)
             assert pattern is not None
             assert pattern.is_active is False
     

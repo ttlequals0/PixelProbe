@@ -44,7 +44,7 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
         from flask import current_app
         
         # Get the chunk from database
-        chunk = ScanChunk.query.get(chunk_id)
+        chunk = db.session.get(ScanChunk, chunk_id)
         if not chunk:
             logger.error(f"Chunk {chunk_id} not found")
             return {
@@ -369,7 +369,7 @@ def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full
         else:
             # Mark chunk as failed after max retries
             try:
-                chunk = ScanChunk.query.get(chunk_id)
+                chunk = db.session.get(ScanChunk, chunk_id)
                 if chunk:
                     chunk.error_message = str(exc)
                     db.session.commit()

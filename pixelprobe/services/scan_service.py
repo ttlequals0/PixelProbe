@@ -699,7 +699,7 @@ class ScanService:
             try:
                 run_scan()
                 # Get final scan state for results
-                final_scan_state = ScanState.query.get(scan_state_id)
+                final_scan_state = db.session.get(ScanState, scan_state_id)
                 if final_scan_state:
                     # Get corrupted file count from ScanResult table with retry logic
                     # Note: ScanResult doesn't have scan_id, so we query all corrupted files
@@ -729,7 +729,7 @@ class ScanService:
 
                     # Re-fetch scan_state after potential session closure to avoid DetachedInstanceError
                     # db.session.close() above can detach the original final_scan_state object
-                    final_scan_state = ScanState.query.get(scan_state_id)
+                    final_scan_state = db.session.get(ScanState, scan_state_id)
                     if not final_scan_state:
                         logger.error(f"Could not re-fetch scan_state {scan_state_id} after retry loop")
                         return {
@@ -949,7 +949,7 @@ class ScanService:
             try:
                 run_scan()
                 # Get final scan state for results
-                final_scan_state = ScanState.query.get(scan_state_id)
+                final_scan_state = db.session.get(ScanState, scan_state_id)
                 if final_scan_state:
                     # Get corrupted file count from ScanResult table with retry logic
                     # Note: ScanResult doesn't have scan_id, so we query all corrupted files

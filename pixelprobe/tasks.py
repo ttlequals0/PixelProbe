@@ -543,7 +543,7 @@ def scheduled_scan_task(schedule_id, scan_type='full'):
         from uuid import uuid4
         
         # Get schedule details
-        schedule = ScanSchedule.query.get(schedule_id)
+        schedule = db.session.get(ScanSchedule, schedule_id)
         if not schedule or not schedule.is_active:
             raise ValueError(f"Schedule {schedule_id} not found or inactive")
         

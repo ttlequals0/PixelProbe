@@ -893,7 +893,7 @@ class PixelProbe:
                 # Note: After load(), tile data is consumed and cleared in PIL - this is normal behavior
                 # Removed incorrect tile data check that was causing false positives
                 
-                    img.transpose(Image.FLIP_LEFT_RIGHT)
+                    img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
                     scan_output.append("Transform test: PASSED")
             
             except Exception as e:

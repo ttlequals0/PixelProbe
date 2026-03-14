@@ -126,7 +126,7 @@ RUN ffmpeg -version && \
 
 COPY requirements.txt .
 # Ubuntu 24.04 requires --break-system-packages for pip install in Docker
-RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+RUN pip install --no-cache-dir --break-system-packages --ignore-installed -r requirements.txt
 
 COPY package.json webpack.config.js ./
 RUN npm install

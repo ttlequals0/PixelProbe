@@ -11,7 +11,7 @@ from functools import wraps
 from datetime import datetime, timezone
 from typing import Optional, Set, Tuple, Union
 from flask import request, jsonify, current_app
-from werkzeug.security import safe_join
+from werkzeug.utils import safe_join
 from pixelprobe.models import db, ScanConfiguration
 import requests
 

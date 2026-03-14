@@ -330,7 +330,7 @@ class MaintenanceService:
         # Store schedule_id for report creation
         self._cleanup_schedule_id = schedule_id
         try:
-            cleanup_record = CleanupState.query.get(cleanup_id)
+            cleanup_record = db.session.get(CleanupState, cleanup_id)
             if not cleanup_record:
                 logger.error(f"Cleanup record not found: {cleanup_id}")
                 return
@@ -575,7 +575,7 @@ class MaintenanceService:
 
             # Try to create error report
             try:
-                cleanup_record = CleanupState.query.get(cleanup_id)
+                cleanup_record = db.session.get(CleanupState, cleanup_id)
                 if cleanup_record:
                     self._create_cleanup_report(cleanup_record, getattr(self, 'orphaned_files_list', []))
             except Exception as report_error:
@@ -1172,7 +1172,7 @@ class MaintenanceService:
     def _handle_cleanup_error(self, cleanup_id: int, error_msg: str):
         """Handle cleanup error"""
         try:
-            cleanup_record = CleanupState.query.get(cleanup_id)
+            cleanup_record = db.session.get(CleanupState, cleanup_id)
             if cleanup_record:
                 cleanup_record.phase = 'error'
                 cleanup_record.is_active = False
