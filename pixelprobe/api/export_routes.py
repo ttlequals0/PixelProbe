@@ -26,7 +26,7 @@ def view_file(result_id):
         response.headers['Access-Control-Max-Age'] = '3600'
         return response
     
-    result = ScanResult.query.get_or_404(result_id)
+    result = db.get_or_404(ScanResult, result_id)
     
     logger.info(f"View requested for file: {result.file_path} (ID: {result_id})")
     
@@ -104,7 +104,7 @@ def view_file(result_id):
 @auth_required
 def download_file(result_id):
     """Download a media file"""
-    result = ScanResult.query.get_or_404(result_id)
+    result = db.get_or_404(ScanResult, result_id)
     
     logger.info(f"Download requested for file: {result.file_path} (ID: {result_id})")
     

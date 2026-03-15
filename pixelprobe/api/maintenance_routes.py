@@ -522,7 +522,7 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
             with db.session.get_bind().connect() as connection:
                 with db.session():
                     # Get the cleanup record
-                    cleanup_record = CleanupState.query.get(cleanup_id)
+                    cleanup_record = db.session.get(CleanupState, cleanup_id)
                     if not cleanup_record:
                         logger.error(f"Cleanup record {cleanup_id} not found")
                         return
@@ -538,7 +538,7 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
         logger.error(f"Error in cleanup_orphaned_async: {str(e)}")
         try:
             with app.app_context():
-                cleanup_record = CleanupState.query.get(cleanup_id)
+                cleanup_record = db.session.get(CleanupState, cleanup_id)
                 if cleanup_record:
                     cleanup_record.phase = 'error'
                     cleanup_record.progress_message = f'Error: {str(e)}'

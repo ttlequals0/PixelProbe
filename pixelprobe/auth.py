@@ -85,7 +85,7 @@ def init_auth(app):
 
     @login_manager.user_loader
     def load_user(user_id):
-        user = User.query.get(int(user_id))
+        user = db.session.get(User, int(user_id))
         if user:
             # Force load all attributes to prevent lazy loading issues
             _ = user.is_active

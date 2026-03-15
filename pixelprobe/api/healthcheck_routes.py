@@ -55,7 +55,7 @@ def get_healthcheck_config(config_id):
         JSON healthcheck configuration details
     """
     try:
-        config = HealthcheckConfig.query.get(config_id)
+        config = db.session.get(HealthcheckConfig, config_id)
 
         if not config:
             return jsonify({'error': 'Healthcheck configuration not found'}), 404
@@ -140,7 +140,7 @@ def create_healthcheck_config():
         healthcheck_url = data['healthcheck_url']
 
         # Verify schedule exists
-        schedule = ScanSchedule.query.get(schedule_id)
+        schedule = db.session.get(ScanSchedule, schedule_id)
         if not schedule:
             return jsonify({'error': f'Schedule {schedule_id} not found'}), 404
 
@@ -204,7 +204,7 @@ def update_healthcheck_config(config_id):
         JSON updated healthcheck configuration
     """
     try:
-        config = HealthcheckConfig.query.get(config_id)
+        config = db.session.get(HealthcheckConfig, config_id)
 
         if not config:
             return jsonify({'error': 'Healthcheck configuration not found'}), 404
@@ -271,7 +271,7 @@ def delete_healthcheck_config(config_id):
         JSON success message
     """
     try:
-        config = HealthcheckConfig.query.get(config_id)
+        config = db.session.get(HealthcheckConfig, config_id)
 
         if not config:
             return jsonify({'error': 'Healthcheck configuration not found'}), 404
@@ -303,7 +303,7 @@ def test_healthcheck(config_id):
         JSON test result
     """
     try:
-        config = HealthcheckConfig.query.get(config_id)
+        config = db.session.get(HealthcheckConfig, config_id)
 
         if not config:
             return jsonify({'error': 'Healthcheck configuration not found'}), 404

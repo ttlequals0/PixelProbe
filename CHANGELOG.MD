@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.5.70] - 2026-03-14
+
+### Fixed
+
+- SQLAlchemy SAWarning during chunk scanning caused by autoflush when accessing chunk attributes after commit
+
+## [2.5.69] - 2026-03-14
+
+### Security
+
+- **Pillow 10.0.0 -> 12.1.1**: CVE-2023-50447 (CRITICAL 9.8, arbitrary code execution), CVE-2024-28219 (HIGH)
+- **Jinja2 (transitive via Flask 3.1.3)**: CVE-2025-27516 (CRITICAL, sandbox breakout)
+- **Werkzeug 2.3.7 -> 3.1.6**: CVE-2024-34069 (HIGH, RCE via debugger), CVE-2023-46136 (HIGH, DoS)
+- **gunicorn 21.2.0 -> 23.0.0**: CVE-2024-1135, CVE-2024-6827 (HIGH 7.5, HTTP request smuggling)
+- **requests 2.31.0 -> 2.32.5**: CVE-2024-35195 (MEDIUM, TLS bypass), CVE-2024-47081 (MEDIUM, credential leak)
+
+### Fixed
+
+- **RequestsDependencyWarning on worker startup**: Removed system `python3-chardet` 7.1.0 from Docker image that conflicted with requests' version check (fires on every gunicorn/celery worker start)
+- **Node.js 20 deprecation warnings in CI**: Updated `actions/checkout` v3->v4, `actions/setup-python` v4->v5, `codecov/codecov-action` v3->v5
+
+### Changed
+
+- **Flask 2.3.3 -> 3.1.3**: Major upgrade required for Werkzeug 3.x compatibility
+- **Werkzeug safe_join import**: Moved from `werkzeug.security` to `werkzeug.utils` (Werkzeug 3.x)
+- **Pillow transpose API**: Updated `Image.FLIP_LEFT_RIGHT` to `Image.Transpose.FLIP_LEFT_RIGHT` (Pillow 12 deprecation)
+- **Replaced all `Model.query.get(id)` with `db.session.get(Model, id)`**: 43 occurrences across 12 files -- `query.get()` is deprecated in SQLAlchemy 2.x / Flask-SQLAlchemy 3.x
+- **Upgraded Flask ecosystem**: Flask-SQLAlchemy 3.1.1, Flask-CORS 5.0.1, Flask-Limiter 3.9.0, Flask-WTF 1.2.2, flask-restx 1.3.2
+- **Upgraded supporting packages**: pillow-heif 0.22.0, SQLAlchemy 2.0.41, psycopg2-binary 2.9.10, celery 5.4.0, redis 5.2.1, reportlab 4.2.5, PyYAML 6.0.2, bcrypt 4.3.0, APScheduler 3.11.0
+- **Upgraded test dependencies**: pytest 8.3.5, pytest-cov 6.1.1, types-requests 2.32.x
+- Updated docker-compose.yml image tags to 2.5.69
+- Updated CI test matrix from Python 3.9/3.10/3.11 to 3.10/3.11/3.12 (Pillow 12 requires Python >= 3.10; Python 3.9 is EOL)
+
+---
+
 ## [2.5.67] - 2026-03-05
 
 ### Fixed

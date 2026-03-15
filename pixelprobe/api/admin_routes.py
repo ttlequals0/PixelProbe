@@ -98,7 +98,7 @@ def mark_as_good():
     
     try:
         for file_id in file_ids:
-            result = ScanResult.query.get(file_id)
+            result = db.session.get(ScanResult, file_id)
             if result:
                 result.marked_as_good = True
                 result.is_corrupted = False
@@ -180,7 +180,7 @@ def add_ignored_pattern():
 @auth_required
 def delete_ignored_pattern(pattern_id):
     """Delete an ignored error pattern"""
-    pattern = IgnoredErrorPattern.query.get(pattern_id)
+    pattern = db.session.get(IgnoredErrorPattern, pattern_id)
     if not pattern:
         return {'error': 'Pattern not found'}, 404
     
@@ -273,7 +273,7 @@ def get_schedules():
 @auth_required
 def get_schedule(schedule_id):
     """Get a specific scan schedule by ID"""
-    schedule = ScanSchedule.query.get_or_404(schedule_id)
+    schedule = db.get_or_404(ScanSchedule, schedule_id)
     return jsonify(schedule.to_dict())
 
 @admin_bp.route('/schedules', methods=['POST'])
@@ -320,7 +320,7 @@ def create_schedule():
 @auth_required
 def update_schedule(schedule_id):
     """Update a scan schedule"""
-    schedule = ScanSchedule.query.get_or_404(schedule_id)
+    schedule = db.get_or_404(ScanSchedule, schedule_id)
     data = request.get_json()
 
     try:
@@ -370,7 +370,7 @@ def update_schedule(schedule_id):
 @auth_required
 def delete_schedule(schedule_id):
     """Delete a scan schedule"""
-    schedule = ScanSchedule.query.get_or_404(schedule_id)
+    schedule = db.get_or_404(ScanSchedule, schedule_id)
     
     try:
         # Actually delete the schedule from database instead of soft delete

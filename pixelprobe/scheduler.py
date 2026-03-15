@@ -349,7 +349,7 @@ class MediaScheduler:
                     logger.warning(f"Scheduled scan {schedule_id} skipped - another scan is already running (phase: {scan_state.phase})")
                     return
 
-                schedule = ScanSchedule.query.get(schedule_id)
+                schedule = db.session.get(ScanSchedule, schedule_id)
                 if not schedule or not schedule.is_active:
                     return
 
@@ -496,10 +496,10 @@ class MediaScheduler:
         
     def update_schedule(self, schedule_id: int, **kwargs) -> ScanSchedule:
         """Update an existing schedule"""
-        schedule = ScanSchedule.query.get(schedule_id)
+        schedule = db.session.get(ScanSchedule, schedule_id)
         if not schedule:
             raise ValueError(f"Schedule {schedule_id} not found")
-            
+
         # Remove old job
         job_id = f"schedule_{schedule_id}"
         try:
@@ -524,10 +524,10 @@ class MediaScheduler:
         
     def delete_schedule(self, schedule_id: int):
         """Delete a schedule"""
-        schedule = ScanSchedule.query.get(schedule_id)
+        schedule = db.session.get(ScanSchedule, schedule_id)
         if not schedule:
             raise ValueError(f"Schedule {schedule_id} not found")
-            
+
         # Remove job
         job_id = f"schedule_{schedule_id}"
         try:
@@ -683,7 +683,7 @@ class MediaScheduler:
 
             with app.app_context():
                 # Get the scan report
-                scan_report = ScanReport.query.get(scan_report_id)
+                scan_report = db.session.get(ScanReport, scan_report_id)
                 if not scan_report:
                     logger.warning(f"Scan report {scan_report_id} not found for healthcheck ping")
                     return

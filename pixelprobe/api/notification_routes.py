@@ -58,7 +58,7 @@ def get_provider(provider_id):
         JSON provider details
     """
     try:
-        provider = NotificationProvider.query.get(provider_id)
+        provider = db.session.get(NotificationProvider, provider_id)
         if not provider:
             return jsonify({'error': 'Provider not found'}), 404
 
@@ -143,7 +143,7 @@ def update_provider(provider_id):
         JSON updated provider
     """
     try:
-        provider = NotificationProvider.query.get(provider_id)
+        provider = db.session.get(NotificationProvider, provider_id)
         if not provider:
             return jsonify({'error': 'Provider not found'}), 404
 
@@ -187,7 +187,7 @@ def delete_provider(provider_id):
         Empty response with 204 status
     """
     try:
-        provider = NotificationProvider.query.get(provider_id)
+        provider = db.session.get(NotificationProvider, provider_id)
         if not provider:
             return jsonify({'error': 'Provider not found'}), 404
 
@@ -216,7 +216,7 @@ def test_provider(provider_id):
         JSON with test result
     """
     try:
-        provider = NotificationProvider.query.get(provider_id)
+        provider = db.session.get(NotificationProvider, provider_id)
         if not provider:
             return jsonify({'error': 'Provider not found'}), 404
 
@@ -274,7 +274,7 @@ def get_rule(rule_id):
         JSON rule details
     """
     try:
-        rule = NotificationRule.query.get(rule_id)
+        rule = db.session.get(NotificationRule, rule_id)
         if not rule:
             return jsonify({'error': 'Rule not found'}), 404
         return jsonify(rule.to_dict()), 200
@@ -315,7 +315,7 @@ def create_rule():
             return jsonify({'error': f'Invalid event type. Must be one of: {VALID_EVENT_TYPES}'}), 400
 
         # Verify provider exists
-        provider = NotificationProvider.query.get(provider_id)
+        provider = db.session.get(NotificationProvider, provider_id)
         if not provider:
             return jsonify({'error': 'Provider not found'}), 404
 
@@ -362,7 +362,7 @@ def update_rule(rule_id):
         JSON updated rule
     """
     try:
-        rule = NotificationRule.query.get(rule_id)
+        rule = db.session.get(NotificationRule, rule_id)
         if not rule:
             return jsonify({'error': 'Rule not found'}), 404
 
@@ -410,7 +410,7 @@ def delete_rule(rule_id):
         Empty response with 204 status
     """
     try:
-        rule = NotificationRule.query.get(rule_id)
+        rule = db.session.get(NotificationRule, rule_id)
         if not rule:
             return jsonify({'error': 'Rule not found'}), 404
 

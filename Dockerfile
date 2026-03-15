@@ -126,7 +126,10 @@ RUN ffmpeg -version && \
 
 COPY requirements.txt .
 # Ubuntu 24.04 requires --break-system-packages for pip install in Docker
-RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+# After install, remove chardet (pulled in by reportlab) -- its 7.x version fails
+# requests' version check (requires <6.0.0). Our app uses charset_normalizer instead.
+RUN pip install --no-cache-dir --break-system-packages --ignore-installed -r requirements.txt \
+    && pip uninstall -y chardet --break-system-packages 2>/dev/null; true
 
 COPY package.json webpack.config.js ./
 RUN npm install

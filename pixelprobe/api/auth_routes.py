@@ -161,15 +161,13 @@ def delete_user(user_id):
     if user.id == user_id:
         return jsonify({'error': 'Cannot delete your own account'}), 400
 
-    # Prevent deleting the last admin
-    if User.query.filter_by(is_admin=True).count() == 1:
-        user_to_delete = User.query.get(user_id)
-        if user_to_delete and user_to_delete.is_admin:
-            return jsonify({'error': 'Cannot delete the last admin user'}), 400
-
-    user_to_delete = User.query.get(user_id)
+    user_to_delete = db.session.get(User, user_id)
     if not user_to_delete:
         return jsonify({'error': 'User not found'}), 404
+
+    # Prevent deleting the last admin
+    if user_to_delete.is_admin and User.query.filter_by(is_admin=True).count() == 1:
+        return jsonify({'error': 'Cannot delete the last admin user'}), 400
 
     try:
         db.session.delete(user_to_delete)
@@ -198,7 +196,7 @@ def change_password(user_id):
     if not new_password or len(new_password) < 8:
         return jsonify({'error': 'New password must be at least 8 characters'}), 400
 
-    target_user = User.query.get(user_id)
+    target_user = db.session.get(User, user_id)
     if not target_user:
         return jsonify({'error': 'User not found'}), 404
 
