@@ -2374,69 +2374,72 @@ class ScanService:
         
         try:
             import json as json_module
-            # Check if this is a file-based chunk (Phase 3)
-            if chunk.directory_path.startswith('{'):
-                # New FCP (File Chunk Paths) JSON format
-                try:
-                    chunk_meta = json_module.loads(chunk.directory_path)
-                    if chunk_meta.get('t') == 'FCP':
-                        first_path = chunk_meta['f']
-                        last_path = chunk_meta['l']
-                        # Count pending files in path range
-                        if force_rescan:
-                            files_count = db.session.query(ScanResult).filter(
-                                ScanResult.file_path >= first_path,
-                                ScanResult.file_path <= last_path
-                            ).count()
+            # Disable autoflush to avoid SAWarning when accessing chunk attributes
+            # after commit (same pattern as _get_chunk_file_count)
+            with db.session.no_autoflush:
+                # Check if this is a file-based chunk (Phase 3)
+                if chunk.directory_path.startswith('{'):
+                    # New FCP (File Chunk Paths) JSON format
+                    try:
+                        chunk_meta = json_module.loads(chunk.directory_path)
+                        if chunk_meta.get('t') == 'FCP':
+                            first_path = chunk_meta['f']
+                            last_path = chunk_meta['l']
+                            # Count pending files in path range
+                            if force_rescan:
+                                files_count = db.session.query(ScanResult).filter(
+                                    ScanResult.file_path >= first_path,
+                                    ScanResult.file_path <= last_path
+                                ).count()
+                            else:
+                                files_count = db.session.query(ScanResult).filter(
+                                    ScanResult.file_path >= first_path,
+                                    ScanResult.file_path <= last_path,
+                                    ScanResult.scan_status == 'pending'
+                                ).count()
+                            logger.info(f"FCP chunk {chunk.chunk_id}: Found {files_count} files in path range")
                         else:
-                            files_count = db.session.query(ScanResult).filter(
-                                ScanResult.file_path >= first_path,
-                                ScanResult.file_path <= last_path,
-                                ScanResult.scan_status == 'pending'
-                            ).count()
-                        logger.info(f"FCP chunk {chunk.chunk_id}: Found {files_count} files in path range")
-                    else:
-                        logger.error(f"Unknown chunk type: {chunk_meta.get('t')}")
+                            logger.error(f"Unknown chunk type: {chunk_meta.get('t')}")
+                            files_count = 0
+                    except json_module.JSONDecodeError as e:
+                        logger.error(f"Failed to parse FCP chunk metadata: {e}")
                         files_count = 0
-                except json_module.JSONDecodeError as e:
-                    logger.error(f"Failed to parse FCP chunk metadata: {e}")
-                    files_count = 0
-            elif chunk.directory_path.startswith('FILE_CHUNK:'):
-                # Legacy: Parse the chunk metadata: "FILE_CHUNK:offset:limit"
-                parts = chunk.directory_path.split(':')
-                offset = int(parts[1])
-                limit = int(parts[2])
+                elif chunk.directory_path.startswith('FILE_CHUNK:'):
+                    # Legacy: Parse the chunk metadata: "FILE_CHUNK:offset:limit"
+                    parts = chunk.directory_path.split(':')
+                    offset = int(parts[1])
+                    limit = int(parts[2])
 
-                # Get count for this specific chunk
-                files_count = limit  # We know exactly how many files are in this chunk
-                logger.info(f"FILE_CHUNK {chunk.chunk_id}: Processing {files_count} files (offset={offset})")
-            elif chunk.directory_path == 'PENDING_FILES':
-                # Legacy: Get ALL pending files regardless of directory
-                files_count = db.session.query(ScanResult).filter(
-                    ScanResult.scan_status == 'pending'
-                ).count()
-                logger.info(f"PENDING_FILES chunk: Found {files_count} pending files to scan")
-            else:
-                # Legacy: Query for files in this chunk's directory that need scanning
-                # Simply match all files that start with the directory path
-                chunk_dir = chunk.directory_path.rstrip(os.sep)
-                
-                # Get count first to avoid loading all files into memory
-                if force_rescan:
-                    # Count all files that start with this directory path
+                    # Get count for this specific chunk
+                    files_count = limit  # We know exactly how many files are in this chunk
+                    logger.info(f"FILE_CHUNK {chunk.chunk_id}: Processing {files_count} files (offset={offset})")
+                elif chunk.directory_path == 'PENDING_FILES':
+                    # Legacy: Get ALL pending files regardless of directory
                     files_count = db.session.query(ScanResult).filter(
-                        ScanResult.file_path.startswith(chunk_dir)
+                        ScanResult.scan_status == 'pending'
                     ).count()
+                    logger.info(f"PENDING_FILES chunk: Found {files_count} pending files to scan")
                 else:
-                    # For normal scans, only scan pending files (new/unscanned)
-                    files_count = db.session.query(ScanResult).filter(
-                        db.and_(
-                            ScanResult.file_path.startswith(chunk_dir),
-                            ScanResult.scan_status == 'pending'
-                        )
-                    ).count()
-            
-            logger.info(f"Chunk {chunk.chunk_id}: Found {files_count} files to scan in {chunk.directory_path}")
+                    # Legacy: Query for files in this chunk's directory that need scanning
+                    # Simply match all files that start with the directory path
+                    chunk_dir = chunk.directory_path.rstrip(os.sep)
+
+                    # Get count first to avoid loading all files into memory
+                    if force_rescan:
+                        # Count all files that start with this directory path
+                        files_count = db.session.query(ScanResult).filter(
+                            ScanResult.file_path.startswith(chunk_dir)
+                        ).count()
+                    else:
+                        # For normal scans, only scan pending files (new/unscanned)
+                        files_count = db.session.query(ScanResult).filter(
+                            db.and_(
+                                ScanResult.file_path.startswith(chunk_dir),
+                                ScanResult.scan_status == 'pending'
+                            )
+                        ).count()
+
+                logger.info(f"Chunk {chunk.chunk_id}: Found {files_count} files to scan in {chunk.directory_path}")
             
             scanned = 0
             errors = 0
