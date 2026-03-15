@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **gunicorn 21.2.0 -> 23.0.0**: CVE-2024-1135, CVE-2024-6827 (HIGH 7.5, HTTP request smuggling)
 - **requests 2.31.0 -> 2.32.5**: CVE-2024-35195 (MEDIUM, TLS bypass), CVE-2024-47081 (MEDIUM, credential leak)
 
+### Fixed
+
+- **RequestsDependencyWarning on worker startup**: Removed system `python3-chardet` 7.1.0 from Docker image that conflicted with requests' version check (fires on every gunicorn/celery worker start)
+- **Node.js 20 deprecation warnings in CI**: Updated `actions/checkout` v3->v4, `actions/setup-python` v4->v5, `codecov/codecov-action` v3->v5
+
 ### Changed
 
 - **Flask 2.3.3 -> 3.1.3**: Major upgrade required for Werkzeug 3.x compatibility
