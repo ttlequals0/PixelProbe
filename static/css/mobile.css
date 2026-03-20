@@ -1107,4 +1107,120 @@
     .schedule-item {
         padding: 0.875rem;
     }
+
+    /* View Logs Modal - Mobile (full-screen) */
+    #logs-modal .modal-content {
+        max-width: 100%;
+        width: 100%;
+        height: 100vh;
+        max-height: 100vh;
+        border-radius: 0;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #logs-modal .modal-header {
+        padding: 0.75rem 1rem;
+        flex-shrink: 0;
+    }
+
+    #logs-modal .modal-header .modal-title {
+        font-size: 1.125rem;
+    }
+
+    #logs-modal .modal-body {
+        flex: 1;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 0.75rem;
+    }
+
+    /* Stacked filter controls */
+    #logs-modal .filter-controls {
+        flex-direction: column;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+
+    #logs-modal .filter-group {
+        width: 100%;
+    }
+
+    #logs-modal .filter-group .form-control,
+    #logs-modal #log-search-input {
+        width: 100%;
+        min-width: unset;
+        font-size: 16px; /* Prevent iOS zoom */
+        padding: 0.5rem 0.625rem;
+    }
+
+    /* Auto-refresh checkbox -- adequate touch target on mobile */
+    #logs-modal .filter-group label[class*="align-items"] {
+        min-height: 2.75rem;
+        font-size: 0.875rem;
+    }
+
+    /* Header actions: icon-only on mobile */
+    #logs-modal .modal-header-actions {
+        gap: 0.25rem;
+    }
+
+    #logs-modal .modal-header-actions .btn-text {
+        display: none;
+    }
+
+    #logs-modal .modal-header-actions .btn {
+        padding: 0.375rem 0.5rem;
+        min-width: 2.25rem;
+        min-height: 2.25rem;
+    }
+
+    /* Log table: flex to fill remaining space after filters */
+    .log-table-container {
+        max-height: calc(100vh - 16rem); /* Account for header + filters + footer */
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .log-table {
+        font-size: 0.688rem;
+    }
+
+    .log-table th {
+        font-size: 0.625rem;
+        padding: 0.25rem 0.375rem;
+    }
+
+    .log-table td {
+        padding: 0.25rem 0.375rem;
+    }
+
+    /* Hide Logger column on mobile -- too narrow to be useful */
+    .log-table th:nth-child(3),
+    .log-table td:nth-child(3) {
+        display: none;
+    }
+
+    /* Time column: shorter format */
+    .log-time {
+        font-size: 0.625rem;
+    }
+
+    /* Expandable rows need adequate touch target */
+    .log-row-expandable td {
+        padding-top: 0.5rem;
+        padding-bottom: 0.5rem;
+    }
+
+    .log-traceback {
+        font-size: 0.625rem;
+        max-height: 12.5rem;
+    }
+
+    /* Path filter on mobile */
+    #path-filter {
+        width: 100%;
+        font-size: 16px; /* Prevent iOS zoom */
+    }
 }

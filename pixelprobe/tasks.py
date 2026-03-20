@@ -18,6 +18,7 @@ from pixelprobe.celery_config import celery_app
 from pixelprobe.services.scan_service import ScanService
 from pixelprobe.progress_utils import get_redis_client, get_scan_progress_redis, update_scan_progress_redis
 from pixelprobe.models import db, ScanState, ScanResult, ScanReport
+from pixelprobe.utils.log_context import current_scan_id, current_celery_task_id
 
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,10 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
                 'files_processed': existing_state.files_processed or 0,
                 'files_discovered': existing_state.discovery_count or 0
             }
+
+    # Tag all logs emitted during this task with scan_id and celery_task_id
+    _scan_token = current_scan_id.set(scan_id)
+    _task_token = current_celery_task_id.set(self.request.id)
 
     try:
         # CRITICAL: Use distributed lock to prevent race conditions when multiple workers
@@ -351,6 +356,9 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             # Max retries exceeded, mark as failed
             logger.error(f"Task {self.request.id} failed permanently after {self.max_retries} retries")
             raise exc
+    finally:
+        current_scan_id.reset(_scan_token)
+        current_celery_task_id.reset(_task_token)
 
 
 @celery_app.task(bind=True, max_retries=2,
@@ -372,6 +380,10 @@ def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
     # The ContextTask wrapper handles session management properly
 
     logger.info(f"Starting Celery cleanup task {self.request.id} for cleanup_id: {cleanup_id}")
+
+    # Tag logs with task context
+    _scan_token = current_scan_id.set(cleanup_id)
+    _task_token = current_celery_task_id.set(self.request.id)
 
     try:
         # MaintenanceService not yet implemented - placeholder for future functionality
@@ -415,6 +427,9 @@ def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
             raise self.retry(exc=exc, countdown=retry_delay)
         else:
             raise exc
+    finally:
+        current_scan_id.reset(_scan_token)
+        current_celery_task_id.reset(_task_token)
 
 
 @celery_app.task(bind=True, max_retries=2,
@@ -438,6 +453,10 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
     # The ContextTask wrapper handles session management properly
 
     logger.info(f"Starting Celery file scan task {self.request.id} for scan_id: {scan_id}")
+
+    # Tag logs with scan context
+    _scan_token = current_scan_id.set(scan_id)
+    _task_token = current_celery_task_id.set(self.request.id)
 
     try:
         from pixelprobe.services.scan_service import ScanService
@@ -507,6 +526,9 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
             raise self.retry(exc=exc, countdown=retry_delay)
         else:
             raise exc
+    finally:
+        current_scan_id.reset(_scan_token)
+        current_celery_task_id.reset(_task_token)
 
 
 @celery_app.task

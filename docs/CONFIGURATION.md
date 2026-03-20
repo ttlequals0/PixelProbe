@@ -113,11 +113,13 @@ CLEANUP_SCHEDULE=interval:days:7             # Every 7 days
 | `SCAN_OUTPUT_RETENTION_DAYS` | `30` | Days before archiving scan outputs (currently disabled) |
 | `REPORT_RETENTION_DAYS` | `90` | Days before deleting old reports |
 | `SCAN_STATE_RETENTION_DAYS` | `7` | Days before deleting completed scan states |
+| `LOG_RETENTION_DAYS` | `30` | Days before deleting old log entries (configurable via UI) |
 
 **Data Retention Notes:**
 - Automated cleanup runs daily via Celery Beat
 - `SCAN_OUTPUT_RETENTION_DAYS` is currently not used (scan results kept forever)
 - Configurable via environment variables for future flexibility
+- `LOG_RETENTION_DAYS` default is stored in the `app_configs` database table and can be changed via the UI (System > View Logs) or API (`PUT /api/logs/retention`)
 
 ### Monitoring Variables (Future)
 

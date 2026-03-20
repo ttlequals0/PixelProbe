@@ -86,6 +86,10 @@
                         <i class="fas fa-file-alt"></i>
                         <span>Scan Reports</span>
                     </a>
+                    <a href="#" class="nav-item" onclick="app.showLogs(); return false;" title="View Logs">
+                        <i class="fas fa-scroll"></i>
+                        <span>View Logs</span>
+                    </a>
                     <a href="https://github.com/ttlequals0/PixelProbe" target="_blank" class="nav-item" title="Build Info">
                         <i class="fas fa-info-circle"></i>
                         <span>Build Info</span>
@@ -212,7 +216,12 @@
                                 </div>
                             </div>
                             <div class="form-group mb-0">
-                                <input type="text" class="form-control" id="search-input" 
+                                <select id="path-filter" class="form-control" style="min-width: 180px;">
+                                    <option value="">All Paths</option>
+                                </select>
+                            </div>
+                            <div class="form-group mb-0">
+                                <input type="text" class="form-control" id="search-input"
                                        placeholder="Search file paths...">
                             </div>
                         </div>
@@ -464,6 +473,104 @@
         </div>
     </div>
     
+    <!-- View Logs Modal -->
+    <div id="logs-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">View Logs</h3>
+                <div class="modal-header-actions">
+                    <button class="btn btn-secondary btn-sm" onclick="app.downloadLogs()" title="Download">
+                        <i class="fas fa-download"></i><span class="btn-text"> Download</span>
+                    </button>
+                    <button class="btn btn-danger btn-sm" onclick="app.purgeLogs()" title="Purge">
+                        <i class="fas fa-trash"></i><span class="btn-text"> Purge</span>
+                    </button>
+                    <button class="modal-close">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="logs-container">
+                    <!-- Filter Controls -->
+                    <div class="filter-controls mb-3">
+                        <div class="filter-group">
+                            <label for="log-type-filter">Job Type:</label>
+                            <select id="log-type-filter" class="form-control">
+                                <option value="">All Types</option>
+                                <option value="full">Full Scan</option>
+                                <option value="scheduled">Scheduled</option>
+                                <option value="pending">Pending Scan</option>
+                                <option value="system">System</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="log-run-filter">Job Run:</label>
+                            <select id="log-run-filter" class="form-control">
+                                <option value="">All Runs</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="log-level-filter">Level:</label>
+                            <select id="log-level-filter" class="form-control">
+                                <option value="">All Levels</option>
+                                <option value="DEBUG">DEBUG</option>
+                                <option value="INFO">INFO</option>
+                                <option value="WARNING">WARNING</option>
+                                <option value="ERROR">ERROR</option>
+                                <option value="CRITICAL">CRITICAL</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="log-time-filter">Time Range:</label>
+                            <select id="log-time-filter" class="form-control">
+                                <option value="">All Time</option>
+                                <option value="1h">Last 1 Hour</option>
+                                <option value="6h">Last 6 Hours</option>
+                                <option value="24h" selected>Last 24 Hours</option>
+                                <option value="7d">Last 7 Days</option>
+                                <option value="30d">Last 30 Days</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <input type="text" class="form-control" id="log-search-input"
+                                   placeholder="Search logs...">
+                        </div>
+                        <div class="filter-group">
+                            <label class="d-flex align-items-center gap-1">
+                                <input type="checkbox" id="log-auto-refresh" checked>
+                                Auto-refresh
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Log Table -->
+                    <div class="table-container log-table-container" id="logs-table-container">
+                        <table class="table log-table" id="logs-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 160px;">Time</th>
+                                    <th style="width: 70px;">Level</th>
+                                    <th style="width: 200px;">Logger</th>
+                                    <th>Message</th>
+                                </tr>
+                            </thead>
+                            <tbody id="logs-tbody">
+                                <!-- Log entries will be loaded here -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Load More / Pagination -->
+                    <div class="d-flex justify-content-between align-items-center mt-2">
+                        <span id="logs-count" class="text-muted"></span>
+                        <button class="btn btn-secondary btn-sm" id="logs-load-more" onclick="app.logViewer.loadMore()" style="display: none;">
+                            Load More
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Media Viewer Modal -->
     <div id="media-viewer-modal" class="modal">
         <div class="modal-content" style="max-width: 90%; width: 90%;">

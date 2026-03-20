@@ -883,6 +883,7 @@ class TableManager {
         this.sortOrder = 'desc';
         this.filter = 'all';
         this.searchQuery = '';
+        this.pathFilter = '';
         this.selectedFiles = new Set();
         this.lastClickedCheckbox = null; // Track last clicked checkbox for shift-select
     }
@@ -960,6 +961,26 @@ class TableManager {
             });
         });
 
+        // Path filter
+        const pathFilter = document.querySelector('#path-filter');
+        if (pathFilter) {
+            pathFilter.addEventListener('change', (e) => {
+                this.pathFilter = e.target.value;
+                this.currentPage = 1;
+                this.loadData();
+                // Persist selection
+                try { localStorage.setItem('pixelprobe_path_filter', e.target.value); } catch (e) {}
+            });
+            // Restore persisted selection
+            try {
+                const saved = localStorage.getItem('pixelprobe_path_filter');
+                if (saved) {
+                    this.pathFilter = saved;
+                    pathFilter.value = saved;
+                }
+            } catch (e) {}
+        }
+
         // Search
         const searchInput = document.querySelector('#search-input');
         if (searchInput) {
@@ -1005,6 +1026,11 @@ class TableManager {
             // Only add search if it has a value
             if (this.searchQuery && this.searchQuery.trim()) {
                 params.search = this.searchQuery.trim();
+            }
+
+            // Add path filter
+            if (this.pathFilter) {
+                params.path = this.pathFilter;
             }
 
             // Map frontend filter values to backend parameters
@@ -1402,6 +1428,324 @@ class TableManager {
 }
 
 // Initialize app
+// Log Viewer
+class LogViewer {
+    static MAX_LOGS = 2000;
+
+    constructor(apiClient) {
+        this.api = apiClient;
+        this.page = 1;
+        this.perPage = 200;
+        this.logs = [];
+        this.autoRefreshInterval = null;
+        this.lastTimestamp = null;
+        this.initialized = false;
+    }
+
+    init() {
+        if (this.initialized) {
+            this.loadLogs();
+            this.startAutoRefresh();
+            return;
+        }
+        this.initialized = true;
+
+        // Bind filter change events
+        ['log-type-filter', 'log-run-filter', 'log-level-filter', 'log-time-filter'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('change', () => { this.page = 1; this.logs = []; this.loadLogs(); });
+        });
+
+        // When job type changes, reload the runs dropdown
+        const typeFilter = document.getElementById('log-type-filter');
+        if (typeFilter) typeFilter.addEventListener('change', () => this.loadRuns());
+
+        // Search with debounce
+        const searchInput = document.getElementById('log-search-input');
+        if (searchInput) {
+            let timeout;
+            searchInput.addEventListener('input', () => {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => { this.page = 1; this.logs = []; this.loadLogs(); }, 300);
+            });
+        }
+
+        // Auto-refresh toggle
+        const autoRefresh = document.getElementById('log-auto-refresh');
+        if (autoRefresh) {
+            autoRefresh.addEventListener('change', (e) => {
+                if (e.target.checked) this.startAutoRefresh();
+                else this.stopAutoRefresh();
+            });
+        }
+
+        // Event delegation for traceback expand/collapse (avoids per-row listeners)
+        const tbody = document.getElementById('logs-tbody');
+        if (tbody) {
+            tbody.addEventListener('click', (e) => {
+                const row = e.target.closest('.log-row-expandable');
+                if (!row) return;
+                const tbRow = row.nextElementSibling;
+                if (tbRow && tbRow.classList.contains('log-traceback-row')) {
+                    tbRow.style.display = tbRow.style.display === 'none' ? 'table-row' : 'none';
+                }
+            });
+        }
+
+        this.loadRuns();
+        this.loadLogs();
+        this.startAutoRefresh();
+    }
+
+    getFilterParams() {
+        const params = {};
+        const scanId = document.getElementById('log-run-filter')?.value;
+        if (scanId) params.scan_id = scanId;
+
+        const level = document.getElementById('log-level-filter')?.value;
+        if (level) params.level = level;
+
+        const search = document.getElementById('log-search-input')?.value?.trim();
+        if (search) params.search = search;
+
+        const timeRange = document.getElementById('log-time-filter')?.value;
+        if (timeRange) {
+            const now = new Date();
+            let start;
+            switch (timeRange) {
+                case '1h': start = new Date(now - 3600000); break;
+                case '6h': start = new Date(now - 6 * 3600000); break;
+                case '24h': start = new Date(now - 24 * 3600000); break;
+                case '7d': start = new Date(now - 7 * 86400000); break;
+                case '30d': start = new Date(now - 30 * 86400000); break;
+            }
+            if (start) params.start_time = start.toISOString();
+        }
+
+        return params;
+    }
+
+    async loadLogs() {
+        try {
+            const params = { ...this.getFilterParams(), page: this.page, per_page: this.perPage };
+            const qs = new URLSearchParams(params).toString();
+            const response = await fetch(`/api/logs?${qs}`);
+            const data = await response.json();
+
+            if (this.page === 1) {
+                this.logs = data.logs || [];
+            } else {
+                this.logs = this.logs.concat(data.logs || []).slice(0, LogViewer.MAX_LOGS);
+            }
+
+            this.renderLogs();
+
+            // Update count and load-more button
+            const countEl = document.getElementById('logs-count');
+            if (countEl) countEl.textContent = `Showing ${this.logs.length} of ${data.total} entries`;
+
+            const loadMoreBtn = document.getElementById('logs-load-more');
+            if (loadMoreBtn) loadMoreBtn.style.display = data.has_more ? 'inline-block' : 'none';
+
+            // Track last timestamp for polling
+            if (this.logs.length > 0) {
+                this.lastTimestamp = this.logs[0].timestamp;
+            }
+        } catch (e) {
+            // Silently fail
+        }
+    }
+
+    async loadMore() {
+        this.page++;
+        await this.loadLogs();
+    }
+
+    async poll() {
+        if (!this.lastTimestamp) return;
+        // Skip polling when modal is not visible
+        const modal = document.getElementById('logs-modal');
+        if (!modal || modal.style.display === 'none' || modal.style.display === '') return;
+
+        try {
+            const params = { ...this.getFilterParams(), since: this.lastTimestamp };
+            const qs = new URLSearchParams(params).toString();
+            const response = await fetch(`/api/logs?${qs}`);
+            const data = await response.json();
+
+            if (data.logs && data.logs.length > 0) {
+                // Prepend new entries and cap at MAX_LOGS
+                this.logs = data.logs.concat(this.logs).slice(0, LogViewer.MAX_LOGS);
+                this.lastTimestamp = data.logs[0].timestamp;
+
+                // Incremental DOM prepend instead of full rebuild
+                const tbody = document.getElementById('logs-tbody');
+                if (tbody) {
+                    // Remove empty state row if present
+                    const emptyRow = tbody.querySelector('.log-table-empty');
+                    if (emptyRow) emptyRow.parentElement.remove();
+
+                    const fragment = document.createDocumentFragment();
+                    data.logs.forEach(log => this._buildLogRow(log, fragment));
+                    tbody.insertBefore(fragment, tbody.firstChild);
+
+                    // Trim excess rows from the end
+                    while (tbody.children.length > LogViewer.MAX_LOGS * 2) {
+                        tbody.removeChild(tbody.lastChild);
+                    }
+                }
+
+                const countEl = document.getElementById('logs-count');
+                if (countEl) countEl.textContent = `Showing ${this.logs.length} entries`;
+
+                // Auto-scroll to top if auto-refresh is on
+                const container = document.getElementById('logs-table-container');
+                if (container) container.scrollTop = 0;
+            }
+        } catch (e) {
+            // Silently fail
+        }
+    }
+
+    startAutoRefresh() {
+        this.stopAutoRefresh();
+        const autoRefresh = document.getElementById('log-auto-refresh');
+        if (autoRefresh && !autoRefresh.checked) return;
+
+        this.autoRefreshInterval = setInterval(() => {
+            // Pause polling when tab is hidden
+            if (!document.hidden) this.poll();
+        }, 3000);
+    }
+
+    stopAutoRefresh() {
+        if (this.autoRefreshInterval) {
+            clearInterval(this.autoRefreshInterval);
+            this.autoRefreshInterval = null;
+        }
+    }
+
+    async loadRuns() {
+        try {
+            const scanType = document.getElementById('log-type-filter')?.value || '';
+            const params = scanType ? `?scan_type=${scanType}` : '';
+            const response = await fetch(`/api/logs/runs${params}`);
+            const data = await response.json();
+
+            const select = document.getElementById('log-run-filter');
+            if (!select) return;
+
+            // Preserve current selection
+            const current = select.value;
+
+            // Clear and rebuild options using DOM methods (safe from XSS)
+            while (select.options.length > 0) select.remove(0);
+            const defaultOpt = document.createElement('option');
+            defaultOpt.value = '';
+            defaultOpt.textContent = 'All Runs';
+            select.appendChild(defaultOpt);
+
+            (data.runs || []).forEach(run => {
+                const opt = document.createElement('option');
+                opt.value = run.scan_id;
+                const date = run.start_time ? new Date(run.start_time).toLocaleString() : 'Unknown';
+                opt.textContent = `${run.scan_id === 'system' ? 'System' : run.scan_id.substring(0, 12)} (${date}) [${run.log_count}]`;
+                if (run.scan_id === current) opt.selected = true;
+                select.appendChild(opt);
+            });
+        } catch (e) {
+            // Silently fail
+        }
+    }
+
+    renderLogs() {
+        const tbody = document.getElementById('logs-tbody');
+        if (!tbody) return;
+
+        // Build log table rows using safe DOM methods
+        tbody.textContent = ''; // Clear existing content safely
+
+        if (this.logs.length === 0) {
+            const emptyRow = document.createElement('tr');
+            const emptyTd = document.createElement('td');
+            emptyTd.colSpan = 4;
+            emptyTd.className = 'log-table-empty';
+            emptyTd.textContent = 'No log entries match the current filters';
+            emptyRow.appendChild(emptyTd);
+            tbody.appendChild(emptyRow);
+            return;
+        }
+
+        this.logs.forEach(log => this._buildLogRow(log, tbody));
+    }
+
+    _buildLogRow(log, container) {
+        const levelClass = this.getLevelClass(log.level);
+        const ts = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '';
+        const loggerShort = (log.logger_name || '').split('.').slice(-2).join('.');
+
+        const row = document.createElement('tr');
+        row.className = `log-row ${levelClass} ${log.traceback ? 'log-row-expandable' : ''}`;
+
+        const tdTime = document.createElement('td');
+        tdTime.className = 'log-time';
+        tdTime.textContent = ts;
+        row.appendChild(tdTime);
+
+        const tdLevel = document.createElement('td');
+        const levelBadge = document.createElement('span');
+        levelBadge.className = `log-level-badge ${levelClass}`;
+        levelBadge.textContent = log.level;
+        tdLevel.appendChild(levelBadge);
+        row.appendChild(tdLevel);
+
+        const tdLogger = document.createElement('td');
+        tdLogger.className = 'log-logger';
+        tdLogger.title = log.logger_name || '';
+        tdLogger.textContent = loggerShort;
+        row.appendChild(tdLogger);
+
+        const tdMessage = document.createElement('td');
+        tdMessage.className = 'log-message';
+        tdMessage.textContent = log.message || '';
+        row.appendChild(tdMessage);
+
+        container.appendChild(row);
+
+        if (log.traceback) {
+            const tbRow = document.createElement('tr');
+            tbRow.className = 'log-traceback-row';
+            tbRow.style.display = 'none';
+            const tbTd = document.createElement('td');
+            tbTd.colSpan = 4;
+            const pre = document.createElement('pre');
+            pre.className = 'log-traceback';
+            pre.textContent = log.traceback;
+            tbTd.appendChild(pre);
+            tbRow.appendChild(tbTd);
+            container.appendChild(tbRow);
+        }
+    }
+
+    getLevelClass(level) {
+        switch (level) {
+            case 'DEBUG': return 'log-debug';
+            case 'INFO': return 'log-info';
+            case 'WARNING': return 'log-warning';
+            case 'ERROR': return 'log-error';
+            case 'CRITICAL': return 'log-critical';
+            default: return '';
+        }
+    }
+
+    downloadLogs() {
+        const params = this.getFilterParams();
+        const qs = new URLSearchParams(params).toString();
+        window.location.href = `/api/logs/download?${qs}`;
+    }
+}
+
+
 class PixelProbeApp {
     constructor() {
         this.api = new APIClient();
@@ -1412,6 +1756,7 @@ class PixelProbeApp {
         this.table = new TableManager(this.api);
         this.trendsChart = null;
         this.histogramChart = null;
+        this.logViewer = new LogViewer(this.api);
     }
 
     escapeHtml(text) {
@@ -1448,6 +1793,9 @@ class PixelProbeApp {
         // Initialize components
         await this.stats.init();
         await this.table.init();
+
+        // Populate path filter dropdown
+        this.loadScanPaths();
         
         // Check for ongoing operations
         try {
@@ -2556,6 +2904,106 @@ class PixelProbeApp {
                 modal.style.display = 'none';
             }
         };
+    }
+
+    async loadScanPaths() {
+        try {
+            const response = await fetch('/api/scan-paths');
+            const data = await response.json();
+            const select = document.querySelector('#path-filter');
+            if (!select || !data.paths) return;
+            // Keep "All Paths" option and add paths
+            const saved = this.table.pathFilter;
+            data.paths.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                if (p === saved) opt.selected = true;
+                select.appendChild(opt);
+            });
+            // Validate saved path still exists
+            if (this.table.pathFilter && !data.paths.includes(this.table.pathFilter)) {
+                this.table.pathFilter = '';
+                select.value = '';
+                try { localStorage.removeItem('pixelprobe_path_filter'); } catch(e) {}
+            }
+        } catch (e) {
+            // Path filter is optional; silently fail
+        }
+    }
+
+    async showLogs() {
+        const modal = document.querySelector('#logs-modal');
+        if (!modal) return;
+
+        modal.style.display = 'block';
+        this.logViewer.init();
+
+        // Setup close handlers
+        const closeBtn = modal.querySelector('.modal-close');
+        if (closeBtn) {
+            closeBtn.onclick = () => {
+                modal.style.display = 'none';
+                this.logViewer.stopAutoRefresh();
+            };
+        }
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.style.display = 'none';
+                this.logViewer.stopAutoRefresh();
+            }
+        };
+
+        // Escape key handler
+        const escHandler = (e) => {
+            if (e.key === 'Escape' && modal.style.display === 'block') {
+                modal.style.display = 'none';
+                this.logViewer.stopAutoRefresh();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+    }
+
+    async downloadLogs() {
+        this.logViewer.downloadLogs();
+    }
+
+    async purgeLogs() {
+        // Build purge params from current view filters
+        const filters = this.logViewer.getFilterParams();
+        const purgeBody = {};
+        if (filters.scan_id) purgeBody.scan_id = filters.scan_id;
+        if (filters.start_time) purgeBody.before = new Date().toISOString();
+        if (filters.level) purgeBody.level = filters.level;
+
+        const hasFilter = purgeBody.scan_id || purgeBody.before || purgeBody.level;
+        const confirmMsg = hasFilter
+            ? 'Are you sure you want to purge the currently filtered logs? This cannot be undone.'
+            : 'No filters are active. This will purge ALL logs. Are you sure?';
+
+        // If no filters, require explicit "purge all" intent
+        if (!hasFilter) {
+            purgeBody.before = new Date().toISOString();
+        }
+
+        if (!confirm(confirmMsg)) return;
+        try {
+            const response = await fetch('/api/logs/purge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(purgeBody)
+            });
+            const data = await response.json();
+            if (data.error) {
+                this.showNotification(data.error, 'error');
+                return;
+            }
+            this.showNotification(`Purged ${data.deleted} log entries`, 'success');
+            this.logViewer.loadLogs();
+        } catch (e) {
+            this.showNotification('Failed to purge logs', 'error');
+        }
     }
 
     async viewReport(filename) {

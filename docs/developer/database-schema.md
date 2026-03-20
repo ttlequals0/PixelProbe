@@ -130,6 +130,26 @@ erDiagram
         boolean is_cancelled
         boolean cancel_requested
     }
+
+    LogEntry {
+        int id PK
+        string scan_id
+        string celery_task_id
+        datetime timestamp
+        string level
+        string logger_name
+        text message
+        text traceback
+    }
+
+    AppConfig {
+        int id PK
+        string key UK
+        text value
+        string description
+        datetime created_at
+        datetime updated_at
+    }
 ```
 
 ## Table Descriptions
@@ -180,6 +200,18 @@ Patterns to ignore in scan output to reduce false positives.
 - **Primary Key**: `id` (auto-increment)
 - **Unique Key**: `pattern`
 - **Purpose**: Filter known non-critical errors
+
+#### LogEntry
+Persistent storage for application log entries.
+- **Primary Key**: `id` (auto-increment)
+- **Indexes**: `(scan_id, timestamp)`, `timestamp`, `level`, `scan_id`, `celery_task_id`
+- **Purpose**: Stores log records for the View Logs feature with scan/task tagging
+
+#### AppConfig
+Application-level key-value configuration.
+- **Primary Key**: `id` (auto-increment)
+- **Unique Key**: `key`
+- **Purpose**: Stores configurable settings like log retention days and excluded loggers
 
 ### Maintenance Tables
 

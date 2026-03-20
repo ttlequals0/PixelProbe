@@ -837,6 +837,56 @@ class APIToken(db.Model):
         return f'<APIToken {self.id} for user {self.user_id}>'
 
 
+class LogEntry(db.Model):
+    """Persistent log storage for the View Logs feature"""
+    __tablename__ = 'log_entries'
+
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(64), nullable=True)
+    celery_task_id = db.Column(db.String(64), nullable=True)
+    timestamp = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    level = db.Column(db.String(10), nullable=False)
+    logger_name = db.Column(db.String(200), nullable=True)
+    message = db.Column(db.Text, nullable=False)
+    traceback = db.Column(db.Text, nullable=True)
+
+    # Indexes are created by migration (pixelprobe/migrations/startup.py) to avoid duplication
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'scan_id': self.scan_id,
+            'celery_task_id': self.celery_task_id,
+            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+            'level': self.level,
+            'logger_name': self.logger_name,
+            'message': self.message,
+            'traceback': self.traceback
+        }
+
+
+class AppConfig(db.Model):
+    """Application-level configuration stored in the database"""
+    __tablename__ = 'app_configs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(100), unique=True, nullable=False)
+    value = db.Column(db.Text, nullable=False)
+    description = db.Column(db.String(500), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'key': self.key,
+            'value': self.value,
+            'description': self.description,
+            'created_at': convert_to_tz(self.created_at),
+            'updated_at': convert_to_tz(self.updated_at)
+        }
+
+
 class NotificationProvider(db.Model):
     """Notification provider configuration (Pushover, ntfy, webhooks)"""
     __tablename__ = 'notification_providers'

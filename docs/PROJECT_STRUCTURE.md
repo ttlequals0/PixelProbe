@@ -29,6 +29,7 @@ PixelProbe/
 │   │   ├── auth_routes.py        # Login, logout, users, tokens
 │   │   ├── export_routes.py      # CSV/data export, file viewer
 │   │   ├── healthcheck_routes.py # Healthcheck integration
+│   │   ├── log_routes.py          # Log viewing, filtering, download
 │   │   ├── maintenance_routes.py # Cleanup, file-changes, vacuum
 │   │   ├── notification_routes.py # Notification providers and rules
 │   │   ├── reports_routes.py     # Scan reports, PDF generation
@@ -56,6 +57,8 @@ PixelProbe/
 │   │   ├── decorators.py
 │   │   ├── helpers.py            # ProgressTracker, batch_process, state utilities
 │   │   ├── rate_limiting.py      # rate_limit, exempt_from_rate_limit
+│   │   ├── log_context.py          # ContextVar-based scan/task log tagging
+│   │   ├── log_handler.py          # Database log handler (background batch writer)
 │   │   ├── security.py           # Path validation, SSRF protection, safe subprocess
 │   │   ├── timezone.py           # Timezone conversion utilities
 │   │   └── validators.py         # Input validation helpers

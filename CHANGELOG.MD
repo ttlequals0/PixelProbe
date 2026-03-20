@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.0] - 2026-03-20
+
+### Added
+
+- **View Logs page** (#43): New "View Logs" page in the System section with persistent log storage in PostgreSQL, live log viewing with 3-second polling, filtering by level/time range/job run/search, traceback expand/collapse, and log download as `.log` file
+- **Path filter on scan results** (#42): New dropdown filter on the scan results page to view results for a single configured scan path, populated from active SCAN_PATHS
+- **LogEntry model**: New database table for persistent log storage with scan_id tagging via Python contextvars
+- **AppConfig model**: New database table for application-level configuration (log retention, excluded loggers)
+- **DatabaseLogHandler**: Background-threaded logging handler that batch-inserts log records to PostgreSQL without blocking app code (10k queue, 100-record batches)
+- **Log context tagging**: Celery scan tasks automatically tag all log entries with scan_id and celery_task_id for filtering
+- **Log retention cleanup**: Configurable retention period (default 30 days) with daily automated cleanup via scheduler
+- **Log API endpoints**: GET /api/logs (filtered/paginated), GET /api/logs/runs, GET /api/logs/download, GET/PUT /api/logs/retention, POST /api/logs/purge
+- **Path filter API**: GET /api/scan-paths returns active configured paths; GET /api/scan-results accepts `path` query parameter
+
+---
+
 ## [2.5.70] - 2026-03-14
 
 ### Fixed

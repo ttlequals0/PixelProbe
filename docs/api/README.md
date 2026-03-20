@@ -673,6 +673,59 @@ POST /api/vacuum
 
 Optimize the database by running VACUUM. Rate limited to 5 requests per minute.
 
+### Log Endpoints
+
+#### Get Logs
+```http
+GET /api/logs?level=ERROR&per_page=50
+```
+
+Get paginated log entries with optional filters.
+
+**Query Parameters:**
+- `since` (string): ISO timestamp for polling (returns only newer entries)
+- `scan_id` (string): Filter by scan run ("system" for non-scan logs)
+- `level` (string): Minimum log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- `search` (string): Search text on message (case-insensitive)
+- `start_time` / `end_time` (string): Time range filter
+- `page` / `per_page` (integer): Pagination (default 200 per page, max 1000)
+
+#### Get Log Runs
+```http
+GET /api/logs/runs
+```
+
+List scan/job runs with log entry counts.
+
+#### Download Logs
+```http
+GET /api/logs/download?level=WARNING
+```
+
+Download filtered logs as a `.log` text file.
+
+#### Log Retention
+```http
+GET /api/logs/retention
+PUT /api/logs/retention
+```
+
+Get or set log retention period (days).
+
+#### Purge Logs
+```http
+POST /api/logs/purge
+```
+
+Manually purge log entries. Requires at least one filter parameter.
+
+#### Get Scan Paths
+```http
+GET /api/scan-paths
+```
+
+Get list of active configured scan paths for the path filter dropdown.
+
 ## Code Examples
 
 ### Python

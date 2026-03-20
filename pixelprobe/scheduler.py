@@ -96,6 +96,18 @@ class MediaScheduler:
         # Schedule default tasks from environment variables
         self._schedule_default_tasks()
         
+        # Schedule daily log retention cleanup at 3 AM
+        self.scheduler.add_job(
+            func=self._run_log_cleanup,
+            trigger="cron",
+            hour=3,
+            minute=0,
+            id="log_retention_cleanup",
+            name="Clean up old log entries",
+            misfire_grace_time=3600
+        )
+        logger.info("Scheduled daily log retention cleanup at 03:00")
+
         # Schedule stuck scan detection every 5 minutes
         self.scheduler.add_job(
             func=self._check_stuck_scans,
@@ -751,6 +763,15 @@ class MediaScheduler:
 
         except Exception as e:
             logger.error(f"Error sending healthcheck completion ping: {e}")
+
+    def _run_log_cleanup(self):
+        """Run log retention cleanup"""
+        try:
+            with self.app.app_context():
+                from pixelprobe.services.maintenance_service import MaintenanceService
+                MaintenanceService.cleanup_old_logs()
+        except Exception as e:
+            logger.error(f"Failed to run log retention cleanup: {e}")
 
     def shutdown(self):
         """Shutdown the scheduler"""
