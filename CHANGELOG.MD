@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fix log download 500 error**: The `/api/logs/download` streaming generator lost Flask app context, causing an `Internal Server Error`. Wrapped with `stream_with_context` to preserve the request context during streaming.
 - **Add rate limit to `/api/logs/runs`**: Added missing `30 per minute` rate limit, consistent with other log endpoints.
 - **Restrict purge endpoint filter scope**: Purge now only accepts its documented filters (`scan_id`, `before`, `level`), ignoring undocumented keys like `search` or `start_time` that were previously passed through.
+- **Fix scan logs missing from Job Run dropdown**: The `DatabaseLogHandler` set up in the parent process had a dead `_writer_thread` in forked Celery worker children (threads don't survive fork). Added `worker_process_init` signal handler in `celery_config.py` to create a fresh handler in each worker child process.
 - **Add test coverage for View Logs feature**: 47 new tests covering LogEntry/AppConfig models, log context vars, DatabaseLogHandler, all log API endpoints, path filter, and log cleanup.
 
 ---
