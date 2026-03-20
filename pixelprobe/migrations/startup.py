@@ -177,6 +177,14 @@ def run_v2_6_0_migrations(db):
             """))
             logger.info("Created app_configs table via migration")
 
+            # Ensure server defaults exist on timestamp columns (fixes seed INSERT
+            # failure when SQLAlchemy's create_all() created the table without them)
+            conn.execute(text("""
+                ALTER TABLE app_configs
+                    ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP,
+                    ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP
+            """))
+
             # Seed default configuration values
             conn.execute(text("""
                 INSERT INTO app_configs (key, value, description)

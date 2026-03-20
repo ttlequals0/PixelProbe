@@ -1,5 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import func
 import json
 import uuid
 import logging
@@ -873,8 +874,13 @@ class AppConfig(db.Model):
     key = db.Column(db.String(100), unique=True, nullable=False)
     value = db.Column(db.Text, nullable=False)
     description = db.Column(db.String(500), nullable=True)
-    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(timezone.utc),
+                           server_default=func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc),
+                           server_default=func.now())
 
     def to_dict(self):
         return {
