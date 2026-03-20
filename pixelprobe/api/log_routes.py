@@ -8,7 +8,7 @@ retention configuration, and purge operations.
 import logging
 from datetime import datetime, timezone
 from sqlalchemy import func
-from flask import Blueprint, request, Response
+from flask import Blueprint, request, Response, stream_with_context
 
 from pixelprobe.models import db, LogEntry, AppConfig, ScanState
 from pixelprobe.auth import auth_required
@@ -121,6 +121,7 @@ def get_logs():
 
 
 @log_bp.route('/logs/runs')
+@rate_limit("30 per minute")
 @auth_required
 def get_log_runs():
     """List job runs that have associated log entries.
@@ -203,7 +204,7 @@ def download_logs():
     filename = f'pixelprobe-logs-{date_str}.log'
 
     return Response(
-        generate(),
+        stream_with_context(generate()),
         mimetype='text/plain',
         headers={'Content-Disposition': f'attachment; filename="{filename}"'}
     )
@@ -258,8 +259,15 @@ def purge_logs():
     if not scan_id and not before and not level:
         return {'error': 'At least one filter (scan_id, before, or level) is required to prevent accidental full purge'}, 400
 
-    # Reuse shared filter builder for scan_id and level
-    query = _apply_log_filters(LogEntry.query, data)
+    # Build query with only the documented purge filters (scan_id, level)
+    # Don't pass raw data to _apply_log_filters which would also accept
+    # undocumented search/start_time/end_time keys
+    purge_filters = {}
+    if scan_id:
+        purge_filters['scan_id'] = scan_id
+    if level:
+        purge_filters['level'] = level
+    query = _apply_log_filters(LogEntry.query, purge_filters)
 
     if before:
         before_dt = _parse_iso(before)

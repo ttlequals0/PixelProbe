@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Fix `app_configs` seed data failure on startup**: Migration v2.6.0 INSERT failed with `NotNullViolation` on `created_at` column because SQLAlchemy's `create_all()` created the table without PostgreSQL `DEFAULT` clauses on timestamp columns. Added `server_default=func.now()` to AppConfig model and `ALTER TABLE ... SET DEFAULT` in migration to fix both new and existing deployments.
+- **Fix log download 500 error**: The `/api/logs/download` streaming generator lost Flask app context, causing an `Internal Server Error`. Wrapped with `stream_with_context` to preserve the request context during streaming.
+- **Add rate limit to `/api/logs/runs`**: Added missing `30 per minute` rate limit, consistent with other log endpoints.
+- **Restrict purge endpoint filter scope**: Purge now only accepts its documented filters (`scan_id`, `before`, `level`), ignoring undocumented keys like `search` or `start_time` that were previously passed through.
+- **Add test coverage for View Logs feature**: 47 new tests covering LogEntry/AppConfig models, log context vars, DatabaseLogHandler, all log API endpoints, path filter, and log cleanup.
 
 ---
 
