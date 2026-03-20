@@ -47,6 +47,8 @@ PixelProbe detects corrupted video, image, and audio files across your media lib
 - **Docker deployment**: Multi-container architecture (web, workers, database, queue)
 - **REST API**: Full OpenAPI/Swagger documentation
 - **Monitoring & Reports**: Real-time statistics, trend analytics, storage projections, PDF/JSON exports, complete audit trail
+- **View Logs**: In-app log viewer with live polling, level/time/search filtering, traceback expansion, and log download
+- **Path filter**: Filter scan results by configured scan path
 - **Performance optimized**: Production-tested with millions of files
 
 ### Security & Authentication
@@ -298,6 +300,8 @@ export MEDIA_PATH=/mnt/all-media  # Contains subdirs: movies/, tv/, backup/
 8. **Exclusions**: Interactive management of paths and extensions to exclude
 9. **Ignored Errors**: Configure error patterns to suppress known benign warnings (e.g., codec-specific messages)
 10. **Trend Analytics**: View corruption trends, storage growth, and projections over multiple time periods
+11. **View Logs**: Browse application logs with level/time/search filtering, auto-refresh, and download
+12. **Path Filter**: Filter scan results by configured scan path using the dropdown in the filter bar
 
 ### API Documentation
 
@@ -359,6 +363,15 @@ PixelProbe provides a REST API with OpenAPI/Swagger documentation.
 - `GET /api/ignored-errors` - Get ignored error patterns
 - `POST /api/ignored-errors` - Add ignored error pattern
 - `DELETE /api/ignored-errors/{id}` - Remove error pattern
+
+#### Log Viewing
+- `GET /api/logs` - Get paginated log entries with filtering and polling
+- `GET /api/logs/runs` - List scan/job runs with log counts
+- `GET /api/logs/download` - Download filtered logs as text file
+- `GET /api/logs/retention` - Get log retention settings
+- `PUT /api/logs/retention` - Set log retention period
+- `POST /api/logs/purge` - Purge log entries (requires filter)
+- `GET /api/scan-paths` - Get configured scan paths for filtering
 
 #### Data Export
 - `POST /api/export` - Export scan results (CSV, JSON, PDF)

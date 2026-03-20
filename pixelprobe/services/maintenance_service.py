@@ -7,13 +7,15 @@ import threading
 import time
 import logging
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 import uuid
 
+from sqlalchemy import text
 from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
-from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState, ScanReport
+from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState, ScanReport, LogEntry, AppConfig
 from pixelprobe.utils.helpers import ProgressTracker
+from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -646,7 +648,6 @@ class MaintenanceService:
         try:
             # Use READ COMMITTED isolation level to reduce lock contention
             # This allows reads to see committed data without holding locks
-            from sqlalchemy import text
             db.session.execute(text("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED"))
             logger.info("Set transaction isolation level to READ COMMITTED for file changes check")
 
@@ -1202,6 +1203,48 @@ class MaintenanceService:
         with self.file_changes_lock:
             self.file_changes_state['is_running'] = False
             self.file_changes_state['phase'] = 'error'
+
+    @staticmethod
+    def cleanup_old_logs():
+        """Delete log entries older than the configured retention period.
+
+        Reads log_retention_days from AppConfig (default 30).
+        Deletes in batches of 10k to avoid long-held locks.
+        Called daily by the scheduler.
+        """
+        try:
+            retention_days = 30
+            config = AppConfig.query.filter_by(key=CONFIG_LOG_RETENTION_DAYS).first()
+            if config and config.value:
+                retention_days = int(config.value) if config.value.isdigit() else 30
+
+            cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            total_deleted = 0
+            batch_size = 10000
+
+            # Delete in batches to avoid long-held locks that block the log handler
+            while True:
+                result = db.session.execute(
+                    text("DELETE FROM log_entries WHERE id IN "
+                         "(SELECT id FROM log_entries WHERE timestamp < :cutoff LIMIT :batch)"),
+                    {'cutoff': cutoff, 'batch': batch_size}
+                )
+                batch_deleted = result.rowcount
+                db.session.commit()
+                total_deleted += batch_deleted
+                if batch_deleted < batch_size:
+                    break
+
+            if total_deleted:
+                logger.info(f"Log retention cleanup: deleted {total_deleted} log entries older than {retention_days} days")
+            return total_deleted
+        except Exception as e:
+            logger.error(f"Log retention cleanup failed: {e}")
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            return 0
 
     def _create_file_changes_report(self, file_changes_record: FileChangesState, changed_files_list=None, deleted_files_count=0):
         """Create a scan report for file changes operation

@@ -1612,3 +1612,211 @@ textarea.form-control {
         text-align: center;
     }
 }
+
+/* View Logs Modal */
+@media (min-width: 769px) {
+    #logs-modal .modal-content {
+        max-width: 95%;
+        width: 95%;
+        min-width: 900px;
+    }
+}
+
+#logs-modal .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+#logs-modal .modal-header-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+#logs-modal .filter-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    align-items: flex-end;
+    margin-bottom: 0.75rem;
+}
+
+#logs-modal .filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+#logs-modal .filter-group label {
+    font-size: 0.688rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+#logs-modal .filter-group .form-control {
+    min-width: 7.5rem;
+    font-size: 0.813rem;
+}
+
+#logs-modal #log-search-input {
+    min-width: 12.5rem;
+}
+
+/* Auto-refresh checkbox -- adequate touch target */
+#logs-modal .filter-group label[class*="align-items"] {
+    min-height: 2.25rem;
+    padding: 0.25rem 0;
+}
+
+/* Log table container with scrolling */
+.log-table-container {
+    max-height: 60vh;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+}
+
+.log-table {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.log-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-secondary);
+}
+
+.log-table th {
+    font-size: 0.688rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 0.375rem 0.5rem;
+    color: var(--text-secondary);
+    font-weight: 600;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.log-table td {
+    padding: 0.188rem 0.5rem;
+    vertical-align: top;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.log-time {
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.log-logger {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 12.5rem;
+    color: var(--text-secondary);
+}
+
+.log-message {
+    word-break: break-word;
+    white-space: pre-wrap;
+    color: var(--text-primary);
+}
+
+/* Empty state */
+.log-table-empty {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--text-secondary);
+    font-family: var(--font-primary);
+    font-size: 0.875rem;
+}
+
+.log-row-expandable {
+    cursor: pointer;
+}
+
+.log-row-expandable .log-message::after {
+    content: ' [+]';
+    color: var(--text-secondary);
+    font-size: 0.625rem;
+    opacity: 0.7;
+}
+
+.log-row-expandable:hover {
+    background: var(--bg-tertiary);
+}
+
+/* Log level badges -- use CSS variables for theme awareness */
+.log-level-badge {
+    display: inline-block;
+    padding: 0.063rem 0.375rem;
+    border-radius: var(--border-radius-sm);
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-align: center;
+    min-width: 3.438rem;
+    line-height: 1.4;
+}
+
+.log-debug .log-level-badge {
+    background: color-mix(in srgb, var(--text-secondary) 15%, transparent);
+    color: var(--text-secondary);
+}
+.log-info .log-level-badge {
+    background: color-mix(in srgb, var(--success-color) 20%, transparent);
+    color: var(--success-color);
+}
+.log-warning .log-level-badge {
+    background: color-mix(in srgb, var(--warning-color) 20%, transparent);
+    color: var(--warning-color);
+}
+.log-error .log-level-badge {
+    background: color-mix(in srgb, var(--danger-color) 20%, transparent);
+    color: var(--danger-color);
+}
+.log-critical .log-level-badge {
+    background: color-mix(in srgb, var(--danger-color) 35%, transparent);
+    color: var(--danger-color);
+    font-weight: 700;
+}
+
+/* Log level row highlights -- theme-aware */
+.log-error td { background: color-mix(in srgb, var(--danger-color) 5%, transparent); }
+.log-critical td { background: color-mix(in srgb, var(--danger-color) 10%, transparent); }
+.log-warning td { background: color-mix(in srgb, var(--warning-color) 5%, transparent); }
+
+/* Traceback */
+.log-traceback-row td {
+    padding: 0 0.5rem 0.5rem 0.5rem;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.log-traceback {
+    font-family: var(--font-mono);
+    font-size: 0.688rem;
+    background: var(--bg-tertiary);
+    padding: 0.5rem;
+    border-radius: var(--border-radius-sm);
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 18.75rem;
+    overflow-y: auto;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+/* Logs count and load-more footer */
+#logs-count {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}

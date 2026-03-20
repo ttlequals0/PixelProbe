@@ -171,6 +171,8 @@ api/
 - `IgnoredErrorPattern`: False positive patterns
 - `ScanSchedule`: Scheduled scan configurations
 - `ScanState`: Current scan status
+- `LogEntry`: Persistent log storage with scan tagging
+- `AppConfig`: Application-level key-value configuration
 
 ## Core Components
 
@@ -365,10 +367,13 @@ Load Balancer / Nginx
 - Queue depth
 
 ### Logging
-- Structured logging
-- Log levels by component
+- Persistent log storage in PostgreSQL (v2.6.0+)
+- Background-threaded DatabaseLogHandler with batch inserts
+- Scan/task-level log tagging via Python contextvars
+- Configurable log retention with automatic cleanup
+- Log viewer UI with filtering, search, and download
+- Structured logging to stdout
 - Security audit trail
-- Error tracking
 
 ## Future Enhancements
 

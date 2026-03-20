@@ -93,3 +93,13 @@ ACTIVE_SCAN_PHASES = ['initializing', 'discovering', 'adding', 'scanning']
 
 # Terminal scan phases (phases where scan has ended)
 TERMINAL_SCAN_PHASES = ['idle', 'completed', 'error', 'crashed', 'cancelled']
+
+# AppConfig keys
+CONFIG_LOG_RETENTION_DAYS = 'log_retention_days'
+CONFIG_LOG_EXCLUDE_LOGGERS = 'log_exclude_loggers'
+
+# Default excluded loggers for database log storage
+DEFAULT_LOG_EXCLUDE_LOGGERS = 'urllib3,werkzeug,celery.worker.strategy,celery.bootsteps,kombu,amqp'
+
+# Sentinel value for system (non-scan) logs
+SYSTEM_LOG_ID = 'system'

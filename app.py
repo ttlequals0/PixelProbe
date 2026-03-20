@@ -5,6 +5,7 @@ This is a demonstration of how app.py would look with the new modular architectu
 
 import os
 import sys
+import atexit
 import logging
 from datetime import datetime, timezone
 from flask import Flask, jsonify, send_file, render_template, request, redirect, url_for
@@ -33,10 +34,14 @@ from pixelprobe.api.reports_routes import reports_bp
 from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
 from pixelprobe.api.healthcheck_routes import healthcheck_bp
 from pixelprobe.api.notification_routes import notification_bp  # P3 audit: Notification API
+from pixelprobe.api.log_routes import log_bp  # v2.6.0: View Logs feature
 from pixelprobe.api.auth_routes import auth_api_bp, auth_ui_bp, auth_bp  # auth_bp for backward compat
 
 # Import authentication module
 from pixelprobe.auth import init_auth, auth_required
+
+# Import database log handler
+from pixelprobe.utils.log_handler import DatabaseLogHandler
 
 # OpenAPI documentation is available as openapi.yaml in the project root
 
@@ -212,6 +217,7 @@ csrf.exempt(reports_bp)
 csrf.exempt(auth_api_bp)  # Exempt API auth endpoints from CSRF
 csrf.exempt(healthcheck_bp)  # Exempt healthcheck API endpoints from CSRF
 csrf.exempt(notification_bp)  # Exempt notification API endpoints from CSRF (P3 audit)
+csrf.exempt(log_bp)  # Exempt log API endpoints from CSRF (v2.6.0)
 # Note: auth_ui_bp (login/logout pages) should NOT be exempted from CSRF
 
 # Initialize scheduler
@@ -312,6 +318,10 @@ apply_auth_to_blueprint(healthcheck_bp)
 # P3 audit: Register notification API routes
 app.register_blueprint(notification_bp)
 apply_auth_to_blueprint(notification_bp)
+
+# v2.6.0: Register log API routes
+app.register_blueprint(log_bp)
+apply_auth_to_blueprint(log_bp)
 
 # API documentation is now provided via openapi.yaml specification file
 
@@ -554,6 +564,13 @@ with app.app_context():
     # before any model queries. This runs migrate_database() which adds
     # the celery_task_id column that the ScanState model expects.
     create_tables()
+
+    # Initialize database log handler (after migrations ensure log_entries table exists)
+    _db_log_handler = DatabaseLogHandler(app)
+    _db_log_handler.setLevel(logging.INFO)
+    logging.getLogger().addHandler(_db_log_handler)
+    atexit.register(_db_log_handler.shutdown)
+
     init_services()
 
     # Sync SCAN_PATHS from environment to database

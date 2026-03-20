@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.2] - 2026-03-20
+
+### Fixed
+
+- **Fix `app_configs` seed data failure on startup**: Migration v2.6.0 INSERT failed with `NotNullViolation` on `created_at` column because SQLAlchemy's `create_all()` created the table without PostgreSQL `DEFAULT` clauses on timestamp columns. Added `server_default=func.now()` to AppConfig model and `ALTER TABLE ... SET DEFAULT` in migration to fix both new and existing deployments.
+- **Fix log download 500 error**: The `/api/logs/download` streaming generator lost Flask app context, causing an `Internal Server Error`. Wrapped with `stream_with_context` to preserve the request context during streaming.
+- **Add rate limit to `/api/logs/runs`**: Added missing `30 per minute` rate limit, consistent with other log endpoints.
+- **Restrict purge endpoint filter scope**: Purge now only accepts its documented filters (`scan_id`, `before`, `level`), ignoring undocumented keys like `search` or `start_time` that were previously passed through.
+- **Fix scan logs missing from Job Run dropdown**: The `DatabaseLogHandler` set up in the parent process had a dead `_writer_thread` in forked Celery worker children (threads don't survive fork). Added `worker_process_init` signal handler in `celery_config.py` to create a fresh handler in each worker child process.
+- **Add test coverage for View Logs feature**: 47 new tests covering LogEntry/AppConfig models, log context vars, DatabaseLogHandler, all log API endpoints, path filter, and log cleanup.
+
+---
+
+## [2.6.0] - 2026-03-20
+
+### Added
+
+- **View Logs page** (#43): New "View Logs" page in the System section with persistent log storage in PostgreSQL, live log viewing with 3-second polling, filtering by level/time range/job run/search, traceback expand/collapse, and log download as `.log` file
+- **Path filter on scan results** (#42): New dropdown filter on the scan results page to view results for a single configured scan path, populated from active SCAN_PATHS
+- **LogEntry model**: New database table for persistent log storage with scan_id tagging via Python contextvars
+- **AppConfig model**: New database table for application-level configuration (log retention, excluded loggers)
+- **DatabaseLogHandler**: Background-threaded logging handler that batch-inserts log records to PostgreSQL without blocking app code (10k queue, 100-record batches)
+- **Log context tagging**: Celery scan tasks automatically tag all log entries with scan_id and celery_task_id for filtering
+- **Log retention cleanup**: Configurable retention period (default 30 days) with daily automated cleanup via scheduler
+- **Log API endpoints**: GET /api/logs (filtered/paginated), GET /api/logs/runs, GET /api/logs/download, GET/PUT /api/logs/retention, POST /api/logs/purge
+- **Path filter API**: GET /api/scan-paths returns active configured paths; GET /api/scan-results accepts `path` query parameter
+
+---
+
 ## [2.5.70] - 2026-03-14
 
 ### Fixed

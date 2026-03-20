@@ -16,6 +16,7 @@ from pixelprobe.utils.security import (
     validate_file_path, validate_directory_path,
     PathTraversalError, AuditLogger, validate_json_input
 )
+from pixelprobe.utils.helpers import get_configured_scan_paths
 # Remove direct limiter imports as we'll use decorators
 
 logger = logging.getLogger(__name__)
@@ -185,9 +186,20 @@ def get_scan_results():
     search_query = request.args.get('search', '').strip()
     sort_field = request.args.get('sort_field', 'scan_date')
     sort_order = request.args.get('sort_order', 'desc')
-    
+    path_filter = request.args.get('path', '').strip()
+
     # Build query
     query = ScanResult.query
+
+    # Apply path filter -- validate against configured paths to prevent probing
+    if path_filter:
+        configured = get_configured_scan_paths()
+        if path_filter in configured:
+            safe_path = path_filter.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+            query = query.filter(ScanResult.file_path.like(f'{safe_path}%', escape='\\'))
+        else:
+            # Invalid path -- return empty results
+            return {'results': [], 'total': 0, 'page': page, 'per_page': per_page, 'pages': 0}
     
     # Apply search filter
     if search_query:
@@ -461,12 +473,11 @@ def scan():
     
     # If no directories provided, use configured ones
     if not scan_dirs:
-        from pixelprobe.utils.helpers import get_configured_scan_paths
         scan_dirs = get_configured_scan_paths()
 
     if not scan_dirs:
         return {'error': 'No directories configured for scanning. Set SCAN_PATHS environment variable or configure paths in the admin interface.'}, 400
-    
+
     # Validate directories
     validated_dirs = []
     for dir_path in scan_dirs:
@@ -476,7 +487,7 @@ def scan():
         except Exception as e:
             AuditLogger.log_security_event('invalid_scan_directory', str(e), 'warning')
             return {'error': f'Invalid directory path: {dir_path}'}, 400
-    
+
     AuditLogger.log_action('scan_all', {'directories': validated_dirs, 'force_rescan': force_rescan})
     
     # P1 Implementation: Use Celery task queue instead of direct scan service
@@ -1023,7 +1034,6 @@ def scan_files_parallel():
     # Otherwise scan directories
     # If no directories provided, use configured ones
     if not scan_dirs:
-        from pixelprobe.utils.helpers import get_configured_scan_paths
         scan_dirs = get_configured_scan_paths()
 
     if not scan_dirs:
@@ -1604,6 +1614,12 @@ def get_worker_status():
             'message': f'Could not retrieve worker status: {str(e)}',
             'workers': []
         }
+
+@scan_bp.route('/scan-paths')
+@auth_required
+def get_scan_paths():
+    """Get list of active scan paths for the path filter dropdown"""
+    return {'paths': get_configured_scan_paths()}
 
 @scan_bp.route('/scan-output/<int:result_id>')
 @auth_required

@@ -11,7 +11,7 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 
 # Import models first to ensure they're registered with SQLAlchemy
-from pixelprobe.models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport, Exclusion, User, APIToken
+from pixelprobe.models import db as _db, ScanResult, ScanState, CleanupState, FileChangesState, ScanConfiguration, IgnoredErrorPattern, ScanSchedule, ScanReport, Exclusion, User, APIToken, LogEntry, AppConfig
 
 # Import models to ensure they're available
 from pixelprobe.models import ScanState, ScanResult
@@ -60,6 +60,7 @@ def create_test_app():
     from pixelprobe.api.reports_routes import reports_bp
     from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
     from pixelprobe.api.auth_routes import auth_bp
+    from pixelprobe.api.log_routes import log_bp
     from pixelprobe.scheduler import MediaScheduler
 
     test_app.register_blueprint(scan_bp)
@@ -70,7 +71,8 @@ def create_test_app():
     test_app.register_blueprint(maintenance_bp)
     test_app.register_blueprint(reports_bp)
     test_app.register_blueprint(parallel_scan_bp)
-    
+    test_app.register_blueprint(log_bp)
+
     # Exempt API endpoints from CSRF
     csrf.exempt(scan_bp)
     csrf.exempt(stats_bp)
@@ -80,6 +82,7 @@ def create_test_app():
     csrf.exempt(reports_bp)
     csrf.exempt(parallel_scan_bp)
     csrf.exempt(auth_bp)
+    csrf.exempt(log_bp)
     
     # Set up scheduler without initializing (to avoid DB access before tables exist)
     scheduler = MediaScheduler()

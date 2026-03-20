@@ -2,8 +2,12 @@
 Celery Configuration Module for PixelProbe
 """
 
-from celery import Celery
+import atexit
+import logging
 import os
+
+from celery import Celery
+from celery.signals import worker_process_init
 
 
 def _make_context_task(celery_instance, flask_app):
@@ -150,3 +154,20 @@ def init_celery(app, celery):
     celery.conf.update(app.config)
     _make_context_task(celery, app)
     return celery
+
+
+@worker_process_init.connect
+def _setup_db_log_handler_in_worker(**kwargs):
+    """Attach DatabaseLogHandler in each forked Celery worker child process.
+
+    Threads don't survive fork(), so the handler set up in the parent process
+    has a dead _writer_thread in children.  This signal fires once per child
+    and creates a fresh handler with its own background writer thread.
+    """
+    from app import app
+    from pixelprobe.utils.log_handler import DatabaseLogHandler
+
+    handler = DatabaseLogHandler(app)
+    handler.setLevel(logging.INFO)
+    logging.getLogger().addHandler(handler)
+    atexit.register(handler.shutdown)

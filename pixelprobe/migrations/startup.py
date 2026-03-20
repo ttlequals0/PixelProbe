@@ -8,6 +8,7 @@ is up-to-date. Each migration is idempotent (safe to re-run).
 import os
 import logging
 from sqlalchemy import text, inspect, exc
+from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS, CONFIG_LOG_EXCLUDE_LOGGERS, DEFAULT_LOG_EXCLUDE_LOGGERS
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,71 @@ def run_v2_4_113_migrations(db):
         logger.error(f"Migration v2.4.113 failed: {e}")
 
 
+def run_v2_6_0_migrations(db):
+    """Run migrations for v2.6.0 - add log_entries and app_configs tables"""
+    try:
+        with db.engine.connect() as conn:
+            # Create log_entries table
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS log_entries (
+                    id SERIAL PRIMARY KEY,
+                    scan_id VARCHAR(64),
+                    celery_task_id VARCHAR(64),
+                    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    level VARCHAR(10) NOT NULL,
+                    logger_name VARCHAR(200),
+                    message TEXT NOT NULL,
+                    traceback TEXT
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_log_scan_timestamp ON log_entries(scan_id, timestamp)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_log_timestamp ON log_entries(timestamp)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_log_level ON log_entries(level)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_log_scan_id ON log_entries(scan_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_log_celery_task_id ON log_entries(celery_task_id)"))
+            logger.info("Created log_entries table via migration")
+
+            # Create app_configs table
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS app_configs (
+                    id SERIAL PRIMARY KEY,
+                    key VARCHAR(100) UNIQUE NOT NULL,
+                    value TEXT NOT NULL,
+                    description VARCHAR(500),
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            logger.info("Created app_configs table via migration")
+
+            # Ensure server defaults exist on timestamp columns (fixes seed INSERT
+            # failure when SQLAlchemy's create_all() created the table without them)
+            conn.execute(text("""
+                ALTER TABLE app_configs
+                    ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP,
+                    ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP
+            """))
+
+            # Seed default configuration values
+            conn.execute(text("""
+                INSERT INTO app_configs (key, value, description)
+                VALUES (:key, '30', 'Number of days to retain log entries before automatic cleanup')
+                ON CONFLICT (key) DO NOTHING
+            """), {'key': CONFIG_LOG_RETENTION_DAYS})
+            conn.execute(text("""
+                INSERT INTO app_configs (key, value, description)
+                VALUES (:key, :value, 'Comma-separated list of logger names to exclude from database storage')
+                ON CONFLICT (key) DO NOTHING
+            """), {'key': CONFIG_LOG_EXCLUDE_LOGGERS, 'value': DEFAULT_LOG_EXCLUDE_LOGGERS})
+            logger.info("Seeded default app_configs values")
+
+            conn.commit()
+            logger.info("v2.6.0 migration completed successfully")
+
+    except Exception as e:
+        logger.error(f"Migration v2.6.0 failed: {e}")
+
+
 def create_performance_indexes(db):
     """Create performance indexes"""
     indexes = [
@@ -203,6 +269,13 @@ def _run_all_migrations(db):
         logger.info("v2.4.113 migration completed successfully")
     except Exception as e:
         logger.error(f"v2.4.113 migration failed: {e}")
+
+    logger.info("Running v2.6.0 migration...")
+    try:
+        run_v2_6_0_migrations(db)
+        logger.info("v2.6.0 migration completed successfully")
+    except Exception as e:
+        logger.error(f"v2.6.0 migration failed: {e}")
 
     logger.info("Creating performance indexes...")
     try:

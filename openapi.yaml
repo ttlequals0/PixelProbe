@@ -689,6 +689,11 @@ paths:
             type: string
             enum: [asc, desc]
             default: desc
+        - name: path
+          in: query
+          description: Filter results by scan path prefix (must match a configured SCAN_PATHS entry)
+          schema:
+            type: string
       responses:
         '200':
           description: Scan results retrieved successfully
@@ -1133,6 +1138,32 @@ paths:
       responses:
         '200':
           description: Worker status retrieved successfully
+
+  /scan-paths:
+    get:
+      summary: Get configured scan paths
+      description: |
+        Get the list of active configured scan paths for the path filter dropdown.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/scan-paths \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Scan]
+      responses:
+        '200':
+          description: Scan paths retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  paths:
+                    type: array
+                    items:
+                      type: string
+                    description: List of active scan directory paths
 
   /scan-output/{result_id}:
     get:
@@ -2694,6 +2725,226 @@ paths:
         '404':
           description: No valid reports found
 
+  # Logs Endpoints
+  /logs:
+    get:
+      summary: Get paginated log entries
+      description: |
+        Retrieve log entries with filtering, pagination, and polling support.
+        Use the `since` parameter for live polling (returns only newer entries, max 1000).
+
+        **Example:**
+        ```bash
+        curl -X GET "http://your-server/api/logs?level=ERROR&per_page=50" \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Logs]
+      parameters:
+        - name: since
+          in: query
+          description: ISO timestamp for polling - returns only entries newer than this
+          schema:
+            type: string
+            format: date-time
+        - name: scan_id
+          in: query
+          description: Filter by scan/job run ID. Use "system" for non-scan logs
+          schema:
+            type: string
+        - name: level
+          in: query
+          description: Minimum log level filter
+          schema:
+            type: string
+            enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+        - name: search
+          in: query
+          description: Search text (case-insensitive match on message)
+          schema:
+            type: string
+        - name: start_time
+          in: query
+          description: Start of time range filter (ISO timestamp)
+          schema:
+            type: string
+            format: date-time
+        - name: end_time
+          in: query
+          description: End of time range filter (ISO timestamp)
+          schema:
+            type: string
+            format: date-time
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 200
+            maximum: 1000
+      responses:
+        '200':
+          description: Log entries retrieved successfully
+
+  /logs/runs:
+    get:
+      summary: List log runs (job history)
+      description: |
+        Get distinct scan/job runs that have associated log entries,
+        with log counts and time ranges.
+
+        **Example:**
+        ```bash
+        curl -X GET "http://your-server/api/logs/runs?scan_type=scheduled" \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Logs]
+      parameters:
+        - name: scan_type
+          in: query
+          description: Filter by scan type
+          schema:
+            type: string
+            enum: [full, scheduled, pending, system]
+      responses:
+        '200':
+          description: Log runs retrieved successfully
+
+  /logs/download:
+    get:
+      summary: Download logs as text file
+      description: |
+        Download filtered logs as a plain text .log file.
+        Accepts the same filter parameters as GET /logs (no pagination).
+        Streams response with a 100k row cap.
+
+        **Example:**
+        ```bash
+        curl -X GET "http://your-server/api/logs/download?level=WARNING" \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          --output pixelprobe-logs.log
+        ```
+      tags: [Logs]
+      parameters:
+        - name: scan_id
+          in: query
+          schema:
+            type: string
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: start_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Log file download
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /logs/retention:
+    get:
+      summary: Get log retention settings
+      description: |
+        Get the current log retention period in days.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/logs/retention \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Logs]
+      responses:
+        '200':
+          description: Retention settings retrieved
+    put:
+      summary: Set log retention period
+      description: |
+        Configure how many days log entries are retained before automatic cleanup.
+
+        **Example:**
+        ```bash
+        curl -X PUT http://your-server/api/logs/retention \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"log_retention_days": 60}'
+        ```
+      tags: [Logs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [log_retention_days]
+              properties:
+                log_retention_days:
+                  type: integer
+                  minimum: 1
+                  description: Number of days to retain logs
+      responses:
+        '200':
+          description: Retention settings updated
+        '400':
+          description: Invalid retention value
+
+  /logs/purge:
+    post:
+      summary: Purge log entries
+      description: |
+        Manually purge log entries matching the given filters.
+        At least one filter parameter is required to prevent accidental full purge.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/logs/purge \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"before": "2025-01-01T00:00:00Z"}'
+        ```
+      tags: [Logs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scan_id:
+                  type: string
+                  description: Purge logs for a specific scan ("system" for non-scan logs)
+                before:
+                  type: string
+                  format: date-time
+                  description: Purge logs older than this timestamp
+                level:
+                  type: string
+                  enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+                  description: Purge logs at or above this level
+      responses:
+        '200':
+          description: Logs purged successfully
+        '400':
+          description: At least one filter is required
+
 tags:
   - name: Authentication
     description: User authentication, authorization, and API token management
@@ -2715,3 +2966,5 @@ tags:
     description: Scan report generation, management, and PDF export
   - name: Configuration
     description: Exclusions, patterns, and advanced configuration
+  - name: Logs
+    description: Log viewing, filtering, download, and retention management
