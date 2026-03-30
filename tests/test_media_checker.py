@@ -4,6 +4,7 @@ Tests for PixelProbe media checker core functionality
 
 import pytest
 import os
+import subprocess
 import time
 import threading
 from unittest.mock import Mock, patch, MagicMock
@@ -402,3 +403,199 @@ class TestMediaChecker:
         # Scan output should be captured
         assert 'scan_output' in result
         # Output might be None for valid files or contain FFmpeg output
+
+
+class TestVideoFreezeDetection:
+    """Test video freeze detection via FFmpeg freezedetect filter"""
+
+    def _make_freezedetect_stderr(self, events):
+        """Build fake FFmpeg stderr containing freezedetect log lines.
+
+        Args:
+            events: list of (start, end, duration) tuples
+        """
+        lines = []
+        for start, end, duration in events:
+            lines.append(
+                f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_start: {start}"
+            )
+            lines.append(
+                f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_end: {end}"
+            )
+            lines.append(
+                f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_duration: {duration}"
+            )
+        return "\n".join(lines)
+
+    @patch('subprocess.run')
+    def test_video_freeze_detection(self, mock_run):
+        """Freeze events are detected and marked as corruption"""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = self._make_freezedetect_stderr([
+            (10.0, 15.0, 5.0),
+            (45.5, 50.0, 4.5),
+        ])
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+            '/fake/video.mp4', duration=120.0
+        )
+
+        assert is_corrupted is True
+        assert len(corruption_details) == 1
+        assert '2 event(s)' in corruption_details[0]
+        assert '9.5s frozen' in corruption_details[0]
+        assert '7.9%' in corruption_details[0]
+        # Scan output should contain per-event detail
+        assert any('Freeze #1' in line for line in scan_output)
+        assert any('Freeze #2' in line for line in scan_output)
+
+    @patch('subprocess.run')
+    def test_video_no_freeze(self, mock_run):
+        """Clean video produces no corruption"""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = 'frame=1200 fps=60 q=-0.0 Lsize=N/A time=00:00:40.00'
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+            '/fake/clean.mp4', duration=40.0
+        )
+
+        assert is_corrupted is False
+        assert corruption_details == []
+        assert any('No freeze events' in line for line in scan_output)
+
+    @patch('subprocess.run')
+    def test_video_freeze_timeout(self, mock_run):
+        """Timeout during freeze detection is handled gracefully"""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd='ffmpeg', timeout=60)
+
+        checker = PixelProbe()
+        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+            '/fake/big.mp4', duration=30.0
+        )
+
+        assert is_corrupted is False
+        assert corruption_details == []
+        assert any('timed out' in line for line in scan_output)
+
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    @patch('subprocess.run')
+    @patch('ffmpeg.probe')
+    def test_video_freeze_integrated_in_corruption_check(
+        self, mock_probe, mock_run, mock_exists, mock_getsize
+    ):
+        """Freeze detection results propagate through _check_video_corruption"""
+        mock_exists.return_value = True
+        mock_getsize.return_value = 1024 * 1024
+
+        mock_probe.return_value = {
+            'streams': [{
+                'codec_type': 'video',
+                'codec_name': 'h264',
+                'profile': 'High',
+                'pix_fmt': 'yuv420p',
+                'duration': '60.0'
+            }],
+            'format': {
+                'duration': '60.0'
+            }
+        }
+
+        # All subprocess calls return clean except freeze detection
+        def subprocess_side_effect(cmd, *args, **kwargs):
+            result = Mock()
+            result.returncode = 0
+            result.stdout = ''
+            # Detect the freezedetect call by checking for the filter arg
+            if any('freezedetect' in str(arg) for arg in cmd):
+                result.stderr = self._make_freezedetect_stderr([(5.0, 10.0, 5.0)])
+            else:
+                result.stderr = ''
+            return result
+
+        mock_run.side_effect = subprocess_side_effect
+
+        checker = PixelProbe()
+        is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
+            checker._check_video_corruption('/fake/freeze_video.mp4')
+        )
+
+        assert is_corrupted is True
+        assert any('Video freeze detected' in d for d in corruption_details)
+        assert any('Freeze #1' in line for line in scan_output)
+
+    @patch('subprocess.run')
+    def test_video_freeze_incomplete_event_dropped(self, mock_run):
+        """Incomplete freeze event (video ends mid-freeze) is silently dropped"""
+        # freeze_start emitted but freeze_duration never comes
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = (
+            "[freezedetect @ 0x1234] lavfi.freezedetect.freeze_start: 55.0\n"
+        )
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+            '/fake/cutoff.mp4', duration=60.0
+        )
+
+        assert is_corrupted is False
+        assert corruption_details == []
+        assert any('No freeze events' in line for line in scan_output)
+
+    @patch.dict('os.environ', {'FREEZE_DETECTION_ENABLED': 'false'})
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    @patch('subprocess.run')
+    @patch('ffmpeg.probe')
+    def test_freeze_detection_disabled_via_env(
+        self, mock_probe, mock_run, mock_exists, mock_getsize
+    ):
+        """Freeze detection is skipped when FREEZE_DETECTION_ENABLED=false"""
+        mock_exists.return_value = True
+        mock_getsize.return_value = 1024 * 1024
+
+        mock_probe.return_value = {
+            'streams': [{
+                'codec_type': 'video',
+                'codec_name': 'h264',
+                'profile': 'High',
+                'pix_fmt': 'yuv420p',
+                'duration': '60.0'
+            }],
+            'format': {
+                'duration': '60.0'
+            }
+        }
+
+        # Return freezedetect output -- but it should never be reached
+        def subprocess_side_effect(cmd, *args, **kwargs):
+            result = Mock()
+            result.returncode = 0
+            result.stdout = ''
+            if any('freezedetect' in str(arg) for arg in cmd):
+                result.stderr = self._make_freezedetect_stderr([(5.0, 10.0, 5.0)])
+            else:
+                result.stderr = ''
+            return result
+
+        mock_run.side_effect = subprocess_side_effect
+
+        checker = PixelProbe()
+        is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
+            checker._check_video_corruption('/fake/freeze_disabled.mp4')
+        )
+
+        # Should NOT be corrupted -- freeze detection was skipped
+        assert not any('Video freeze detected' in d for d in corruption_details)
+        assert not any('Freeze #' in line for line in scan_output)

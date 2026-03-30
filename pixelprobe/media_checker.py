@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import magic
 import logging
@@ -24,6 +25,11 @@ import threading
 from pixelprobe.utils.security import safe_subprocess_run, validate_file_path
 
 logger = logging.getLogger(__name__)
+
+# Pre-compiled patterns for parsing FFmpeg freezedetect filter output
+_RE_FREEZE_START = re.compile(r'freeze_start:\s*([\d.]+)')
+_RE_FREEZE_END = re.compile(r'freeze_end:\s*([\d.]+)')
+_RE_FREEZE_DURATION = re.compile(r'freeze_duration:\s*([\d.]+)')
 
 def get_default_filename_patterns():
     """Get default filename patterns to exclude"""
@@ -1400,9 +1406,18 @@ class PixelProbe:
                 corruption_details.extend(hevc_details)
                 scan_output.extend(hevc_output)
         
+        # Freeze detection - check for stuck frames (configurable via FREEZE_DETECTION_ENABLED)
+        freeze_enabled = os.getenv('FREEZE_DETECTION_ENABLED', 'true').lower() == 'true'
+        if freeze_enabled and duration and duration > 0:
+            freeze_corrupted, freeze_details, freeze_output = self._check_video_freeze(file_path, duration)
+            if freeze_corrupted:
+                is_corrupted = True
+                corruption_details.extend(freeze_details)
+                scan_output.extend(freeze_output)
+
         # Return warning details as well
         return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
-    
+
     def _check_audio_corruption(self, file_path):
         """Check audio files for corruption using FFmpeg and format-specific tools"""
         corruption_details = []
@@ -1657,7 +1672,109 @@ class PixelProbe:
             logger.error(f"HEVC Main 10 check error for {file_path}: {str(e)}")
         
         return is_corrupted, corruption_details, hevc_output
-    
+
+    def _check_video_freeze(self, file_path, duration):
+        """Detect frozen video frames using FFmpeg's freezedetect filter.
+
+        A freeze is where the video picture stops changing while time (and audio)
+        continues.  Uses the lavfi freezedetect filter with a 2-second minimum
+        duration and -60 dB noise tolerance.
+
+        Returns (is_corrupted, corruption_details, scan_output).
+        """
+        corruption_details = []
+        is_corrupted = False
+        scan_output = []
+
+        logger.info(f"Running freeze detection for {file_path}")
+        scan_output.append("=== Freeze Detection Analysis ===")
+
+        # Timeout: 2x realtime for full decode, floor 60s, cap 7200s
+        timeout_seconds = max(60, min(int(duration * 2), 7200))
+
+        try:
+            result = safe_subprocess_run([
+                'ffmpeg',
+                '-nostdin',
+                '-v', 'info',
+                '-i', file_path,
+                '-an',
+                '-vf', 'freezedetect=n=-60dB:d=2',
+                '-f', 'null',
+                '-'
+            ], capture_output=True, text=True, timeout=timeout_seconds)
+
+            stderr = result.stderr or ''
+
+            freeze_events = []
+            current_event = {}
+
+            for line in stderr.split('\n'):
+                if 'freezedetect' not in line.lower():
+                    continue
+
+                start_match = _RE_FREEZE_START.search(line)
+                if start_match:
+                    current_event['start'] = float(start_match.group(1))
+
+                end_match = _RE_FREEZE_END.search(line)
+                if end_match:
+                    current_event['end'] = float(end_match.group(1))
+
+                dur_match = _RE_FREEZE_DURATION.search(line)
+                if dur_match:
+                    current_event['duration'] = float(dur_match.group(1))
+                    # freeze_duration is the last field emitted per event
+                    if 'start' in current_event:
+                        freeze_events.append(current_event)
+                    current_event = {}
+
+            if freeze_events:
+                is_corrupted = True
+                total_frozen = sum(e.get('duration', 0) for e in freeze_events)
+                frozen_pct = total_frozen / duration * 100
+
+                summary = (
+                    f"Video freeze detected: {len(freeze_events)} event(s), "
+                    f"{total_frozen:.1f}s frozen ({frozen_pct:.1f}% of video)"
+                )
+                corruption_details.append(summary)
+                scan_output.append(summary)
+
+                for i, event in enumerate(freeze_events[:10]):
+                    start = event.get('start', 0)
+                    end = event.get('end', 0)
+                    dur = event.get('duration', 0)
+                    scan_output.append(
+                        f"  Freeze #{i + 1}: {start:.1f}s - {end:.1f}s (duration: {dur:.1f}s)"
+                    )
+                if len(freeze_events) > 10:
+                    scan_output.append(f"  ... and {len(freeze_events) - 10} more freeze event(s)")
+
+                logger.warning(
+                    f"Freeze detected in {file_path}: {len(freeze_events)} event(s), "
+                    f"{total_frozen:.1f}s total frozen"
+                )
+            else:
+                scan_output.append("No freeze events detected")
+                logger.info(f"No freeze detected in {file_path}")
+
+        except subprocess.TimeoutExpired:
+            scan_output.append(f"Freeze detection timed out after {timeout_seconds}s")
+            logger.warning(f"Freeze detection timeout for {file_path} ({timeout_seconds}s)")
+        except FileNotFoundError:
+            logger.warning("FFmpeg not found, skipping freeze detection")
+        except OSError as e:
+            # OSError includes SIGBUS and other memory-related errors
+            logger.error(f"Freeze detection process crashed for {file_path}: {str(e)}")
+            corruption_details.append(f"Freeze detection process crashed (possible memory error): {str(e)}")
+            is_corrupted = True
+        except Exception as e:
+            logger.debug(f"Freeze detection error for {file_path}: {str(e)}")
+
+        scan_output.append("=== Freeze Detection Complete ===")
+        return is_corrupted, corruption_details, scan_output
+
     def _enhanced_corruption_check(self, file_path, file_size_gb):
         """Enhanced multi-stage corruption detection for files that fail basic checks"""
         corruption_details = []
