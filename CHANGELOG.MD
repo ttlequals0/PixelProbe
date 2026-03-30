@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
-## [2.6.3] - 2026-03-30
+## [2.6.4] - 2026-03-30
 
 ### Added
 
@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Fix "0 of 0 files" progress display during scanning phase**: The scan status API returned `estimated_total=0` during the gap between phase transition and chunk counting. Added explicit Redis update after DB commit and a fallback to `phase_total` in the API when `estimated_total` is 0.
+- **Filter black frame false positives from freeze detection**: Freeze events that overlap with black sections (scene transitions, studio logos, end credits) are now filtered out. Uses FFmpeg `blackdetect` filter chained with `freezedetect` in a single decode pass.
 
 ---
 

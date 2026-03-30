@@ -31,6 +31,11 @@ _RE_FREEZE_START = re.compile(r'freeze_start:\s*([\d.]+)')
 _RE_FREEZE_END = re.compile(r'freeze_end:\s*([\d.]+)')
 _RE_FREEZE_DURATION = re.compile(r'freeze_duration:\s*([\d.]+)')
 
+# Pre-compiled patterns for parsing FFmpeg blackdetect filter output
+_RE_BLACK_START = re.compile(r'black_start:\s*([\d.]+)')
+_RE_BLACK_END = re.compile(r'black_end:\s*([\d.]+)')
+_RE_BLACK_DURATION = re.compile(r'black_duration:\s*([\d.]+)')
+
 def get_default_filename_patterns():
     """Get default filename patterns to exclude"""
     return [
@@ -1699,7 +1704,7 @@ class PixelProbe:
                 '-v', 'info',
                 '-i', file_path,
                 '-an',
-                '-vf', 'freezedetect=n=-60dB:d=2',
+                '-vf', 'freezedetect=n=-60dB:d=2,blackdetect=d=0.5:pix_th=0.10',
                 '-f', 'null',
                 '-'
             ], capture_output=True, text=True, timeout=timeout_seconds)
@@ -1707,27 +1712,75 @@ class PixelProbe:
             stderr = result.stderr or ''
 
             freeze_events = []
-            current_event = {}
+            black_events = []
+            current_freeze = {}
+            current_black = {}
 
             for line in stderr.split('\n'):
-                if 'freezedetect' not in line.lower():
-                    continue
+                line_lower = line.lower()
 
-                start_match = _RE_FREEZE_START.search(line)
-                if start_match:
-                    current_event['start'] = float(start_match.group(1))
+                # Parse freezedetect events
+                if 'freezedetect' in line_lower:
+                    start_match = _RE_FREEZE_START.search(line)
+                    if start_match:
+                        current_freeze['start'] = float(start_match.group(1))
 
-                end_match = _RE_FREEZE_END.search(line)
-                if end_match:
-                    current_event['end'] = float(end_match.group(1))
+                    end_match = _RE_FREEZE_END.search(line)
+                    if end_match:
+                        current_freeze['end'] = float(end_match.group(1))
 
-                dur_match = _RE_FREEZE_DURATION.search(line)
-                if dur_match:
-                    current_event['duration'] = float(dur_match.group(1))
-                    # freeze_duration is the last field emitted per event
-                    if 'start' in current_event:
-                        freeze_events.append(current_event)
-                    current_event = {}
+                    dur_match = _RE_FREEZE_DURATION.search(line)
+                    if dur_match:
+                        current_freeze['duration'] = float(dur_match.group(1))
+                        # freeze_duration is the last field emitted per event
+                        if 'start' in current_freeze:
+                            freeze_events.append(current_freeze)
+                        current_freeze = {}
+
+                # Parse blackdetect events
+                elif 'blackdetect' in line_lower or 'black_start' in line_lower:
+                    bs = _RE_BLACK_START.search(line)
+                    if bs:
+                        current_black['start'] = float(bs.group(1))
+
+                    be = _RE_BLACK_END.search(line)
+                    if be:
+                        current_black['end'] = float(be.group(1))
+
+                    bd = _RE_BLACK_DURATION.search(line)
+                    if bd:
+                        current_black['duration'] = float(bd.group(1))
+                        if 'start' in current_black and 'end' in current_black:
+                            black_events.append(current_black)
+                        current_black = {}
+
+            # Filter out freeze events that overlap with black sections
+            # Real freezes stick on actual content, not black frames
+            if freeze_events and black_events:
+                total_before = len(freeze_events)
+                filtered = []
+                for freeze in freeze_events:
+                    f_start = freeze.get('start', 0)
+                    f_end = f_start + freeze.get('duration', 0)
+                    overlaps_black = False
+                    for black in black_events:
+                        b_start = black.get('start', 0)
+                        b_end = black.get('end', 0)
+                        if f_start < b_end and b_start < f_end:
+                            overlaps_black = True
+                            break
+                    if not overlaps_black:
+                        filtered.append(freeze)
+                removed = total_before - len(filtered)
+                if removed > 0:
+                    logger.info(
+                        f"Filtered {removed} of {total_before} freeze events "
+                        f"(black frame overlap) for {file_path}"
+                    )
+                    scan_output.append(
+                        f"Filtered {removed} of {total_before} freeze events (black frame false positives)"
+                    )
+                freeze_events = filtered
 
             if freeze_events:
                 is_corrupted = True

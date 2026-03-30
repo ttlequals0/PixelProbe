@@ -427,6 +427,19 @@ class TestVideoFreezeDetection:
             )
         return "\n".join(lines)
 
+    def _make_blackdetect_stderr(self, events):
+        """Build fake FFmpeg stderr containing blackdetect log lines.
+
+        Args:
+            events: list of (start, end, duration) tuples
+        """
+        lines = []
+        for start, end, duration in events:
+            lines.append(
+                f"[blackdetect @ 0x5678] black_start:{start} black_end:{end} black_duration:{duration}"
+            )
+        return "\n".join(lines)
+
     @patch('subprocess.run')
     def test_video_freeze_detection(self, mock_run):
         """Freeze events are detected and marked as corruption"""
@@ -599,3 +612,58 @@ class TestVideoFreezeDetection:
         # Should NOT be corrupted -- freeze detection was skipped
         assert not any('Video freeze detected' in d for d in corruption_details)
         assert not any('Freeze #' in line for line in scan_output)
+
+    @patch('subprocess.run')
+    def test_video_freeze_black_frame_filtered(self, mock_run):
+        """Freeze events overlapping black sections are filtered as false positives"""
+        # Freeze at 0-3s and 100-105s, black at 0-4s and 99-106s
+        # Both freezes overlap black -- should be filtered out entirely
+        freeze_stderr = self._make_freezedetect_stderr([
+            (0.0, 3.0, 3.0),
+            (100.0, 105.0, 5.0),
+        ])
+        black_stderr = self._make_blackdetect_stderr([
+            (0.0, 4.0, 4.0),
+            (99.0, 106.0, 7.0),
+        ])
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = freeze_stderr + "\n" + black_stderr
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+            '/fake/transitions.mp4', duration=120.0
+        )
+
+        assert is_corrupted is False
+        assert corruption_details == []
+        assert any('Filtered 2 of 2' in line for line in scan_output)
+
+    @patch('subprocess.run')
+    def test_video_freeze_real_freeze_not_filtered(self, mock_run):
+        """Freeze on actual content (no black overlap) is still flagged"""
+        # Freeze at 50-55s on real content, black only at 0-2s (opening)
+        freeze_stderr = self._make_freezedetect_stderr([
+            (0.0, 2.0, 2.0),    # overlaps black -- filtered
+            (50.0, 55.0, 5.0),  # no black overlap -- kept
+        ])
+        black_stderr = self._make_blackdetect_stderr([
+            (0.0, 2.5, 2.5),
+        ])
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = freeze_stderr + "\n" + black_stderr
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+            '/fake/real_freeze.mp4', duration=120.0
+        )
+
+        assert is_corrupted is True
+        assert len(corruption_details) == 1
+        assert '1 event(s)' in corruption_details[0]
+        assert any('Filtered 1 of 2' in line for line in scan_output)
