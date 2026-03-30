@@ -622,6 +622,18 @@ class ScanService:
                     db.session.commit()
                     # Force flush to ensure changes are written immediately
                     db.session.flush()
+
+                    # Ensure Redis has the correct total immediately after phase transition
+                    # Prevents "0 of 0" display while chunk counting runs
+                    if hasattr(self, 'update_scan_progress_redis') and self.update_scan_progress_redis and self.scan_id:
+                        self.update_scan_progress_redis(
+                            self.scan_id,
+                            files_processed=0,
+                            estimated_total=total_scan_files,
+                            phase='scanning',
+                            current_file=''
+                        )
+
                     logger.info(f"Scan state transitioned to 'scanning' phase "
                                f"with {total_scan_files} files")
                     

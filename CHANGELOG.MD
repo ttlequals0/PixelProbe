@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Video freeze detection**: Detect videos with frozen frames (stuck picture while audio continues) using FFmpeg's `freezedetect` filter. Freeze events are marked as corruption with details including event count, total frozen time, percentage of video frozen, and per-event timestamps. Uses `-60dB` noise tolerance and `2s` minimum freeze duration. Configurable via `FREEZE_DETECTION_ENABLED` environment variable (default: `true`).
 
+### Fixed
+
+- **Fix "0 of 0 files" progress display during scanning phase**: The scan status API returned `estimated_total=0` during the gap between phase transition and chunk counting. Added explicit Redis update after DB commit and a fallback to `phase_total` in the API when `estimated_total` is 0.
+
 ---
 
 ## [2.6.2] - 2026-03-20

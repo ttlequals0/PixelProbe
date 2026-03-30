@@ -614,6 +614,9 @@ def get_scan_status():
     # Use database values primarily, with service as fallback
     current_progress = state_dict.get('files_processed', service_status.get('current', 0))
     total_progress = state_dict.get('estimated_total', service_status.get('total', 0))
+    # Fallback: if estimated_total is 0 but phase_total has a value, use it
+    if total_progress == 0 and state_dict.get('phase_total', 0) > 0:
+        total_progress = state_dict.get('phase_total')
 
     # When scan is active, read real-time progress from Redis (much fresher than PostgreSQL)
     if scan_state and scan_state.is_active and scan_state.scan_id:
