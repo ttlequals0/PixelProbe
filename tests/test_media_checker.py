@@ -442,7 +442,7 @@ class TestVideoFreezeDetection:
 
     @patch('subprocess.run')
     def test_video_freeze_detection(self, mock_run):
-        """Freeze events are detected and marked as corruption"""
+        """Freeze events are detected and returned as warnings"""
         mock_result = Mock()
         mock_result.returncode = 0
         mock_result.stderr = self._make_freezedetect_stderr([
@@ -453,22 +453,21 @@ class TestVideoFreezeDetection:
         mock_run.return_value = mock_result
 
         checker = PixelProbe()
-        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
             '/fake/video.mp4', duration=120.0
         )
 
-        assert is_corrupted is True
-        assert len(corruption_details) == 1
-        assert '2 event(s)' in corruption_details[0]
-        assert '9.5s frozen' in corruption_details[0]
-        assert '7.9%' in corruption_details[0]
-        # Scan output should contain per-event detail
+        assert has_warnings is True
+        assert len(warning_details) == 1
+        assert '2 event(s)' in warning_details[0]
+        assert '9.5s frozen' in warning_details[0]
+        assert '7.9%' in warning_details[0]
         assert any('Freeze #1' in line for line in scan_output)
         assert any('Freeze #2' in line for line in scan_output)
 
     @patch('subprocess.run')
     def test_video_no_freeze(self, mock_run):
-        """Clean video produces no corruption"""
+        """Clean video produces no warnings"""
         mock_result = Mock()
         mock_result.returncode = 0
         mock_result.stderr = 'frame=1200 fps=60 q=-0.0 Lsize=N/A time=00:00:40.00'
@@ -476,12 +475,12 @@ class TestVideoFreezeDetection:
         mock_run.return_value = mock_result
 
         checker = PixelProbe()
-        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
             '/fake/clean.mp4', duration=40.0
         )
 
-        assert is_corrupted is False
-        assert corruption_details == []
+        assert has_warnings is False
+        assert warning_details == []
         assert any('No freeze events' in line for line in scan_output)
 
     @patch('subprocess.run')
@@ -490,12 +489,12 @@ class TestVideoFreezeDetection:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd='ffmpeg', timeout=60)
 
         checker = PixelProbe()
-        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
             '/fake/big.mp4', duration=30.0
         )
 
-        assert is_corrupted is False
-        assert corruption_details == []
+        assert has_warnings is False
+        assert warning_details == []
         assert any('timed out' in line for line in scan_output)
 
     @patch('os.path.getsize')
@@ -541,8 +540,10 @@ class TestVideoFreezeDetection:
             checker._check_video_corruption('/fake/freeze_video.mp4')
         )
 
-        assert is_corrupted is True
-        assert any('Video freeze detected' in d for d in corruption_details)
+        # Freeze detection produces warnings, not corruption
+        assert is_corrupted is False
+        assert not any('Video freeze' in d for d in corruption_details)
+        assert any('Video freeze warning' in w for w in warning_details)
         assert any('Freeze #1' in line for line in scan_output)
 
     @patch('subprocess.run')
@@ -558,12 +559,12 @@ class TestVideoFreezeDetection:
         mock_run.return_value = mock_result
 
         checker = PixelProbe()
-        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
             '/fake/cutoff.mp4', duration=60.0
         )
 
-        assert is_corrupted is False
-        assert corruption_details == []
+        assert has_warnings is False
+        assert warning_details == []
         assert any('No freeze events' in line for line in scan_output)
 
     @patch.dict('os.environ', {'FREEZE_DETECTION_ENABLED': 'false'})
@@ -633,12 +634,12 @@ class TestVideoFreezeDetection:
         mock_run.return_value = mock_result
 
         checker = PixelProbe()
-        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
             '/fake/transitions.mp4', duration=120.0
         )
 
-        assert is_corrupted is False
-        assert corruption_details == []
+        assert has_warnings is False
+        assert warning_details == []
         assert any('Filtered 2 of 2' in line for line in scan_output)
 
     @patch('subprocess.run')
@@ -659,11 +660,11 @@ class TestVideoFreezeDetection:
         mock_run.return_value = mock_result
 
         checker = PixelProbe()
-        is_corrupted, corruption_details, scan_output = checker._check_video_freeze(
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
             '/fake/real_freeze.mp4', duration=120.0
         )
 
-        assert is_corrupted is True
-        assert len(corruption_details) == 1
-        assert '1 event(s)' in corruption_details[0]
+        assert has_warnings is True
+        assert len(warning_details) == 1
+        assert '1 event(s)' in warning_details[0]
         assert any('Filtered 1 of 2' in line for line in scan_output)
