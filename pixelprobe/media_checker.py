@@ -1411,13 +1411,12 @@ class PixelProbe:
                 corruption_details.extend(hevc_details)
                 scan_output.extend(hevc_output)
         
-        # Freeze detection - check for stuck frames (configurable via FREEZE_DETECTION_ENABLED)
+        # Freeze detection - check for stuck frames (warning only, not corruption)
         freeze_enabled = os.getenv('FREEZE_DETECTION_ENABLED', 'true').lower() == 'true'
         if freeze_enabled and duration and duration > 0:
-            freeze_corrupted, freeze_details, freeze_output = self._check_video_freeze(file_path, duration)
-            if freeze_corrupted:
-                is_corrupted = True
-                corruption_details.extend(freeze_details)
+            freeze_detected, freeze_details, freeze_output = self._check_video_freeze(file_path, duration)
+            if freeze_detected:
+                warning_details.extend(freeze_details)
                 scan_output.extend(freeze_output)
 
         # Return warning details as well
@@ -1682,15 +1681,15 @@ class PixelProbe:
         """Detect frozen video frames using FFmpeg's freezedetect filter.
 
         A freeze is where the video picture stops changing while time (and audio)
-        continues.  Uses the lavfi freezedetect filter with a 4-second minimum
-        duration and -40 dB noise tolerance.  Black frame sections detected by
+        continues.  Uses the lavfi freezedetect filter with a 5-second minimum
+        duration and -60 dB noise tolerance.  Black frame sections detected by
         blackdetect are used to filter false positives from scene transitions,
         studio logos, and end credits.
 
-        Returns (is_corrupted, corruption_details, scan_output).
+        Returns (has_warnings, warning_details, scan_output).
         """
-        corruption_details = []
-        is_corrupted = False
+        warning_details = []
+        has_warnings = False
         scan_output = []
 
         logger.info(f"Running freeze detection for {file_path}")
@@ -1706,7 +1705,7 @@ class PixelProbe:
                 '-v', 'info',
                 '-i', file_path,
                 '-an',
-                '-vf', 'freezedetect=n=-40dB:d=4,blackdetect=d=1.0:pic_th=0.98:pix_th=0.10',
+                '-vf', 'freezedetect=n=-60dB:d=5,blackdetect=d=1.0:pic_th=0.98:pix_th=0.10',
                 '-f', 'null',
                 '-'
             ], capture_output=True, text=True, timeout=timeout_seconds)
@@ -1785,15 +1784,15 @@ class PixelProbe:
                 freeze_events = filtered
 
             if freeze_events:
-                is_corrupted = True
+                has_warnings = True
                 total_frozen = sum(e.get('duration', 0) for e in freeze_events)
                 frozen_pct = total_frozen / duration * 100
 
                 summary = (
-                    f"Video freeze detected: {len(freeze_events)} event(s), "
+                    f"Video freeze warning: {len(freeze_events)} event(s), "
                     f"{total_frozen:.1f}s frozen ({frozen_pct:.1f}% of video)"
                 )
-                corruption_details.append(summary)
+                warning_details.append(summary)
                 scan_output.append(summary)
 
                 for i, event in enumerate(freeze_events[:10]):
@@ -1806,8 +1805,8 @@ class PixelProbe:
                 if len(freeze_events) > 10:
                     scan_output.append(f"  ... and {len(freeze_events) - 10} more freeze event(s)")
 
-                logger.warning(
-                    f"Freeze detected in {file_path}: {len(freeze_events)} event(s), "
+                logger.info(
+                    f"Freeze warning in {file_path}: {len(freeze_events)} event(s), "
                     f"{total_frozen:.1f}s total frozen"
                 )
             else:
@@ -1822,13 +1821,11 @@ class PixelProbe:
         except OSError as e:
             # OSError includes SIGBUS and other memory-related errors
             logger.error(f"Freeze detection process crashed for {file_path}: {str(e)}")
-            corruption_details.append(f"Freeze detection process crashed (possible memory error): {str(e)}")
-            is_corrupted = True
         except Exception as e:
             logger.debug(f"Freeze detection error for {file_path}: {str(e)}")
 
         scan_output.append("=== Freeze Detection Complete ===")
-        return is_corrupted, corruption_details, scan_output
+        return has_warnings, warning_details, scan_output
 
     def _enhanced_corruption_check(self, file_path, file_size_gb):
         """Enhanced multi-stage corruption detection for files that fail basic checks"""

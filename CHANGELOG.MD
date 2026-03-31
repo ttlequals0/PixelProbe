@@ -5,11 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
-## [2.6.5] - 2026-03-30
+## [2.6.7] - 2026-03-31
 
 ### Added
 
-- **Video freeze detection**: Detect videos with frozen frames (stuck picture while audio continues) using FFmpeg's `freezedetect` filter. Freeze events are marked as corruption with details including event count, total frozen time, percentage of video frozen, and per-event timestamps. Uses `-40dB` noise tolerance and `4s` minimum freeze duration with black frame filtering to reduce false positives. Configurable via `FREEZE_DETECTION_ENABLED` environment variable (default: `true`).
+- **Video freeze detection**: Detect videos with frozen frames (stuck picture while audio continues) using FFmpeg's `freezedetect` filter. Freeze events are reported as **warnings** (not corruption) with details including event count, total frozen time, percentage of video frozen, and per-event timestamps. Uses `-60dB` noise tolerance and `5s` minimum freeze duration with black frame filtering to reduce false positives. Configurable via `FREEZE_DETECTION_ENABLED` environment variable (default: `true`).
 
 ### Fixed
 
