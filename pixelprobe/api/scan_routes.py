@@ -10,7 +10,7 @@ from pixelprobe.models import db, ScanResult, ScanState
 from pixelprobe.constants import TERMINAL_SCAN_PHASES
 from pixelprobe.version import __version__
 from pixelprobe.auth import auth_required
-from pixelprobe.progress_utils import get_scan_progress_redis
+from pixelprobe.progress_utils import get_scan_progress_redis, clear_scan_progress_redis
 
 from pixelprobe.utils.security import (
     validate_file_path, validate_directory_path,
@@ -936,6 +936,11 @@ def force_cleanup_scan():
             scan.phase = 'crashed'
             scan.error_message = 'Force cleaned up by admin'
             scan.end_time = datetime.now(timezone.utc)
+            # Clear stale Redis progress to prevent new scans from reading old data
+            try:
+                clear_scan_progress_redis(scan.scan_id)
+            except Exception as redis_err:
+                logger.warning(f"Failed to clear Redis progress for {scan.scan_id}: {redis_err}")
             cleaned_count += 1
         
         # Also stop any thread-based scans

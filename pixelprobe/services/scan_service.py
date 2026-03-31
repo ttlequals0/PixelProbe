@@ -226,6 +226,13 @@ class ScanService:
         scan_state_id = scan_state.id
         scan_id = scan_state.scan_id
 
+        # Clear stale Redis progress from a previous scan with this ID
+        try:
+            from pixelprobe.progress_utils import clear_scan_progress_redis
+            clear_scan_progress_redis(scan_id)
+        except Exception as e:
+            logger.debug(f"Could not clear stale Redis progress for {scan_id}: {e}")
+
         # Start UI progress worker task if using Celery
         try:
             from pixelprobe.tasks import ui_progress_update_task
@@ -710,6 +717,11 @@ class ScanService:
             logger.info("Running scan synchronously for Celery task")
             try:
                 run_scan()
+                # run_scan() uses a nested app_context with its own db.session,
+                # so the outer session may have stale cached objects (including
+                # is_active=True from before _mark_scan_completed ran).
+                # Expire all to force fresh reads from PostgreSQL.
+                db.session.expire_all()
                 # Get final scan state for results
                 final_scan_state = db.session.get(ScanState, scan_state_id)
                 if final_scan_state:
@@ -1755,6 +1767,10 @@ class ScanService:
             }
         )
         db.session.commit()
+        # Expire all cached ORM objects so subsequent queries/commits
+        # read the updated state from PostgreSQL instead of writing
+        # stale is_active=True back from the identity map
+        db.session.expire_all()
 
     def _create_scan_report(self, scan_state: ScanState, scan_type: str = 'full_scan'):
         """Create a scan report from the completed scan state"""

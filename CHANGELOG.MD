@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
-## [2.6.7] - 2026-03-31
+## [2.6.8] - 2026-03-31
 
 ### Added
 
@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Fix "0 of 0 files" progress display during scanning phase**: The scan status API returned `estimated_total=0` during the gap between phase transition and chunk counting. Added explicit Redis update after DB commit and a fallback to `phase_total` in the API when `estimated_total` is 0.
 - **Filter black frame false positives from freeze detection**: Freeze events that overlap with black sections (scene transitions, studio logos, end credits) are now filtered out. Uses FFmpeg `blackdetect` filter chained with `freezedetect` in a single decode pass.
+- **Fix scan stuck as active after completion**: Two issues -- (1) `_mark_scan_completed()` used raw SQL UPDATE but the ORM identity map still held stale `is_active=True`; when `_create_scan_report()` committed, it overwrote the completed state. Added `db.session.expire_all()` after the raw SQL commit. (2) Recovery endpoint and new scans didn't clear stale Redis progress keys, causing the API to return contradictory state (running + completed). Added `clear_scan_progress_redis()` to recovery and scan start.
 
 ---
 
