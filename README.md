@@ -18,7 +18,7 @@ PixelProbe detects corrupted video, image, and audio files across your media lib
 
 ### Detection Capabilities
 - FFmpeg-based deep video analysis
-- Video freeze detection (stuck frames while audio continues) via FFmpeg freezedetect filter
+- Video freeze detection (stuck frames while audio continues) via FFmpeg freezedetect filter with black frame false positive filtering
 - ImageMagick and PIL image validation
 - Smart warning system for minor issues vs critical corruption
 - Multi-stage detection with configurable thresholds

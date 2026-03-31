@@ -1682,8 +1682,10 @@ class PixelProbe:
         """Detect frozen video frames using FFmpeg's freezedetect filter.
 
         A freeze is where the video picture stops changing while time (and audio)
-        continues.  Uses the lavfi freezedetect filter with a 2-second minimum
-        duration and -60 dB noise tolerance.
+        continues.  Uses the lavfi freezedetect filter with a 4-second minimum
+        duration and -40 dB noise tolerance.  Black frame sections detected by
+        blackdetect are used to filter false positives from scene transitions,
+        studio logos, and end credits.
 
         Returns (is_corrupted, corruption_details, scan_output).
         """
@@ -1704,7 +1706,7 @@ class PixelProbe:
                 '-v', 'info',
                 '-i', file_path,
                 '-an',
-                '-vf', 'freezedetect=n=-60dB:d=2,blackdetect=d=0.5:pix_th=0.10',
+                '-vf', 'freezedetect=n=-40dB:d=4,blackdetect=d=1.0:pic_th=0.98:pix_th=0.10',
                 '-f', 'null',
                 '-'
             ], capture_output=True, text=True, timeout=timeout_seconds)
