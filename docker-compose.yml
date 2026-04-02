@@ -88,9 +88,10 @@ services:
       BATCH_SIZE: ${BATCH_SIZE:-100}
       MAX_OUTPUT_SIZE: ${MAX_OUTPUT_SIZE:-10000}
       OUTPUT_ROTATION_ENABLED: ${OUTPUT_ROTATION_ENABLED:-true}
+      FREEZE_DETECTION_ENABLED: ${FREEZE_DETECTION_ENABLED:-true}
       TZ: America/New_York
-      
-      
+
+
       # Scheduled scans
       PERIODIC_SCAN_SCHEDULE: ${PERIODIC_SCAN_SCHEDULE:-}
       CLEANUP_SCHEDULE: ${CLEANUP_SCHEDULE:-}
@@ -147,6 +148,7 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       FLASK_ENV: ${FLASK_ENV:-production}
       MAX_WORKERS: ${MAX_WORKERS:-10}  # Parallel file scanning workers per task
+      FREEZE_DETECTION_ENABLED: ${FREEZE_DETECTION_ENABLED:-true}
 
       # Scan configuration (required for scheduler)
       SCAN_PATHS: ${SCAN_PATHS:-/media}

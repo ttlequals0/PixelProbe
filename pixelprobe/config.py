@@ -71,6 +71,7 @@ class Config:
     BATCH_SIZE = int(os.getenv('BATCH_SIZE', '100'))
     MAX_OUTPUT_SIZE = int(os.getenv('MAX_OUTPUT_SIZE', '10000'))  # For output rotation
     OUTPUT_ROTATION_ENABLED = os.getenv('OUTPUT_ROTATION_ENABLED', 'true').lower() == 'true'
+    FREEZE_DETECTION_ENABLED = os.getenv('FREEZE_DETECTION_ENABLED', 'true').lower() == 'true'
     
     # P1 Celery task queue configuration (now implemented)
     # Celery 5.x requires lowercase config keys - keep both for compatibility

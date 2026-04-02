@@ -54,6 +54,7 @@ All configuration is done via environment variables, either in `.env` file or di
 | `BATCH_SIZE` | `100` | Files per batch during discovery | 50-200 based on file sizes |
 | `MAX_OUTPUT_SIZE` | `10000` | Max output characters before rotation | 10000-50000 |
 | `OUTPUT_ROTATION_ENABLED` | `true` | Enable output truncation | `true` for large scans |
+| `FREEZE_DETECTION_ENABLED` | `true` | Enable video freeze detection (freezedetect + blackdetect) | `false` to skip and reduce scan time |
 
 **Performance Notes:**
 - `MAX_WORKERS` controls parallelism within each scan task

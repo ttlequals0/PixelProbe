@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import magic
 import logging
@@ -24,6 +25,16 @@ import threading
 from pixelprobe.utils.security import safe_subprocess_run, validate_file_path
 
 logger = logging.getLogger(__name__)
+
+# Pre-compiled patterns for parsing FFmpeg freezedetect filter output
+_RE_FREEZE_START = re.compile(r'freeze_start:\s*([\d.]+)')
+_RE_FREEZE_END = re.compile(r'freeze_end:\s*([\d.]+)')
+_RE_FREEZE_DURATION = re.compile(r'freeze_duration:\s*([\d.]+)')
+
+# Pre-compiled patterns for parsing FFmpeg blackdetect filter output
+_RE_BLACK_START = re.compile(r'black_start:\s*([\d.]+)')
+_RE_BLACK_END = re.compile(r'black_end:\s*([\d.]+)')
+_RE_BLACK_DURATION = re.compile(r'black_duration:\s*([\d.]+)')
 
 def get_default_filename_patterns():
     """Get default filename patterns to exclude"""
@@ -1400,9 +1411,17 @@ class PixelProbe:
                 corruption_details.extend(hevc_details)
                 scan_output.extend(hevc_output)
         
+        # Freeze detection - check for stuck frames (warning only, not corruption)
+        freeze_enabled = os.getenv('FREEZE_DETECTION_ENABLED', 'true').lower() == 'true'
+        if freeze_enabled and duration and duration > 0:
+            freeze_detected, freeze_details, freeze_output = self._check_video_freeze(file_path, duration)
+            if freeze_detected:
+                warning_details.extend(freeze_details)
+                scan_output.extend(freeze_output)
+
         # Return warning details as well
         return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
-    
+
     def _check_audio_corruption(self, file_path):
         """Check audio files for corruption using FFmpeg and format-specific tools"""
         corruption_details = []
@@ -1657,7 +1676,157 @@ class PixelProbe:
             logger.error(f"HEVC Main 10 check error for {file_path}: {str(e)}")
         
         return is_corrupted, corruption_details, hevc_output
-    
+
+    def _check_video_freeze(self, file_path, duration):
+        """Detect frozen video frames using FFmpeg's freezedetect filter.
+
+        A freeze is where the video picture stops changing while time (and audio)
+        continues.  Uses the lavfi freezedetect filter with a 5-second minimum
+        duration and -60 dB noise tolerance.  Black frame sections detected by
+        blackdetect are used to filter false positives from scene transitions,
+        studio logos, and end credits.
+
+        Returns (has_warnings, warning_details, scan_output).
+        """
+        warning_details = []
+        has_warnings = False
+        scan_output = []
+
+        logger.info(f"Running freeze detection for {file_path}")
+        scan_output.append("=== Freeze Detection Analysis ===")
+
+        # Timeout: 2x realtime for full decode, floor 60s, cap 7200s
+        timeout_seconds = max(60, min(int(duration * 2), 7200))
+
+        try:
+            result = safe_subprocess_run([
+                'ffmpeg',
+                '-nostdin',
+                '-v', 'info',
+                '-i', file_path,
+                '-an',
+                '-vf', 'freezedetect=n=-60dB:d=5,blackdetect=d=1.0:pic_th=0.98:pix_th=0.10',
+                '-f', 'null',
+                '-'
+            ], capture_output=True, text=True, timeout=timeout_seconds)
+
+            stderr = result.stderr or ''
+
+            freeze_events = []
+            black_events = []
+            current_freeze = {}
+            current_black = {}
+
+            for line in stderr.split('\n'):
+                line_lower = line.lower()
+
+                # Parse freezedetect events
+                if 'freezedetect' in line_lower:
+                    start_match = _RE_FREEZE_START.search(line)
+                    if start_match:
+                        current_freeze['start'] = float(start_match.group(1))
+
+                    end_match = _RE_FREEZE_END.search(line)
+                    if end_match:
+                        current_freeze['end'] = float(end_match.group(1))
+
+                    dur_match = _RE_FREEZE_DURATION.search(line)
+                    if dur_match:
+                        current_freeze['duration'] = float(dur_match.group(1))
+                        # freeze_duration is the last field emitted per event
+                        if 'start' in current_freeze:
+                            freeze_events.append(current_freeze)
+                        current_freeze = {}
+
+                # Parse blackdetect events
+                elif 'blackdetect' in line_lower or 'black_start' in line_lower:
+                    bs = _RE_BLACK_START.search(line)
+                    if bs:
+                        current_black['start'] = float(bs.group(1))
+
+                    be = _RE_BLACK_END.search(line)
+                    if be:
+                        current_black['end'] = float(be.group(1))
+
+                    bd = _RE_BLACK_DURATION.search(line)
+                    if bd:
+                        current_black['duration'] = float(bd.group(1))
+                        if 'start' in current_black and 'end' in current_black:
+                            black_events.append(current_black)
+                        current_black = {}
+
+            # Filter out freeze events that overlap with black sections
+            # Real freezes stick on actual content, not black frames
+            if freeze_events and black_events:
+                total_before = len(freeze_events)
+                filtered = []
+                for freeze in freeze_events:
+                    f_start = freeze.get('start', 0)
+                    f_end = f_start + freeze.get('duration', 0)
+                    overlaps_black = False
+                    for black in black_events:
+                        b_start = black.get('start', 0)
+                        b_end = black.get('end', 0)
+                        if f_start < b_end and b_start < f_end:
+                            overlaps_black = True
+                            break
+                    if not overlaps_black:
+                        filtered.append(freeze)
+                removed = total_before - len(filtered)
+                if removed > 0:
+                    logger.info(
+                        f"Filtered {removed} of {total_before} freeze events "
+                        f"(black frame overlap) for {file_path}"
+                    )
+                    scan_output.append(
+                        f"Filtered {removed} of {total_before} freeze events (black frame false positives)"
+                    )
+                freeze_events = filtered
+
+            if freeze_events:
+                has_warnings = True
+                total_frozen = sum(e.get('duration', 0) for e in freeze_events)
+                frozen_pct = total_frozen / duration * 100
+
+                summary = (
+                    f"Video freeze warning: {len(freeze_events)} event(s), "
+                    f"{total_frozen:.1f}s frozen ({frozen_pct:.1f}% of video)"
+                )
+                warning_details.append(summary)
+                scan_output.append(summary)
+
+                for i, event in enumerate(freeze_events[:10]):
+                    start = event.get('start', 0)
+                    end = event.get('end', 0)
+                    dur = event.get('duration', 0)
+                    scan_output.append(
+                        f"  Freeze #{i + 1}: {start:.1f}s - {end:.1f}s (duration: {dur:.1f}s)"
+                    )
+                if len(freeze_events) > 10:
+                    scan_output.append(f"  ... and {len(freeze_events) - 10} more freeze event(s)")
+
+                logger.info(
+                    f"Freeze warning in {file_path}: {len(freeze_events)} event(s), "
+                    f"{total_frozen:.1f}s total frozen"
+                )
+            else:
+                scan_output.append("No freeze events detected")
+                logger.info(f"No freeze detected in {file_path}")
+
+        except subprocess.TimeoutExpired:
+            scan_output.append(f"Freeze detection timed out after {timeout_seconds}s")
+            logger.warning(f"Freeze detection timeout for {file_path} ({timeout_seconds}s)")
+        except FileNotFoundError:
+            logger.warning("FFmpeg not found, skipping freeze detection")
+        except OSError as e:
+            # OSError includes SIGBUS and other memory-related errors
+            logger.error(f"Freeze detection process crashed for {file_path}: {str(e)}")
+        except Exception as e:
+            logger.debug(f"Freeze detection error for {file_path}: {str(e)}")
+
+        scan_output.append("=== Freeze Detection Complete ===")
+        return has_warnings, warning_details, scan_output
+
     def _enhanced_corruption_check(self, file_path, file_size_gb):
         """Enhanced multi-stage corruption detection for files that fail basic checks"""
         corruption_details = []

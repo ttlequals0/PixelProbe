@@ -255,3 +255,22 @@ def update_scan_progress_redis(scan_id, files_processed=0, estimated_total=0, ph
             logger.error(f"Failed to verify Redis data for {scan_id} - key might not exist!")
     except Exception as e:
         logger.error(f"Failed to update Redis progress: {e}")
+
+
+def clear_scan_progress_redis(scan_id):
+    """
+    Delete scan progress key from Redis.
+
+    Call this when recovering stuck scans or before starting a new scan
+    to prevent stale progress data from a previous run.
+    """
+    redis_client = get_redis_client()
+    if not redis_client:
+        return
+
+    progress_key = f"{_PROGRESS_KEY_PREFIX}:{scan_id}"
+    try:
+        redis_client.delete(progress_key)
+        logger.info(f"Cleared Redis progress key for scan {scan_id}")
+    except Exception as e:
+        logger.warning(f"Failed to clear Redis progress for scan {scan_id}: {e}")
