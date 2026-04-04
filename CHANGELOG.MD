@@ -5,11 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
-## [2.6.8] - 2026-03-31
+## [2.6.10] - 2026-04-04
 
 ### Added
 
 - **Video freeze detection**: Detect videos with frozen frames (stuck picture while audio continues) using FFmpeg's `freezedetect` filter. Freeze events are reported as **warnings** (not corruption) with details including event count, total frozen time, percentage of video frozen, and per-event timestamps. Uses `-60dB` noise tolerance and `5s` minimum freeze duration with black frame filtering to reduce false positives. Configurable via `FREEZE_DETECTION_ENABLED` environment variable (default: `true`).
+- **JPEG pixel corruption detection**: Detect visually corrupted JPEG files that pass PIL verification and ImageMagick validation but contain visible garbage (rainbow bands, solid color fill) in decoded pixel data. Uses row-averaged RGB sampling with two signals: sustained chaos (8+ consecutive rows with inter-row color difference > 100, catching rainbow garbage) and bottom-anchored solid fill (30+ consecutive identical rows extending to the image bottom, catching decoder fill). Designed to avoid false positives on high-contrast images like YouTube thumbnails.
 
 ### Fixed
 

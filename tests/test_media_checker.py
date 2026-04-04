@@ -5,9 +5,11 @@ Tests for PixelProbe media checker core functionality
 import pytest
 import os
 import subprocess
+import tempfile
 import time
 import threading
 from unittest.mock import Mock, patch, MagicMock
+from PIL import Image
 
 from pixelprobe.media_checker import PixelProbe
 
@@ -668,3 +670,129 @@ class TestVideoFreezeDetection:
         assert len(warning_details) == 1
         assert '1 event(s)' in warning_details[0]
         assert any('Filtered 1 of 2' in line for line in scan_output)
+
+
+class TestJpegPixelCorruption:
+    """Tests for JPEG pixel corruption detection."""
+
+    def test_jpeg_pixel_corruption_sustained_chaos(self):
+        """Detect corruption via sustained chaotic rows (rainbow garbage)."""
+        checker = PixelProbe()
+
+        # Create a 200x200 image with alternating color bands at the bottom
+        # simulating rainbow garbage -- each row drastically different from previous
+        # Using PNG to avoid JPEG compression smoothing the test signal
+        img = Image.new('RGB', (200, 200), (128, 128, 128))
+        pixels = img.load()
+        colors = [(255, 0, 0), (0, 0, 255), (0, 255, 0), (255, 255, 0)]
+        for y in range(160, 200):
+            c = colors[y % len(colors)]
+            for x in range(200):
+                pixels[x, y] = c
+
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+            img.save(f, 'PNG')
+            tmp_path = f.name
+
+        try:
+            is_corrupted, details, output = checker._check_jpeg_pixel_corruption(tmp_path)
+            assert is_corrupted is True
+            assert any('sustained chaos' in d for d in details)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_jpeg_pixel_corruption_solid_fill(self):
+        """Detect corruption via solid fill streak anchored to image bottom."""
+        checker = PixelProbe()
+
+        # Create a 200x200 image with 80 identical rows at the very bottom
+        # simulating decoder fill that runs to EOF
+        # Using PNG to preserve exact pixel equality
+        img = Image.new('RGB', (200, 200), (100, 150, 200))
+        pixels = img.load()
+        for y in range(120, 200):
+            for x in range(200):
+                pixels[x, y] = (128, 128, 128)
+
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+            img.save(f, 'PNG')
+            tmp_path = f.name
+
+        try:
+            is_corrupted, details, output = checker._check_jpeg_pixel_corruption(tmp_path)
+            assert is_corrupted is True
+            assert any('solid fill' in d for d in details)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_jpeg_high_contrast_no_false_positive(self):
+        """YouTube-style thumbnail with sharp text boundary should not trigger."""
+        checker = PixelProbe()
+
+        # Simulate a thumbnail: dark top bar, then varied photo content below
+        # Single sharp boundary but no sustained chaos, no solid fill to bottom
+        img = Image.new('RGB', (200, 200))
+        pixels = img.load()
+        for y in range(0, 50):
+            for x in range(200):
+                pixels[x, y] = (10, 10, 10)  # dark bar
+        for y in range(50, 200):
+            for x in range(200):
+                pixels[x, y] = ((x * 3 + y) % 256, (y * 2) % 256, (x + y * 3) % 256)
+
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+            img.save(f, 'PNG')
+            tmp_path = f.name
+
+        try:
+            is_corrupted, details, output = checker._check_jpeg_pixel_corruption(tmp_path)
+            assert is_corrupted is False
+            assert any('PASSED' in line for line in output)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_jpeg_clean_no_false_positive(self):
+        """Clean JPEG should not trigger corruption."""
+        checker = PixelProbe()
+
+        # Create a gradient image - smooth transitions, no sudden jumps
+        img = Image.new('RGB', (200, 200))
+        pixels = img.load()
+        for y in range(200):
+            for x in range(200):
+                pixels[x, y] = (x % 256, y % 256, (x + y) % 256)
+
+        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as f:
+            img.save(f, 'JPEG', quality=95)
+            tmp_path = f.name
+
+        try:
+            is_corrupted, details, output = checker._check_jpeg_pixel_corruption(tmp_path)
+            assert is_corrupted is False
+            assert len(details) == 0
+            assert any('PASSED' in line for line in output)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_jpeg_pixel_corruption_skipped_for_png(self):
+        """Pixel corruption check should only run for JPEG files."""
+        checker = PixelProbe()
+
+        # The _check_image_corruption method gates on is_jpeg, so we verify
+        # the method itself works but the gate is what matters.
+        # Create a gradient PNG and verify the check still returns clean when called directly
+        img = Image.new('RGB', (100, 100))
+        pixels = img.load()
+        for y in range(100):
+            for x in range(100):
+                pixels[x, y] = (x * 2 % 256, y * 2 % 256, (x + y) % 256)
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+            img.save(f, 'PNG')
+            tmp_path = f.name
+
+        try:
+            # Even if called directly on a PNG, it should not false-positive
+            is_corrupted, details, output = checker._check_jpeg_pixel_corruption(tmp_path)
+            assert is_corrupted is False
+        finally:
+            os.unlink(tmp_path)

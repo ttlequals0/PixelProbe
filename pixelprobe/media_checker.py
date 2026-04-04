@@ -861,6 +861,7 @@ class PixelProbe:
         file_ext = os.path.splitext(file_path)[1].lower()
         is_gif = file_ext == '.gif'
         is_heic = file_ext in ['.heic', '.heif']
+        is_jpeg = file_ext in ['.jpg', '.jpeg']
         
         # Check if HEIC is supported
         if is_heic and not HEIF_SUPPORT:
@@ -925,8 +926,16 @@ class PixelProbe:
                     logger.info(f"HEIC PIL load failed (may be libheif limitation) for {file_path}: {str(e)}")
                     # Don't mark as corrupted yet - ImageMagick will provide the definitive answer
         
+        # JPEG-specific pixel analysis -- catches corruption that PIL misses
+        if is_jpeg:
+            jpeg_corrupted, jpeg_details, jpeg_output = self._check_jpeg_pixel_corruption(file_path)
+            if jpeg_corrupted:
+                is_corrupted = True
+                corruption_details.extend(jpeg_details)
+                scan_output.extend(jpeg_output)
+
         logger.info(f"Starting ImageMagick verification for: {file_path}")
-        
+
         # Calculate timeout based on file type and size
         file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
         file_size_mb = file_size / (1024 * 1024)
@@ -1143,6 +1152,118 @@ class PixelProbe:
         
         return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
     
+    def _check_jpeg_pixel_corruption(self, file_path):
+        """Detect visual corruption in JPEG files via pixel analysis.
+
+        Catches truncated/corrupted JPEGs that pass PIL and ImageMagick
+        validation but contain visible garbage (rainbow bands, solid fill)
+        in the decoded pixel data.
+
+        Returns (is_corrupted, corruption_details, scan_output).
+        """
+        corruption_details = []
+        scan_output = []
+
+        try:
+            with Image.open(file_path) as img:
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                width, height = img.size
+
+                if height < 20 or width < 10:
+                    scan_output.append("JPEG pixel analysis: SKIPPED (image too small)")
+                    return False, corruption_details, scan_output
+
+                # Sample ~200 evenly-spaced rows, 50 pixels per row
+                pixels = img.load()
+                num_rows = min(200, height)
+                row_step = max(1, height // num_rows)
+                num_cols = min(50, width)
+                col_step = max(1, width // num_cols)
+
+                row_averages = []
+                for row_idx in range(0, height, row_step):
+                    r_sum, g_sum, b_sum = 0, 0, 0
+                    count = 0
+                    for col_idx in range(0, width, col_step):
+                        r, g, b = pixels[col_idx, row_idx]
+                        r_sum += r
+                        g_sum += g
+                        b_sum += b
+                        count += 1
+                    if count > 0:
+                        row_averages.append((r_sum // count, g_sum // count, b_sum // count))
+
+                if len(row_averages) < 4:
+                    scan_output.append("JPEG pixel analysis: SKIPPED (insufficient rows)")
+                    return False, corruption_details, scan_output
+
+                # Scan lower 80% for both signals in one pass:
+                # Signal 1: Sustained chaos -- 8+ consecutive rows with jump > 100
+                #   (corruption = many chaotic rows; normal images have 1-2 at boundaries)
+                # Signal 2: Bottom-anchored solid fill -- 30+ identical rows reaching image bottom
+                #   (decoder fill runs to EOF; normal solid backgrounds don't reach the last row)
+                start_row = len(row_averages) // 5
+                total_rows = len(row_averages)
+
+                max_chaos_streak = 0
+                current_chaos = 0
+                chaos_region_start = 0
+
+                max_fill_streak = 1
+                current_fill = 1
+                fill_start = 0
+                fill_end = 0
+
+                for i in range(start_row + 1, total_rows):
+                    prev = row_averages[i - 1]
+                    curr = row_averages[i]
+                    jump = abs(curr[0] - prev[0]) + abs(curr[1] - prev[1]) + abs(curr[2] - prev[2])
+
+                    if jump > 100:
+                        if current_chaos == 0:
+                            chaos_region_start = i
+                        current_chaos += 1
+                        if current_chaos > max_chaos_streak:
+                            max_chaos_streak = current_chaos
+                    else:
+                        current_chaos = 0
+
+                    if curr == prev:
+                        current_fill += 1
+                        if current_fill >= max_fill_streak:
+                            max_fill_streak = current_fill
+                            fill_start = i - current_fill + 1
+                            fill_end = i
+                    else:
+                        current_fill = 1
+
+                has_chaos = max_chaos_streak >= 8
+                near_bottom = fill_end >= total_rows * 0.95
+                has_fill = max_fill_streak >= 30 and near_bottom
+
+                if has_chaos or has_fill:
+                    details = []
+                    if has_chaos:
+                        pct = int(chaos_region_start / total_rows * 100)
+                        details.append(f"sustained chaos ({max_chaos_streak} rows) starting at {pct}%")
+                    if has_fill:
+                        pct = int(fill_start / total_rows * 100)
+                        details.append(f"solid fill streak of {max_fill_streak} rows at {pct}% to bottom")
+                    detail_str = "; ".join(details)
+                    corruption_details.append(f"JPEG pixel corruption detected: {detail_str}")
+                    scan_output.append(f"JPEG pixel analysis: CORRUPTED ({detail_str})")
+                    logger.warning(f"JPEG pixel corruption in {file_path}: {detail_str}")
+                    return True, corruption_details, scan_output
+
+                scan_output.append(f"JPEG pixel analysis: PASSED (chaos={max_chaos_streak}, fill={max_fill_streak})")
+                return False, corruption_details, scan_output
+
+        except Exception as e:
+            scan_output.append(f"JPEG pixel analysis: ERROR - {str(e)}")
+            logger.warning(f"JPEG pixel analysis error for {file_path}: {e}")
+            return False, corruption_details, scan_output
+
     def _check_video_corruption(self, file_path):
         corruption_details = []
         is_corrupted = False
