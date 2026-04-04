@@ -702,14 +702,19 @@ class TestJpegPixelCorruption:
             os.unlink(tmp_path)
 
     def test_jpeg_pixel_corruption_solid_fill(self):
-        """Detect corruption via solid fill streak anchored to image bottom."""
+        """Detect corruption via solid fill streak preceded by chaos."""
         checker = PixelProbe()
 
-        # Create a 200x200 image with 80 identical rows at the very bottom
-        # simulating decoder fill that runs to EOF
-        # Using PNG to preserve exact pixel equality
+        # Simulate real corruption: normal image -> chaotic garbage -> solid fill to EOF
         img = Image.new('RGB', (200, 200), (100, 150, 200))
         pixels = img.load()
+        # Rows 110-119: alternating solid colors (high inter-row jump averages)
+        chaos_colors = [(255, 0, 0), (0, 0, 255), (0, 255, 0), (255, 255, 0)]
+        for y in range(110, 120):
+            c = chaos_colors[y % len(chaos_colors)]
+            for x in range(200):
+                pixels[x, y] = c
+        # Rows 120-199: solid decoder fill to EOF
         for y in range(120, 200):
             for x in range(200):
                 pixels[x, y] = (128, 128, 128)

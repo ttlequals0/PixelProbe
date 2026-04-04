@@ -1201,8 +1201,9 @@ class PixelProbe:
                 # Scan lower 80% for both signals in one pass:
                 # Signal 1: Sustained chaos -- 8+ consecutive rows with jump > 100
                 #   (corruption = many chaotic rows; normal images have 1-2 at boundaries)
-                # Signal 2: Bottom-anchored solid fill -- 30+ identical rows reaching image bottom
-                #   (decoder fill runs to EOF; normal solid backgrounds don't reach the last row)
+                # Signal 2: Bottom-anchored solid fill preceded by chaos -- 30+ identical rows
+                #   reaching image bottom, with chaotic rows in the 10 rows before the fill
+                #   (corruption pattern: garbage data -> decoder gives up -> solid fill to EOF)
                 start_row = len(row_averages) // 5
                 total_rows = len(row_averages)
 
@@ -1215,10 +1216,13 @@ class PixelProbe:
                 fill_start = 0
                 fill_end = 0
 
+                row_jumps = []
+
                 for i in range(start_row + 1, total_rows):
                     prev = row_averages[i - 1]
                     curr = row_averages[i]
                     jump = abs(curr[0] - prev[0]) + abs(curr[1] - prev[1]) + abs(curr[2] - prev[2])
+                    row_jumps.append((i, jump))
 
                     if jump > 100:
                         if current_chaos == 0:
@@ -1240,7 +1244,15 @@ class PixelProbe:
 
                 has_chaos = max_chaos_streak >= 8
                 near_bottom = fill_end >= total_rows * 0.95
-                has_fill = max_fill_streak >= 30 and near_bottom
+
+                # Solid fill only counts if preceded by chaotic rows (corruption pattern)
+                chaos_before_fill = False
+                if max_fill_streak >= 30 and near_bottom:
+                    lookback_start = max(0, fill_start - start_row - 1 - 10)
+                    lookback_end = fill_start - start_row - 1
+                    chaotic_before = sum(1 for _, j in row_jumps[lookback_start:lookback_end] if j > 100)
+                    chaos_before_fill = chaotic_before >= 3
+                has_fill = max_fill_streak >= 30 and near_bottom and chaos_before_fill
 
                 if has_chaos or has_fill:
                     details = []
