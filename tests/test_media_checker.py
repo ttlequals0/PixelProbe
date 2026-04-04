@@ -801,3 +801,31 @@ class TestJpegPixelCorruption:
             assert is_corrupted is False
         finally:
             os.unlink(tmp_path)
+
+    def test_jpeg_pixel_analysis_skipped_large_dimensions(self):
+        """High-resolution images should be skipped to avoid OOM."""
+        checker = PixelProbe()
+
+        # Create a small file but mock Image.open to report large dimensions
+        img = Image.new('RGB', (100, 100), (128, 128, 128))
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+            img.save(f, 'PNG')
+            tmp_path = f.name
+
+        try:
+            class FakeImg:
+                mode = 'RGB'
+                size = (8000, 6000)  # 48MP -- exceeds 30MP guard
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    pass
+                def convert(self, mode):
+                    return self
+
+            with patch('pixelprobe.media_checker.Image.open', return_value=FakeImg()):
+                is_corrupted, details, output = checker._check_jpeg_pixel_corruption(tmp_path)
+                assert is_corrupted is False
+                assert any('too large' in line for line in output)
+        finally:
+            os.unlink(tmp_path)

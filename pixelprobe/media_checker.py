@@ -926,19 +926,27 @@ class PixelProbe:
                     logger.info(f"HEIC PIL load failed (may be libheif limitation) for {file_path}: {str(e)}")
                     # Don't mark as corrupted yet - ImageMagick will provide the definitive answer
         
+        # File size needed for JPEG pixel analysis guard and ImageMagick timeout
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError:
+            file_size = 0
+        file_size_mb = file_size / (1024 * 1024)
+
         # JPEG-specific pixel analysis -- catches corruption that PIL misses
+        # Skip for large files: truncation corruption targets small-to-medium files,
+        # and large JPEGs (DSLR photos) decompress to 300MB-1.2GB in RAM
         if is_jpeg:
-            jpeg_corrupted, jpeg_details, jpeg_output = self._check_jpeg_pixel_corruption(file_path)
-            if jpeg_corrupted:
-                is_corrupted = True
-                corruption_details.extend(jpeg_details)
-                scan_output.extend(jpeg_output)
+            if file_size_mb <= 10:
+                jpeg_corrupted, jpeg_details, jpeg_output = self._check_jpeg_pixel_corruption(file_path)
+                if jpeg_corrupted:
+                    is_corrupted = True
+                    corruption_details.extend(jpeg_details)
+                    scan_output.extend(jpeg_output)
+            else:
+                scan_output.append(f"JPEG pixel analysis: SKIPPED (file too large: {file_size_mb:.1f}MB)")
 
         logger.info(f"Starting ImageMagick verification for: {file_path}")
-
-        # Calculate timeout based on file type and size
-        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
-        file_size_mb = file_size / (1024 * 1024)
         
         # Scale timeout with file size, no artificial limit for large files
         if is_gif:
@@ -1165,14 +1173,22 @@ class PixelProbe:
         scan_output = []
 
         try:
+            start_time = time.monotonic()
             with Image.open(file_path) as img:
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
                 width, height = img.size
 
                 if height < 20 or width < 10:
                     scan_output.append("JPEG pixel analysis: SKIPPED (image too small)")
                     return False, corruption_details, scan_output
+
+                # Guard against large images that would consume too much RAM when decoded
+                total_pixels = width * height
+                if total_pixels > 30_000_000:
+                    scan_output.append(f"JPEG pixel analysis: SKIPPED (image too large: {width}x{height})")
+                    return False, corruption_details, scan_output
+
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
 
                 # Sample ~200 evenly-spaced rows, 50 pixels per row
                 pixels = img.load()
@@ -1183,6 +1199,9 @@ class PixelProbe:
 
                 row_averages = []
                 for row_idx in range(0, height, row_step):
+                    if time.monotonic() - start_time > 30:
+                        scan_output.append("JPEG pixel analysis: SKIPPED (timeout)")
+                        return False, corruption_details, scan_output
                     r_sum, g_sum, b_sum = 0, 0, 0
                     count = 0
                     for col_idx in range(0, width, col_step):
@@ -1210,6 +1229,7 @@ class PixelProbe:
                 max_chaos_streak = 0
                 current_chaos = 0
                 chaos_region_start = 0
+                max_chaos_start = 0
 
                 max_fill_streak = 1
                 current_fill = 1
@@ -1230,6 +1250,7 @@ class PixelProbe:
                         current_chaos += 1
                         if current_chaos > max_chaos_streak:
                             max_chaos_streak = current_chaos
+                            max_chaos_start = chaos_region_start
                     else:
                         current_chaos = 0
 
@@ -1257,7 +1278,7 @@ class PixelProbe:
                 if has_chaos or has_fill:
                     details = []
                     if has_chaos:
-                        pct = int(chaos_region_start / total_rows * 100)
+                        pct = int(max_chaos_start / total_rows * 100)
                         details.append(f"sustained chaos ({max_chaos_streak} rows) starting at {pct}%")
                     if has_fill:
                         pct = int(fill_start / total_rows * 100)
