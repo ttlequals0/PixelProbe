@@ -35,6 +35,7 @@ class Config:
         'pool_size': 20,
         'pool_pre_ping': True,
         'pool_recycle': 3600,
+        'pool_reset_on_return': 'rollback',
         'max_overflow': 40,
         'pool_timeout': 30,
         'echo': os.getenv('DATABASE_ECHO', 'false').lower() == 'true',

@@ -4,7 +4,7 @@ import os
 # Default version - this is the single source of truth
 
 
-_DEFAULT_VERSION = '2.6.12'
+_DEFAULT_VERSION = '2.6.13'
 
 
 # Allow override via environment variable for CI/CD, but default to the hardcoded version

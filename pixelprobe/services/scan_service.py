@@ -16,7 +16,7 @@ from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusion
 from pixelprobe.models import db, ScanResult, ScanState, ScanReport, ScanChunk
 from pixelprobe.utils.helpers import ProgressTracker
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DatabaseError, OperationalError
 import hashlib
 
 logger = logging.getLogger(__name__)
@@ -674,6 +674,12 @@ class ScanService:
                         # psycopg2.DatabaseError) and all subsequent writes will silently fail,
                         # leaving the scan stuck as "active" forever.
                         db.session.rollback()
+
+                        # Force fresh connection pool on database-level errors (e.g. corrupted
+                        # libpq state after OOM kill). pool_pre_ping won't catch these.
+                        if isinstance(e, (DatabaseError, OperationalError)):
+                            db.engine.dispose()
+                            logger.info("Disposed connection pool after database error")
 
                         if scan_state:
                             # Re-query scan_state with a fresh session instead of merge,
