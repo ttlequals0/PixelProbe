@@ -606,11 +606,17 @@ class ProgressManager {
                 if (isRunning) {
                     const progress = this.calculateProgress(status, this.operationType);
                     this.update(progress.percentage, progress.text, progress.details, status._isStuck || false);
-                } else if (status.phase === 'complete' || status.phase === 'completed' || 
+                } else if (status.phase === 'complete' || status.phase === 'completed' ||
                           status.phase === 'cancelled' || status.phase === 'error' ||
                           status.status === 'completed') {
-                    // Operation is complete - show completion state
-                    this.complete(this.operationType, status);
+                    // Ignore stale completed status for 15s after user starts a scan
+                    // (the API returns the previous scan's status before the new one initializes)
+                    const recentStart = this._scanStartedAt && (Date.now() - this._scanStartedAt) < 15000;
+                    if (recentStart && !isRunning) {
+                        this.update(0, 'Starting scan...', '', false);
+                    } else {
+                        this.complete(this.operationType, status);
+                    }
                 } else {
                     // Still showing last progress state
                     const progress = this.calculateProgress(status, this.operationType);
@@ -1984,6 +1990,7 @@ class PixelProbeApp {
             
             await this.api.startScan();
             this.progress.operationType = 'scan';
+            this.progress._scanStartedAt = Date.now();
             this.progress.startMonitoring('scan');
             this.showNotification('Scan started', 'success');
         } catch (error) {

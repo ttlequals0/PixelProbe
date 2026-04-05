@@ -2405,6 +2405,9 @@ class ScanService:
             num_workers: Number of parallel workers to use for scanning files within this chunk
             use_atomic_increment: If True, always use atomic SQL increment for progress (for parallel chunk processing)
         """
+        # Merge chunk into the current thread's session -- the chunk object may have
+        # been created in a different thread's session (parallel chunk processing)
+        chunk = db.session.merge(chunk)
         chunk.status = 'processing'
         chunk.phase = 'scanning'
         chunk.start_time = datetime.now(timezone.utc)
@@ -2751,9 +2754,12 @@ class ScanService:
                 file_executor.shutdown(wait=True, cancel_futures=True)
                 logger.info(f"ThreadPoolExecutor shut down successfully for chunk {chunk.chunk_id}")
 
-            chunk.files_scanned = scanned
-            chunk.status = 'completed'
-            chunk.end_time = datetime.now(timezone.utc)
+            # Update chunk completion via raw SQL to avoid cross-session ORM issues
+            db.session.execute(
+                text("UPDATE scan_chunks SET files_scanned = :scanned, status = 'completed', "
+                     "end_time = :now WHERE chunk_id = :cid"),
+                {'scanned': scanned, 'now': datetime.now(timezone.utc), 'cid': chunk.chunk_id}
+            )
             
             # In parallel chunk mode, skip ORM scan_state writes from worker threads
             # to avoid row-lock convoy. Expire it so commit() doesn't flush dirty
