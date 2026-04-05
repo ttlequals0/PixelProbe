@@ -72,7 +72,6 @@ def create_celery(app=None):
         # Worker settings
         'worker_prefetch_multiplier': 1,  # One task per worker at a time
         'worker_max_tasks_per_child': 50,  # Restart worker after 50 tasks
-        'worker_max_memory_per_child': 2048000,  # Restart worker if RSS exceeds 2GB (in KB)
 
         # Task deduplication to prevent multiple workers from picking up same retry
         'task_track_started': True,  # Track when tasks actually start execution

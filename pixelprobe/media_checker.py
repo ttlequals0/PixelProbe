@@ -1185,35 +1185,29 @@ class PixelProbe:
                 scan_output.append(f"JPEG pixel analysis: SKIPPED (image too large: {width}x{height})")
                 return False, corruption_details, scan_output
 
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-
-            # Extract raw pixel bytes once -- avoids PIL C-extension calls during
-            # the analysis loop, preventing C-level state corruption over many files
-            raw = img.tobytes()
-            stride = width * 3  # RGB = 3 bytes per pixel
-
-            num_rows = min(200, height)
-            row_step = max(1, height // num_rows)
-            num_cols = min(50, width)
-            col_step = max(1, width // num_cols)
+            # Downscale to ~200px wide before pixel access. The detection algorithm
+            # only needs row-averaged color data -- full resolution is wasted and
+            # creates 36MB allocations per image that bypass PIL's block allocator,
+            # causing memory fragmentation over thousands of files (Pillow #3610).
+            sample_w = min(200, width)
+            sample_h = max(1, int(height * sample_w / width))
+            sampled = img.resize((sample_w, sample_h), Image.NEAREST)
+            if sampled.mode != 'RGB':
+                sampled = sampled.convert('RGB')
+            pixels = sampled.load()
 
             row_averages = []
-            for row_idx in range(0, height, row_step):
+            for row_idx in range(sample_h):
                 if time.monotonic() - start_time > 30:
                     scan_output.append("JPEG pixel analysis: SKIPPED (timeout)")
                     return False, corruption_details, scan_output
                 r_sum, g_sum, b_sum = 0, 0, 0
-                count = 0
-                row_offset = row_idx * stride
-                for col_idx in range(0, width, col_step):
-                    px = row_offset + col_idx * 3
-                    r_sum += raw[px]
-                    g_sum += raw[px + 1]
-                    b_sum += raw[px + 2]
-                    count += 1
-                if count > 0:
-                    row_averages.append((r_sum // count, g_sum // count, b_sum // count))
+                for col_idx in range(sample_w):
+                    r, g, b = pixels[col_idx, row_idx]
+                    r_sum += r
+                    g_sum += g
+                    b_sum += b
+                row_averages.append((r_sum // sample_w, g_sum // sample_w, b_sum // sample_w))
 
             if len(row_averages) < 4:
                 scan_output.append("JPEG pixel analysis: SKIPPED (insufficient rows)")
