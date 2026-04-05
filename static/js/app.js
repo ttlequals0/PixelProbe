@@ -640,7 +640,12 @@ class ProgressManager {
             this.updateFileChangesButton(true);
         }
         
-        // Immediately check status once
+        // If user just started a scan, show placeholder and delay first poll
+        // to give the Celery task time to create the ScanState
+        if (this._scanStartedAt && (Date.now() - this._scanStartedAt) < 5000) {
+            this.update(0, 'Starting scan...', '', false);
+            await new Promise(r => setTimeout(r, 3000));
+        }
         await this.checkProgress();
 
         // Implement exponential backoff polling (P1 performance optimization)
