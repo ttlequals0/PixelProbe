@@ -1878,13 +1878,23 @@ class ScanService:
 
         max_retries = 2
 
-        # Check for pending files
+        # Count pending files first (cheap) before deciding to load them
+        pending_count = db.session.query(ScanResult).filter(
+            ScanResult.scan_status == 'pending'
+        ).count()
+
+        if pending_count == 0:
+            return 0
+
+        # Skip retry for large pending sets -- they'll be picked up on the next scan.
+        # Loading 90K+ ORM objects blocks completion for hours.
+        if pending_count > 1000:
+            logger.info(f"{pending_count} files still pending after scan -- will be processed on next scheduled run")
+            return pending_count
+
         pending_files = db.session.query(ScanResult).filter(
             ScanResult.scan_status == 'pending'
-        ).all()
-
-        if not pending_files:
-            return 0
+        ).limit(1000).all()
 
         initial_pending = len(pending_files)
         logger.warning(f"Found {initial_pending} files still pending after initial scan pass - starting retry")
@@ -2099,32 +2109,30 @@ class ScanService:
         num_chunks = (total_files + chunk_size - 1) // chunk_size
         logger.info(f"Creating ~{num_chunks} file-based chunks for ~{total_files} estimated files (chunk size: {chunk_size})")
 
-        # Query all pending file paths ordered by path to establish stable boundaries
-        # This captures the exact files at scan start, preventing pagination race conditions
-        if force_rescan:
-            # For force rescan, get all files in directories
-            all_files_query = db.session.query(ScanResult.file_path).filter(
-                db.or_(*[ScanResult.file_path.like(f"{d}%") for d in directories])
-            ).order_by(ScanResult.file_path)
-        else:
-            # Normal scan: get all pending files
-            all_files_query = db.session.query(ScanResult.file_path).filter(
-                ScanResult.scan_status == 'pending'
-            ).order_by(ScanResult.file_path)
-
-        # Use limit/offset pagination instead of yield_per to avoid holding
-        # a server-side cursor across the entire chunk creation loop.
-        # Each query is independent with its own transaction boundary.
+        # Keyset pagination: each query uses WHERE file_path > last_seen_path.
+        # Stable regardless of concurrent changes (unlike OFFSET which shifts
+        # when rows are removed from the result set between queries).
         actual_file_count = 0
         chunk_index = 0
-        offset = 0
+        last_path = ''
 
         while True:
-            batch = all_files_query.offset(offset).limit(chunk_size).all()
+            if force_rescan:
+                batch = db.session.query(ScanResult.file_path).filter(
+                    db.or_(*[ScanResult.file_path.like(f"{d}%") for d in directories]),
+                    ScanResult.file_path > last_path
+                ).order_by(ScanResult.file_path).limit(chunk_size).all()
+            else:
+                batch = db.session.query(ScanResult.file_path).filter(
+                    ScanResult.scan_status == 'pending',
+                    ScanResult.file_path > last_path
+                ).order_by(ScanResult.file_path).limit(chunk_size).all()
+
             if not batch:
                 break
 
             chunk_paths = [row[0] for row in batch]
+            last_path = chunk_paths[-1]
             actual_file_count += len(chunk_paths)
 
             chunk_id = hashlib.md5(f"{scan_id}:scan_chunk_{chunk_index}:{time.time()}".encode()).hexdigest()
