@@ -2,7 +2,6 @@
 Scan service for handling media scanning operations
 """
 
-import gc
 import os
 import json
 import threading
@@ -1347,9 +1346,6 @@ class ScanService:
             
             logger.info(f"Chunk {i+1}/{total_chunks} completed: {chunk.files_scanned} files scanned (total: {total_files_scanned}/{total_files_to_scan})")
 
-            # Force garbage collection after each chunk to prevent PIL memory
-            # accumulation (Pillow #5180 -- Image.close() doesn't free pixel data)
-            gc.collect()
 
         # Complete scan
         if self.scan_cancelled:
