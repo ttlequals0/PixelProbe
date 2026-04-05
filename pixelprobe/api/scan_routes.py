@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from pixelprobe.utils.timezone import from_utc_to_configured
 
 from pixelprobe.media_checker import PixelProbe, load_exclusions
-from pixelprobe.models import db, ScanResult, ScanState
+from pixelprobe.models import db, ScanResult, ScanState, ScanChunk
 from pixelprobe.constants import TERMINAL_SCAN_PHASES
 from pixelprobe.version import __version__
 from pixelprobe.auth import auth_required
@@ -894,7 +894,26 @@ def get_scan_status():
         'files_per_second': round(files_per_second, 2) if files_per_second > 0 else 0
     }
     
-    # Debug log the complete response
+    # Add per-chunk worker progress during scanning phase
+    if current_phase == 'scanning' and scan_state and scan_state.scan_id:
+        try:
+            active_chunks = ScanChunk.query.filter_by(
+                scan_id=scan_state.scan_id
+            ).filter(
+                ScanChunk.status.in_(['processing', 'completed', 'error'])
+            ).order_by(ScanChunk.start_time.desc()).limit(30).all()
+
+            if active_chunks:
+                status['chunks'] = [{
+                    'chunk_id': c.chunk_id[:8],
+                    'directory': c.directory_path,
+                    'status': c.status,
+                    'files_scanned': c.files_scanned or 0,
+                    'files_total': c.files_discovered or 0,
+                } for c in active_chunks]
+        except Exception as e:
+            logger.debug(f"Failed to get chunk progress: {e}")
+
     logger.info(f"API scan-status response: progress_message='{status['progress_message']}', "
                 f"file='{status['file']}', eta='{status['eta']}', "
                 f"current={status['current']}, total={status['total']}")

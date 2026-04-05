@@ -586,6 +586,19 @@
         word-break: break-word;
     }
     
+    .worker-grid-toggle {
+        min-height: 2.75rem;
+        padding: 0.5rem 0.75rem;
+    }
+
+    .worker-path {
+        max-width: 8rem;
+    }
+
+    .worker-bar-bg {
+        display: none;
+    }
+
     /* Fix mobile filter and search layout */
     .card-header > div {
         flex-direction: column !important;
