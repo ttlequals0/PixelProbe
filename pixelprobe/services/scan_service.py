@@ -2621,11 +2621,11 @@ class ScanService:
                     future_to_file = {file_executor.submit(scan_single_file, f): f for f in files_batch}
                     logger.info(f"All {len(files_batch)} files submitted to executor")
 
+                    last_file_in_batch = None
                     for future in as_completed(future_to_file):
                         if self.scan_cancelled:
-                            # Clean up ThreadPoolExecutor before cancelling
                             if file_executor:
-                                file_executor.shutdown(wait=True)
+                                file_executor.shutdown(wait=True, cancel_futures=True)
                             chunk.status = 'cancelled'
                             chunk.end_time = datetime.now(timezone.utc)
                             db.session.commit()
@@ -2636,6 +2636,7 @@ class ScanService:
                             continue
 
                         file_result, success, error = result
+                        last_file_in_batch = file_result
 
                         with scanned_lock:
                             if success:
@@ -2643,112 +2644,40 @@ class ScanService:
                             else:
                                 errors += 1
                                 logger.error(f"Error scanning {file_result.file_path}: {error}")
-
-                                # Mark the file as error so it doesn't stay pending
                                 try:
                                     file_result.scan_status = 'error'
-                                    file_result.error_message = str(error)[:500]  # Store error message (truncated)
+                                    file_result.error_message = str(error)[:500]
                                     file_result.scan_date = datetime.now(timezone.utc)
                                     db.session.commit()
-                                    logger.debug(f"Marked {file_result.file_path} as error status")
                                 except Exception as e:
                                     logger.error(f"Failed to update error status for {file_result.file_path}: {e}")
 
-                            # Update progress (less frequently for parallel to reduce contention)
-                            current_total = total_scanned_so_far + scanned
+                    # Update progress ONCE per batch from the main thread only.
+                    # Previous code updated per-file inside as_completed, causing
+                    # 20 threads to deadlock on UPDATE scan_state row locks.
+                    current_total = total_scanned_so_far + scanned
+                    if last_file_in_batch:
+                        self.update_progress(current_total, total_to_scan,
+                                           last_file_in_batch.file_path, 'scanning')
 
-                            if scanned % 10 == 0 or scanned == 1:
-                                self.update_progress(current_total, total_to_scan,
-                                                   file_result.file_path, 'scanning')
-
-                            # Determine update threshold
-                            if total_to_scan < 20:
-                                update_threshold = 1
-                            elif total_to_scan < 100:
-                                update_threshold = 5
-                            elif total_to_scan < 1000:
-                                update_threshold = 10
-                            else:
-                                update_threshold = 50
-
-                            if scan_state and (scanned - last_commit_count) >= update_threshold:
-                                try:
-                                    # CRITICAL FIX (v2.4.161): Use atomic SQL increment to prevent race conditions
-                                    # Multiple workers can safely increment files_processed without overwriting each other
-                                    # Calculate how many files we've scanned since last update
-                                    increment = scanned - last_commit_count
-
-                                    # Use a fresh session for progress updates to avoid conflicts with worker threads
-                                    from sqlalchemy.orm import Session
-                                    progress_session = Session(bind=db.engine)
-                                    try:
-                                        # For parallel scans, use the existing estimated_total from scan_state
-                                        # The estimated_total was already set correctly at the beginning of parallel scan
-                                        aggregate_total = scan_state.estimated_total if scan_state.estimated_total > 0 else total_to_scan
-
-                                        # Use atomic increment if explicitly requested OR if total_to_scan is 0 (parallel chunk mode)
-                                        if use_atomic_increment or total_to_scan == 0:
-                                            # Parallel mode: ATOMIC INCREMENT of files_processed
-                                            # This prevents race conditions - database handles the increment atomically
-                                            logger.debug(f"[ATOMIC INCREMENT parallel] Using atomic increment: +{increment}")
-                                            progress_session.execute(
-                                                text("UPDATE scan_state SET files_processed = files_processed + :increment, "
-                                                     "current_file = :file, last_update = :now WHERE id = :id"),
-                                                {
-                                                    'increment': increment,
-                                                    'file': file_result.file_path,
-                                                    'now': datetime.now(timezone.utc),
-                                                    'id': scan_state.id
-                                                }
-                                            )
-                                        else:
-                                            # Sequential mode: update both files_processed and estimated_total normally
-                                            progress_session.execute(
-                                                text("UPDATE scan_state SET files_processed = :total, "
-                                                     "estimated_total = :estimated, current_file = :file, "
-                                                     "last_update = :now WHERE id = :id"),
-                                                {
-                                                    'total': current_total,
-                                                    'estimated': total_to_scan,
-                                                    'file': file_result.file_path,
-                                                    'now': datetime.now(timezone.utc),
-                                                    'id': scan_state.id
-                                                }
-                                            )
-
-                                        # Get updated files_processed for progress message
-                                        result = progress_session.execute(
-                                            text("SELECT files_processed FROM scan_state WHERE id = :id"),
-                                            {'id': scan_state.id}
-                                        )
-                                        row = result.fetchone()
-                                        updated_files_processed = row[0] if row else current_total
-
-                                        # Update progress message
-                                        from pixelprobe.utils.helpers import ProgressTracker
-                                        progress_tracker = ProgressTracker('scan')
-                                        progress_message = progress_tracker.get_progress_message(
-                                            f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
-                                            updated_files_processed,
-                                            aggregate_total,
-                                            os.path.basename(file_result.file_path)
-                                        )
-
-                                        progress_session.execute(
-                                            text("UPDATE scan_state SET progress_message = :msg WHERE id = :id"),
-                                            {'msg': progress_message, 'id': scan_state.id}
-                                        )
-
-                                        progress_session.commit()
-                                        last_commit_count = scanned
-
-                                        if scanned % 1000 == 0:
-                                            import gc
-                                            gc.collect()
-                                    finally:
-                                        progress_session.close()
-                                except Exception as e:
-                                    logger.error(f"Failed to update progress: {e}")
+                    if scan_state and last_file_in_batch and (scanned - last_commit_count) > 0:
+                        try:
+                            increment = scanned - last_commit_count
+                            db.session.execute(
+                                text("UPDATE scan_state SET files_processed = files_processed + :increment, "
+                                     "current_file = :file, last_update = :now WHERE id = :id"),
+                                {
+                                    'increment': increment,
+                                    'file': last_file_in_batch.file_path,
+                                    'now': datetime.now(timezone.utc),
+                                    'id': scan_state.id
+                                }
+                            )
+                            db.session.commit()
+                            last_commit_count = scanned
+                        except Exception as e:
+                            logger.error(f"Failed to update progress: {e}")
+                            db.session.rollback()
                 else:
                     # Sequential processing (original code)
                     for file_result in files_batch:
