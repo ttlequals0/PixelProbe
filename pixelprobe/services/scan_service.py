@@ -2756,13 +2756,15 @@ class ScanService:
             chunk.status = 'completed'
             chunk.end_time = datetime.now(timezone.utc)
             
-            # Final update to scan state
-            if scan_state and scanned > 0:
+            # In parallel chunk mode, skip ALL scan_state writes from worker threads.
+            # Expire it from the session so commit() doesn't flush dirty attributes.
+            if use_atomic_increment and scan_state:
+                db.session.expire(scan_state)
+            elif scan_state and scanned > 0:
                 final_total = total_scanned_so_far + scanned
                 scan_state.files_processed = final_total
-                # Clear current_file when chunk is complete (don't show directory path as a file)
                 scan_state.update_progress(final_total, total_to_scan, current_file='')
-            
+
             db.session.commit()
             
             logger.info(f"Chunk {chunk.chunk_id} completed: {scanned} files scanned, {errors} errors")
