@@ -1467,13 +1467,10 @@ class ScanService:
         app = current_app._get_current_object()
 
         def scan_chunk(chunk):
-            # Set up Flask app context for worker thread
+            # Set up Flask app context for worker thread.
+            # Each thread gets its own app context which gives it a separate
+            # scoped session, avoiding "concurrent operations" errors.
             with app.app_context():
-                # Force a fresh scoped session for this thread to avoid
-                # "concurrent operations are not permitted" errors when
-                # multiple chunk threads share the same session scope
-                db.session.remove()
-
                 if self.scan_cancelled:
                     return None
 
@@ -1484,7 +1481,10 @@ class ScanService:
                         return None
                 except Exception as e:
                     logger.error(f"Failed to get scan_state in chunk thread: {e}")
-                    db.session.rollback()
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        pass
                     return None
                 # For parallel scan, we can't pass cumulative counts, so pass 0
                 # The main thread will handle updating the cumulative progress
@@ -1493,8 +1493,17 @@ class ScanService:
                 # Use sequential file processing (num_workers=1) when chunk_workers > 1
                 chunk_file_workers = 1 if chunk_workers > 1 else num_workers
                 # CRITICAL: Pass use_atomic_increment=True for parallel chunk processing to prevent progress resets
-                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, thread_scan_state,
-                                      num_workers=chunk_file_workers, use_atomic_increment=True)
+                try:
+                    self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, thread_scan_state,
+                                          num_workers=chunk_file_workers, use_atomic_increment=True)
+                except Exception as e:
+                    logger.error(f"Chunk {chunk.chunk_id} failed: {e}")
+                    chunk.status = 'error'
+                    chunk.error_message = str(e)[:500]
+                    try:
+                        db.session.commit()
+                    except Exception:
+                        pass
                 return chunk, chunk.files_scanned or 0
 
         chunk_workers = min(num_workers, len(chunks))
