@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
-## [2.6.23] - 2026-04-05
+## [2.6.24] - 2026-04-05
 
 ### Added
 
@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Fix JPEG pixel analysis guards**: Added file size guard (skip > 10MB), image dimensions guard (skip > 30MP), 30s timeout, and downscale to ~200px wide before analysis (90KB vs 36MB full-resolution tobytes).
+- **Fix stuck scan false-positive during long video processing**: The `db.session.expire(scan_state)` fix for the row-lock convoy also stopped `last_update` from being written. The UI progress worker that should maintain `last_update` independently fails to launch when Redis is congested from previous crash retries. Added raw SQL `last_update` refresh at chunk completion to maintain scan self-sufficiency.
 - **Fix scan deadlock from concurrent progress updates**: 20 ThreadPoolExecutor worker threads all executed `UPDATE scan_state SET files_processed = files_processed + 1` on the same row simultaneously, creating a PostgreSQL row-level lock convoy that permanently blocked all scanning. Moved progress updates out of the per-future loop to a single batch-level update from the main thread after all futures complete.
 - **Fix scan worker death on 500K+ pending files**: `_create_scanning_chunks()` loaded all file paths into memory at once via `.all()`, consuming ~200MB+ for 600K files. Replaced with `yield_per()` streaming that holds only one chunk (~1000 paths) in memory at a time. Added `cancel_futures=True` to ThreadPoolExecutor shutdown to prevent indefinite hangs. Added composite index `(scan_status, file_path)` for optimal query performance on pending file lookups.
 - **Fix "0 of 0 files" progress display during scanning phase**: The scan status API returned `estimated_total=0` during the gap between phase transition and chunk counting. Added explicit Redis update after DB commit and a fallback to `phase_total` in the API when `estimated_total` is 0.

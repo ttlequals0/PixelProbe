@@ -2756,10 +2756,16 @@ class ScanService:
             chunk.status = 'completed'
             chunk.end_time = datetime.now(timezone.utc)
             
-            # In parallel chunk mode, skip ALL scan_state writes from worker threads.
-            # Expire it from the session so commit() doesn't flush dirty attributes.
+            # In parallel chunk mode, skip ORM scan_state writes from worker threads
+            # to avoid row-lock convoy. Expire it so commit() doesn't flush dirty
+            # attributes. But update last_update via raw SQL to prevent the stuck
+            # scan checker from killing active scans during long video processing.
             if use_atomic_increment and scan_state:
                 db.session.expire(scan_state)
+                db.session.execute(
+                    text("UPDATE scan_state SET last_update = :now WHERE id = :id"),
+                    {'now': datetime.now(timezone.utc), 'id': scan_state.id}
+                )
             elif scan_state and scanned > 0:
                 final_total = total_scanned_so_far + scanned
                 scan_state.files_processed = final_total
