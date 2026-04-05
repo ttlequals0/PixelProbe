@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
-## [2.6.18] - 2026-04-04
+## [2.6.20] - 2026-04-05
 
 ### Added
 
@@ -14,9 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Fix JPEG pixel analysis crashing celery worker on large files**: Added file size guard (skip files > 10MB), image dimensions guard (skip images > 30MP), and timeout (30s) to prevent OOM kills and hangs when scanning large DSLR photos.
-- **Fix corrupted PostgreSQL connections after worker OOM kill**: Added `pool_reset_on_return='rollback'` to SQLAlchemy engine options and `db.engine.dispose()` on DatabaseError/OperationalError to force fresh connection pool after crashes. Prevents `psycopg2.DatabaseError: error with status PGRES_TUPLES_OK` from blocking all subsequent scans.
-- **Fix JPEG pixel analysis memory accumulation killing celery worker**: Pillow's `Image.close()` does not deallocate pixel data (python-pillow/Pillow#3610). `tobytes()` bypassed PIL's block allocator, creating 36MB Python allocations per image that fragmented memory over thousands of files. Fixed by downscaling to ~200px wide before analysis (90KB vs 36MB), adding `gc.collect()` per chunk, setting `PILLOW_BLOCKS_MAX=256`, and removing the `worker_max_memory_per_child` limit that was killing workers and corrupting DB connections.
+- **Fix JPEG pixel analysis guards**: Added file size guard (skip > 10MB), image dimensions guard (skip > 30MP), 30s timeout, and downscale to ~200px wide before analysis (90KB vs 36MB full-resolution tobytes).
+- **Fix scan worker death on 500K+ pending files**: `_create_scanning_chunks()` loaded all file paths into memory at once via `.all()`, consuming ~200MB+ for 600K files. Replaced with `yield_per()` streaming that holds only one chunk (~1000 paths) in memory at a time. Added `cancel_futures=True` to ThreadPoolExecutor shutdown to prevent indefinite hangs. Added composite index `(scan_status, file_path)` for optimal query performance on pending file lookups.
 - **Fix "0 of 0 files" progress display during scanning phase**: The scan status API returned `estimated_total=0` during the gap between phase transition and chunk counting. Added explicit Redis update after DB commit and a fallback to `phase_total` in the API when `estimated_total` is 0.
 - **Filter black frame false positives from freeze detection**: Freeze events that overlap with black sections (scene transitions, studio logos, end credits) are now filtered out. Uses FFmpeg `blackdetect` filter chained with `freezedetect` in a single decode pass.
 - **Fix scan stuck as active after completion**: Two issues -- (1) `_mark_scan_completed()` used raw SQL UPDATE but the ORM identity map still held stale `is_active=True`; when `_create_scan_report()` committed, it overwrote the completed state. Added `db.session.expire_all()` after the raw SQL commit. (2) Recovery endpoint and new scans didn't clear stale Redis progress keys, causing the API to return contradictory state (running + completed). Added `clear_scan_progress_redis()` to recovery and scan start.

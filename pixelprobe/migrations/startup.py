@@ -218,7 +218,8 @@ def create_performance_indexes(db):
         "CREATE INDEX IF NOT EXISTS idx_file_path ON scan_results(file_path)",
         "CREATE INDEX IF NOT EXISTS idx_status_date ON scan_results(scan_status, scan_date)",
         "CREATE INDEX IF NOT EXISTS idx_corrupted_good ON scan_results(is_corrupted, marked_as_good)",
-        "CREATE INDEX IF NOT EXISTS idx_file_path_status ON scan_results(file_path, scan_status)"
+        "CREATE INDEX IF NOT EXISTS idx_file_path_status ON scan_results(file_path, scan_status)",
+        "CREATE INDEX IF NOT EXISTS idx_status_file_path ON scan_results(scan_status, file_path)"
     ]
 
     logger.info("Creating performance indexes...")

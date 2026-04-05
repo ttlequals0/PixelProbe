@@ -16,7 +16,7 @@ from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusion
 from pixelprobe.models import db, ScanResult, ScanState, ScanReport, ScanChunk
 from pixelprobe.utils.helpers import ProgressTracker
 from sqlalchemy import text
-from sqlalchemy.exc import DatabaseError, OperationalError
+from sqlalchemy.exc import OperationalError
 import hashlib
 
 logger = logging.getLogger(__name__)
@@ -670,16 +670,10 @@ class ScanService:
                     # Enhanced crash recovery tracking
                     try:
                         # CRITICAL: Clear the failed transaction before attempting recovery writes.
-                        # Without this, the session may be in a rolled-back state (e.g. after
-                        # psycopg2.DatabaseError) and all subsequent writes will silently fail,
-                        # leaving the scan stuck as "active" forever.
+                        # Without this, the session may be in a rolled-back state and all
+                        # subsequent writes will silently fail, leaving the scan stuck as
+                        # "active" forever.
                         db.session.rollback()
-
-                        # Force fresh connection pool on database-level errors (e.g. corrupted
-                        # libpq state after OOM kill). pool_pre_ping won't catch these.
-                        if isinstance(e, (DatabaseError, OperationalError)):
-                            db.engine.dispose()
-                            logger.info("Disposed connection pool after database error")
 
                         if scan_state:
                             # Re-query scan_state with a fresh session instead of merge,
@@ -2089,7 +2083,7 @@ class ScanService:
             chunk_size = 1000  # 1000 files per chunk for large scans
 
         num_chunks = (total_files + chunk_size - 1) // chunk_size
-        logger.info(f"Creating {num_chunks} file-based chunks for {total_files} files (chunk size: {chunk_size})")
+        logger.info(f"Creating ~{num_chunks} file-based chunks for ~{total_files} estimated files (chunk size: {chunk_size})")
 
         # Query all pending file paths ordered by path to establish stable boundaries
         # This captures the exact files at scan start, preventing pagination race conditions
@@ -2104,45 +2098,55 @@ class ScanService:
                 ScanResult.scan_status == 'pending'
             ).order_by(ScanResult.file_path)
 
-        all_file_paths = [row[0] for row in all_files_query.all()]
-        actual_file_count = len(all_file_paths)
+        # Stream file paths instead of loading all into memory at once.
+        # With 600K+ pending files, .all() would allocate ~200MB for the path list.
+        # yield_per streams in batches, holding only one chunk in memory.
+        # NOTE: Do not issue other DB queries inside this loop --
+        # yield_per holds an open result set on the session connection.
+        actual_file_count = 0
+        chunk_paths = []
+        chunk_index = 0
 
-        if actual_file_count == 0:
-            logger.info("No files to create chunks for")
-            return chunks
+        for row in all_files_query.yield_per(chunk_size):
+            chunk_paths.append(row[0])
+            actual_file_count += 1
 
-        # Recalculate num_chunks based on actual file count
-        num_chunks = (actual_file_count + chunk_size - 1) // chunk_size
-        logger.info(f"Actual files: {actual_file_count}, creating {num_chunks} chunks")
+            if len(chunk_paths) >= chunk_size:
+                chunk_id = hashlib.md5(f"{scan_id}:scan_chunk_{chunk_index}:{time.time()}".encode()).hexdigest()
+                chunk_metadata = json.dumps({"t": "FCP", "f": chunk_paths[0], "l": chunk_paths[-1]})
+                chunk = ScanChunk(
+                    scan_id=scan_id,
+                    chunk_id=chunk_id,
+                    directory_path=chunk_metadata,
+                    phase='scanning',
+                    status='pending',
+                    files_discovered=len(chunk_paths)
+                )
+                chunks.append(chunk)
+                logger.debug(f"Chunk {chunk_index}: {len(chunk_paths)} files")
+                chunk_paths = []
+                chunk_index += 1
 
-        # Create file-based chunks with path boundaries
-        for i in range(num_chunks):
-            chunk_id = hashlib.md5(f"{scan_id}:scan_chunk_{i}:{time.time()}".encode()).hexdigest()
-
-            # Calculate the file indices for this chunk
-            start_idx = i * chunk_size
-            end_idx = min(start_idx + chunk_size - 1, actual_file_count - 1)
-
-            first_path = all_file_paths[start_idx]
-            last_path = all_file_paths[end_idx]
-            files_in_chunk = end_idx - start_idx + 1
-
-            # Store as JSON for safe handling of any path characters
-            # Format: {"t":"FCP","f":"first_path","l":"last_path"}
-            chunk_metadata = json.dumps({"t": "FCP", "f": first_path, "l": last_path})
-
+        # Handle remaining paths
+        if chunk_paths:
+            chunk_id = hashlib.md5(f"{scan_id}:scan_chunk_{chunk_index}:{time.time()}".encode()).hexdigest()
+            chunk_metadata = json.dumps({"t": "FCP", "f": chunk_paths[0], "l": chunk_paths[-1]})
             chunk = ScanChunk(
                 scan_id=scan_id,
                 chunk_id=chunk_id,
                 directory_path=chunk_metadata,
                 phase='scanning',
                 status='pending',
-                files_discovered=files_in_chunk  # Set the expected file count
+                files_discovered=len(chunk_paths)
             )
             chunks.append(chunk)
+            chunk_index += 1
 
-            logger.debug(f"Chunk {i}: files {start_idx}-{end_idx} ({files_in_chunk} files)")
+        if actual_file_count == 0:
+            logger.info("No files to create chunks for")
+            return chunks
 
+        logger.info(f"Created {chunk_index} chunks for {actual_file_count} files (chunk size: {chunk_size})")
         return chunks
     
     def _create_directory_chunks(self, directories: List[str], scan_id: str) -> List[ScanChunk]:
@@ -2884,7 +2888,7 @@ class ScanService:
             # Clean up ThreadPoolExecutor after all batches are processed
             if file_executor:
                 logger.info(f"Shutting down ThreadPoolExecutor for chunk {chunk.chunk_id}")
-                file_executor.shutdown(wait=True)
+                file_executor.shutdown(wait=True, cancel_futures=True)
                 logger.info(f"ThreadPoolExecutor shut down successfully for chunk {chunk.chunk_id}")
 
             chunk.files_scanned = scanned
