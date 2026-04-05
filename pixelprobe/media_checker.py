@@ -916,16 +916,16 @@ class PixelProbe:
                     scan_output.append("Transform test: PASSED")
 
                 # JPEG pixel analysis -- reuses already-loaded image, no extra file open
-                # Runs inside the PIL try block because img is only valid here
-                if is_jpeg and file_size_mb <= 10:
-                    jpeg_corrupted, jpeg_details, jpeg_output = self._check_jpeg_pixel_corruption(img)
-                    if jpeg_corrupted:
-                        is_corrupted = True
-                        corruption_details.extend(jpeg_details)
-                        scan_output.extend(jpeg_output)
-                        logger.warning(f"JPEG pixel corruption in {file_path}")
-                elif is_jpeg and file_size_mb > 10:
-                    scan_output.append(f"JPEG pixel analysis: SKIPPED (file too large: {file_size_mb:.1f}MB)")
+                if is_jpeg:
+                    if file_size_mb <= 10:
+                        jpeg_corrupted, jpeg_details, jpeg_output = self._check_jpeg_pixel_corruption(img)
+                        if jpeg_corrupted:
+                            is_corrupted = True
+                            corruption_details.extend(jpeg_details)
+                            scan_output.extend(jpeg_output)
+                            logger.warning(f"JPEG pixel corruption in {file_path}")
+                    else:
+                        scan_output.append(f"JPEG pixel analysis: SKIPPED (file too large: {file_size_mb:.1f}MB)")
 
             except Exception as e:
                 pil_load_failed = True
@@ -1188,8 +1188,11 @@ class PixelProbe:
             if img.mode != 'RGB':
                 img = img.convert('RGB')
 
-            # Reuse already-loaded pixel data (img.load() returns the accessor)
-            pixels = img.load()
+            # Extract raw pixel bytes once -- avoids PIL C-extension calls during
+            # the analysis loop, preventing C-level state corruption over many files
+            raw = img.tobytes()
+            stride = width * 3  # RGB = 3 bytes per pixel
+
             num_rows = min(200, height)
             row_step = max(1, height // num_rows)
             num_cols = min(50, width)
@@ -1202,11 +1205,12 @@ class PixelProbe:
                     return False, corruption_details, scan_output
                 r_sum, g_sum, b_sum = 0, 0, 0
                 count = 0
+                row_offset = row_idx * stride
                 for col_idx in range(0, width, col_step):
-                    r, g, b = pixels[col_idx, row_idx]
-                    r_sum += r
-                    g_sum += g
-                    b_sum += b
+                    px = row_offset + col_idx * 3
+                    r_sum += raw[px]
+                    g_sum += raw[px + 1]
+                    b_sum += raw[px + 2]
                     count += 1
                 if count > 0:
                     row_averages.append((r_sum // count, g_sum // count, b_sum // count))
