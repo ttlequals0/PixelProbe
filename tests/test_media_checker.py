@@ -5,7 +5,6 @@ Tests for PixelProbe media checker core functionality
 import pytest
 import os
 import subprocess
-import time
 import threading
 from unittest.mock import Mock, patch, MagicMock
 
@@ -668,3 +667,5 @@ class TestVideoFreezeDetection:
         assert len(warning_details) == 1
         assert '1 event(s)' in warning_details[0]
         assert any('Filtered 1 of 2' in line for line in scan_output)
+
+

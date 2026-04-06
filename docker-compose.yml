@@ -89,6 +89,7 @@ services:
       MAX_OUTPUT_SIZE: ${MAX_OUTPUT_SIZE:-10000}
       OUTPUT_ROTATION_ENABLED: ${OUTPUT_ROTATION_ENABLED:-true}
       FREEZE_DETECTION_ENABLED: ${FREEZE_DETECTION_ENABLED:-true}
+      PILLOW_BLOCKS_MAX: 256
       TZ: America/New_York
 
 
@@ -149,6 +150,7 @@ services:
       FLASK_ENV: ${FLASK_ENV:-production}
       MAX_WORKERS: ${MAX_WORKERS:-10}  # Parallel file scanning workers per task
       FREEZE_DETECTION_ENABLED: ${FREEZE_DETECTION_ENABLED:-true}
+      PILLOW_BLOCKS_MAX: 256
 
       # Scan configuration (required for scheduler)
       SCAN_PATHS: ${SCAN_PATHS:-/media}

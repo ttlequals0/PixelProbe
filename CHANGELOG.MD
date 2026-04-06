@@ -5,14 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
-## [2.6.8] - 2026-03-31
-
-### Added
-
-- **Video freeze detection**: Detect videos with frozen frames (stuck picture while audio continues) using FFmpeg's `freezedetect` filter. Freeze events are reported as **warnings** (not corruption) with details including event count, total frozen time, percentage of video frozen, and per-event timestamps. Uses `-60dB` noise tolerance and `5s` minimum freeze duration with black frame filtering to reduce false positives. Configurable via `FREEZE_DETECTION_ENABLED` environment variable (default: `true`).
+## [2.6.37] - 2026-04-06
 
 ### Fixed
 
+- **Remove hardcoded 30-chunk limit on scan progress grid**: The scan-status API limited chunk results to 30, hiding all other chunks from the UI worker grid. Removed the `.limit(30)` so the grid shows all chunks for the current scan.
+
+---
+
+## [2.6.36] - 2026-04-06
+
+### Fixed
+
+- **Fix scans completing with ~65% of files still pending**: `checker.scan_file()` committed `scan_status='completed'` via PixelProbe's separate StaticPool session (connection B), but batch queries used Flask's `db.session` (connection A) which never saw the change. Added raw SQL `UPDATE scan_results SET scan_status = 'completed'` via Flask's `db.session` after each successful scan, ensuring the next batch query on the same connection sees the status change. Previous fixes (`offset(0)` in v2.6.34, `expire_all()` in v2.6.35) failed because they couldn't bridge the cross-connection visibility gap.
+
+---
+
+## [2.6.35] - 2026-04-05
+
+### Fixed
+
+- **Fix scan leaving ~65% of files stuck in pending**: `_scan_chunk_files()` batch queries used Flask's `db.session` but `checker.scan_file()` committed `scan_status='completed'` via a separate PixelProbe session. SQLAlchemy's identity map in `db.session` retained stale ScanResult objects from previous batches, causing the `offset(0)` batch query to return the same files repeatedly instead of the next pending batch. Added `db.session.expire_all()` before each batch query to force fresh reads from PostgreSQL.
+
+---
+
+## [2.6.34] - 2026-04-05
+
+### Fixed
+
+- **Fix scan skipping ~25% of pending files per chunk**: Batch pagination within `_scan_chunk_files()` used `offset(batch_offset)` on queries filtered by `scan_status == 'pending'`. As each batch was scanned, files changed from 'pending' to 'completed', shrinking the result set. The incrementing offset then skipped files that shifted to lower positions. Fixed by using `offset(0)` for all pending-file queries since scanned files drop out of the result set automatically.
+
+---
+
+## [2.6.33] - 2026-04-05
+
+### Fixed
+
+- **Fix scan startup crash from dead `offset` variable**: `_create_scanning_chunks()` crashed every scan with `UnboundLocalError: cannot access local variable 'offset'`. Leftover from the offset-to-keyset pagination migration -- the function uses `last_path` to advance through results, but `offset += chunk_size` was never removed.
+- **Fix IndexError on scan_state and scan_chunks ORM queries**: `db.create_all()` creates new tables but does not add columns to existing ones. Columns added to models (`num_workers`, `files_added`, `files_updated` on scan_state; `files_processed`, `is_complete`, `celery_task_id`, `files_added` on scan_chunks) were missing from the production database, causing `IndexError: tuple index out of range` when SQLAlchemy tried to load rows with fewer columns than the mapper expected. Added startup migration to sync missing columns.
+
+---
+
+## [2.6.32] - 2026-04-05
+
+### Added
+
+- **Per-worker scan progress grid**: Collapsible grid below the scan progress bar showing each parallel chunk worker's status, directory path, files scanned/total, and mini progress bar. Collapsed by default, expandable via toggle. Shows active, completed, and errored chunks with real-time updates. Responsive mobile layout hides progress bars and truncates paths.
+- **Video freeze detection**: Detect videos with frozen frames (stuck picture while audio continues) using FFmpeg's `freezedetect` filter. Freeze events are reported as **warnings** (not corruption) with details including event count, total frozen time, percentage of video frozen, and per-event timestamps. Uses `-60dB` noise tolerance and `5s` minimum freeze duration with black frame filtering to reduce false positives. Configurable via `FREEZE_DETECTION_ENABLED` environment variable (default: `true`).
+- **JPEG pixel corruption detection**: Detect visually corrupted JPEG files that pass PIL verification and ImageMagick validation but contain visible garbage (rainbow bands, solid color fill) in decoded pixel data. Uses row-averaged RGB sampling with two signals: sustained chaos (8+ consecutive rows with inter-row color difference > 100, catching rainbow garbage) and bottom-anchored solid fill (30+ consecutive identical rows extending to the image bottom, catching decoder fill). Designed to avoid false positives on high-contrast images like YouTube thumbnails.
+
+### Fixed
+
+- **Fix JPEG pixel analysis guards**: Added file size guard (skip > 10MB), image dimensions guard (skip > 30MP), 30s timeout, and downscale to ~200px wide before analysis (90KB vs 36MB full-resolution tobytes).
+- **Fix parallel chunk session error**: `_parallel_scan_chunks` worker threads sharing Flask's scoped `db.session` caused "concurrent operations are not permitted" (isce) errors. Every chunk immediately errored, making the scan complete with 0 files processed. Fixed by calling `db.session.remove()` at thread start to force a fresh session per thread.
+- **Fix stuck scan false-positive during long video processing**: The `db.session.expire(scan_state)` fix for the row-lock convoy also stopped `last_update` from being written. The UI progress worker that should maintain `last_update` independently fails to launch when Redis is congested from previous crash retries. Added raw SQL `last_update` refresh at chunk completion to maintain scan self-sufficiency.
+- **Fix scan deadlock from concurrent progress updates**: 20 ThreadPoolExecutor worker threads all executed `UPDATE scan_state SET files_processed = files_processed + 1` on the same row simultaneously, creating a PostgreSQL row-level lock convoy that permanently blocked all scanning. Moved progress updates out of the per-future loop to a single batch-level update from the main thread after all futures complete.
+- **Fix scan worker death on 500K+ pending files**: `_create_scanning_chunks()` loaded all file paths into memory at once via `.all()`, consuming ~200MB+ for 600K files. Replaced with `yield_per()` streaming that holds only one chunk (~1000 paths) in memory at a time. Added `cancel_futures=True` to ThreadPoolExecutor shutdown to prevent indefinite hangs. Added composite index `(scan_status, file_path)` for optimal query performance on pending file lookups.
 - **Fix "0 of 0 files" progress display during scanning phase**: The scan status API returned `estimated_total=0` during the gap between phase transition and chunk counting. Added explicit Redis update after DB commit and a fallback to `phase_total` in the API when `estimated_total` is 0.
 - **Filter black frame false positives from freeze detection**: Freeze events that overlap with black sections (scene transitions, studio logos, end credits) are now filtered out. Uses FFmpeg `blackdetect` filter chained with `freezedetect` in a single decode pass.
 - **Fix scan stuck as active after completion**: Two issues -- (1) `_mark_scan_completed()` used raw SQL UPDATE but the ORM identity map still held stale `is_active=True`; when `_create_scan_report()` committed, it overwrote the completed state. Added `db.session.expire_all()` after the raw SQL commit. (2) Recovery endpoint and new scans didn't clear stale Redis progress keys, causing the API to return contradictory state (running + completed). Added `clear_scan_progress_redis()` to recovery and scan start.

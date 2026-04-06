@@ -434,7 +434,107 @@ class ProgressManager {
             } else {
                 progressDetails.textContent = detailsText;
             }
+
+            // Render per-worker chunk progress grid if available
+            if (this._lastScanStatus && this._lastScanStatus.chunks && this._lastScanStatus.chunks.length > 0) {
+                this._renderWorkerGrid(progressDetails, this._lastScanStatus.chunks);
+            }
         }
+    }
+
+    _renderWorkerGrid(container, chunks) {
+        let grid = container.querySelector('.worker-grid-container');
+        if (!grid) {
+            grid = document.createElement('div');
+            grid.className = 'worker-grid-container';
+
+            const toggle = document.createElement('button');
+            toggle.className = 'worker-grid-toggle';
+            toggle.addEventListener('click', () => {
+                const gridEl = grid.querySelector('.worker-grid');
+                const expanded = gridEl.style.display !== 'none';
+                gridEl.style.display = expanded ? 'none' : 'block';
+                this._workersExpanded = !expanded;
+                this._updateToggleText(grid, chunks);
+            });
+            grid.appendChild(toggle);
+
+            const gridEl = document.createElement('div');
+            gridEl.className = 'worker-grid';
+            gridEl.style.display = 'none';
+            grid.appendChild(gridEl);
+
+            container.appendChild(grid);
+        }
+
+        this._updateToggleText(grid, chunks);
+
+        const gridEl = grid.querySelector('.worker-grid');
+        if (this._workersExpanded) {
+            gridEl.style.display = 'block';
+        }
+
+        const processing = chunks.filter(c => c.status === 'processing');
+        const completed = chunks.filter(c => c.status === 'completed');
+        const errors = chunks.filter(c => c.status === 'error');
+        const sorted = [...processing, ...errors, ...completed].slice(0, 20);
+
+        // Clear and rebuild with safe DOM methods
+        gridEl.textContent = '';
+        for (const chunk of sorted) {
+            const pct = chunk.files_total > 0 ? Math.round((chunk.files_scanned / chunk.files_total) * 100) : 0;
+
+            const row = document.createElement('div');
+            row.className = 'worker-row ' + chunk.status;
+
+            const icon = document.createElement('span');
+            icon.className = 'worker-icon ' + chunk.status;
+            icon.textContent = chunk.status === 'completed' ? '\u2713' : chunk.status === 'error' ? '\u2717' : '\u2022';
+            row.appendChild(icon);
+
+            let dirLabel = chunk.directory;
+            let fullPath = chunk.directory;
+            try {
+                const meta = JSON.parse(chunk.directory);
+                if (meta.f) {
+                    fullPath = meta.f;
+                    const parts = meta.f.split('/');
+                    dirLabel = parts.length > 3 ? '.../' + parts.slice(-3).join('/') : meta.f;
+                }
+            } catch (e) {
+                const parts = chunk.directory.split('/');
+                dirLabel = parts.length > 3 ? '.../' + parts.slice(-3).join('/') : chunk.directory;
+            }
+
+            const path = document.createElement('span');
+            path.className = 'worker-path';
+            path.textContent = dirLabel;
+            path.title = fullPath;
+            row.appendChild(path);
+
+            const count = document.createElement('span');
+            count.className = 'worker-count';
+            count.textContent = chunk.files_scanned + '/' + chunk.files_total;
+            row.appendChild(count);
+
+            const barBg = document.createElement('div');
+            barBg.className = 'worker-bar-bg';
+            const bar = document.createElement('div');
+            bar.className = 'worker-bar';
+            bar.style.width = pct + '%';
+            barBg.appendChild(bar);
+            row.appendChild(barBg);
+
+            gridEl.appendChild(row);
+        }
+    }
+
+    _updateToggleText(grid, chunks) {
+        const toggle = grid.querySelector('.worker-grid-toggle');
+        const processing = chunks.filter(c => c.status === 'processing').length;
+        const completed = chunks.filter(c => c.status === 'completed').length;
+        const arrow = this._workersExpanded ? '\u25B2' : '\u25BC';
+        toggle.textContent = arrow + ' ' + processing + ' active, ' + completed + ' done';
     }
 
     async checkProgress() {
@@ -445,6 +545,7 @@ class ProgressManager {
             // Get status based on operation type
             if (this.operationType === 'scan') {
                 status = await this.api.getScanStatus();
+                this._lastScanStatus = status;
                 // Use is_active from database state as primary indicator
                 const isActive = status.is_active !== undefined ? status.is_active : (status.phase === 'scanning' || status.phase === 'discovering' || status.phase === 'adding');
                 isRunning = status.is_scanning || status.is_running || isActive;
@@ -505,11 +606,17 @@ class ProgressManager {
                 if (isRunning) {
                     const progress = this.calculateProgress(status, this.operationType);
                     this.update(progress.percentage, progress.text, progress.details, status._isStuck || false);
-                } else if (status.phase === 'complete' || status.phase === 'completed' || 
+                } else if (status.phase === 'complete' || status.phase === 'completed' ||
                           status.phase === 'cancelled' || status.phase === 'error' ||
                           status.status === 'completed') {
-                    // Operation is complete - show completion state
-                    this.complete(this.operationType, status);
+                    // Ignore stale completed status for 15s after user starts a scan
+                    // (the API returns the previous scan's status before the new one initializes)
+                    const recentStart = this._scanStartedAt && (Date.now() - this._scanStartedAt) < 15000;
+                    if (recentStart && !isRunning) {
+                        this.update(0, 'Starting scan...', '', false);
+                    } else {
+                        this.complete(this.operationType, status);
+                    }
                 } else {
                     // Still showing last progress state
                     const progress = this.calculateProgress(status, this.operationType);
@@ -533,7 +640,12 @@ class ProgressManager {
             this.updateFileChangesButton(true);
         }
         
-        // Immediately check status once
+        // If user just started a scan, show placeholder and delay first poll
+        // to give the Celery task time to create the ScanState
+        if (this._scanStartedAt && (Date.now() - this._scanStartedAt) < 5000) {
+            this.update(0, 'Starting scan...', '', false);
+            await new Promise(r => setTimeout(r, 3000));
+        }
         await this.checkProgress();
 
         // Implement exponential backoff polling (P1 performance optimization)
@@ -603,6 +715,8 @@ class ProgressManager {
             clearInterval(this.checkInterval);
             this.checkInterval = null;
         }
+        this._lastScanStatus = null;
+        this._workersExpanded = false;
     }
 
     calculateProgress(status, operationType = 'scan') {
@@ -1881,6 +1995,7 @@ class PixelProbeApp {
             
             await this.api.startScan();
             this.progress.operationType = 'scan';
+            this.progress._scanStartedAt = Date.now();
             this.progress.startMonitoring('scan');
             this.showNotification('Scan started', 'success');
         } catch (error) {

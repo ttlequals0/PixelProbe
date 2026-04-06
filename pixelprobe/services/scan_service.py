@@ -670,9 +670,9 @@ class ScanService:
                     # Enhanced crash recovery tracking
                     try:
                         # CRITICAL: Clear the failed transaction before attempting recovery writes.
-                        # Without this, the session may be in a rolled-back state (e.g. after
-                        # psycopg2.DatabaseError) and all subsequent writes will silently fail,
-                        # leaving the scan stuck as "active" forever.
+                        # Without this, the session may be in a rolled-back state and all
+                        # subsequent writes will silently fail, leaving the scan stuck as
+                        # "active" forever.
                         db.session.rollback()
 
                         if scan_state:
@@ -1339,7 +1339,7 @@ class ScanService:
                     logger.error(f"Failed to recover progress update: {e2}")
             
             logger.info(f"Chunk {i+1}/{total_chunks} completed: {chunk.files_scanned} files scanned (total: {total_files_scanned}/{total_files_to_scan})")
-        
+
         # Complete scan
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
@@ -1465,46 +1465,59 @@ class ScanService:
         from flask import current_app
         app = current_app._get_current_object()
 
-        def scan_chunk(chunk):
-            # Set up Flask app context for worker thread
+        def scan_chunk(chunk_db_id, chunk_id_str):
+            """Process a single chunk in a worker thread.
+
+            Receives chunk DB ID (not ORM object) to avoid cross-session issues.
+            Each thread queries its own fresh ORM objects.
+            """
             with app.app_context():
                 if self.scan_cancelled:
-                    return None
+                    return chunk_id_str, 0
 
-                # Handle database connection errors with retry
-                from sqlalchemy.exc import OperationalError
-                max_retries = 3
-                for attempt in range(max_retries):
+                try:
+                    # Query fresh objects in this thread's session
+                    thread_chunk = db.session.query(ScanChunk).filter_by(id=chunk_db_id).first()
+                    thread_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                    if not thread_chunk or not thread_scan_state:
+                        logger.error(f"Could not find chunk {chunk_db_id} or scan_state {scan_state_id}")
+                        return chunk_id_str, 0
+                except Exception as e:
+                    logger.error(f"Failed to query objects in chunk thread: {e}")
                     try:
-                        # Get a fresh scan_state from database for this thread to avoid session conflicts
-                        thread_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
-                        if not thread_scan_state:
-                            logger.error(f"Could not find scan_state with id {scan_state_id}")
-                            return None
-                        break
-                    except OperationalError as e:
-                        if "server closed the connection" in str(e) or "SSL connection has been closed" in str(e):
-                            logger.warning(f"Database connection lost, attempt {attempt + 1}/{max_retries}: {e}")
-                            if attempt < max_retries - 1:
-                                # Rollback and retry
-                                db.session.rollback()
-                                db.session.remove()
-                                time.sleep(1 * (attempt + 1))  # Exponential backoff
-                            else:
-                                logger.error(f"Failed to reconnect to database after {max_retries} attempts")
-                                raise
-                        else:
-                            raise
-                # For parallel scan, we can't pass cumulative counts, so pass 0
-                # The main thread will handle updating the cumulative progress
-                # CRITICAL: When processing chunks in parallel, disable file-level parallelism
-                # to avoid double parallelism (chunks × files = too many threads/connections)
-                # Use sequential file processing (num_workers=1) when chunk_workers > 1
+                        db.session.rollback()
+                    except Exception:
+                        pass
+                    return chunk_id_str, 0
+
                 chunk_file_workers = 1 if chunk_workers > 1 else num_workers
-                # CRITICAL: Pass use_atomic_increment=True for parallel chunk processing to prevent progress resets
-                self._scan_chunk_files(chunk, checker, force_rescan, 0, 0, thread_scan_state,
-                                      num_workers=chunk_file_workers, use_atomic_increment=True)
-                return chunk, chunk.files_scanned or 0
+                try:
+                    self._scan_chunk_files(thread_chunk, checker, force_rescan, 0, 0,
+                                          thread_scan_state, num_workers=chunk_file_workers,
+                                          use_atomic_increment=True)
+                except Exception as e:
+                    logger.error(f"Chunk {chunk_id_str} failed: {e}")
+                    try:
+                        db.session.rollback()
+                        db.session.execute(
+                            text("UPDATE scan_chunks SET status = 'error', error_message = :msg WHERE id = :id"),
+                            {'msg': str(e)[:500], 'id': chunk_db_id}
+                        )
+                        db.session.commit()
+                    except Exception:
+                        pass
+
+                # Re-query to get the committed files_scanned count
+                try:
+                    result = db.session.execute(
+                        text("SELECT files_scanned FROM scan_chunks WHERE id = :id"),
+                        {'id': chunk_db_id}
+                    )
+                    row = result.fetchone()
+                    files = row[0] if row and row[0] else 0
+                except Exception:
+                    files = 0
+                return chunk_id_str, files
 
         chunk_workers = min(num_workers, len(chunks))
         logger.info(f"Processing {len(chunks)} chunks with {chunk_workers} chunk workers, {1 if chunk_workers > 1 else num_workers} file workers per chunk")
@@ -1536,94 +1549,95 @@ class ScanService:
             else:
                 logger.warning(f"Redis updates not available - update_scan_progress_redis={update_scan_progress_redis}, scan_id={scan_id}")
 
-            # Commit to persist estimated_total so API/UI can see it
-            # Safe now because worker threads fetch their own scan_state from DB
+            # Persist estimated_total and chunks to DB before passing IDs to threads
             db.session.commit()
             logger.info(f"Total files to scan: {total_files_to_scan} across {total_chunks} chunks")
+            chunk_refs = [(c.id, c.chunk_id) for c in chunks]
 
-            # Submit all chunks for scanning
-            future_to_chunk = {executor.submit(scan_chunk, chunk): chunk for chunk in chunks}
-            
-            # Process completed scans
-            for future in as_completed(future_to_chunk):
+            # Submit chunk DB IDs (not ORM objects) to worker threads
+            future_to_ref = {
+                executor.submit(scan_chunk, db_id, cid): (db_id, cid)
+                for db_id, cid in chunk_refs
+            }
+
+            # Process completed chunks -- main thread handles ALL scan_state updates
+            for future in as_completed(future_to_ref):
                 if self.scan_cancelled:
-                    executor.shutdown(wait=False)
+                    executor.shutdown(wait=False, cancel_futures=True)
                     break
-                
+
                 try:
-                    chunk, files_in_chunk = future.result()
+                    chunk_id_str, files_in_chunk = future.result()
                     completed_chunks += 1
-                    
-                    # Update total files scanned thread-safely
+
                     with files_scanned_lock:
                         total_files_scanned += files_in_chunk
                         current_files_scanned = total_files_scanned
 
-                    # DEBUG: Log chunk completion and accumulated progress
-                    logger.info(f"[CHUNK COMPLETE] Chunk {chunk.chunk_id}: scanned {files_in_chunk} files, total_accumulated={current_files_scanned}/{total_files_to_scan}")
+                    logger.info(f"[CHUNK COMPLETE] Chunk {chunk_id_str}: scanned {files_in_chunk} files, "
+                                f"total={current_files_scanned}/{total_files_to_scan}")
 
-                    self.update_progress(current_files_scanned, total_files_to_scan, chunk.directory_path, 'scanning')
-                    
-                    # Update progress using Redis for the UI worker to read
+                    # Update Redis progress
+                    self.update_progress(current_files_scanned, total_files_to_scan, '', 'scanning')
                     try:
-                        # Update Redis progress (non-blocking, no database commits)
                         if 'update_scan_progress_redis' in locals():
                             update_scan_progress_redis(
                                 scan_id,
                                 files_processed=current_files_scanned,
                                 estimated_total=total_files_to_scan,
                                 phase='scanning',
-                                current_file=os.path.basename(chunk.directory_path)
+                                current_file=''
                             )
+                    except Exception:
+                        pass
 
-                        # Only update non-critical fields in memory (no commit)
-                        scan_state.current_chunk_index = completed_chunks
-                        # CRITICAL: DO NOT update scan_state.files_processed here in parallel mode!
-                        # The atomic SQL increments in _scan_chunk_files already handle this.
-                        # Setting it here overwrites the database value with the local thread count,
-                        # causing the progress counter to reset. See v2.4.188 fix.
-
-                        # Update progress message in memory
-                        scan_state.progress_message = progress_tracker.get_progress_message(
-                            f'Phase 3 of 3: Scanning files across {total_chunks} directories (parallel)',
-                            current_files_scanned,
-                            total_files_to_scan,
-                            os.path.basename(chunk.directory_path)
-                        )
-                        # NO COMMIT HERE - UI worker handles database updates
+                    # Main thread: single writer to scan_state -- no contention
+                    try:
+                        scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
+                        if scan_state:
+                            scan_state.files_processed = current_files_scanned
+                            scan_state.current_chunk_index = completed_chunks
+                            scan_state.last_update = datetime.now(timezone.utc)
+                            scan_state.progress_message = progress_tracker.get_progress_message(
+                                f'Phase 3 of 3: Scanning files ({total_chunks} chunks, parallel)',
+                                current_files_scanned,
+                                total_files_to_scan,
+                                ''
+                            )
+                            db.session.commit()
                     except Exception as e:
-                        logger.error(f"Failed to update progress for chunk {chunk.directory_path}: {e}")
-                    
-                    logger.info(f"Parallel scan progress: {completed_chunks}/{total_chunks} chunks processed, {current_files_scanned}/{total_files_to_scan} files scanned")
-                except Exception as e:
-                    # Track failed chunk for retry
-                    failed_chunk = future_to_chunk[future]
-                    failed_chunks.append(failed_chunk)
-                    logger.error(f"Error processing chunk {failed_chunk.chunk_id} result: {e}")
+                        logger.error(f"Failed to update scan_state from main thread: {e}")
+                        try:
+                            db.session.rollback()
+                        except Exception:
+                            pass
 
-        # Retry failed chunks sequentially (single-threaded to avoid concurrency issues)
+                except Exception as e:
+                    db_id, cid = future_to_ref[future]
+                    failed_chunks.append(cid)
+                    logger.error(f"Error processing chunk {cid}: {e}")
+
+        # Retry failed chunks sequentially
         if failed_chunks and not self.scan_cancelled:
             logger.warning(f"Retrying {len(failed_chunks)} failed chunks sequentially...")
-            for chunk in failed_chunks:
+            for failed_cid in failed_chunks:
                 if self.scan_cancelled:
                     break
                 try:
-                    logger.info(f"Retrying chunk {chunk.chunk_id} ({chunk.directory_path})...")
-                    # Use scan_chunk function which handles app context and retries
-                    result = scan_chunk(chunk)
-                    if result:
-                        retry_chunk, files_in_chunk = result
-                        completed_chunks += 1
-                        with files_scanned_lock:
-                            total_files_scanned += files_in_chunk
-                            current_files_scanned = total_files_scanned
-                        logger.info(f"[CHUNK RETRY SUCCESS] Chunk {chunk.chunk_id}: scanned {files_in_chunk} files")
-                        self.update_progress(current_files_scanned, total_files_to_scan, chunk.directory_path, 'scanning')
-                    else:
-                        logger.error(f"Chunk {chunk.chunk_id} retry returned None (scan cancelled or error)")
+                    # Look up DB ID from chunk_id string
+                    failed_db_chunk = db.session.query(ScanChunk).filter_by(chunk_id=failed_cid).first()
+                    if not failed_db_chunk:
+                        continue
+                    logger.info(f"Retrying chunk {failed_cid}...")
+                    result_cid, files_in_chunk = scan_chunk(failed_db_chunk.id, failed_cid)
+                    completed_chunks += 1
+                    with files_scanned_lock:
+                        total_files_scanned += files_in_chunk
+                        current_files_scanned = total_files_scanned
+                    logger.info(f"[CHUNK RETRY SUCCESS] Chunk {failed_cid}: scanned {files_in_chunk} files")
+                    self.update_progress(current_files_scanned, total_files_to_scan, '', 'scanning')
                 except Exception as e:
-                    logger.error(f"Chunk {chunk.chunk_id} failed on retry: {e}")
-                    # Files in this chunk remain pending and will be picked up on next scan
+                    logger.error(f"Chunk {failed_cid} failed on retry: {e}")
 
         # Complete scan
         if self.scan_cancelled:
@@ -1863,13 +1877,23 @@ class ScanService:
 
         max_retries = 2
 
-        # Check for pending files
+        # Count pending files first (cheap) before deciding to load them
+        pending_count = db.session.query(ScanResult).filter(
+            ScanResult.scan_status == 'pending'
+        ).count()
+
+        if pending_count == 0:
+            return 0
+
+        # Skip retry for large pending sets -- they'll be picked up on the next scan.
+        # Loading 90K+ ORM objects blocks completion for hours.
+        if pending_count > 1000:
+            logger.info(f"{pending_count} files still pending after scan -- will be processed on next scheduled run")
+            return pending_count
+
         pending_files = db.session.query(ScanResult).filter(
             ScanResult.scan_status == 'pending'
-        ).all()
-
-        if not pending_files:
-            return 0
+        ).limit(1000).all()
 
         initial_pending = len(pending_files)
         logger.warning(f"Found {initial_pending} files still pending after initial scan pass - starting retry")
@@ -2082,60 +2106,53 @@ class ScanService:
             chunk_size = 1000  # 1000 files per chunk for large scans
 
         num_chunks = (total_files + chunk_size - 1) // chunk_size
-        logger.info(f"Creating {num_chunks} file-based chunks for {total_files} files (chunk size: {chunk_size})")
+        logger.info(f"Creating ~{num_chunks} file-based chunks for ~{total_files} estimated files (chunk size: {chunk_size})")
 
-        # Query all pending file paths ordered by path to establish stable boundaries
-        # This captures the exact files at scan start, preventing pagination race conditions
-        if force_rescan:
-            # For force rescan, get all files in directories
-            all_files_query = db.session.query(ScanResult.file_path).filter(
-                db.or_(*[ScanResult.file_path.like(f"{d}%") for d in directories])
-            ).order_by(ScanResult.file_path)
-        else:
-            # Normal scan: get all pending files
-            all_files_query = db.session.query(ScanResult.file_path).filter(
-                ScanResult.scan_status == 'pending'
-            ).order_by(ScanResult.file_path)
+        # Keyset pagination: each query uses WHERE file_path > last_seen_path.
+        # Stable regardless of concurrent changes (unlike OFFSET which shifts
+        # when rows are removed from the result set between queries).
+        actual_file_count = 0
+        chunk_index = 0
+        last_path = ''
 
-        all_file_paths = [row[0] for row in all_files_query.all()]
-        actual_file_count = len(all_file_paths)
+        while True:
+            if force_rescan:
+                batch = db.session.query(ScanResult.file_path).filter(
+                    db.or_(*[ScanResult.file_path.like(f"{d}%") for d in directories]),
+                    ScanResult.file_path > last_path
+                ).order_by(ScanResult.file_path).limit(chunk_size).all()
+            else:
+                batch = db.session.query(ScanResult.file_path).filter(
+                    ScanResult.scan_status == 'pending',
+                    ScanResult.file_path > last_path
+                ).order_by(ScanResult.file_path).limit(chunk_size).all()
 
-        if actual_file_count == 0:
-            logger.info("No files to create chunks for")
-            return chunks
+            if not batch:
+                break
 
-        # Recalculate num_chunks based on actual file count
-        num_chunks = (actual_file_count + chunk_size - 1) // chunk_size
-        logger.info(f"Actual files: {actual_file_count}, creating {num_chunks} chunks")
+            chunk_paths = [row.file_path for row in batch]
+            last_path = chunk_paths[-1]
+            actual_file_count += len(chunk_paths)
 
-        # Create file-based chunks with path boundaries
-        for i in range(num_chunks):
-            chunk_id = hashlib.md5(f"{scan_id}:scan_chunk_{i}:{time.time()}".encode()).hexdigest()
-
-            # Calculate the file indices for this chunk
-            start_idx = i * chunk_size
-            end_idx = min(start_idx + chunk_size - 1, actual_file_count - 1)
-
-            first_path = all_file_paths[start_idx]
-            last_path = all_file_paths[end_idx]
-            files_in_chunk = end_idx - start_idx + 1
-
-            # Store as JSON for safe handling of any path characters
-            # Format: {"t":"FCP","f":"first_path","l":"last_path"}
-            chunk_metadata = json.dumps({"t": "FCP", "f": first_path, "l": last_path})
-
+            chunk_id = hashlib.md5(f"{scan_id}:scan_chunk_{chunk_index}:{time.time()}".encode()).hexdigest()
+            chunk_metadata = json.dumps({"t": "FCP", "f": chunk_paths[0], "l": chunk_paths[-1]})
             chunk = ScanChunk(
                 scan_id=scan_id,
                 chunk_id=chunk_id,
                 directory_path=chunk_metadata,
                 phase='scanning',
                 status='pending',
-                files_discovered=files_in_chunk  # Set the expected file count
+                files_discovered=len(chunk_paths)
             )
             chunks.append(chunk)
+            logger.debug(f"Chunk {chunk_index}: {len(chunk_paths)} files")
+            chunk_index += 1
 
-            logger.debug(f"Chunk {i}: files {start_idx}-{end_idx} ({files_in_chunk} files)")
+        if actual_file_count == 0:
+            logger.info("No files to create chunks for")
+            return chunks
 
+        logger.info(f"Created {chunk_index} chunks for {actual_file_count} files (chunk size: {chunk_size})")
         return chunks
     
     def _create_directory_chunks(self, directories: List[str], scan_id: str) -> List[ScanChunk]:
@@ -2395,6 +2412,9 @@ class ScanService:
             num_workers: Number of parallel workers to use for scanning files within this chunk
             use_atomic_increment: If True, always use atomic SQL increment for progress (for parallel chunk processing)
         """
+        # Merge chunk into the current thread's session -- the chunk object may have
+        # been created in a different thread's session (parallel chunk processing)
+        chunk = db.session.merge(chunk)
         chunk.status = 'processing'
         chunk.phase = 'scanning'
         chunk.start_time = datetime.now(timezone.utc)
@@ -2495,7 +2515,12 @@ class ScanService:
                 from pixelprobe.media_checker import load_exclusions_with_patterns
                 excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
 
-            # Process files in batches to avoid loading all into memory
+            # Process files in batches to avoid loading all into memory.
+            # For pending-file queries (non-force-rescan), always use offset(0) because
+            # scanned files change status from 'pending' and drop out of the result set.
+            # Using an incrementing offset on a shrinking result set skips files.
+            # For force_rescan queries (no pending filter), the result set is stable so
+            # offset pagination is correct.
             for batch_offset in range(0, files_count, batch_size):
                 if self.scan_cancelled:
                     # Clean up ThreadPoolExecutor before cancelling
@@ -2525,7 +2550,7 @@ class ScanService:
                                     ScanResult.file_path >= first_path,
                                     ScanResult.file_path <= last_path,
                                     ScanResult.scan_status == 'pending'
-                                ).order_by(ScanResult.file_path).offset(batch_offset).limit(batch_size).all()
+                                ).order_by(ScanResult.file_path).limit(batch_size).all()
                         else:
                             logger.error(f"Unknown chunk type in batch processing: {chunk_meta.get('t')}")
                             files_batch = []
@@ -2541,40 +2566,39 @@ class ScanService:
                             ScanResult.file_path
                         ).offset(chunk_offset + batch_offset).limit(batch_size).all()
                     else:
-                        # Normal scan: only pending files
+                        # Normal scan: only pending files -- offset(0) because result set shrinks
                         files_batch = db.session.query(ScanResult).filter(
                             ScanResult.scan_status == 'pending'
-                        ).order_by(ScanResult.file_path).offset(chunk_offset + batch_offset).limit(batch_size).all()
+                        ).order_by(ScanResult.file_path).limit(batch_size).all()
                 elif chunk.directory_path == 'PENDING_FILES':
-                    # Legacy: Get batch of ALL pending files
+                    # Legacy: Get batch of ALL pending files -- offset(0) because result set shrinks
                     files_batch = db.session.query(ScanResult).filter(
                         ScanResult.scan_status == 'pending'
-                    ).offset(batch_offset).limit(batch_size).all()
+                    ).limit(batch_size).all()
                 elif force_rescan:
                     files_batch = db.session.query(ScanResult).filter(
                         ScanResult.file_path.startswith(chunk_dir)
                     ).offset(batch_offset).limit(batch_size).all()
                 else:
                     # For normal scans, only get pending files (new/unscanned)
+                    # offset(0) because scanned files drop out of the pending result set
                     files_batch = db.session.query(ScanResult).filter(
                         db.and_(
                             ScanResult.file_path.startswith(chunk_dir),
                             ScanResult.scan_status == 'pending'
                         )
-                    ).offset(batch_offset).limit(batch_size).all()
+                    ).limit(batch_size).all()
                 
                 if not files_batch:
                     break  # No more files
 
-                # Use parallel processing if num_workers > 1
                 if num_workers > 1:
                     from concurrent.futures import as_completed
 
-                    logger.info(f"Processing batch at offset {batch_offset}, batch size: {len(files_batch)}")
+                    logger.info(f"Processing batch {batch_offset // batch_size + 1}, size: {len(files_batch)}")
 
-                    # Define scan function inside batch loop to capture batch-specific variables
                     def scan_single_file(file_result):
-                        """Scan a single file in a worker thread"""
+                        """Scan a single file in a worker thread."""
                         import threading as thread_module
                         current_thread_id = thread_module.current_thread().ident
                         current_thread_name = thread_module.current_thread().name
@@ -2597,8 +2621,6 @@ class ScanService:
                                         excluded_patterns=excluded_patterns
                                     )
                                     logger.info(f"[Thread {current_thread_name}/{current_thread_id}] PixelProbe instance created")
-                                # else:
-                                #     logger.debug(f"[Thread {current_thread_name}/{current_thread_id}] Reusing existing PixelProbe instance")
 
                                 thread_local.checker.scan_file(file_result.file_path, force_rescan=force_rescan)
                                 return file_result, True, None
@@ -2610,11 +2632,12 @@ class ScanService:
                     future_to_file = {file_executor.submit(scan_single_file, f): f for f in files_batch}
                     logger.info(f"All {len(files_batch)} files submitted to executor")
 
+                    last_file_in_batch = None
+                    completed_ids = []
                     for future in as_completed(future_to_file):
                         if self.scan_cancelled:
-                            # Clean up ThreadPoolExecutor before cancelling
                             if file_executor:
-                                file_executor.shutdown(wait=True)
+                                file_executor.shutdown(wait=True, cancel_futures=True)
                             chunk.status = 'cancelled'
                             chunk.end_time = datetime.now(timezone.utc)
                             db.session.commit()
@@ -2625,32 +2648,80 @@ class ScanService:
                             continue
 
                         file_result, success, error = result
+                        last_file_in_batch = file_result
 
                         with scanned_lock:
                             if success:
                                 scanned += 1
+                                completed_ids.append(file_result.id)
                             else:
                                 errors += 1
                                 logger.error(f"Error scanning {file_result.file_path}: {error}")
-
-                                # Mark the file as error so it doesn't stay pending
                                 try:
                                     file_result.scan_status = 'error'
-                                    file_result.error_message = str(error)[:500]  # Store error message (truncated)
+                                    file_result.error_message = str(error)[:500]
                                     file_result.scan_date = datetime.now(timezone.utc)
                                     db.session.commit()
-                                    logger.debug(f"Marked {file_result.file_path} as error status")
                                 except Exception as e:
                                     logger.error(f"Failed to update error status for {file_result.file_path}: {e}")
 
-                            # Update progress (less frequently for parallel to reduce contention)
+                    # Batch-mark completed via Flask's db.session so the next batch
+                    # query (same connection) sees the change. _save_to_cache commits
+                    # via a separate PixelProbe session invisible to Flask.
+                    if completed_ids:
+                        db.session.execute(
+                            text("UPDATE scan_results SET scan_status = 'completed' WHERE id = ANY(:ids) AND scan_status = 'pending'"),
+                            {'ids': completed_ids}
+                        )
+
+                    # Update in-memory/Redis progress per batch
+                    current_total = total_scanned_so_far + scanned
+                    if last_file_in_batch:
+                        self.update_progress(current_total, total_to_scan,
+                                           last_file_in_batch.file_path, 'scanning')
+
+                    # scan_state updates: only in sequential mode (not parallel chunk mode)
+                    # In parallel mode, the main thread's as_completed loop handles scan_state
+                    if not use_atomic_increment and scan_state and last_file_in_batch and (scanned - last_commit_count) > 0:
+                        try:
+                            scan_state.files_processed = current_total
+                            scan_state.current_file = last_file_in_batch.file_path
+                            scan_state.last_update = datetime.now(timezone.utc)
+                            db.session.commit()
+                            last_commit_count = scanned
+                        except Exception as e:
+                            logger.error(f"Failed to update progress: {e}")
+                            try:
+                                db.session.rollback()
+                            except Exception:
+                                pass
+                else:
+                    # Sequential processing
+                    for file_result in files_batch:
+                        if self.scan_cancelled:
+                            chunk.status = 'cancelled'
+                            chunk.end_time = datetime.now(timezone.utc)
+                            db.session.commit()
+                            return
+
+                        try:
+                            checker.scan_file(file_result.file_path, force_rescan=force_rescan)
+                            # Mark completed via Flask's session so the next batch
+                            # query (same connection) sees the change. The PixelProbe
+                            # checker commits via a separate StaticPool session.
+                            db.session.execute(
+                                text("UPDATE scan_results SET scan_status = 'completed' WHERE id = :id AND scan_status = 'pending'"),
+                                {'id': file_result.id}
+                            )
+                            scanned += 1
+
                             current_total = total_scanned_so_far + scanned
 
                             if scanned % 10 == 0 or scanned == 1:
                                 self.update_progress(current_total, total_to_scan,
                                                    file_result.file_path, 'scanning')
 
-                            # Determine update threshold
+                            # DB commit frequency scales with scan size
                             if total_to_scan < 20:
                                 update_threshold = 1
                             elif total_to_scan < 100:
@@ -2660,237 +2731,80 @@ class ScanService:
                             else:
                                 update_threshold = 50
 
-                            if scan_state and (scanned - last_commit_count) >= update_threshold:
+                            # When use_atomic_increment is True, this chunk runs inside
+                            # a parallel chunk executor (20 threads). Skip per-file DB
+                            # progress to avoid row-lock convoy on scan_state. The chunk
+                            # completion handler in _parallel_scan_chunks updates progress.
+                            if not use_atomic_increment and scan_state and (scanned - last_commit_count) >= update_threshold:
                                 try:
-                                    # CRITICAL FIX (v2.4.161): Use atomic SQL increment to prevent race conditions
-                                    # Multiple workers can safely increment files_processed without overwriting each other
-                                    # Calculate how many files we've scanned since last update
-                                    increment = scanned - last_commit_count
-
-                                    # Use a fresh session for progress updates to avoid conflicts with worker threads
-                                    from sqlalchemy.orm import Session
-                                    progress_session = Session(bind=db.engine)
-                                    try:
-                                        # For parallel scans, use the existing estimated_total from scan_state
-                                        # The estimated_total was already set correctly at the beginning of parallel scan
-                                        aggregate_total = scan_state.estimated_total if scan_state.estimated_total > 0 else total_to_scan
-
-                                        # Use atomic increment if explicitly requested OR if total_to_scan is 0 (parallel chunk mode)
-                                        if use_atomic_increment or total_to_scan == 0:
-                                            # Parallel mode: ATOMIC INCREMENT of files_processed
-                                            # This prevents race conditions - database handles the increment atomically
-                                            logger.debug(f"[ATOMIC INCREMENT parallel] Using atomic increment: +{increment}")
-                                            progress_session.execute(
-                                                text("UPDATE scan_state SET files_processed = files_processed + :increment, "
-                                                     "current_file = :file, last_update = :now WHERE id = :id"),
-                                                {
-                                                    'increment': increment,
-                                                    'file': file_result.file_path,
-                                                    'now': datetime.now(timezone.utc),
-                                                    'id': scan_state.id
-                                                }
-                                            )
-                                        else:
-                                            # Sequential mode: update both files_processed and estimated_total normally
-                                            progress_session.execute(
-                                                text("UPDATE scan_state SET files_processed = :total, "
-                                                     "estimated_total = :estimated, current_file = :file, "
-                                                     "last_update = :now WHERE id = :id"),
-                                                {
-                                                    'total': current_total,
-                                                    'estimated': total_to_scan,
-                                                    'file': file_result.file_path,
-                                                    'now': datetime.now(timezone.utc),
-                                                    'id': scan_state.id
-                                                }
-                                            )
-
-                                        # Get updated files_processed for progress message
-                                        result = progress_session.execute(
-                                            text("SELECT files_processed FROM scan_state WHERE id = :id"),
-                                            {'id': scan_state.id}
-                                        )
-                                        row = result.fetchone()
-                                        updated_files_processed = row[0] if row else current_total
-
-                                        # Update progress message
-                                        from pixelprobe.utils.helpers import ProgressTracker
-                                        progress_tracker = ProgressTracker('scan')
-                                        progress_message = progress_tracker.get_progress_message(
-                                            f'Phase 3 of 3: Scanning files (parallel: {num_workers} workers)',
-                                            updated_files_processed,
-                                            aggregate_total,
-                                            os.path.basename(file_result.file_path)
-                                        )
-
-                                        progress_session.execute(
-                                            text("UPDATE scan_state SET progress_message = :msg WHERE id = :id"),
-                                            {'msg': progress_message, 'id': scan_state.id}
-                                        )
-
-                                        progress_session.commit()
-                                        last_commit_count = scanned
-
-                                        if scanned % 1000 == 0:
-                                            import gc
-                                            gc.collect()
-                                    finally:
-                                        progress_session.close()
-                                except Exception as e:
-                                    logger.error(f"Failed to update progress: {e}")
-                else:
-                    # Sequential processing (original code)
-                    for file_result in files_batch:
-                        if self.scan_cancelled:
-                            chunk.status = 'cancelled'
-                            chunk.end_time = datetime.now(timezone.utc)
-                            db.session.commit()
-                            return
-
-                        try:
-                            # Scan the file
-                            checker.scan_file(file_result.file_path, force_rescan=force_rescan)
-                            scanned += 1
-
-                            # Update progress with cumulative counts
-                            current_total = total_scanned_so_far + scanned
-
-                            # Update progress every 10 files for real-time feedback
-                            if scanned % 10 == 0 or scanned == 1 or scanned == batch_offset + 1:
-                                self.update_progress(current_total, total_to_scan,
-                                                   file_result.file_path, 'scanning')
-
-                            # Commit based on scan size to balance real-time updates with performance
-                            # For small scans (<20 files), update EVERY file for immediate UI feedback
-                            # For medium scans, update every 5-10 files
-                            # For large scans, update less frequently to reduce database overhead
-                            if total_to_scan < 20:
-                                update_threshold = 1  # Update every file for small scans
-                            elif total_to_scan < 100:
-                                update_threshold = 5  # Update every 5 files for medium scans
-                            elif total_to_scan < 1000:
-                                update_threshold = 10  # Update every 10 files
-                            else:
-                                update_threshold = 50  # Update every 50 files for large scans
-
-                            if scan_state and (scanned - last_commit_count) >= update_threshold:
-                                try:
-                                    # CRITICAL FIX (v2.4.161): Use atomic SQL increment to prevent race conditions
-                                    # Calculate how many files we've scanned since last update
-                                    increment = scanned - last_commit_count
-
-                                    # For parallel scans, use the existing estimated_total from scan_state
-                                    aggregate_total = scan_state.estimated_total if scan_state.estimated_total > 0 else total_to_scan
-
-                                    # DEBUG: Log the total_to_scan value to verify parallel mode detection
-                                    logger.debug(f"[PROGRESS DEBUG] total_to_scan={total_to_scan}, use_atomic_increment={use_atomic_increment}, increment={increment}, current_total={total_scanned_so_far + scanned}")
-
-                                    # Use atomic increment if explicitly requested OR if total_to_scan is 0 (parallel chunk mode)
-                                    if use_atomic_increment or total_to_scan == 0:
-                                        # Parallel mode: ATOMIC INCREMENT of files_processed
-                                        # Use raw SQL to prevent race conditions
-                                        logger.debug(f"[ATOMIC INCREMENT] Using atomic increment: +{increment}")
-                                        db.session.execute(
-                                            text("UPDATE scan_state SET files_processed = files_processed + :increment, "
-                                                 "current_file = :file, last_update = :now WHERE id = :id"),
-                                            {
-                                                'increment': increment,
-                                                'file': file_result.file_path,
-                                                'now': datetime.now(timezone.utc),
-                                                'id': scan_state.id
-                                            }
-                                        )
-                                        # Get updated files_processed for progress message
-                                        result = db.session.execute(
-                                            text("SELECT files_processed FROM scan_state WHERE id = :id"),
-                                            {'id': scan_state.id}
-                                        )
-                                        row = result.fetchone()
-                                        current_total = row[0] if row else current_total
-                                        logger.debug(f"[ATOMIC INCREMENT] After increment, files_processed={current_total}")
-                                    else:
-                                        # Sequential mode: update both files_processed and estimated_total normally
-                                        scan_state.files_processed = current_total
-                                        scan_state.estimated_total = total_to_scan
-                                        scan_state.current_file = file_result.file_path
-                                        scan_state.last_update = datetime.now(timezone.utc)
-
-                                    # Update progress message with current file info
-                                    from pixelprobe.utils.helpers import ProgressTracker
-                                    progress_tracker = ProgressTracker('scan')
-                                    scan_state.progress_message = progress_tracker.get_progress_message(
-                                        f'Phase 3 of 3: Scanning files',
-                                        current_total,
-                                        aggregate_total,
-                                        os.path.basename(file_result.file_path)
-                                    )
+                                    scan_state.files_processed = current_total
+                                    scan_state.estimated_total = total_to_scan
+                                    scan_state.current_file = file_result.file_path
+                                    scan_state.last_update = datetime.now(timezone.utc)
                                     db.session.commit()
                                     last_commit_count = scanned
-
-                                    # Memory management - cleanup every 1000 files
-                                    if scanned % 1000 == 0:
-                                        import gc
-                                        gc.collect()
                                 except Exception as e:
                                     logger.error(f"Failed to update progress for file {file_result.file_path}: {e}")
-                                # Try to recover the database session
+                                    try:
+                                        db.session.rollback()
+                                    except Exception:
+                                        pass
+
+                            # Update chunk progress every 100 files for the worker grid UI.
+                            # Each chunk is a different row so no contention risk.
+                            if scanned % 100 == 0:
                                 try:
-                                    db.session.rollback()
-                                    # Re-get scan state and try again
-                                    scan_state = db.session.query(ScanState).filter_by(id=scan_state.id).first()
-                                    if scan_state:
-                                        increment = scanned - last_commit_count
-                                        # Use atomic increment if explicitly requested OR if total_to_scan is 0 (parallel chunk mode)
-                                        if use_atomic_increment or total_to_scan == 0:
-                                            # Parallel mode: atomic increment
-                                            logger.debug(f"[ATOMIC INCREMENT recovery] Using atomic increment: +{increment}")
-                                            db.session.execute(
-                                                text("UPDATE scan_state SET files_processed = files_processed + :increment, "
-                                                     "current_file = :file, last_update = :now WHERE id = :id"),
-                                                {'increment': increment, 'file': file_result.file_path,
-                                                 'now': datetime.now(timezone.utc), 'id': scan_state.id}
-                                            )
-                                        else:
-                                            # Sequential mode: update files_processed normally
-                                            scan_state.files_processed = current_total
-                                            scan_state.current_file = file_result.file_path
-                                            scan_state.last_update = datetime.now(timezone.utc)
-                                        db.session.commit()
-                                        last_commit_count = scanned
-                                except Exception as e2:
-                                    logger.error(f"Failed to recover progress update: {e2}")
+                                    db.session.execute(
+                                        text("UPDATE scan_chunks SET files_scanned = :s WHERE chunk_id = :cid"),
+                                        {'s': scanned, 'cid': chunk.chunk_id}
+                                    )
+                                    db.session.commit()
+                                except Exception:
+                                    try:
+                                        db.session.rollback()
+                                    except Exception:
+                                        pass
 
                         except Exception as e:
                             logger.error(f"Error scanning {file_result.file_path}: {e}")
                             errors += 1
 
-                            # Mark the file as error so it doesn't stay pending
                             try:
                                 file_result.scan_status = 'error'
-                                file_result.error_message = str(e)[:500]  # Store error message (truncated)
+                                file_result.error_message = str(e)[:500]
                                 file_result.scan_date = datetime.now(timezone.utc)
                                 db.session.commit()
-                                logger.debug(f"Marked {file_result.file_path} as error status")
                             except Exception as e2:
                                 logger.error(f"Failed to update error status for {file_result.file_path}: {e2}")
 
             # Clean up ThreadPoolExecutor after all batches are processed
             if file_executor:
                 logger.info(f"Shutting down ThreadPoolExecutor for chunk {chunk.chunk_id}")
-                file_executor.shutdown(wait=True)
+                file_executor.shutdown(wait=True, cancel_futures=True)
                 logger.info(f"ThreadPoolExecutor shut down successfully for chunk {chunk.chunk_id}")
 
-            chunk.files_scanned = scanned
-            chunk.status = 'completed'
-            chunk.end_time = datetime.now(timezone.utc)
-            
-            # Final update to scan state
-            if scan_state and scanned > 0:
+            # Update chunk completion via raw SQL (not ORM) to avoid cross-session issues.
+            # Expire the chunk ORM object so commit() doesn't overwrite the raw SQL values.
+            db.session.expire(chunk)
+            db.session.execute(
+                text("UPDATE scan_chunks SET files_scanned = :scanned, status = 'completed', "
+                     "end_time = :now WHERE chunk_id = :cid"),
+                {'scanned': scanned, 'now': datetime.now(timezone.utc), 'cid': chunk.chunk_id}
+            )
+
+            if use_atomic_increment:
+                # Worker thread: only update last_update via raw SQL.
+                # Main thread handles scan_state progress after chunk completes.
+                if scan_state:
+                    db.session.execute(
+                        text("UPDATE scan_state SET last_update = :now WHERE id = :id"),
+                        {'now': datetime.now(timezone.utc), 'id': scan_state.id}
+                    )
+            elif scan_state and scanned > 0:
                 final_total = total_scanned_so_far + scanned
                 scan_state.files_processed = final_total
-                # Clear current_file when chunk is complete (don't show directory path as a file)
                 scan_state.update_progress(final_total, total_to_scan, current_file='')
-            
+
             db.session.commit()
             
             logger.info(f"Chunk {chunk.chunk_id} completed: {scanned} files scanned, {errors} errors")
