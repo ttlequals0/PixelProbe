@@ -2131,7 +2131,7 @@ class ScanService:
             if not batch:
                 break
 
-            chunk_paths = [row[0] for row in batch]
+            chunk_paths = [row.file_path for row in batch]
             last_path = chunk_paths[-1]
             actual_file_count += len(chunk_paths)
 
