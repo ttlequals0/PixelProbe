@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.38] - 2026-04-06
+
+### Fixed
+
+- **Fix newly discovered files marked completed without being scanned**: Parallel chunk scanning (v2.6.32+) passed the parent `PixelProbe` instance to all chunk worker threads. Each `PixelProbe` uses a `StaticPool` with a single DB connection -- when 3+ chunk threads shared it concurrently, `_save_to_cache()` writes were silently lost due to transaction interference. Files ended up with `scan_status='completed'` but `scan_date=NULL` and `scan_tool=NULL`. Fixed by creating a per-thread `PixelProbe` instance in each chunk worker, giving each its own isolated DB connection. The v2.6.36 raw SQL `UPDATE SET scan_status = 'completed'` fix masked the issue by marking unscanned files as done.
+
+---
+
 ## [2.6.37] - 2026-04-06
 
 ### Fixed

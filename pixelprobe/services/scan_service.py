@@ -1457,13 +1457,20 @@ class ScanService:
         files_scanned_lock = threading.Lock()
         discovery_lock = threading.Lock()
         failed_chunks = []  # Track chunks that fail during parallel processing for retry
-        
+
         # Create progress tracker for scan
         progress_tracker = ProgressTracker('scan')
 
         # Capture Flask app for worker threads
         from flask import current_app
         app = current_app._get_current_object()
+
+        # Thread-local PixelProbe instances. The parent checker uses StaticPool
+        # (single DB connection) which causes data races when multiple chunk
+        # threads share it. Each thread gets its own instance via threading.local().
+        chunk_thread_local = threading.local()
+        thread_checkers = []  # Track all instances for connection cleanup
+        thread_checkers_lock = threading.Lock()
 
         def scan_chunk(chunk_db_id, chunk_id_str):
             """Process a single chunk in a worker thread.
@@ -1490,9 +1497,19 @@ class ScanService:
                         pass
                     return chunk_id_str, 0
 
+                if not hasattr(chunk_thread_local, 'checker'):
+                    chunk_thread_local.checker = PixelProbe(
+                        database_path=self.database_uri,
+                        excluded_paths=checker.excluded_paths,
+                        excluded_extensions=checker.excluded_extensions,
+                        excluded_patterns=checker.excluded_patterns
+                    )
+                    with thread_checkers_lock:
+                        thread_checkers.append(chunk_thread_local.checker)
+
                 chunk_file_workers = 1 if chunk_workers > 1 else num_workers
                 try:
-                    self._scan_chunk_files(thread_chunk, checker, force_rescan, 0, 0,
+                    self._scan_chunk_files(thread_chunk, chunk_thread_local.checker, force_rescan, 0, 0,
                                           thread_scan_state, num_workers=chunk_file_workers,
                                           use_atomic_increment=True)
                 except Exception as e:
@@ -1638,6 +1655,14 @@ class ScanService:
                     self.update_progress(current_files_scanned, total_files_to_scan, '', 'scanning')
                 except Exception as e:
                     logger.error(f"Chunk {failed_cid} failed on retry: {e}")
+
+        # Dispose all thread-local PixelProbe DB engines to release connections
+        for tc in thread_checkers:
+            try:
+                if tc._db_engine:
+                    tc._db_engine.dispose()
+            except Exception:
+                pass
 
         # Complete scan
         if self.scan_cancelled:
