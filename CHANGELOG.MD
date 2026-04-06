@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.37] - 2026-04-06
+
+### Fixed
+
+- **Remove hardcoded 30-chunk limit on scan progress grid**: The scan-status API limited chunk results to 30, hiding all other chunks from the UI worker grid. Removed the `.limit(30)` so the grid shows all chunks for the current scan.
+
+---
+
+## [2.6.36] - 2026-04-06
+
+### Fixed
+
+- **Fix scans completing with ~65% of files still pending**: `checker.scan_file()` committed `scan_status='completed'` via PixelProbe's separate StaticPool session (connection B), but batch queries used Flask's `db.session` (connection A) which never saw the change. Added raw SQL `UPDATE scan_results SET scan_status = 'completed'` via Flask's `db.session` after each successful scan, ensuring the next batch query on the same connection sees the status change. Previous fixes (`offset(0)` in v2.6.34, `expire_all()` in v2.6.35) failed because they couldn't bridge the cross-connection visibility gap.
+
+---
+
+## [2.6.35] - 2026-04-05
+
+### Fixed
+
+- **Fix scan leaving ~65% of files stuck in pending**: `_scan_chunk_files()` batch queries used Flask's `db.session` but `checker.scan_file()` committed `scan_status='completed'` via a separate PixelProbe session. SQLAlchemy's identity map in `db.session` retained stale ScanResult objects from previous batches, causing the `offset(0)` batch query to return the same files repeatedly instead of the next pending batch. Added `db.session.expire_all()` before each batch query to force fresh reads from PostgreSQL.
+
+---
+
+## [2.6.34] - 2026-04-05
+
+### Fixed
+
+- **Fix scan skipping ~25% of pending files per chunk**: Batch pagination within `_scan_chunk_files()` used `offset(batch_offset)` on queries filtered by `scan_status == 'pending'`. As each batch was scanned, files changed from 'pending' to 'completed', shrinking the result set. The incrementing offset then skipped files that shifted to lower positions. Fixed by using `offset(0)` for all pending-file queries since scanned files drop out of the result set automatically.
+
+---
+
+## [2.6.33] - 2026-04-05
+
+### Fixed
+
+- **Fix scan startup crash from dead `offset` variable**: `_create_scanning_chunks()` crashed every scan with `UnboundLocalError: cannot access local variable 'offset'`. Leftover from the offset-to-keyset pagination migration -- the function uses `last_path` to advance through results, but `offset += chunk_size` was never removed.
+- **Fix IndexError on scan_state and scan_chunks ORM queries**: `db.create_all()` creates new tables but does not add columns to existing ones. Columns added to models (`num_workers`, `files_added`, `files_updated` on scan_state; `files_processed`, `is_complete`, `celery_task_id`, `files_added` on scan_chunks) were missing from the production database, causing `IndexError: tuple index out of range` when SQLAlchemy tried to load rows with fewer columns than the mapper expected. Added startup migration to sync missing columns.
+
+---
+
 ## [2.6.32] - 2026-04-05
 
 ### Added

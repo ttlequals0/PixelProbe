@@ -901,7 +901,7 @@ def get_scan_status():
                 scan_id=scan_state.scan_id
             ).filter(
                 ScanChunk.status.in_(['processing', 'completed', 'error'])
-            ).order_by(ScanChunk.start_time.desc()).limit(30).all()
+            ).order_by(ScanChunk.start_time.desc()).all()
 
             if active_chunks:
                 status['chunks'] = [{

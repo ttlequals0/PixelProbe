@@ -205,6 +205,43 @@ def run_v2_6_0_migrations(db):
         logger.error(f"Migration v2.6.0 failed: {e}")
 
 
+def run_v2_6_33_migrations(db):
+    """Ensure scan_state and scan_chunks tables have all columns the ORM models expect.
+
+    db.create_all() creates new tables but does NOT add columns to existing ones.
+    Several columns were added to the models over time without ALTER TABLE migrations,
+    causing IndexError ('tuple index out of range') when SQLAlchemy tries to load rows
+    with fewer columns than the mapper expects.
+    """
+    # (table, column, sql_type_with_default)
+    missing_cols = [
+        ('scan_state', 'num_workers', 'INTEGER NOT NULL DEFAULT 1'),
+        ('scan_state', 'files_added', 'INTEGER NOT NULL DEFAULT 0'),
+        ('scan_state', 'files_updated', 'INTEGER NOT NULL DEFAULT 0'),
+        ('scan_chunks', 'files_processed', 'INTEGER NOT NULL DEFAULT 0'),
+        ('scan_chunks', 'is_complete', 'BOOLEAN NOT NULL DEFAULT FALSE'),
+        ('scan_chunks', 'celery_task_id', 'VARCHAR(36)'),
+        ('scan_chunks', 'files_added', 'INTEGER NOT NULL DEFAULT 0'),
+    ]
+
+    try:
+        with db.engine.connect() as conn:
+            for table, column, col_type in missing_cols:
+                exists = conn.execute(text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = :tbl AND column_name = :col"
+                ), {'tbl': table, 'col': column}).fetchone()
+                if not exists:
+                    logger.info(f"Adding missing column {table}.{column} ({col_type})")
+                    conn.execute(text(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
+                    ))
+            conn.commit()
+            logger.info("v2.6.33 schema sync completed")
+    except Exception as e:
+        logger.error(f"Migration v2.6.33 failed: {e}")
+
+
 def create_performance_indexes(db):
     """Create performance indexes"""
     indexes = [
@@ -277,6 +314,12 @@ def _run_all_migrations(db):
         logger.info("v2.6.0 migration completed successfully")
     except Exception as e:
         logger.error(f"v2.6.0 migration failed: {e}")
+
+    logger.info("Running v2.6.33 migration (schema sync)...")
+    try:
+        run_v2_6_33_migrations(db)
+    except Exception as e:
+        logger.error(f"v2.6.33 migration failed: {e}")
 
     logger.info("Creating performance indexes...")
     try:

@@ -1340,7 +1340,6 @@ class ScanService:
             
             logger.info(f"Chunk {i+1}/{total_chunks} completed: {chunk.files_scanned} files scanned (total: {total_files_scanned}/{total_files_to_scan})")
 
-
         # Complete scan
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
@@ -2148,7 +2147,6 @@ class ScanService:
             chunks.append(chunk)
             logger.debug(f"Chunk {chunk_index}: {len(chunk_paths)} files")
             chunk_index += 1
-            offset += chunk_size
 
         if actual_file_count == 0:
             logger.info("No files to create chunks for")
@@ -2517,7 +2515,12 @@ class ScanService:
                 from pixelprobe.media_checker import load_exclusions_with_patterns
                 excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
 
-            # Process files in batches to avoid loading all into memory
+            # Process files in batches to avoid loading all into memory.
+            # For pending-file queries (non-force-rescan), always use offset(0) because
+            # scanned files change status from 'pending' and drop out of the result set.
+            # Using an incrementing offset on a shrinking result set skips files.
+            # For force_rescan queries (no pending filter), the result set is stable so
+            # offset pagination is correct.
             for batch_offset in range(0, files_count, batch_size):
                 if self.scan_cancelled:
                     # Clean up ThreadPoolExecutor before cancelling
@@ -2547,7 +2550,7 @@ class ScanService:
                                     ScanResult.file_path >= first_path,
                                     ScanResult.file_path <= last_path,
                                     ScanResult.scan_status == 'pending'
-                                ).order_by(ScanResult.file_path).offset(batch_offset).limit(batch_size).all()
+                                ).order_by(ScanResult.file_path).limit(batch_size).all()
                         else:
                             logger.error(f"Unknown chunk type in batch processing: {chunk_meta.get('t')}")
                             files_batch = []
@@ -2563,40 +2566,39 @@ class ScanService:
                             ScanResult.file_path
                         ).offset(chunk_offset + batch_offset).limit(batch_size).all()
                     else:
-                        # Normal scan: only pending files
+                        # Normal scan: only pending files -- offset(0) because result set shrinks
                         files_batch = db.session.query(ScanResult).filter(
                             ScanResult.scan_status == 'pending'
-                        ).order_by(ScanResult.file_path).offset(chunk_offset + batch_offset).limit(batch_size).all()
+                        ).order_by(ScanResult.file_path).limit(batch_size).all()
                 elif chunk.directory_path == 'PENDING_FILES':
-                    # Legacy: Get batch of ALL pending files
+                    # Legacy: Get batch of ALL pending files -- offset(0) because result set shrinks
                     files_batch = db.session.query(ScanResult).filter(
                         ScanResult.scan_status == 'pending'
-                    ).offset(batch_offset).limit(batch_size).all()
+                    ).limit(batch_size).all()
                 elif force_rescan:
                     files_batch = db.session.query(ScanResult).filter(
                         ScanResult.file_path.startswith(chunk_dir)
                     ).offset(batch_offset).limit(batch_size).all()
                 else:
                     # For normal scans, only get pending files (new/unscanned)
+                    # offset(0) because scanned files drop out of the pending result set
                     files_batch = db.session.query(ScanResult).filter(
                         db.and_(
                             ScanResult.file_path.startswith(chunk_dir),
                             ScanResult.scan_status == 'pending'
                         )
-                    ).offset(batch_offset).limit(batch_size).all()
+                    ).limit(batch_size).all()
                 
                 if not files_batch:
                     break  # No more files
 
-                # Use parallel processing if num_workers > 1
                 if num_workers > 1:
                     from concurrent.futures import as_completed
 
-                    logger.info(f"Processing batch at offset {batch_offset}, batch size: {len(files_batch)}")
+                    logger.info(f"Processing batch {batch_offset // batch_size + 1}, size: {len(files_batch)}")
 
-                    # Define scan function inside batch loop to capture batch-specific variables
                     def scan_single_file(file_result):
-                        """Scan a single file in a worker thread"""
+                        """Scan a single file in a worker thread."""
                         import threading as thread_module
                         current_thread_id = thread_module.current_thread().ident
                         current_thread_name = thread_module.current_thread().name
@@ -2619,8 +2621,6 @@ class ScanService:
                                         excluded_patterns=excluded_patterns
                                     )
                                     logger.info(f"[Thread {current_thread_name}/{current_thread_id}] PixelProbe instance created")
-                                # else:
-                                #     logger.debug(f"[Thread {current_thread_name}/{current_thread_id}] Reusing existing PixelProbe instance")
 
                                 thread_local.checker.scan_file(file_result.file_path, force_rescan=force_rescan)
                                 return file_result, True, None
@@ -2633,6 +2633,7 @@ class ScanService:
                     logger.info(f"All {len(files_batch)} files submitted to executor")
 
                     last_file_in_batch = None
+                    completed_ids = []
                     for future in as_completed(future_to_file):
                         if self.scan_cancelled:
                             if file_executor:
@@ -2652,6 +2653,7 @@ class ScanService:
                         with scanned_lock:
                             if success:
                                 scanned += 1
+                                completed_ids.append(file_result.id)
                             else:
                                 errors += 1
                                 logger.error(f"Error scanning {file_result.file_path}: {error}")
@@ -2662,6 +2664,15 @@ class ScanService:
                                     db.session.commit()
                                 except Exception as e:
                                     logger.error(f"Failed to update error status for {file_result.file_path}: {e}")
+
+                    # Batch-mark completed via Flask's db.session so the next batch
+                    # query (same connection) sees the change. _save_to_cache commits
+                    # via a separate PixelProbe session invisible to Flask.
+                    if completed_ids:
+                        db.session.execute(
+                            text("UPDATE scan_results SET scan_status = 'completed' WHERE id = ANY(:ids) AND scan_status = 'pending'"),
+                            {'ids': completed_ids}
+                        )
 
                     # Update in-memory/Redis progress per batch
                     current_total = total_scanned_so_far + scanned
@@ -2685,7 +2696,7 @@ class ScanService:
                             except Exception:
                                 pass
                 else:
-                    # Sequential processing (original code)
+                    # Sequential processing
                     for file_result in files_batch:
                         if self.scan_cancelled:
                             chunk.status = 'cancelled'
@@ -2694,30 +2705,31 @@ class ScanService:
                             return
 
                         try:
-                            # Scan the file
                             checker.scan_file(file_result.file_path, force_rescan=force_rescan)
+                            # Mark completed via Flask's session so the next batch
+                            # query (same connection) sees the change. The PixelProbe
+                            # checker commits via a separate StaticPool session.
+                            db.session.execute(
+                                text("UPDATE scan_results SET scan_status = 'completed' WHERE id = :id AND scan_status = 'pending'"),
+                                {'id': file_result.id}
+                            )
                             scanned += 1
 
-                            # Update progress with cumulative counts
                             current_total = total_scanned_so_far + scanned
 
-                            # Update progress every 10 files for real-time feedback
-                            if scanned % 10 == 0 or scanned == 1 or scanned == batch_offset + 1:
+                            if scanned % 10 == 0 or scanned == 1:
                                 self.update_progress(current_total, total_to_scan,
                                                    file_result.file_path, 'scanning')
 
-                            # Commit based on scan size to balance real-time updates with performance
-                            # For small scans (<20 files), update EVERY file for immediate UI feedback
-                            # For medium scans, update every 5-10 files
-                            # For large scans, update less frequently to reduce database overhead
+                            # DB commit frequency scales with scan size
                             if total_to_scan < 20:
-                                update_threshold = 1  # Update every file for small scans
+                                update_threshold = 1
                             elif total_to_scan < 100:
-                                update_threshold = 5  # Update every 5 files for medium scans
+                                update_threshold = 5
                             elif total_to_scan < 1000:
-                                update_threshold = 10  # Update every 10 files
+                                update_threshold = 10
                             else:
-                                update_threshold = 50  # Update every 50 files for large scans
+                                update_threshold = 50
 
                             # When use_atomic_increment is True, this chunk runs inside
                             # a parallel chunk executor (20 threads). Skip per-file DB
@@ -2757,13 +2769,11 @@ class ScanService:
                             logger.error(f"Error scanning {file_result.file_path}: {e}")
                             errors += 1
 
-                            # Mark the file as error so it doesn't stay pending
                             try:
                                 file_result.scan_status = 'error'
-                                file_result.error_message = str(e)[:500]  # Store error message (truncated)
+                                file_result.error_message = str(e)[:500]
                                 file_result.scan_date = datetime.now(timezone.utc)
                                 db.session.commit()
-                                logger.debug(f"Marked {file_result.file_path} as error status")
                             except Exception as e2:
                                 logger.error(f"Failed to update error status for {file_result.file_path}: {e2}")
 
