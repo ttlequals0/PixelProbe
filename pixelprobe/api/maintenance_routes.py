@@ -145,11 +145,11 @@ def get_cleanup_status():
         return response
 
     except Exception as e:
-        logger.error(f"Error getting cleanup status: {str(e)}")
+        logger.error(f"Error getting cleanup status: {str(e)}", exc_info=True)
         return {
             'is_running': False,
             'phase': 'error',
-            'error': str(e)
+            'error': 'Failed to get cleanup status',
         }
 
 @maintenance_bp.route('/file-changes-status')
@@ -225,11 +225,11 @@ def get_file_changes_status():
         return response
 
     except Exception as e:
-        logger.error(f"Error getting file changes status: {str(e)}")
+        logger.error(f"Error getting file changes status: {str(e)}", exc_info=True)
         return {
             'is_running': False,
             'phase': 'error',
-            'error': str(e)
+            'error': 'Failed to get file changes status',
         }
 
 @maintenance_bp.route('/cancel-cleanup', methods=['POST'])
@@ -255,8 +255,8 @@ def cancel_cleanup():
             return {'error': 'No active cleanup operation to cancel'}, 400
             
     except Exception as e:
-        logger.error(f"Error cancelling cleanup: {str(e)}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error cancelling cleanup: {str(e)}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @maintenance_bp.route('/reset-cleanup-state', methods=['POST'])
 @auth_required
@@ -292,8 +292,8 @@ def reset_cleanup_state():
         return {'message': 'Cleanup state reset successfully'}
         
     except Exception as e:
-        logger.error(f"Error resetting cleanup state: {str(e)}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error resetting cleanup state: {str(e)}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @maintenance_bp.route('/cancel-file-changes', methods=['POST'])
 @auth_required
@@ -318,8 +318,8 @@ def cancel_file_changes():
             return {'error': 'No active file changes check to cancel'}, 400
             
     except Exception as e:
-        logger.error(f"Error cancelling file changes check: {str(e)}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error cancelling file changes check: {str(e)}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @maintenance_bp.route('/reset-file-changes-state', methods=['POST'])
 @auth_required
@@ -356,8 +356,8 @@ def reset_file_changes_state():
         return {'message': 'File changes state reset successfully'}
         
     except Exception as e:
-        logger.error(f"Error resetting file changes state: {str(e)}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error resetting file changes state: {str(e)}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @maintenance_bp.route('/cleanup-orphaned', methods=['POST'])
 @auth_required
@@ -535,13 +535,13 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
                     maintenance_service._run_cleanup(cleanup_record.id, file_paths=file_paths, schedule_id=schedule_id)
 
     except Exception as e:
-        logger.error(f"Error in cleanup_orphaned_async: {str(e)}")
+        logger.error(f"Error in cleanup_orphaned_async: {str(e)}", exc_info=True)
         try:
             with app.app_context():
                 cleanup_record = db.session.get(CleanupState, cleanup_id)
                 if cleanup_record:
                     cleanup_record.phase = 'error'
-                    cleanup_record.progress_message = f'Error: {str(e)}'
+                    cleanup_record.progress_message = 'Cleanup failed'
                     cleanup_record.is_active = False
                     cleanup_record.end_time = datetime.now(timezone.utc)
                     db.session.commit()
@@ -575,13 +575,13 @@ def check_file_changes_async(app, check_id, file_paths=None, schedule_id=None):
                     maintenance_service._run_file_changes_check(check_record.check_id, file_paths=file_paths, schedule_id=schedule_id)
 
     except Exception as e:
-        logger.error(f"Error in check_file_changes_async: {str(e)}")
+        logger.error(f"Error in check_file_changes_async: {str(e)}", exc_info=True)
         try:
             with app.app_context():
                 check_record = FileChangesState.query.filter_by(check_id=check_id).first()
                 if check_record:
                     check_record.phase = 'error'
-                    check_record.progress_message = f'Error: {str(e)}'
+                    check_record.progress_message = 'File changes check failed'
                     check_record.is_active = False
                     check_record.end_time = datetime.now(timezone.utc)
                     db.session.commit()
@@ -629,5 +629,5 @@ def vacuum_database():
         }
 
     except Exception as e:
-        logger.error(f"Error vacuuming database: {str(e)}")
-        return {'error': f'Failed to vacuum database: {str(e)}'}, 500
+        logger.error(f"Error vacuuming database: {str(e)}", exc_info=True)
+        return {'error': 'Failed to vacuum database'}, 500

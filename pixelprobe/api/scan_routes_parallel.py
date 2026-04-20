@@ -112,17 +112,11 @@ def scan_parallel():
         }
 
     except ImportError as e:
-        logger.error(f"Failed to import parallel tasks: {e}")
-        return {
-            'error': 'Parallel scanning module not available',
-            'details': str(e)
-        }, 500
+        logger.error(f"Failed to import parallel tasks: {e}", exc_info=True)
+        return {'error': 'Parallel scanning module not available'}, 500
     except Exception as e:
-        logger.error(f"Failed to launch parallel scan: {e}")
-        return {
-            'error': 'Failed to launch parallel scan',
-            'details': str(e)
-        }, 500
+        logger.error(f"Failed to launch parallel scan: {e}", exc_info=True)
+        return {'error': 'Failed to launch parallel scan'}, 500
 
 
 @parallel_scan_bp.route('/scan-parallel/status/<scan_id>', methods=['GET'])
@@ -192,11 +186,8 @@ def get_parallel_scan_status(scan_id):
         }
 
     except Exception as e:
-        logger.error(f"Error getting parallel scan status: {e}")
-        return {
-            'error': 'Failed to get scan status',
-            'details': str(e)
-        }, 500
+        logger.error(f"Error getting parallel scan status: {e}", exc_info=True)
+        return {'error': 'Failed to get scan status'}, 500
 
 
 @parallel_scan_bp.route('/scan-parallel/workers', methods=['GET'])
@@ -255,8 +246,5 @@ def get_worker_status():
         }
 
     except Exception as e:
-        logger.error(f"Error getting worker status: {e}")
-        return {
-            'error': 'Failed to get worker status',
-            'details': str(e)
-        }, 500
+        logger.error(f"Error getting worker status: {e}", exc_info=True)
+        return {'error': 'Failed to get worker status'}, 500

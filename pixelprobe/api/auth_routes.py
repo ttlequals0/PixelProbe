@@ -53,7 +53,8 @@ def first_run_setup():
 
     admin, error = create_initial_admin(password)
     if error:
-        return jsonify({'error': error}), 500
+        logger.error("create_initial_admin failed: %s", error)
+        return jsonify({'error': 'Failed to create admin user'}), 500
 
     # Log the admin user in automatically
     login_user(admin, remember=True)

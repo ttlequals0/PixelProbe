@@ -52,11 +52,11 @@ def _load_trusted_hosts():
         try:
             network = ipaddress.ip_network(entry, strict=False)
             _trusted_networks.add(network)
-            logger.info(f"Trusted internal network: {network}")
+            logger.debug("Trusted internal network loaded from TRUSTED_INTERNAL_HOSTS")
         except ValueError:
             # Not a valid network -- treat as a hostname
             _trusted_hostnames.add(entry.lower())
-            logger.info(f"Trusted internal hostname: {entry.lower()}")
+            logger.debug("Trusted internal hostname loaded from TRUSTED_INTERNAL_HOSTS")
 
 
 def _reset_trusted_hosts():
@@ -92,6 +92,21 @@ class SecurityError(Exception):
 class PathTraversalError(SecurityError):
     """Raised when a path traversal attempt is detected"""
     pass
+
+def _is_within_allowed(real_input: str, allowed_paths) -> bool:
+    """True if ``real_input`` (already symlink-resolved) sits inside one of
+    ``allowed_paths``. Each allowed path is resolved with ``realpath`` before
+    comparison so the check is symlink-safe on both sides."""
+    for allowed_path in allowed_paths:
+        real_allowed = os.path.realpath(allowed_path)
+        try:
+            common = os.path.commonpath([real_input, real_allowed])
+        except ValueError:
+            continue  # Different drives on Windows, skip
+        if common == real_allowed:
+            return True
+    return False
+
 
 def get_allowed_scan_paths():
     """Get all allowed scan paths from configuration"""
@@ -148,6 +163,9 @@ def validate_file_path(file_path, allowed_paths=None):
     if allowed_paths is None:
         allowed_paths = get_allowed_scan_paths()
 
+    # Resolve symlinks before any allowlist check so symlink-based escapes are defeated.
+    real_input = os.path.realpath(normalized)
+
     # If still no paths, this is likely a rescan operation - check if file exists in database
     if not allowed_paths:
         # Import here to avoid circular dependency
@@ -155,49 +173,57 @@ def validate_file_path(file_path, allowed_paths=None):
         existing = ScanResult.query.filter_by(file_path=normalized).first()
         if existing:
             # File already in database - trust it for rescan
-            if os.path.exists(normalized) and os.access(normalized, os.R_OK):
+            if os.path.exists(real_input) and os.access(real_input, os.R_OK):
                 return normalized
         raise PathTraversalError("No allowed scan paths configured")
-    
-    # Check if path is within allowed directories
-    for allowed_path in allowed_paths:
-        allowed_abs = os.path.abspath(allowed_path)
-        if normalized.startswith(allowed_abs + os.sep) or normalized == allowed_abs:
-            # Additional check: ensure the file exists and is readable
-            if os.path.exists(normalized) and os.access(normalized, os.R_OK):
-                return normalized
-            else:
-                raise PathTraversalError(f"File not found or not readable: {file_path}")
-    
-    raise PathTraversalError(f"Path outside allowed directories: {file_path}")
 
-def validate_directory_path(dir_path):
+    if not _is_within_allowed(real_input, allowed_paths):
+        raise PathTraversalError(f"Path outside allowed directories: {file_path}")
+    if os.path.exists(real_input) and os.access(real_input, os.R_OK):
+        return normalized
+    raise PathTraversalError(f"File not found or not readable: {file_path}")
+
+def validate_directory_path(dir_path, allowed_paths=None):
     """
-    Validate that a directory path is safe
-    
+    Validate that a directory path is safe.
+
+    When ``allowed_paths`` is ``None`` (default), the configured scan paths
+    are used as the allowlist and the resolved real path must sit within one
+    of them. Callers that need to register a new allowlist entry (e.g. the
+    admin add-configuration endpoint) pass ``allowed_paths=[]`` to skip the
+    allowlist check. The suspicious-pattern check and symlink resolution
+    always run.
+
     Args:
         dir_path: The directory path to validate
-        
+        allowed_paths: Explicit allowlist; ``[]`` disables the allowlist check,
+            ``None`` uses ``get_allowed_scan_paths()``.
+
     Returns:
         Normalized absolute path if valid
-        
+
     Raises:
-        PathTraversalError: If path contains dangerous patterns
+        PathTraversalError: If the path is unsafe or outside the allowlist.
     """
     if not dir_path:
         raise PathTraversalError("Empty directory path")
-    
-    # Normalize and get absolute path
-    normalized = os.path.normpath(os.path.abspath(dir_path))
-    
-    # Check for suspicious patterns
+
+    # Reject traversal/home-expansion tokens before touching the filesystem.
     if '..' in dir_path or '~' in dir_path:
         raise PathTraversalError("Directory path contains suspicious patterns")
-    
-    # Ensure it's a directory
-    if os.path.exists(normalized) and not os.path.isdir(normalized):
+
+    normalized = os.path.normpath(os.path.abspath(dir_path))
+    real_input = os.path.realpath(normalized)
+
+    if os.path.exists(real_input) and not os.path.isdir(real_input):
         raise PathTraversalError("Path is not a directory")
-    
+
+    if allowed_paths is None:
+        allowed_paths = get_allowed_scan_paths()
+
+    if allowed_paths and not _is_within_allowed(real_input, allowed_paths):
+        raise PathTraversalError(f"Path outside allowed directories: {dir_path}")
+
     return normalized
 
 def sanitize_filename(filename):

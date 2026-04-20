@@ -471,5 +471,5 @@ def export_scan_results():
             )
         
     except Exception as e:
-        logger.error(f"Error exporting: {str(e)}")
-        return {'error': f'Export failed: {str(e)}'}, 500
+        logger.error(f"Error exporting: {str(e)}", exc_info=True)
+        return {'error': 'Export failed'}, 500
