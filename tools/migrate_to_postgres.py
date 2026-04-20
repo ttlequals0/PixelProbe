@@ -21,9 +21,13 @@ logger = logging.getLogger(__name__)
 class PostgreSQLMigrator:
     """Handles migration from SQLite to PostgreSQL"""
     
-    def __init__(self, sqlite_path: str, pg_config: Dict[str, Any]):
+    def __init__(self, sqlite_path: str, pg_config: Dict[str, Any], pg_password: str):
         self.sqlite_path = sqlite_path
+        # pg_config holds only non-sensitive connection fields (host, port,
+        # database, user). The password is kept separate so it never shares
+        # scope with logged or serialized configuration data.
         self.pg_config = pg_config
+        self._pg_password = pg_password
         self.sqlite_conn = None
         self.pg_conn = None
         self.table_mappings = self._get_table_mappings()
@@ -211,10 +215,11 @@ class PostgreSQLMigrator:
                 port=self.pg_config['port'],
                 database=self.pg_config['database'],
                 user=self.pg_config['user'],
-                password=self.pg_config['password']
+                password=self._pg_password,
             )
             self.pg_conn.autocommit = False
-            logger.info(f"Connected to PostgreSQL database: {self.pg_config['database']}")
+            db_name = self.pg_config['database']
+            logger.info("Connected to PostgreSQL database: %s", db_name)
             
         except Exception as e:
             logger.error(f"Failed to connect to databases: {e}")
@@ -499,29 +504,32 @@ def main():
         logger.error(f"SQLite database not found: {args.sqlite_path}")
         sys.exit(1)
     
-    # PostgreSQL configuration
+    # PostgreSQL configuration -- password is kept in its own variable and
+    # never placed in the dict, so it cannot be logged or serialized along
+    # with the non-sensitive connection details.
     pg_config = {
         'host': args.pg_host,
         'port': args.pg_port,
         'database': args.pg_database,
         'user': args.pg_user,
-        'password': args.pg_password
     }
-    
+    pg_password = args.pg_password
+
     if args.dry_run:
         logger.info("DRY RUN MODE - No actual migration will be performed")
-        logger.info(f"SQLite database: {args.sqlite_path}")
-        logger.info(f"PostgreSQL target: {pg_config['host']}:{pg_config['port']}/{pg_config['database']}")
-        
+        logger.info("SQLite database: %s", args.sqlite_path)
+        target = "%s:%s/%s" % (pg_config['host'], pg_config['port'], pg_config['database'])
+        logger.info("PostgreSQL target: %s", target)
+
         # Test connections only
-        migrator = PostgreSQLMigrator(args.sqlite_path, pg_config)
+        migrator = PostgreSQLMigrator(args.sqlite_path, pg_config, pg_password)
         migrator.connect()
         migrator.close()
         logger.info("Connection test successful")
     else:
         # Perform actual migration
         logger.info("Starting database migration...")
-        migrator = PostgreSQLMigrator(args.sqlite_path, pg_config)
+        migrator = PostgreSQLMigrator(args.sqlite_path, pg_config, pg_password)
         migrator.migrate()
 
 

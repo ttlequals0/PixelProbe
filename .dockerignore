@@ -3,6 +3,9 @@
 README.md
 .env
 .env.example
+.env.test
+node_modules
+package-lock.json
 __pycache__
 *.pyc
 *.pyo

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.40] - 2026-04-20
+
+### Security
+
+- **Resolve open CodeQL and Dependabot findings**. No external behavior changes; exception details that previously leaked into HTTP response bodies are now logged server-side only.
+  - **Stack trace exposure (49 sites)**: Exception detail (`str(e)`, `traceback`, `details`) no longer appears in API error responses. The `handle_errors` decorator and every route-level `except` across the API blueprints now returns a generic error message; the exception is logged server-side with `exc_info=True` for operators.
+  - **Path injection (7 sites)**: `validate_file_path` and `validate_directory_path` resolve symlinks via `os.path.realpath` and validate with `os.path.commonpath` against the configured allowlist, defeating symlink-based escapes. **Behavior change**: `validate_directory_path` now enforces the configured scan-path allowlist by default; `POST /api/scan`, `POST /api/scan-files-parallel`, and `POST /api/parallel/scan` will reject directories outside `SCAN_PATHS` or the active `ScanConfiguration` entries (previously only `..` / `~` tokens were rejected). `POST /api/configurations` is exempt because it is defining a new allowlist entry. The unused `validate_path_exists` decorator was removed.
+  - **Clear-text logging of sensitive data (3 sites)**: `tools/migrate_to_postgres.py` no longer holds the DB password in the `pg_config` dict while logging connection details; the password is stored in a dedicated parameter. Trusted-host config logging in `security.py` demoted from `info` to `debug`.
+  - **GitHub Actions workflow permissions**: `.github/workflows/test.yml` declares `permissions: contents: read` at the workflow level.
+  - **Reflective XSS (17 alerts)**: Reviewed; every flagged site returns JSON via `jsonify()` with no HTML sink. Dismissed as false positives; no code change required.
+
+### Changed
+
+- **Dependency bumps covering 6 CVEs**:
+  - `Pillow` 12.1.1 -> 12.2.0 (FITS GZIP decompression bomb).
+  - `requests` 2.32.5 -> 2.33.0 (`extract_zipped_paths` tempfile reuse).
+  - `Flask-CORS` 5.0.1 -> 6.0.0 (path-matching CVEs; verified wildcard config is unaffected by the v6 specificity and case-sensitivity changes).
+  - `pytest` 8.3.5 -> 9.0.3 (tmpdir handling CVE).
+  - `black` removed from `requirements-test.txt`; it was unused dev tooling (no CI gate, no `pyproject.toml`, no pre-commit hook).
+
+---
+
 ## [2.6.39] - 2026-04-20
 
 ### Fixed

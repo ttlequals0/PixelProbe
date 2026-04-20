@@ -136,8 +136,11 @@ RUN npm install
 
 COPY . .
 
-# Build frontend assets
-RUN npm run build
+# Build frontend assets, then drop the node toolchain. Webpack and its
+# transitive dev-only dependencies (picomatch, serialize-javascript, svgo,
+# etc.) are not needed at runtime and otherwise ship as CVEs in the image.
+RUN npm run build && \
+    rm -rf node_modules package-lock.json
 
 # Ensure the pixelprobe package is properly installed
 RUN mkdir -p /app/instance && \

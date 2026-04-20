@@ -334,5 +334,5 @@ def test_healthcheck(config_id):
             }), 200
 
     except Exception as e:
-        logger.error(f"Error testing healthcheck config {config_id}: {e}")
-        return jsonify({'error': f'Failed to test healthcheck: {str(e)}'}), 500
+        logger.error(f"Error testing healthcheck config {config_id}: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to test healthcheck'}), 500

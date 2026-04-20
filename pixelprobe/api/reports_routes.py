@@ -430,8 +430,8 @@ def generate_pdf_report(scan_type, scan_id):
         logger.error("reportlab not installed for PDF export")
         return jsonify({'error': 'PDF export requires reportlab package'}), 500
     except Exception as e:
-        logger.error(f"Error generating PDF report: {e}")
-        return jsonify({'error': f'Failed to generate PDF: {str(e)}'}), 500
+        logger.error(f"Error generating PDF report: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to generate PDF'}), 500
 
 @reports_bp.route('/scan-reports/<report_id>/pdf')
 @auth_required
@@ -961,8 +961,8 @@ def export_scan_report_pdf(report_id):
     
     except Exception as e:
         # Log any other errors (use module-level logger)
-        logger.error(f"Failed to generate PDF report: {e}")
-        return jsonify({'error': f'Failed to generate PDF: {str(e)}'}), 500
+        logger.error(f"Failed to generate PDF report: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to generate PDF'}), 500
 
 @reports_bp.route('/scan-reports/latest')
 @auth_required
@@ -1014,8 +1014,9 @@ def delete_scan_report(report_id):
         db.session.commit()
         return jsonify({'message': 'Report deleted successfully', 'report_id': report_id})
     except Exception as e:
+        logger.error(f"Failed to delete report: {e}", exc_info=True)
         db.session.rollback()
-        return jsonify({'error': f'Failed to delete report: {str(e)}'}), 500
+        return jsonify({'error': 'Failed to delete report'}), 500
 
 @reports_bp.route('/reports/download-multiple', methods=['POST'])
 @auth_required
@@ -1267,5 +1268,5 @@ def download_multiple_reports():
             return response
             
     except Exception as e:
-        logger.error(f"Error downloading multiple reports: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error downloading multiple reports: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Failed to download reports'}), 500

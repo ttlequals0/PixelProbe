@@ -25,6 +25,30 @@ logger = logging.getLogger(__name__)
 from pixelprobe.utils.celery_utils import check_celery_available
 
 
+_SCAN_ALREADY_RUNNING_RESPONSE = {
+    'error': 'A scan is already running. Use /api/scan-status to check progress or /api/cancel-scan to stop it.',
+    'suggestion': 'Check /api/scan-status for current scan progress',
+}
+_SCAN_CONFLICT_FALLBACK_RESPONSE = {
+    'error': 'Scan operation failed',
+    'suggestion': 'Check /api/scan-status for current scan progress',
+}
+
+
+def _scan_conflict_response(error):
+    """Map a RuntimeError from the scan service to a safe 409 response.
+
+    The service raises RuntimeError with a free-form message. We recognise the
+    known "already running" case and return a user-facing message for it;
+    everything else is logged with a traceback and returned as a generic
+    conflict so the exception text never reaches the client.
+    """
+    if 'already running' in str(error).lower():
+        return _SCAN_ALREADY_RUNNING_RESPONSE, 409
+    logger.error("Scan conflict: %s", error, exc_info=True)
+    return _SCAN_CONFLICT_FALLBACK_RESPONSE, 409
+
+
 def safe_check_task_state(celery_task_id, app, max_retries=3, base_delay=0.5):
     """
     Safely check Celery task state with retry logic for Redis connection errors.
@@ -413,13 +437,9 @@ def scan_file():
             return result
             
     except RuntimeError as e:
-        error_msg = str(e)
-        # Provide more context for common errors
-        if 'already running' in error_msg.lower():
-            error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
-        return {'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}, 409
-    except FileNotFoundError as e:
-        return {'error': str(e)}, 404
+        return _scan_conflict_response(e)
+    except FileNotFoundError:
+        return {'error': 'File not found'}, 404
 
 @scan_bp.route('/scan', methods=['POST', 'OPTIONS'])  # Main scan endpoint
 @rate_limit("2 per minute")
@@ -540,13 +560,9 @@ def scan():
             return result
             
     except RuntimeError as e:
-        error_msg = str(e)
-        # Provide more context for common errors
-        if 'already running' in error_msg.lower():
-            error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
-        return {'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}, 409
-    except ValueError as e:
-        return {'error': str(e)}, 400
+        return _scan_conflict_response(e)
+    except ValueError:
+        return {'error': 'Invalid request'}, 400
 
 @scan_bp.route('/scan-status')
 @exempt_from_rate_limit
@@ -931,8 +947,10 @@ def cancel_scan():
         logger.info(f"Cancel scan successful: {result}")
         return result
     except RuntimeError as e:
-        logger.error(f"Cancel scan failed: {str(e)}")
-        return {'error': str(e)}, 400
+        logger.error(f"Cancel scan failed: {str(e)}", exc_info=True)
+        if 'No scan is currently running' in str(e):
+            return {'error': 'No scan is currently running'}, 400
+        return {'error': 'Unable to cancel scan'}, 400
 
 @scan_bp.route('/force-cleanup-scan', methods=['POST'])
 @scan_bp.route('/scan/recovery', methods=['POST'])
@@ -977,9 +995,9 @@ def force_cleanup_scan():
             'cleaned_count': cleaned_count
         }
     except Exception as e:
-        logger.error(f"Force cleanup failed: {str(e)}")
+        logger.error(f"Force cleanup failed: {str(e)}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
 
 @scan_bp.route('/scan-files-parallel', methods=['POST'])
 @rate_limit("2 per minute")
@@ -1053,10 +1071,10 @@ def scan_files_parallel():
                 result['celery_enabled'] = False
                 return result
                 
-        except RuntimeError as e:
-            return {'error': str(e)}, 409
-        except ValueError as e:
-            return {'error': str(e)}, 400
+        except RuntimeError:
+            return {'error': 'Scan conflict'}, 409
+        except ValueError:
+            return {'error': 'Invalid request'}, 400
     
     # Otherwise scan directories
     # If no directories provided, use configured ones
@@ -1124,13 +1142,9 @@ def scan_files_parallel():
             return result
             
     except RuntimeError as e:
-        error_msg = str(e)
-        # Provide more context for common errors
-        if 'already running' in error_msg.lower():
-            error_msg = f'{error_msg}. Use /api/scan-status to check progress or /api/cancel-scan to stop the current scan.'
-        return {'error': error_msg, 'suggestion': 'Check /api/scan-status for current scan progress'}, 409
-    except ValueError as e:
-        return {'error': str(e)}, 400
+        return _scan_conflict_response(e)
+    except ValueError:
+        return {'error': 'Invalid request'}, 400
 
 @scan_bp.route('/reset-for-rescan', methods=['POST'])
 @rate_limit("5 per minute")
@@ -1193,8 +1207,8 @@ def reset_for_rescan():
         }
 
     except Exception as e:
-        logger.error(f"Error resetting files for rescan: {e}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error resetting files for rescan: {e}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @scan_bp.route('/force-scan-pending', methods=['POST'])
 @rate_limit("2 per minute")
@@ -1262,8 +1276,8 @@ def force_scan_pending():
             }
         
     except Exception as e:
-        logger.error(f"Error starting pending files scan: {e}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error starting pending files scan: {e}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @scan_bp.route('/reset-files-by-path', methods=['POST'])
 @rate_limit("5 per minute")
@@ -1299,8 +1313,8 @@ def reset_files_by_path():
         }
 
     except Exception as e:
-        logger.error(f"Error resetting files by path: {e}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error resetting files by path: {e}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @scan_bp.route('/reset-incomplete-scans', methods=['POST'])
 @rate_limit("2 per minute")
@@ -1365,8 +1379,8 @@ def reset_incomplete_scans():
         }
 
     except Exception as e:
-        logger.error(f"Error resetting incomplete scans: {e}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error resetting incomplete scans: {e}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @scan_bp.route('/diagnose-incomplete-scans', methods=['GET'])
 @rate_limit("5 per minute")
@@ -1422,8 +1436,8 @@ def diagnose_incomplete_scans():
         return diagnostics
 
     except Exception as e:
-        logger.error(f"Error diagnosing incomplete scans: {e}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error diagnosing incomplete scans: {e}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @scan_bp.route('/diagnose-pending-files', methods=['GET'])
 @rate_limit("5 per minute")
@@ -1489,8 +1503,8 @@ def diagnose_pending_files():
         return diagnostics
 
     except Exception as e:
-        logger.error(f"Error diagnosing pending files: {e}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error diagnosing pending files: {e}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @scan_bp.route('/error-files', methods=['GET'])
 @rate_limit("10 per minute")
@@ -1590,8 +1604,8 @@ def get_error_files():
         }
 
     except Exception as e:
-        logger.error(f"Error retrieving error files: {e}")
-        return {'error': str(e)}, 500
+        logger.error(f"Error retrieving error files: {e}", exc_info=True)
+        return {'error': 'Internal server error'}, 500
 
 @scan_bp.route('/worker-status')
 @exempt_from_rate_limit
@@ -1635,10 +1649,10 @@ def get_worker_status():
             'workers': workers
         }
     except Exception as e:
-        logger.error(f"Error getting worker status: {e}")
+        logger.error(f"Error getting worker status: {e}", exc_info=True)
         return {
             'status': 'error',
-            'message': f'Could not retrieve worker status: {str(e)}',
+            'message': 'Could not retrieve worker status',
             'workers': []
         }
 

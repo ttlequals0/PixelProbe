@@ -55,7 +55,7 @@ def get_stats():
         return result
 
     except Exception as e:
-        logger.error(f"Error getting stats: {str(e)}")
+        logger.error(f"Error getting stats: {str(e)}", exc_info=True)
         # Fallback to individual queries if the optimized query fails
         try:
             total_files = ScanResult.query.count()
@@ -286,7 +286,7 @@ def get_trends():
         }
 
     except Exception as e:
-        logger.error(f"Error getting trends: {str(e)}")
+        logger.error(f"Error getting trends: {str(e)}", exc_info=True)
         return {'error': 'Failed to get trends data'}, 500
 
 @stats_bp.route('/system-info')
@@ -539,7 +539,7 @@ def get_system_info():
         return system_info
 
     except Exception as e:
-        logger.error(f"Error getting system info: {str(e)}")
+        logger.error(f"Error getting system info: {str(e)}", exc_info=True)
         return {'error': 'Failed to get system info'}, 500
 
 @stats_bp.route('/stats/trends')
@@ -569,7 +569,7 @@ def get_scan_trends():
         return trends
 
     except Exception as e:
-        logger.error(f"Error getting scan trends: {str(e)}")
+        logger.error(f"Error getting scan trends: {str(e)}", exc_info=True)
         return {'error': 'Failed to get scan trends'}, 500
 
 @stats_bp.route('/stats/duration-histogram')
@@ -605,5 +605,5 @@ def get_duration_histogram():
         return histogram
 
     except Exception as e:
-        logger.error(f"Error getting duration histogram: {str(e)}")
+        logger.error(f"Error getting duration histogram: {str(e)}", exc_info=True)
         return {'error': 'Failed to get duration histogram'}, 500

@@ -114,9 +114,9 @@ def mark_as_good():
         }
         
     except Exception as e:
-        logger.error(f"Error marking files as good: {str(e)}")
+        logger.error(f"Error marking files as good: {str(e)}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/ignored-patterns')
 @auth_required
@@ -172,9 +172,9 @@ def add_ignored_pattern():
             'message': 'Pattern added successfully'
         }, 201
     except Exception as e:
-        logger.error(f"Error adding ignored pattern: {e}")
+        logger.error(f"Error adding ignored pattern: {e}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/ignored-patterns/<int:pattern_id>', methods=['DELETE'])
 @auth_required
@@ -193,9 +193,9 @@ def delete_ignored_pattern(pattern_id):
         
         return {'message': 'Pattern deleted successfully'}
     except Exception as e:
-        logger.error(f"Error deleting ignored pattern: {e}")
+        logger.error(f"Error deleting ignored pattern: {e}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/configurations')
 @auth_required
@@ -219,9 +219,10 @@ def add_configuration():
     data = request.get_json()
     path = data.get('path')
     
-    # Validate and normalize path
+    # Admin is defining a new allowlist entry, so skip the allowlist check.
+    # Traversal tokens and symlink resolution still run.
     try:
-        path = validate_directory_path(path)
+        path = validate_directory_path(path, allowed_paths=[])
         AuditLogger.log_action('add_configuration', {'path': path})
     except Exception as e:
         AuditLogger.log_security_event('invalid_directory_path', str(e), 'warning')
@@ -256,9 +257,9 @@ def add_configuration():
             'message': message
         }
     except Exception as e:
-        logger.error(f"Error adding configuration: {e}")
+        logger.error(f"Error adding configuration: {e}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/schedules', methods=['GET'])
 @auth_required
@@ -312,9 +313,9 @@ def create_schedule():
 
         return schedule.to_dict(), 201
     except Exception as e:
-        logger.error(f"Error creating schedule: {e}")
+        logger.error(f"Error creating schedule: {e}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/schedules/<int:schedule_id>', methods=['PUT'])
 @auth_required
@@ -362,9 +363,9 @@ def update_schedule(schedule_id):
 
         return schedule.to_dict()
     except Exception as e:
-        logger.error(f"Error updating schedule: {e}")
+        logger.error(f"Error updating schedule: {e}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/schedules/<int:schedule_id>', methods=['DELETE'])
 @auth_required
@@ -386,9 +387,9 @@ def delete_schedule(schedule_id):
 
         return '', 204
     except Exception as e:
-        logger.error(f"Error deleting schedule: {e}")
+        logger.error(f"Error deleting schedule: {e}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/exclusions', methods=['GET'])
 @auth_required
@@ -444,9 +445,9 @@ def update_exclusions():
         db.session.commit()
         return {'message': 'Exclusions updated successfully'}
     except Exception as e:
-        logger.error(f"Error updating exclusions: {e}")
+        logger.error(f"Error updating exclusions: {e}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['POST'])
 @auth_required
@@ -489,9 +490,9 @@ def add_exclusion(exclusion_type):
         return {'message': f'{exclusion_type.capitalize()} added successfully'}
             
     except Exception as e:
-        logger.error(f"Error adding exclusion: {e}")
+        logger.error(f"Error adding exclusion: {e}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['DELETE'])
 @auth_required
@@ -529,6 +530,6 @@ def remove_exclusion(exclusion_type):
         return {'message': f'{exclusion_type.capitalize()} removed successfully'}
             
     except Exception as e:
-        logger.error(f"Error removing exclusion: {e}")
+        logger.error(f"Error removing exclusion: {e}", exc_info=True)
         db.session.rollback()
-        return {'error': str(e)}, 500
+        return {'error': 'Internal server error'}, 500
