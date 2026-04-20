@@ -303,6 +303,72 @@ class TestDatabaseLogHandler:
         finally:
             handler.shutdown()
 
+    def test_flush_failure_resets_session_and_throttles_log(self, app, monkeypatch):
+        """On flush failure the handler must rollback+remove the session so the
+        next flush starts clean, and rate-limit stderr output."""
+        from pixelprobe.utils.log_handler import DatabaseLogHandler
+        from pixelprobe.models import db
+
+        handler = DatabaseLogHandler(app)
+        try:
+            with app.app_context():
+                remove_calls = {'n': 0}
+                rollback_calls = {'n': 0}
+                original_remove = db.session.remove
+                original_rollback = db.session.rollback
+
+                def counting_remove(*a, **kw):
+                    remove_calls['n'] += 1
+                    return original_remove(*a, **kw)
+
+                def counting_rollback(*a, **kw):
+                    rollback_calls['n'] += 1
+                    return original_rollback(*a, **kw)
+
+                monkeypatch.setattr(db.session, 'remove', counting_remove)
+                monkeypatch.setattr(db.session, 'rollback', counting_rollback)
+
+                def boom(*args, **kwargs):
+                    raise RuntimeError('simulated bulk insert failure')
+
+                monkeypatch.setattr(db.session, 'bulk_insert_mappings', boom)
+
+                batch = [{
+                    'scan_id': None,
+                    'celery_task_id': None,
+                    'timestamp': None,
+                    'level': 'ERROR',
+                    'logger_name': 'pixelprobe.test',
+                    'message': 'boom',
+                    'traceback': None,
+                }]
+
+                first_logged_at = handler._flush_error_logged_at
+                handler._flush_batch(batch)
+                assert rollback_calls['n'] == 1
+                assert remove_calls['n'] == 1
+                assert handler._flush_error_logged_at > first_logged_at
+
+                # Second flush within the throttle window: no new stderr emission,
+                # but rollback+remove must still run to recover the session.
+                previous_logged_at = handler._flush_error_logged_at
+                handler._flush_batch(batch)
+                assert rollback_calls['n'] == 2
+                assert remove_calls['n'] == 2
+                assert handler._flush_error_logged_at == previous_logged_at
+
+                # Rewind past the throttle window: a new stderr line must emit
+                # so operators still see recurring failures.
+                handler._flush_error_logged_at = (
+                    previous_logged_at - handler.FLUSH_ERROR_LOG_INTERVAL - 1.0
+                )
+                handler._flush_batch(batch)
+                assert rollback_calls['n'] == 3
+                assert remove_calls['n'] == 3
+                assert handler._flush_error_logged_at > previous_logged_at
+        finally:
+            handler.shutdown()
+
 
 # ---------------------------------------------------------------------------
 # Log API route tests

@@ -16,6 +16,12 @@ from pixelprobe.services.healthcheck_service import HealthcheckService
 logger = logging.getLogger(__name__)
 
 class MediaScheduler:
+    # Defaults for queue-on-conflict retry when a scheduled scan fires while
+    # another scan is still running. Up to MAX_COUNT retries spaced
+    # DELAY_MINUTES apart; after that we give up until the next cron fire.
+    DEFAULT_RETRY_DELAY_MINUTES = 10
+    DEFAULT_RETRY_MAX_COUNT = 6
+
     def __init__(self, app=None):
         self.scheduler = BackgroundScheduler()
         self.app = app
@@ -24,8 +30,79 @@ class MediaScheduler:
         self.excluded_paths = []
         self.excluded_extensions = []
 
+        self.pending_retries: Dict[str, int] = {}
+        self._retry_lock = threading.Lock()
+        self.retry_delay_minutes = self._load_positive_int_env(
+            'SCHEDULE_RETRY_DELAY_MINUTES', self.DEFAULT_RETRY_DELAY_MINUTES, min_value=1
+        )
+        self.retry_max_count = self._load_positive_int_env(
+            'SCHEDULE_RETRY_MAX_COUNT', self.DEFAULT_RETRY_MAX_COUNT, min_value=0
+        )
+
         # Load exclusions from environment
         self._load_exclusions()
+
+    @staticmethod
+    def _load_positive_int_env(var_name: str, default: int, min_value: int) -> int:
+        raw = os.environ.get(var_name)
+        if raw is None:
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"Invalid {var_name}={raw!r}; falling back to default {default}"
+            )
+            return default
+        return max(min_value, value)
+
+    def _queue_conflict_retry(self, retry_key: str, retry_func, retry_args, reason: str):
+        """Queue a one-shot retry when a scheduled scan's cron fire is skipped.
+
+        APScheduler consumes the original cron fire when the guard trips, so
+        without a retry the schedule is silently dropped until its next regular
+        fire (e.g. a weekly cleanup would go missing for an entire week).
+        """
+        run_date = datetime.now(timezone.utc) + timedelta(minutes=self.retry_delay_minutes)
+        # Hold the lock across add_job so the counter can't drift if two callers
+        # race on the same retry_key. add_job on the default MemoryJobStore is
+        # in-process and cheap, so the critical section stays short.
+        with self._retry_lock:
+            count = self.pending_retries.get(retry_key, 0)
+            if count >= self.retry_max_count:
+                logger.warning(
+                    f"{retry_key} skipped ({reason}); already retried "
+                    f"{count} times, giving up until next cron fire"
+                )
+                self.pending_retries.pop(retry_key, None)
+                return
+            count += 1
+            job_id = f"{retry_key}_retry_{count}"
+            try:
+                self.scheduler.add_job(
+                    func=retry_func,
+                    args=list(retry_args),
+                    trigger='date',
+                    run_date=run_date,
+                    id=job_id,
+                    max_instances=1,
+                    replace_existing=True,
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to queue retry job {job_id}: {e}", exc_info=True
+                )
+                return
+            self.pending_retries[retry_key] = count
+
+        logger.warning(
+            f"{retry_key} skipped ({reason}); queued retry "
+            f"#{count}/{self.retry_max_count} at {run_date.isoformat()}"
+        )
+
+    def _clear_pending_retry(self, retry_key: str):
+        with self._retry_lock:
+            self.pending_retries.pop(retry_key, None)
 
     def _filter_excluded_paths(self, scan_paths):
         """Filter out excluded paths and return the remaining ones."""
@@ -311,14 +388,19 @@ class MediaScheduler:
         if not self.scan_lock.acquire(blocking=False):
             logger.warning("Periodic scan already in progress, skipping")
             return
-            
+
         try:
             with self.app.app_context():
                 # Check if ANY scan is already running before proceeding
                 scan_state = ScanState.get_or_create()
                 if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
-                    logger.warning(f"Periodic scan skipped - another scan is already running (phase: {scan_state.phase})")
+                    self._queue_conflict_retry(
+                        'periodic', self._run_periodic_scan, (),
+                        f"phase={scan_state.phase}"
+                    )
                     return
+
+                self._clear_pending_retry('periodic')
 
                 from pixelprobe.utils.helpers import get_configured_scan_paths
                 scan_paths = get_configured_scan_paths()
@@ -349,6 +431,7 @@ class MediaScheduler:
             
     def _run_scheduled_scan(self, schedule_id: int):
         """Run a scheduled scan via HTTP self-call to avoid Flask context issues"""
+        retry_key = f"schedule_{schedule_id}"
         if not self.scan_lock.acquire(blocking=False):
             logger.warning(f"Scheduled scan {schedule_id} already in progress, skipping")
             return
@@ -358,8 +441,13 @@ class MediaScheduler:
                 # Check if ANY scan is already running before proceeding
                 scan_state = ScanState.get_or_create()
                 if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
-                    logger.warning(f"Scheduled scan {schedule_id} skipped - another scan is already running (phase: {scan_state.phase})")
+                    self._queue_conflict_retry(
+                        retry_key, self._run_scheduled_scan, (schedule_id,),
+                        f"phase={scan_state.phase}"
+                    )
                     return
+
+                self._clear_pending_retry(retry_key)
 
                 schedule = db.session.get(ScanSchedule, schedule_id)
                 if not schedule or not schedule.is_active:
@@ -468,17 +556,21 @@ class MediaScheduler:
                 }
                 
                 try:
-                    response = requests.post(f'{base_url}/api/cleanup-orphaned', 
+                    response = requests.post(f'{base_url}/api/cleanup-orphaned',
                                           headers=headers,
                                           timeout=60)
-                    
+
                     if response.status_code == 200:
                         logger.info("Cleanup task started successfully")
+                        self._clear_pending_retry('default_cleanup')
                     elif response.status_code == 409:
-                        logger.warning("Cleanup skipped - another scan/cleanup is already running")
+                        self._queue_conflict_retry(
+                            'default_cleanup', self._run_cleanup, (),
+                            "api returned 409"
+                        )
                     else:
                         logger.error(f"Cleanup API call failed: {response.status_code} - {response.text}")
-                        
+
                 except requests.exceptions.RequestException as e:
                     logger.error(f"Failed to call API for cleanup: {e}")
                 
