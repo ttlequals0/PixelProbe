@@ -6,10 +6,11 @@ on database writes. Records are batch-inserted periodically.
 """
 
 import logging
-import threading
-import traceback
-import time
 import queue
+import sys
+import threading
+import time
+import traceback
 from datetime import datetime, timezone
 
 from pixelprobe.utils.log_context import current_scan_id, current_celery_task_id
@@ -30,6 +31,7 @@ class DatabaseLogHandler(logging.Handler):
     QUEUE_MAX_SIZE = 10000
     BATCH_SIZE = 100
     FLUSH_INTERVAL = 1.0  # seconds
+    FLUSH_ERROR_LOG_INTERVAL = 60.0  # seconds between repeated stderr messages
 
     def __init__(self, app):
         super().__init__()
@@ -39,6 +41,7 @@ class DatabaseLogHandler(logging.Handler):
             name.strip() for name in DEFAULT_LOG_EXCLUDE_LOGGERS.split(',') if name.strip()
         }
         self._running = True
+        self._flush_error_logged_at = 0.0
 
         # Start background writer thread
         self._writer_thread = threading.Thread(
@@ -152,15 +155,27 @@ class DatabaseLogHandler(logging.Handler):
         try:
             db.session.bulk_insert_mappings(LogEntry, batch)
             db.session.commit()
-            self._flush_error_logged = False
+            self._flush_error_logged_at = 0.0
         except Exception as e:
-            # Log the first failure to stderr (not via logging to avoid recursion)
-            if not getattr(self, '_flush_error_logged', False):
-                import sys
-                print(f"[log_handler] Failed to flush {len(batch)} log entries to DB: {e}", file=sys.stderr)
-                self._flush_error_logged = True
+            # Rate-limit stderr reports to once per FLUSH_ERROR_LOG_INTERVAL so
+            # recurring failures still surface without flooding logs.
+            now = time.monotonic()
+            if now - self._flush_error_logged_at > self.FLUSH_ERROR_LOG_INTERVAL:
+                print(
+                    f"[log_handler] Failed to flush {len(batch)} log entries to DB: {e}",
+                    file=sys.stderr,
+                )
+                self._flush_error_logged_at = now
             try:
                 db.session.rollback()
+            except Exception:
+                pass
+            # Discard the scoped session so the next flush starts fresh. Protects
+            # against rollback() silently failing on a broken connection, which
+            # would otherwise leave db.session stuck in "rollback() fully before
+            # proceeding" state for the life of the writer thread.
+            try:
+                db.session.remove()
             except Exception:
                 pass
 

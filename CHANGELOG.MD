@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.39] - 2026-04-20
+
+### Fixed
+
+- **Scheduled scans silently dropped when another scan is running**: When a scheduled scan's cron fire landed while a prior scan was still in progress, `MediaScheduler` logged `Scheduled scan {id} skipped - another scan is already running` and returned. APScheduler consumed the cron fire, so the next run advanced to the following cron interval (a weekly Sunday cleanup could go missing for an entire week). Added a queue-on-conflict retry that schedules a one-shot date-trigger retry `SCHEDULE_RETRY_DELAY_MINUTES` later (default 10), up to `SCHEDULE_RETRY_MAX_COUNT` times (default 6), and clears the retry state as soon as a scan actually starts. Applies to `_run_scheduled_scan`, `_run_periodic_scan`, and the env-var `_run_cleanup` HTTP 409 path. Retry state is kept in process memory; if the worker restarts while a retry is pending, the retry is lost and the schedule will fire again on its next regular cron.
+- **Database log handler stuck after a flush failure**: `DatabaseLogHandler._flush_batch` attempted `db.session.rollback()` inside a silent try/except; if the rollback itself failed (stale connection, broken pipe), the scoped session stayed in `InvalidRequestError: Please rollback() fully before proceeding` state for the life of the writer thread, producing a flood of `[log_handler] Failed to flush N log entries to DB` lines. Added `db.session.remove()` after the rollback so the next flush starts with a fresh scoped session, and rate-limited the stderr report to once per 60s so recurring failures still surface instead of being logged exactly once at startup. Also moved `import sys` to the top of the file.
+
+---
+
 ## [2.6.38] - 2026-04-06
 
 ### Fixed

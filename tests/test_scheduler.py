@@ -1,4 +1,7 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
+
 from pixelprobe.scheduler import MediaScheduler
 from pixelprobe.models import db, ScanSchedule
 
@@ -216,7 +219,78 @@ class TestMediaScheduler:
             
             # Call update_schedules
             scheduler.update_schedules()
-            
+
             # The job should be removed and re-added
             # Since we don't have the actual schedule loading logic in test,
             # at least verify the method runs without error
+
+
+class TestQueueConflictRetry:
+    """Test that skipped scheduled scans get a one-shot retry queued."""
+
+    @pytest.fixture
+    def scheduler(self, app):
+        scheduler = MediaScheduler()
+        scheduler.init_app(app)
+        yield scheduler
+        scheduler.shutdown()
+
+    def test_queues_date_trigger_retry(self, scheduler):
+        def noop(schedule_id):
+            return None
+
+        scheduler._queue_conflict_retry('schedule_42', noop, (42,), 'phase=scanning')
+
+        assert scheduler.pending_retries['schedule_42'] == 1
+
+        job = scheduler.scheduler.get_job('schedule_42_retry_1')
+        assert job is not None
+        expected = datetime.now(timezone.utc) + timedelta(minutes=scheduler.retry_delay_minutes)
+        assert abs((job.next_run_time - expected).total_seconds()) < 30
+
+    def test_respects_max_count(self, scheduler):
+        def noop(schedule_id):
+            return None
+
+        scheduler.retry_max_count = 2
+        scheduler._queue_conflict_retry('schedule_99', noop, (99,), 'phase=scanning')
+        scheduler._queue_conflict_retry('schedule_99', noop, (99,), 'phase=scanning')
+        # Third call hits the cap and should drop the pending entry.
+        scheduler._queue_conflict_retry('schedule_99', noop, (99,), 'phase=scanning')
+
+        assert 'schedule_99' not in scheduler.pending_retries
+        assert scheduler.scheduler.get_job('schedule_99_retry_3') is None
+
+    def test_clear_pending_retry_removes_entry(self, scheduler):
+        def noop():
+            return None
+
+        scheduler._queue_conflict_retry('periodic', noop, (), 'phase=scanning')
+        assert 'periodic' in scheduler.pending_retries
+
+        scheduler._clear_pending_retry('periodic')
+        assert 'periodic' not in scheduler.pending_retries
+
+    def test_add_job_failure_does_not_consume_slot(self, scheduler, monkeypatch):
+        """If APScheduler fails to enqueue the retry job the counter must not
+        advance, otherwise transient failures would burn through retry_max_count
+        without a single retry actually running."""
+        def noop(schedule_id):
+            return None
+
+        def broken_add_job(*args, **kwargs):
+            raise RuntimeError('simulated APScheduler failure')
+
+        monkeypatch.setattr(scheduler.scheduler, 'add_job', broken_add_job)
+
+        scheduler._queue_conflict_retry('schedule_77', noop, (77,), 'phase=scanning')
+
+        assert 'schedule_77' not in scheduler.pending_retries
+
+    def test_invalid_env_var_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv('SCHEDULE_RETRY_DELAY_MINUTES', 'not-a-number')
+        monkeypatch.setenv('SCHEDULE_RETRY_MAX_COUNT', '-5')
+
+        scheduler = MediaScheduler()
+        assert scheduler.retry_delay_minutes == MediaScheduler.DEFAULT_RETRY_DELAY_MINUTES
+        assert scheduler.retry_max_count == 0  # clamped via min_value=0
