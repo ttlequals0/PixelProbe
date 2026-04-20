@@ -5,7 +5,7 @@
 -r requirements.txt
 
 # Testing frameworks
-pytest==8.3.5
+pytest==9.0.3
 pytest-cov==6.1.1
 pytest-benchmark==4.0.0
 pytest-timeout==2.2.0
