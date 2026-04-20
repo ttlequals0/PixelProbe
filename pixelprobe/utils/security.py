@@ -215,14 +215,15 @@ def validate_directory_path(dir_path, allowed_paths=None):
     normalized = os.path.normpath(os.path.abspath(dir_path))
     real_input = os.path.realpath(normalized)
 
-    if os.path.exists(real_input) and not os.path.isdir(real_input):
-        raise PathTraversalError("Path is not a directory")
-
+    # Run the allowlist check before touching the filesystem so any os.path.*
+    # call below operates on a path that has already been validated.
     if allowed_paths is None:
         allowed_paths = get_allowed_scan_paths()
-
     if allowed_paths and not _is_within_allowed(real_input, allowed_paths):
         raise PathTraversalError(f"Path outside allowed directories: {dir_path}")
+
+    if os.path.exists(real_input) and not os.path.isdir(real_input):
+        raise PathTraversalError("Path is not a directory")
 
     return normalized
 
