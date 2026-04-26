@@ -9,7 +9,7 @@ pillow-heif==0.22.0  # HEIC/HEIF support for Pillow (requires libheif system lib
 python-magic==0.4.27
 ffmpeg-python==0.2.0
 SQLAlchemy==2.0.41
-python-dotenv==1.0.0
+python-dotenv==1.2.2
 Werkzeug==3.1.6
 gunicorn==23.0.0
 pytz==2023.3
