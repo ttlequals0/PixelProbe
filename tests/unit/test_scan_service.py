@@ -92,6 +92,40 @@ class TestScanService:
         """Test scanning non-existent file"""
         with pytest.raises(FileNotFoundError):
             scan_service.scan_single_file('/nonexistent/file.mp4')
+
+    @patch('os.path.exists')
+    @patch('pixelprobe.services.scan_service.PixelProbe')
+    def test_scan_single_file_reuses_existing_scan_state(self, mock_probe_class, mock_exists,
+                                                         scan_service, app, db):
+        """Single-file scan reuses an existing ScanState row when scan_id is passed.
+
+        Regression test for the v2.6.41 UI flicker bug: the API route created a
+        ScanState before queueing the Celery task, then scan_single_file created
+        a *second* row with a different scan_id and the UI lost track in between.
+        """
+        with app.app_context():
+            mock_exists.return_value = True
+            mock_probe_class.return_value.scan_file.return_value = Mock()
+
+            existing = ScanState.create_new_scan(scan_id='route-scan-id')
+            existing.start_scan(['/test/file.mp4'], force_rescan=True)
+            existing.is_active = False  # Simulate post-failure state pre-retry
+            existing.phase = 'failed'
+            db.session.commit()
+            existing_id = existing.id
+
+            scan_service.scan_single_file('/test/file.mp4', force_rescan=True,
+                                          scan_id='route-scan-id')
+
+            rows = ScanState.query.filter_by(scan_id='route-scan-id').all()
+            assert len(rows) == 1
+            assert rows[0].id == existing_id
+            assert rows[0].is_active is True
+            assert rows[0].phase == 'initializing'
+            assert rows[0].error_message is None
+
+            if scan_service.current_scan_thread:
+                scan_service.current_scan_thread.join(timeout=1)
     
     @patch('os.path.exists')
     @patch('pixelprobe.services.scan_service.PixelProbe')

@@ -157,15 +157,24 @@ def init_celery(app, celery):
 
 
 @worker_process_init.connect
-def _setup_db_log_handler_in_worker(**kwargs):
-    """Attach DatabaseLogHandler in each forked Celery worker child process.
+def _setup_worker_process(**kwargs):
+    """Initialize each forked Celery worker child process.
 
-    Threads don't survive fork(), so the handler set up in the parent process
-    has a dead _writer_thread in children.  This signal fires once per child
-    and creates a fresh handler with its own background writer thread.
+    1. Dispose the inherited SQLAlchemy engine so each child builds a fresh
+       connection pool. Without this, child processes share libpq sockets
+       with the parent, which surfaces as "PGRES_TUPLES_OK and no message
+       from the libpq" - a NotImplementedError when concurrent SQLAlchemy
+       queries try to read a row whose cursor was torn out from under them.
+    2. Attach a fresh DatabaseLogHandler. The handler set up in the parent
+       process has a dead _writer_thread because threads don't survive
+       fork(); this signal fires once per child and replaces it.
     """
     from app import app
+    from pixelprobe.models import db
     from pixelprobe.utils.log_handler import DatabaseLogHandler
+
+    with app.app_context():
+        db.engine.dispose()
 
     handler = DatabaseLogHandler(app)
     handler.setLevel(logging.INFO)

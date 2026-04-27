@@ -23,3 +23,14 @@ def check_celery_available():
             celery_enabled = False
 
     return celery_enabled
+
+
+def is_db_connection_corruption(exc) -> bool:
+    """Detect post-fork PostgreSQL connection corruption.
+
+    Surfaces as "PGRES_TUPLES_OK and no message from the libpq" when a forked
+    worker inherits and uses a parent's libpq socket. The connection is dead;
+    retrying the same task on the same connection will not help.
+    """
+    msg = str(exc)
+    return "PGRES_TUPLES_OK" in msg or "no message from the libpq" in msg

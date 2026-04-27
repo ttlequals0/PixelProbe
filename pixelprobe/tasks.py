@@ -15,9 +15,11 @@ import redis
 from contextlib import contextmanager
 
 from pixelprobe.celery_config import celery_app
+from pixelprobe.constants import SCAN_PHASES
 from pixelprobe.services.scan_service import ScanService
 from pixelprobe.progress_utils import get_redis_client, get_scan_progress_redis, update_scan_progress_redis
 from pixelprobe.models import db, ScanState, ScanResult, ScanReport
+from pixelprobe.utils.celery_utils import is_db_connection_corruption
 from pixelprobe.utils.log_context import current_scan_id, current_celery_task_id
 
 
@@ -273,9 +275,14 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
         elif scan_type == 'single':
             # Single file scan
             if paths and len(paths) == 1:
+                # Pass scan_id so scan_service reuses the ScanState row this task
+                # is already tracking, instead of creating a second one. Otherwise
+                # the UI's progress monitor sees a brief gap between rows and
+                # flips to "done" before the real scan starts.
                 result = scan_service.scan_single_file(
                     file_path=paths[0],
-                    force_rescan=force_rescan
+                    force_rescan=force_rescan,
+                    scan_id=scan_id
                 )
                 
                 # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible
@@ -309,6 +316,15 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
         is_db_error = isinstance(exc, (sqlalchemy.exc.DatabaseError, psycopg2.DatabaseError))
         is_connection_error = isinstance(exc, (sqlalchemy.exc.OperationalError, psycopg2.OperationalError))
 
+        # Decide whether this exception will be retried so we can preserve the
+        # ScanState row across attempts. If we marked it failed/inactive on
+        # every transient error, the UI would flip to "done" during the retry
+        # window and only re-discover the scan minutes later.
+        is_corruption_error = is_db_error and is_db_connection_corruption(exc)
+        will_retry = (
+            self.request.retries < self.max_retries and not is_corruption_error
+        )
+
         # Update scan state with error
         try:
             # Roll back any pending transaction before querying
@@ -318,8 +334,17 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             if scan_state:
                 error_msg = f"Celery task failed: {str(exc)}"
                 scan_state.error_message = error_msg[:950]  # Truncate to fit VARCHAR(1000)
-                scan_state.is_active = False
-                scan_state.phase = 'failed'
+                if will_retry:
+                    # Keep the row active so the UI keeps showing progress
+                    # during the retry backoff instead of jumping to "done".
+                    scan_state.phase = SCAN_PHASES['INITIALIZING']
+                    scan_state.progress_message = (
+                        f'Retrying after error '
+                        f'(attempt {self.request.retries + 1}/{self.max_retries})'
+                    )
+                else:
+                    scan_state.is_active = False
+                    scan_state.phase = 'failed'
                 db.session.commit()
         except Exception as db_exc:
             logger.error(f"Failed to update scan state with error: {str(db_exc)}")
@@ -340,7 +365,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             elif is_db_error:
                 logger.error(f"Database error detected: {type(exc).__name__}")
                 # Don't retry immediately for database corruption errors
-                if "PGRES_TUPLES_OK" in str(exc) or "no message from the libpq" in str(exc):
+                if is_db_connection_corruption(exc):
                     logger.error(f"Database connection corruption detected - task {self.request.id} failed permanently")
                     raise exc
                 else:

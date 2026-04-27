@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.41] - 2026-04-26
+
+### Security
+
+- **Bump `python-dotenv` from 1.0.0 to 1.2.2** to resolve CVE-2026-28684 (arbitrary file overwrite via symlink follow). MEDIUM severity. The pinned 1.0.0 had no fix available; 1.2.2 is the first release with the patch.
+
+### Fixed
+
+- **Single-file rescan UI flips to "done" then resumes minutes later**. The Flask route created a `ScanState` row keyed on its generated `scan_id`, then the Celery worker's `scan_service.scan_single_file` created a *second* `ScanState` with a different `scan_id` and tracked progress on that one. The UI's progress monitor lost track between the two rows and reported the scan complete before the worker had even started hashing the file. `scan_single_file` now accepts an optional `scan_id` and reuses the existing row when one matches; the Celery `scan_media_task` passes `scan_id` through for `scan_type='single'`.
+- **Silent first-attempt failures on Celery worker scans** caused by post-fork PostgreSQL connection sharing. Symptom in logs: `psycopg2.DatabaseError: error with status PGRES_TUPLES_OK and no message from the libpq` on one worker, surfacing as a bare `NotImplementedError` from `sqlalchemy/engine/result.py:_indexes_for_keys` in a sibling worker. Fixed by disposing the SQLAlchemy engine in the `worker_process_init` Celery signal so each forked child builds its own connection pool. The existing log-handler setup in that signal has been merged into a single `_setup_worker_process` handler.
+- **Scan progress flickers to "failed" during transient Celery retries**. `scan_media_task`'s catch-all exception handler used to set `phase='failed'` and `is_active=False` on every error, including ones that were about to be retried. The handler now keeps the row active (`phase='initializing'` with a "Retrying after error" progress message) when more retries remain, and only marks the scan failed once the retry budget is exhausted or the error is the known-fatal `PGRES_TUPLES_OK` connection-corruption case.
+
 ## [2.6.40] - 2026-04-20
 
 ### Security

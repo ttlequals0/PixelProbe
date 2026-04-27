@@ -12,6 +12,7 @@ import time
 from typing import List, Dict, Optional, Tuple
 
 from flask import current_app
+from pixelprobe.constants import SCAN_PHASES
 from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
 from pixelprobe.models import db, ScanResult, ScanState, ScanReport, ScanChunk
 from pixelprobe.utils.helpers import ProgressTracker
@@ -92,8 +93,16 @@ class ScanService:
                 except Exception as e:
                     logger.debug(f"Failed to update Redis progress: {e}")
     
-    def scan_single_file(self, file_path: str, force_rescan: bool = False) -> Dict:
-        """Scan a single file"""
+    def scan_single_file(self, file_path: str, force_rescan: bool = False,
+                         scan_id: Optional[str] = None) -> Dict:
+        """Scan a single file.
+
+        When ``scan_id`` is provided (e.g., the API route created a ScanState
+        before queueing the Celery task), reuse that row so the UI tracks one
+        continuous scan from queued through completed. Without this, a second
+        ScanState is created here and the UI's progress monitor briefly sees
+        no active scan and flips to "done" before the new row appears.
+        """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
@@ -104,13 +113,29 @@ class ScanService:
         self.update_progress(0, 1, file_path, 'scanning')
         self.scan_cancelled = False
 
-        # Create ScanState record for UI progress tracking
-        scan_state = ScanState.create_new_scan()
-        scan_state.start_scan([file_path], force_rescan)
-        scan_state.phase = 'initializing'
+        scan_state = None
+        if scan_id:
+            scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
+
+        if scan_state is None:
+            scan_state = ScanState.create_new_scan(scan_id=scan_id)
+
+        # Apply single-file initialization fields directly. We avoid
+        # ScanState.start_scan() here because it commits eagerly and sets
+        # phase='discovering', which we'd immediately overwrite.
+        now = datetime.now(timezone.utc)
+        scan_state.is_active = True
+        scan_state.phase = SCAN_PHASES['INITIALIZING']
         scan_state.progress_message = 'Initializing single file scan'
         scan_state.estimated_total = 1
         scan_state.phase_total = 1
+        scan_state.files_processed = 0
+        scan_state.directories = json.dumps([file_path])
+        scan_state.force_rescan = force_rescan
+        scan_state.error_message = None
+        scan_state.start_time = now
+        scan_state.last_update = now
+        scan_state.end_time = None
         db.session.commit()
 
         # Capture scan ID for UI progress tracking
