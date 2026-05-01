@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.42] - 2026-05-01
+
+### Fixed
+
+- **Integrity scan hung at "5000 active" forever when Celery workers died mid-scan**. The producer loop in `_run_file_changes_check` had no per-task timeout, so any `calculate_file_hash_task` whose worker disappeared remained `PENDING` in Redis indefinitely. `safe_task_ready()` was deliberately built to return `False` on Redis errors, which kept stuck tasks in `active_tasks` forever; combined with `MAX_CONCURRENT_SMALL=5000`, that pinned the producer at the cap with no submissions or completions. Each entry in `active_tasks` now carries a `submitted_at` monotonic timestamp; tasks older than `INTEGRITY_TASK_TIMEOUT_SECS` (default `1800`, env-overridable) are revoked, logged, and dropped from the active set.
+- **Worker post-fork engine disposal could fail silently (v2.6.41 regression)**. `_setup_worker_process` now logs entry/exit and wraps `db.engine.dispose()` in a try/except, so a fork-time failure no longer leaves a child unable to log task activity. After the next deploy, the worker container should show `_setup_worker_process: starting in worker pid=...` and `_setup_worker_process: complete in worker pid=...` for each fork.
+- **Misleading "queued" heartbeat label**. The integrity-scan heartbeat used to print `files_queued`, a cumulative counter that was only ever incremented, so an idle producer at the concurrency cap looked like a perpetually growing queue. Replaced with explicit `remaining` (unsubmitted files) and `abandoned` counts, e.g.: `Progress: 225881/1167919 processed, 5000 active, 937038 remaining, 0 abandoned`.
+
 ## [2.6.41] - 2026-04-26
 
 ### Security

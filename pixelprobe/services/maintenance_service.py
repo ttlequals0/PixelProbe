@@ -20,6 +20,15 @@ from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
 logger = logging.getLogger(__name__)
 
 
+# Integrity-scan task timeout. Tasks whose results have not arrived within this
+# many seconds are considered orphaned (worker died, broker lost the message,
+# etc.) and dropped from the active set so the producer loop can keep moving.
+# Override via the INTEGRITY_TASK_TIMEOUT_SECS environment variable.
+INTEGRITY_TASK_TIMEOUT_SECS = int(
+    os.environ.get('INTEGRITY_TASK_TIMEOUT_SECS', 1800)
+)
+
+
 def safe_task_ready(task, max_retries=5, base_delay=1.0):
     """
     Safely check if a Celery task is ready with enhanced retry logic for Redis connection errors.
@@ -791,6 +800,7 @@ class MaintenanceService:
             active_tasks = []
             total_files_processed = 0
             files_queued = 0
+            files_abandoned = 0
             task_results = []
             last_heartbeat_time = time.time()
 
@@ -815,8 +825,12 @@ class MaintenanceService:
                 current_time = time.time()
                 if current_time - last_heartbeat_time >= 30:
                     file_changes_record.last_heartbeat = datetime.now(timezone.utc)
-                    logger.info(f"Progress: {total_files_processed}/{len(all_results)} processed, "
-                              f"{len(active_tasks)} active, {files_queued} queued")
+                    remaining = len(all_results_sorted) - file_index
+                    logger.info(
+                        f"Progress: {total_files_processed}/{len(all_results)} processed, "
+                        f"{len(active_tasks)} active, {remaining} remaining, "
+                        f"{files_abandoned} abandoned"
+                    )
                     db.session.commit()
                     last_heartbeat_time = current_time
 
@@ -875,7 +889,23 @@ class MaintenanceService:
                         except Exception as e:
                             logger.error(f"Error getting task result: {e}")
                     else:
-                        still_active.append(task_info)
+                        # If the task has been pending longer than the timeout,
+                        # treat it as orphaned (worker died or broker lost it)
+                        # and drop it so the producer loop can advance instead
+                        # of pinning at max concurrency forever.
+                        age = time.monotonic() - task_info.get('submitted_at', 0)
+                        if age > INTEGRITY_TASK_TIMEOUT_SECS:
+                            logger.warning(
+                                "Abandoning stuck integrity task id=%s path=%s age=%.0fs",
+                                task.id, task_info['path'], age,
+                            )
+                            try:
+                                task.revoke(terminate=False)
+                            except Exception:
+                                pass
+                            files_abandoned += 1
+                        else:
+                            still_active.append(task_info)
                 active_tasks = still_active
 
                 # Submit new tasks based on available slots
@@ -923,7 +953,12 @@ class MaintenanceService:
                         task_result = calculate_file_hash_task.apply_async(
                             args=[result['id'], result['file_path'], result['file_hash'], stored_modified_iso]
                         )
-                        active_tasks.append({'task': task_result, 'size': file_size, 'path': result['file_path']})
+                        active_tasks.append({
+                            'task': task_result,
+                            'size': file_size,
+                            'path': result['file_path'],
+                            'submitted_at': time.monotonic(),
+                        })
                         task_results.append(task_result)
                         files_queued += 1
                         file_index += 1
