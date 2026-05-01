@@ -16,8 +16,21 @@ from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusion
 from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState, ScanReport, LogEntry, AppConfig
 from pixelprobe.utils.helpers import ProgressTracker
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
+from pixelprobe.progress_utils import (
+    update_file_changes_progress_redis,
+    clear_file_changes_progress_redis,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# Integrity-scan task timeout. Tasks whose results have not arrived within this
+# many seconds are considered orphaned (worker died, broker lost the message,
+# etc.) and dropped from the active set so the producer loop can keep moving.
+# Override via the INTEGRITY_TASK_TIMEOUT_SECS environment variable.
+INTEGRITY_TASK_TIMEOUT_SECS = int(
+    os.environ.get('INTEGRITY_TASK_TIMEOUT_SECS', 1800)
+)
 
 
 def safe_task_ready(task, max_retries=5, base_delay=1.0):
@@ -791,6 +804,8 @@ class MaintenanceService:
             active_tasks = []
             total_files_processed = 0
             files_queued = 0
+            files_abandoned = 0
+            last_progress_update = 0
             task_results = []
             last_heartbeat_time = time.time()
 
@@ -809,15 +824,42 @@ class MaintenanceService:
             # Handle NULL file_size by treating as 0 for sorting
             all_results_sorted = sorted(all_results, key=lambda x: x['file_size'] if x['file_size'] else 0)
 
+            total_count = len(all_results)
+
+            def write_progress_snapshot(set_heartbeat: bool):
+                pct = int((total_files_processed / total_count * 100)) if total_count > 0 else 0
+                msg = (
+                    f'Processing files: {total_files_processed:,}/{total_count:,} ({pct}%) - '
+                    f'{len(changed_files)} changes found, {len(active_tasks)} active tasks'
+                )
+                if set_heartbeat:
+                    file_changes_record.last_heartbeat = datetime.now(timezone.utc)
+                file_changes_record.phase_current = total_files_processed
+                file_changes_record.files_processed = total_files_processed
+                file_changes_record.progress_message = msg
+                db.session.commit()
+                update_file_changes_progress_redis(
+                    check_id=check_id,
+                    files_processed=total_files_processed,
+                    total_files=total_count,
+                    phase=file_changes_record.phase or '',
+                    progress_message=msg,
+                )
+
             file_index = 0
             while file_index < len(all_results_sorted) or active_tasks:
-                # Heartbeat every 30 seconds
+                # Heartbeat every 10 s: write-through to PostgreSQL + Redis so the
+                # UI sees motion even when the periodic-delta block below hasn't
+                # fired in the current iteration. phase_total is invariant for
+                # Phase 2 (set once at line ~816) so it's not repeated here.
                 current_time = time.time()
-                if current_time - last_heartbeat_time >= 30:
-                    file_changes_record.last_heartbeat = datetime.now(timezone.utc)
-                    logger.info(f"Progress: {total_files_processed}/{len(all_results)} processed, "
-                              f"{len(active_tasks)} active, {files_queued} queued")
-                    db.session.commit()
+                if current_time - last_heartbeat_time >= 10:
+                    write_progress_snapshot(set_heartbeat=True)
+                    logger.info(
+                        f"Progress: {total_files_processed}/{total_count} processed, "
+                        f"{len(active_tasks)} active, {len(all_results_sorted) - file_index} remaining, "
+                        f"{files_abandoned} abandoned"
+                    )
                     last_heartbeat_time = current_time
 
                 # Check for cancellation
@@ -875,7 +917,23 @@ class MaintenanceService:
                         except Exception as e:
                             logger.error(f"Error getting task result: {e}")
                     else:
-                        still_active.append(task_info)
+                        # If the task has been pending longer than the timeout,
+                        # treat it as orphaned (worker died or broker lost it)
+                        # and drop it so the producer loop can advance instead
+                        # of pinning at max concurrency forever.
+                        age = time.monotonic() - task_info.get('submitted_at', 0)
+                        if age > INTEGRITY_TASK_TIMEOUT_SECS:
+                            logger.warning(
+                                "Abandoning stuck integrity task id=%s path=%s age=%.0fs",
+                                task.id, task_info['path'], age,
+                            )
+                            try:
+                                task.revoke(terminate=False)
+                            except Exception:
+                                pass
+                            files_abandoned += 1
+                        else:
+                            still_active.append(task_info)
                 active_tasks = still_active
 
                 # Submit new tasks based on available slots
@@ -923,7 +981,12 @@ class MaintenanceService:
                         task_result = calculate_file_hash_task.apply_async(
                             args=[result['id'], result['file_path'], result['file_hash'], stored_modified_iso]
                         )
-                        active_tasks.append({'task': task_result, 'size': file_size, 'path': result['file_path']})
+                        active_tasks.append({
+                            'task': task_result,
+                            'size': file_size,
+                            'path': result['file_path'],
+                            'submitted_at': time.monotonic(),
+                        })
                         task_results.append(task_result)
                         files_queued += 1
                         file_index += 1
@@ -958,18 +1021,17 @@ class MaintenanceService:
                 else:
                     update_interval = 100
 
-                # Update progress when we hit the interval OR if we've processed all files
-                if (total_files_processed > 0 and
-                    (total_files_processed % update_interval == 0 or
-                     total_files_processed == len(all_results))):
-                    file_changes_record.phase_current = total_files_processed
-                    file_changes_record.phase_total = len(all_results)
-                    pct = int((total_files_processed / len(all_results) * 100)) if len(all_results) > 0 else 0
-                    file_changes_record.progress_message = (
-                        f'Processing files: {total_files_processed:,}/{len(all_results):,} ({pct}%) - '
-                        f'{len(changed_files)} changes found, {len(active_tasks)} active tasks'
-                    )
-                    db.session.commit()
+                # Delta-based check (not modulo): fires reliably even when the
+                # producer batches thousands of task completions per outer-loop
+                # iteration. Modulo would only match when the batch boundary
+                # landed exactly on a multiple of update_interval, which at
+                # 5000-active steady state almost never does.
+                if total_files_processed > 0 and (
+                    total_files_processed - last_progress_update >= update_interval or
+                    total_files_processed == total_count
+                ):
+                    write_progress_snapshot(set_heartbeat=False)
+                    last_progress_update = total_files_processed
 
             # Final update
             file_changes_record.phase_current = total_files_processed
@@ -1078,6 +1140,7 @@ class MaintenanceService:
                 logger.warning(f"Failed to complete ScanState for single file integrity check: {e}")
 
             db.session.commit()
+            clear_file_changes_progress_redis(check_id)
 
             # Create scan report for file changes operation
             # Always try to create a report even if there was an error, as long as we have some data

@@ -168,15 +168,34 @@ def _setup_worker_process(**kwargs):
     2. Attach a fresh DatabaseLogHandler. The handler set up in the parent
        process has a dead _writer_thread because threads don't survive
        fork(); this signal fires once per child and replaces it.
+
+    Both steps log entry/exit so a fork-time failure is visible in the
+    worker container logs instead of silently leaving the child unable to
+    process tasks (regression seen post v2.6.41).
     """
+    pid = os.getpid()
+    init_logger = logging.getLogger(__name__)
+    init_logger.info("_setup_worker_process: starting in worker pid=%s", pid)
+
     from app import app
     from pixelprobe.models import db
     from pixelprobe.utils.log_handler import DatabaseLogHandler
 
-    with app.app_context():
-        db.engine.dispose()
+    try:
+        with app.app_context():
+            db.engine.dispose()
+        init_logger.info(
+            "_setup_worker_process: db.engine.dispose() ok in pid=%s", pid
+        )
+    except Exception as e:
+        init_logger.exception(
+            "_setup_worker_process: db.engine.dispose() failed in pid=%s: %s",
+            pid, e,
+        )
+        # Continue: a fresh connection on first session use is the fallback.
 
     handler = DatabaseLogHandler(app)
     handler.setLevel(logging.INFO)
     logging.getLogger().addHandler(handler)
     atexit.register(handler.shutdown)
+    init_logger.info("_setup_worker_process: complete in worker pid=%s", pid)

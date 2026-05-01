@@ -14,6 +14,7 @@ from functools import wraps
 logger = logging.getLogger(__name__)
 
 _PROGRESS_KEY_PREFIX = 'scan_progress'
+_FILE_CHANGES_PROGRESS_KEY_PREFIX = 'file_changes_progress'
 
 # Connection pool to reuse connections
 _redis_connection_pool = None
@@ -274,3 +275,74 @@ def clear_scan_progress_redis(scan_id):
         logger.info(f"Cleared Redis progress key for scan {scan_id}")
     except Exception as e:
         logger.warning(f"Failed to clear Redis progress for scan {scan_id}: {e}")
+
+
+# Integrity-scan (file-changes) progress mirrors the regular scan helpers above.
+# Separate key prefix so check_id values can't collide with scan_id values, and
+# a slightly different field set (progress_message instead of current_file) to
+# match what the integrity producer loop tracks.
+
+def get_file_changes_progress_redis(check_id):
+    """Read current integrity-scan progress from Redis. Returns dict or None."""
+    redis_client = get_redis_client()
+    if not redis_client:
+        return None
+
+    progress_key = f"{_FILE_CHANGES_PROGRESS_KEY_PREFIX}:{check_id}"
+    try:
+        data = redis_client.hgetall(progress_key)
+        if not data:
+            return None
+        decoded = {}
+        for k, v in data.items():
+            key = k.decode('utf-8') if isinstance(k, bytes) else k
+            val = v.decode('utf-8') if isinstance(v, bytes) else v
+            decoded[key] = val
+        return {
+            'files_processed': int(decoded.get('files_processed', 0)),
+            'total_files': int(decoded.get('total_files', 0)),
+            'phase': decoded.get('phase', ''),
+            'progress_message': decoded.get('progress_message', ''),
+            'last_update': decoded.get('last_update', ''),
+        }
+    except Exception as e:
+        logger.warning(f"Failed to read Redis file-changes progress for {check_id}: {e}")
+        return None
+
+
+def update_file_changes_progress_redis(check_id, files_processed=0, total_files=0,
+                                       phase='', progress_message=''):
+    """Update integrity-scan progress in Redis for the file-changes-status API to read."""
+    redis_client = get_redis_client()
+    if not redis_client:
+        logger.debug("Redis not available for file-changes progress updates")
+        return
+
+    progress_key = f"{_FILE_CHANGES_PROGRESS_KEY_PREFIX}:{check_id}"
+    progress_data = {
+        'files_processed': str(files_processed),
+        'total_files': str(total_files),
+        'phase': phase,
+        'progress_message': progress_message,
+        'last_update': datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        redis_client.hset(progress_key, mapping=progress_data)
+        redis_client.expire(progress_key, 3600)
+    except Exception as e:
+        logger.error(f"Failed to update Redis file-changes progress for {check_id}: {e}")
+
+
+def clear_file_changes_progress_redis(check_id):
+    """Delete integrity-scan progress key from Redis."""
+    redis_client = get_redis_client()
+    if not redis_client:
+        return
+
+    progress_key = f"{_FILE_CHANGES_PROGRESS_KEY_PREFIX}:{check_id}"
+    try:
+        redis_client.delete(progress_key)
+        logger.info(f"Cleared Redis file-changes progress key for {check_id}")
+    except Exception as e:
+        logger.warning(f"Failed to clear Redis file-changes progress for {check_id}: {e}")
