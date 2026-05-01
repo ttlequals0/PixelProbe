@@ -12,6 +12,7 @@ from pixelprobe.media_checker import PixelProbe
 from pixelprobe.auth import auth_required
 from pixelprobe.utils.helpers import ProgressTracker
 from pixelprobe.services.maintenance_service import MaintenanceService
+from pixelprobe.progress_utils import get_file_changes_progress_redis
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,25 @@ def get_file_changes_status():
                 'current_file': file_changes_record.current_file,
                 'progress_message': file_changes_record.progress_message or ''
             }
+
+            # When the scan is active, prefer Redis values for the live counters.
+            # Mirrors the v2.5.67 pattern in scan_routes.py for /api/scan-status.
+            if file_changes_record.is_active and file_changes_record.check_id:
+                redis_progress = get_file_changes_progress_redis(file_changes_record.check_id)
+                if redis_progress:
+                    redis_files = redis_progress.get('files_processed', 0)
+                    redis_total = redis_progress.get('total_files', 0)
+                    redis_phase = redis_progress.get('phase', '')
+                    redis_msg = redis_progress.get('progress_message', '')
+                    if redis_files >= response['files_processed']:
+                        response['files_processed'] = redis_files
+                        response['phase_current'] = redis_files
+                    if redis_total > 0:
+                        response['phase_total'] = redis_total
+                    if redis_phase and redis_phase not in ('', 'idle'):
+                        response['phase'] = redis_phase
+                    if redis_msg:
+                        response['progress_message'] = redis_msg
             
             if file_changes_record.start_time and file_changes_record.is_active:
                 # Handle both timezone-aware and timezone-naive datetimes

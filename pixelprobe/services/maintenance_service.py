@@ -16,6 +16,10 @@ from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusion
 from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState, ScanReport, LogEntry, AppConfig
 from pixelprobe.utils.helpers import ProgressTracker
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
+from pixelprobe.progress_utils import (
+    update_file_changes_progress_redis,
+    clear_file_changes_progress_redis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -801,6 +805,7 @@ class MaintenanceService:
             total_files_processed = 0
             files_queued = 0
             files_abandoned = 0
+            last_progress_update = 0
             task_results = []
             last_heartbeat_time = time.time()
 
@@ -819,19 +824,42 @@ class MaintenanceService:
             # Handle NULL file_size by treating as 0 for sorting
             all_results_sorted = sorted(all_results, key=lambda x: x['file_size'] if x['file_size'] else 0)
 
+            total_count = len(all_results)
+
+            def write_progress_snapshot(set_heartbeat: bool):
+                pct = int((total_files_processed / total_count * 100)) if total_count > 0 else 0
+                msg = (
+                    f'Processing files: {total_files_processed:,}/{total_count:,} ({pct}%) - '
+                    f'{len(changed_files)} changes found, {len(active_tasks)} active tasks'
+                )
+                if set_heartbeat:
+                    file_changes_record.last_heartbeat = datetime.now(timezone.utc)
+                file_changes_record.phase_current = total_files_processed
+                file_changes_record.files_processed = total_files_processed
+                file_changes_record.progress_message = msg
+                db.session.commit()
+                update_file_changes_progress_redis(
+                    check_id=check_id,
+                    files_processed=total_files_processed,
+                    total_files=total_count,
+                    phase=file_changes_record.phase or '',
+                    progress_message=msg,
+                )
+
             file_index = 0
             while file_index < len(all_results_sorted) or active_tasks:
-                # Heartbeat every 30 seconds
+                # Heartbeat every 10 s: write-through to PostgreSQL + Redis so the
+                # UI sees motion even when the periodic-delta block below hasn't
+                # fired in the current iteration. phase_total is invariant for
+                # Phase 2 (set once at line ~816) so it's not repeated here.
                 current_time = time.time()
-                if current_time - last_heartbeat_time >= 30:
-                    file_changes_record.last_heartbeat = datetime.now(timezone.utc)
-                    remaining = len(all_results_sorted) - file_index
+                if current_time - last_heartbeat_time >= 10:
+                    write_progress_snapshot(set_heartbeat=True)
                     logger.info(
-                        f"Progress: {total_files_processed}/{len(all_results)} processed, "
-                        f"{len(active_tasks)} active, {remaining} remaining, "
+                        f"Progress: {total_files_processed}/{total_count} processed, "
+                        f"{len(active_tasks)} active, {len(all_results_sorted) - file_index} remaining, "
                         f"{files_abandoned} abandoned"
                     )
-                    db.session.commit()
                     last_heartbeat_time = current_time
 
                 # Check for cancellation
@@ -993,18 +1021,17 @@ class MaintenanceService:
                 else:
                     update_interval = 100
 
-                # Update progress when we hit the interval OR if we've processed all files
-                if (total_files_processed > 0 and
-                    (total_files_processed % update_interval == 0 or
-                     total_files_processed == len(all_results))):
-                    file_changes_record.phase_current = total_files_processed
-                    file_changes_record.phase_total = len(all_results)
-                    pct = int((total_files_processed / len(all_results) * 100)) if len(all_results) > 0 else 0
-                    file_changes_record.progress_message = (
-                        f'Processing files: {total_files_processed:,}/{len(all_results):,} ({pct}%) - '
-                        f'{len(changed_files)} changes found, {len(active_tasks)} active tasks'
-                    )
-                    db.session.commit()
+                # Delta-based check (not modulo): fires reliably even when the
+                # producer batches thousands of task completions per outer-loop
+                # iteration. Modulo would only match when the batch boundary
+                # landed exactly on a multiple of update_interval, which at
+                # 5000-active steady state almost never does.
+                if total_files_processed > 0 and (
+                    total_files_processed - last_progress_update >= update_interval or
+                    total_files_processed == total_count
+                ):
+                    write_progress_snapshot(set_heartbeat=False)
+                    last_progress_update = total_files_processed
 
             # Final update
             file_changes_record.phase_current = total_files_processed
@@ -1113,6 +1140,7 @@ class MaintenanceService:
                 logger.warning(f"Failed to complete ScanState for single file integrity check: {e}")
 
             db.session.commit()
+            clear_file_changes_progress_redis(check_id)
 
             # Create scan report for file changes operation
             # Always try to create a report even if there was an error, as long as we have some data
