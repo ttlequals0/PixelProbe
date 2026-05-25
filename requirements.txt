@@ -15,6 +15,7 @@ gunicorn==23.0.0
 pytz==2023.3
 APScheduler==3.11.0
 requests==2.33.0
+urllib3>=2.7.0  # transitive via requests; pinned to resolve CVE-2026-44431 / CVE-2026-44432
 reportlab==4.2.5
 psutil==7.0.0
 PyYAML==6.0.2

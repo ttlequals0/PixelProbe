@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.43] - 2026-05-25
+
+### Security
+
+- **Bump `urllib3` floor to `>=2.7.0`** to resolve CVE-2026-44431 and CVE-2026-44432 (HTTP response decompression denial-of-service). HIGH severity. Pinned in `requirements.txt` because it's transitive through `requests`; `requests==2.33.0` still permits the vulnerable 2.6.x line otherwise.
+- **`apt-get upgrade` added to the Ubuntu 24.04 base layer** so the image picks up security patches the base image hasn't been rebuilt with, including the linux-libc-dev kernel-header CVEs (CVE-2026-22984, CVE-2026-31431) that Trivy flagged at HIGH.
+
+### Fixed
+
+- **Weekly schedule silently dropped when a long-running AddNew scan was concurrent**. On 2026-05-25 the Sunday 02:00 EDT cleanup (`schedule_10`) was skipped six times in a row and then abandoned because the 6-hour AddNew scan that started at 00:00 took 3h 5m (vs the typical <35 min) and was still in `phase=scanning` at 03:00 -- the queue-on-conflict retry window introduced in v2.6.39 was capped at `DEFAULT_RETRY_MAX_COUNT=6 * DEFAULT_RETRY_DELAY_MINUTES=10 min = 60 min`. The conflicting scan finished four minutes after the cap expired, so the weekly schedule was lost until the next cron fire one week later. Raised `DEFAULT_RETRY_MAX_COUNT` from 6 to 144, giving a 24-hour retry window that safely covers any realistic scan duration. Per-schedule retry counters (`pending_retries[f"schedule_{schedule_id}"]`) remain isolated, and the env override `SCHEDULE_RETRY_MAX_COUNT` is unchanged for operators who want tighter behavior.
+
 ## [2.6.42] - 2026-05-01
 
 ### Fixed
