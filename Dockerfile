@@ -9,6 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # - ImageMagick 6.9.13 (newer than 22.04's 6.9.11)
 # - Python 3.12 by default
 RUN apt-get update && \
+    apt-get upgrade -y && \
     apt-get install -y \
     # Python and pip
     python3 \

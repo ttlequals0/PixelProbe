@@ -20,7 +20,7 @@ class MediaScheduler:
     # another scan is still running. Up to MAX_COUNT retries spaced
     # DELAY_MINUTES apart; after that we give up until the next cron fire.
     DEFAULT_RETRY_DELAY_MINUTES = 10
-    DEFAULT_RETRY_MAX_COUNT = 6
+    DEFAULT_RETRY_MAX_COUNT = 144
 
     def __init__(self, app=None):
         self.scheduler = BackgroundScheduler()
