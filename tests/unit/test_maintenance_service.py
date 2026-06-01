@@ -21,10 +21,12 @@ class TestIntegrityTaskTimeoutConfig:
         os.environ.pop('INTEGRITY_TASK_TIMEOUT_SECS', None)
         importlib.reload(maintenance_service)
 
-    def test_default_is_thirty_minutes(self):
+    def test_default_is_three_hours(self):
+        # Raised from 30m to 3h so a ~55GB sequential hash on slow storage is not
+        # abandoned mid-read.
         os.environ.pop('INTEGRITY_TASK_TIMEOUT_SECS', None)
         importlib.reload(maintenance_service)
-        assert maintenance_service.INTEGRITY_TASK_TIMEOUT_SECS == 1800
+        assert maintenance_service.INTEGRITY_TASK_TIMEOUT_SECS == 10800
 
     def test_overrides_via_environment(self):
         os.environ['INTEGRITY_TASK_TIMEOUT_SECS'] = '120'

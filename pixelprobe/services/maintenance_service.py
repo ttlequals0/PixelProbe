@@ -28,8 +28,14 @@ logger = logging.getLogger(__name__)
 # many seconds are considered orphaned (worker died, broker lost the message,
 # etc.) and dropped from the active set so the producer loop can keep moving.
 # Override via the INTEGRITY_TASK_TIMEOUT_SECS environment variable.
+#
+# Default is 3h (was 30m): the hash task reads the WHOLE file, and PixelProbe
+# scans files up to ~55GB. On slow/contended storage a 55GB sequential read can
+# exceed 30 minutes, so a too-low timeout abandons (skips) the very largest files
+# mid-hash. 3h covers ~55GB down to ~5MB/s; with the 5000-slot concurrency cap a
+# few genuinely-dead tasks holding slots this long is harmless.
 INTEGRITY_TASK_TIMEOUT_SECS = int(
-    os.environ.get('INTEGRITY_TASK_TIMEOUT_SECS', 1800)
+    os.environ.get('INTEGRITY_TASK_TIMEOUT_SECS', 10800)
 )
 
 

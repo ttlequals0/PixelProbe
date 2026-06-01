@@ -76,10 +76,15 @@ def create_celery(app=None):
         # Task deduplication to prevent multiple workers from picking up same retry
         'task_track_started': True,  # Track when tasks actually start execution
         'task_ignore_result': False,  # Store results for monitoring
-        
-        # Monitoring
-        'worker_send_task_events': True,
-        'task_send_sent_event': True,
+
+        # Monitoring task events are DISABLED. Under a high-throughput scan (e.g.
+        # 1M+ tiny immich thumbnails hashing in sub-millisecond bursts), the
+        # event stream floods the kombu event-loop hub and trips an
+        # "Unrecoverable error: AssertionError()" in hub.fire_timers that wedges
+        # the worker. PixelProbe's UI reads progress from the DB (/api/*-status),
+        # not Celery events, so disabling these costs nothing here.
+        'worker_send_task_events': False,
+        'task_send_sent_event': False,
         
         # Result backend settings
         'result_expires': 86400,  # Results expire after 24 hours
