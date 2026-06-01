@@ -27,7 +27,31 @@ except pytz.exceptions.UnknownTimeZoneError:
 maintenance_bp = Blueprint('maintenance', __name__, url_prefix='/api')
 
 from flask import current_app
+from sqlalchemy import text
 from pixelprobe.utils.rate_limiting import rate_limit, exempt_from_rate_limit
+
+# Distinct transaction-scoped advisory-lock keys to serialize operation starts
+# across gunicorn workers / the celery container (closes the SELECT-then-INSERT
+# TOCTOU where two requests both pass the is_active check and spawn duplicates).
+_CLEANUP_START_LOCK_KEY = 994411
+_FILE_CHANGES_START_LOCK_KEY = 994412
+
+
+def _try_acquire_start_lock(key):
+    """Best-effort cross-worker start lock via a PostgreSQL transaction-scoped
+    advisory lock (auto-released on the next commit/rollback). Returns True when
+    acquired, or when not running on PostgreSQL (e.g. the sqlite test DB), where
+    the existing is_active check and single-threaded execution suffice.
+    """
+    try:
+        if db.session.bind.dialect.name != 'postgresql':
+            return True
+        return bool(db.session.execute(
+            text("SELECT pg_try_advisory_xact_lock(:k)"), {'k': key}
+        ).scalar())
+    except Exception as e:
+        logger.warning(f"Advisory start-lock check failed, proceeding: {e}")
+        return True
 
 # Global state tracking - will be moved to service layer
 cleanup_state = {
@@ -385,13 +409,19 @@ def cleanup_orphaned_files():
     """Start cleanup of orphaned database entries"""
     global current_cleanup_thread
 
-    # Check if cleanup is already running - use database check for cross-worker visibility
+    # Serialize starts across workers, then check is_active while holding the lock
+    # so two concurrent requests cannot both pass and spawn duplicate cleanups.
+    if not _try_acquire_start_lock(_CLEANUP_START_LOCK_KEY):
+        return {'error': 'Cleanup operation already in progress'}, 409
+
     active_cleanup = CleanupState.query.filter_by(is_active=True).first()
     if active_cleanup:
+        db.session.rollback()  # release the advisory lock
         return {'error': 'Cleanup operation already in progress'}, 409
 
     # Secondary check: process-local thread (for same-worker requests)
     if current_cleanup_thread and current_cleanup_thread.is_alive():
+        db.session.rollback()
         return {'error': 'Cleanup operation already in progress'}, 409
 
     # Get optional parameters from request
@@ -449,13 +479,19 @@ def check_file_changes():
     """Check for file changes since last scan"""
     global current_file_changes_thread
 
-    # Check if file changes check is already running - use database check for cross-worker visibility
+    # Serialize starts across workers, then check is_active while holding the lock
+    # so two concurrent requests cannot both pass and spawn duplicate checks.
+    if not _try_acquire_start_lock(_FILE_CHANGES_START_LOCK_KEY):
+        return {'error': 'File changes check already in progress'}, 409
+
     active_check = FileChangesState.query.filter_by(is_active=True).first()
     if active_check:
+        db.session.rollback()  # release the advisory lock
         return {'error': 'File changes check already in progress'}, 409
 
     # Secondary check: process-local thread (for same-worker requests)
     if current_file_changes_thread and current_file_changes_thread.is_alive():
+        db.session.rollback()
         return {'error': 'File changes check already in progress'}, 409
 
     # Get optional parameters from request

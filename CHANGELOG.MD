@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.46] - 2026-06-01
+
+### Fixed (reliability hardening - phase 3: session hygiene + cross-process coordination)
+
+- **Aborted DB sessions are rolled back instead of left poisoned.** `ScanState.get_or_create`, `ScanState.update_progress`, the scheduler's `_load_saved_schedules`, and the auth API-token `request_loader` now roll back on a swallowed exception so a failed statement does not leave the scoped session in an aborted state that breaks later queries. `update_progress` no longer double-commits (the success path commits once in its retry loop; the failure path makes a single best-effort `is_active` correction) so a failed progress write can no longer be masked by a second commit on a rolled-back instance.
+- **An app-container restart no longer crashes a scan still running in the worker container.** `cleanup_stuck_scans` previously marked ALL active scans crashed on every boot; since the web app and Celery worker run as separate containers, that wrongly killed in-flight worker scans on an app restart. It now only crashes scans with no recent progress (`last_update` older than `STUCK_SCAN_STARTUP_GRACE_SECS`, default 30 min); actively-progressing scans survive the restart.
+- **Concurrent scan starts can no longer double-start.** `/api/scan-parallel` now uses the same atomic `with_for_update(nowait=True)` claim as `/api/scan` (reusing the claimed `scan_id` so the orchestrator does not create a duplicate row, and releasing the claim if the launch fails). `/api/cleanup-orphaned` and `/api/file-changes` now serialize their start with a PostgreSQL transaction-scoped advisory lock (a no-op on the sqlite test DB) to close the SELECT-then-INSERT TOCTOU that allowed two workers to both spawn the operation.
+- **Non-critical startup steps no longer crash every worker.** The log-handler, scan-path sync, scheduler init, and stale-state cleanup steps in app startup are each wrapped so a single failure is logged and does not abort the import for all gunicorn workers; core DB service init still fails fast.
+
 ## [2.6.45] - 2026-06-01
 
 ### Fixed (reliability hardening - phase 2: silent / dropped work)

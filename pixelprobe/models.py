@@ -356,7 +356,10 @@ class ScanState(db.Model):
             if scan_state:
                 return scan_state
         except Exception:
-            # Table might not exist, return a transient instance
+            # Table might not exist, or the session's transaction was aborted by a
+            # prior failed statement. Roll back so the session is usable again
+            # (PostgreSQL refuses further queries on an aborted transaction).
+            db.session.rollback()
             scan_state = None
             
         # Only create new if no scan state exists at all
@@ -504,37 +507,40 @@ class ScanState(db.Model):
                     if retry == 2:
                         logger.error(f"Failed to update scan progress after 3 attempts: {e}")
                         raise
+            # Success path commits inside the retry loop above; nothing more to do.
+            logger.debug(f"Progress updated: {files_processed}/{total_files}, "
+                        f"phase={self.phase}, file={current_file}")
         except Exception as e:
+            # Progress writes are best-effort and self-heal on the next tick, so a
+            # failure here must not crash the scan. Roll back the aborted
+            # transaction, then make a single best-effort attempt to persist the
+            # is_active correction (no second commit on the success path, and no
+            # commit on a still-rolled-back instance that would mask the failure).
             logger.error(f"Error in update_progress: {e}")
             try:
                 db.session.rollback()
-            except:
+            except Exception:
                 pass
-        
-            # Ensure the scan is marked as active when we have actual progress
-            # Check if instance is attached to session first
+
             try:
                 current_phase = self.phase
                 if current_phase in ['discovering', 'adding', 'scanning'] and total_files > 0:
                     self.is_active = True
-            except Exception as e:
-                logger.warning(f"Could not access scan state phase, re-attaching to session: {e}")
-                # Try to re-attach to session
+            except Exception as phase_error:
+                logger.warning(f"Could not access scan state phase, re-attaching to session: {phase_error}")
                 try:
                     self = db.session.merge(self)
                     if self.phase in ['discovering', 'adding', 'scanning'] and total_files > 0:
                         self.is_active = True
                 except Exception as re_attach_error:
                     logger.error(f"Failed to re-attach scan state to session: {re_attach_error}")
-        
-        try:
-            db.session.commit()
-            logger.debug(f"Progress updated: {files_processed}/{total_files}, "
-                        f"phase={self.phase}, file={current_file}")
-        except Exception as e:
-            logger.error(f"Failed to commit progress update: {e}")
-            db.session.rollback()
-            raise
+                    return
+
+            try:
+                db.session.commit()
+            except Exception as commit_error:
+                logger.error(f"Failed to persist is_active correction: {commit_error}")
+                db.session.rollback()
     
     def complete_scan(self):
         """Mark scan as completed - thread-safe version

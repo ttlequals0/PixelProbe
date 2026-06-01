@@ -352,6 +352,9 @@ class MediaScheduler:
                 seen_schedules[key] = schedule
                 self._activate_schedule(schedule)
         except Exception as e:
+            # Roll back so a query/commit failure here doesn't leave the session
+            # in an aborted state for later startup steps.
+            db.session.rollback()
             logger.error(f"Failed to load saved schedules: {e}")
             
     def _activate_schedule(self, schedule: ScanSchedule):

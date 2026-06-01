@@ -102,6 +102,12 @@ def init_auth(app):
                     api_token.update_last_used()
                     return api_token.user
         except Exception as e:
+            # Roll back so a failed token lookup/commit doesn't leave the request's
+            # session in an aborted state for the rest of the handler.
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
             logger.error(f"Error loading user from API token: {e}")
 
         return None

@@ -6,7 +6,8 @@ state from previous runs (e.g., crashed scans, bloated records).
 """
 
 import logging
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -41,23 +42,45 @@ def cleanup_stuck_operations(db):
 
 
 def cleanup_stuck_scans(db):
-    """Clean up ALL active scans from previous runs - they can't still be running after restart."""
+    """Mark abandoned scans from a previous run as crashed.
+
+    Only scans with NO recent progress are crashed. PixelProbe runs the web app
+    and the Celery worker as SEPARATE containers, so an app-container restart
+    must NOT crash a scan that is still actively running in the worker (it keeps
+    writing last_update). A scan whose last activity is older than the grace
+    window (default 30 min, matching the periodic stuck-scan check) is treated as
+    genuinely dead and crashed; anything still progressing is left alone and the
+    periodic checker handles it if it later goes stale.
+    """
     try:
         from pixelprobe.models import ScanState
-        stuck_scans = ScanState.query.filter(
-            ScanState.is_active == True
-        ).all()
+        try:
+            grace_secs = max(60, int(os.environ.get('STUCK_SCAN_STARTUP_GRACE_SECS', '1800')))
+        except (TypeError, ValueError):
+            grace_secs = 1800
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=grace_secs)
 
-        for scan in stuck_scans:
-            logger.warning(f"Found active scan {scan.id} from {scan.start_time}, marking as crashed (app restarted)")
+        active_scans = ScanState.query.filter(ScanState.is_active == True).all()
+        crashed = 0
+        for scan in active_scans:
+            last_activity = scan.last_update or scan.start_time
+            if last_activity and last_activity.tzinfo is None:
+                last_activity = last_activity.replace(tzinfo=timezone.utc)
+            if last_activity and last_activity > cutoff:
+                logger.info(f"Active scan {scan.id} last updated {last_activity} (within grace); "
+                            f"leaving it running across this restart")
+                continue
+            logger.warning(f"Marking abandoned scan {scan.id} (last activity {last_activity}) as crashed")
             scan.is_active = False
             scan.phase = 'crashed'
             scan.error_message = "Application restarted - scan was interrupted"
+            crashed += 1
 
-        if stuck_scans:
+        if crashed:
             db.session.commit()
-            logger.info(f"Cleaned up {len(stuck_scans)} abandoned scans from previous run")
+            logger.info(f"Cleaned up {crashed} abandoned scans from previous run")
     except Exception as e:
+        db.session.rollback()
         logger.warning(f"Could not clean up stuck scans on startup: {e}")
 
 
