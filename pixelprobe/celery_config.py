@@ -117,14 +117,9 @@ def create_celery(app=None):
         # Connection retry settings (Celery 6.0 compatibility)
         'broker_connection_retry_on_startup': True,  # Fix deprecation warning
 
-        # Celery Beat scheduled tasks (P2 Data Retention Implementation)
-        'beat_schedule': {
-            'data-retention-cleanup': {
-                'task': 'pixelprobe.tasks.run_retention_cleanup',
-                'schedule': 86400.0,  # Run daily (24 * 60 * 60 seconds)
-                'options': {'priority': 9}  # Lowest priority - maintenance task
-            },
-        },
+        # NOTE: data-retention-cleanup is scheduled by the single-leader
+        # MediaScheduler (APScheduler) daily at 04:00, NOT Celery beat. No beat
+        # process is launched, so a beat_schedule entry here would never fire.
     })
 
     # Flask app context integration

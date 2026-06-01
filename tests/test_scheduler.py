@@ -439,3 +439,18 @@ class TestSchedulerRetryGaps:
     def test_handle_response_connection_error_queues_retry(self, scheduler):
         assert scheduler._handle_scan_response('schedule_7', lambda _i: None, (7,), None) is False
         assert scheduler.pending_retries.get('schedule_7') == 1
+
+
+class TestRetentionJob:
+    """Data retention cleanup must be scheduled by the single-leader scheduler
+    (not the never-launched Celery beat)."""
+
+    @pytest.fixture
+    def scheduler(self, app):
+        scheduler = MediaScheduler()
+        scheduler.init_app(app)
+        yield scheduler
+        scheduler.shutdown()
+
+    def test_data_retention_job_registered(self, scheduler):
+        assert scheduler.scheduler.get_job('data_retention_cleanup') is not None

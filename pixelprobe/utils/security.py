@@ -14,6 +14,8 @@ from flask import request, jsonify, current_app
 from werkzeug.utils import safe_join
 from pixelprobe.models import db, ScanConfiguration
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -550,6 +552,24 @@ def create_safe_session(max_redirects: int = 5) -> requests.Session:
     """
     session = requests.Session()
     session.max_redirects = max_redirects
+
+    # Retry transient failures (connection errors, 429, 5xx) with backoff so a
+    # momentary blip does not drop an idempotent GET healthcheck ping. POST is
+    # deliberately NOT retried: a notification/webhook POST that the provider
+    # already delivered before returning 5xx must not be re-sent (duplicate
+    # alerts), so only idempotent methods are retried.
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(['GET']),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
 
     def _check_redirect(response, *args, **kwargs):
         """Response hook that validates redirect Location headers."""

@@ -192,13 +192,19 @@ def download_logs():
     query = query.order_by(LogEntry.timestamp.asc()).limit(100000)
 
     def generate():
-        for log in query.yield_per(500):
-            ts = log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if log.timestamp else '????-??-?? ??:??:??'
-            line = f"{ts}  {log.level:<8}  {log.logger_name or '':<30}  {log.message}\n"
-            yield line
-            if log.traceback:
-                for tb_line in log.traceback.splitlines():
-                    yield f"  {tb_line}\n"
+        # Close the session in finally so a client disconnect mid-download
+        # (GeneratorExit) does not leave the streaming cursor / pooled connection
+        # pinned open until garbage collection.
+        try:
+            for log in query.yield_per(500):
+                ts = log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if log.timestamp else '????-??-?? ??:??:??'
+                line = f"{ts}  {log.level:<8}  {log.logger_name or '':<30}  {log.message}\n"
+                yield line
+                if log.traceback:
+                    for tb_line in log.traceback.splitlines():
+                        yield f"  {tb_line}\n"
+        finally:
+            db.session.close()
 
     date_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     filename = f'pixelprobe-logs-{date_str}.log'

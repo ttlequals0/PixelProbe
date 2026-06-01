@@ -836,9 +836,22 @@ class APIToken(db.Model):
         return True
 
     def update_last_used(self):
-        """Update the last_used timestamp"""
-        self.last_used = datetime.now(timezone.utc)
-        db.session.commit()
+        """Update the last_used timestamp, throttled to avoid a DB write+commit on
+        every authenticated request (write amplification under polling). Writes at
+        most once per 5 minutes per token; rolls back on failure so a failed write
+        does not leave the request's shared session dirty."""
+        now = datetime.now(timezone.utc)
+        if self.last_used is not None:
+            last = self.last_used
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            if (now - last).total_seconds() < 300:
+                return
+        self.last_used = now
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     def to_dict(self):
         return {

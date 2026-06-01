@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.47] - 2026-06-01
+
+### Fixed (reliability hardening - phase 4: observability + cleanup)
+
+- **Idempotent healthcheck pings now retry transient failures.** `create_safe_session` mounts a urllib3 `Retry` adapter (3 attempts, exponential backoff, retries connection errors + 429/5xx) for GET requests, so a momentary blip no longer drops a GET healthcheck ping (which could trip a false "down" alert). POST is deliberately not retried so a notification/webhook the provider already delivered before returning 5xx is not re-sent as a duplicate.
+- **Status endpoints no longer report "idle" on a query error.** `/api/cleanup-status` and `/api/file-changes-status` now return HTTP 500 with `status_unavailable` (rolling back the session) instead of `is_running: false` with 200, so the polling UI does not mistake a transient error for "operation finished" and start a duplicate.
+- **API-token `last_used` write is throttled.** Updated at most once per 5 minutes per token (was a DB write+commit on every authenticated request), and rolled back on failure so a failed write does not leave the request's session dirty.
+- **Background maintenance uses the real database.** Cleanup and file-changes async workers now construct `MaintenanceService` from the app's `SQLALCHEMY_DATABASE_URI` instead of the `DATABASE_URL` env var that is unset in the PostgreSQL-only deployment (which fell back to a stray sqlite file).
+- **Streaming log download releases its cursor.** The `/api/logs` download generator closes the DB session in a `finally`, so a client disconnect mid-download no longer pins the streaming cursor / pooled connection.
+- **Data-retention cleanup actually runs.** It is now scheduled by the single-leader `MediaScheduler` (daily at 04:00) instead of a Celery `beat_schedule` that was configured but never launched (no beat process ran), so the retention task no longer silently never executes. The dead `beat_schedule` entry was removed.
+
 ## [2.6.46] - 2026-06-01
 
 ### Fixed (reliability hardening - phase 3: session hygiene + cross-process coordination)

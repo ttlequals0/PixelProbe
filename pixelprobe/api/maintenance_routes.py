@@ -170,12 +170,16 @@ def get_cleanup_status():
         return response
 
     except Exception as e:
+        # Return 500 (not is_running:False with 200) so a transient query error is
+        # not read by the UI as "operation finished" -- which could trigger a
+        # duplicate start. status_unavailable signals "unknown", not "idle".
         logger.error(f"Error getting cleanup status: {str(e)}", exc_info=True)
+        db.session.rollback()
         return {
-            'is_running': False,
-            'phase': 'error',
+            'status_unavailable': True,
+            'phase': 'unknown',
             'error': 'Failed to get cleanup status',
-        }
+        }, 500
 
 @maintenance_bp.route('/file-changes-status')
 @exempt_from_rate_limit
@@ -269,12 +273,15 @@ def get_file_changes_status():
         return response
 
     except Exception as e:
+        # Return 500 (not is_running:False with 200) so a transient query error is
+        # not read by the UI as "finished" and used to start a duplicate check.
         logger.error(f"Error getting file changes status: {str(e)}", exc_info=True)
+        db.session.rollback()
         return {
-            'is_running': False,
-            'phase': 'error',
+            'status_unavailable': True,
+            'phase': 'unknown',
             'error': 'Failed to get file changes status',
-        }
+        }, 500
 
 @maintenance_bp.route('/cancel-cleanup', methods=['POST'])
 @auth_required
@@ -583,9 +590,10 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
                         logger.error(f"Cleanup record {cleanup_id} not found")
                         return
 
-                    # Create maintenance service instance
-                    database_url = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
-                    maintenance_service = MaintenanceService(database_url)
+                    # Create maintenance service instance using the app's real DB URI
+                    # (DATABASE_URL is unset in the PostgreSQL-only deployment, so the
+                    # old os.environ fallback pointed at a stray sqlite file).
+                    maintenance_service = MaintenanceService(app.config['SQLALCHEMY_DATABASE_URI'])
 
                     # Run the cleanup using the maintenance service logic with optional file_paths filter
                     maintenance_service._run_cleanup(cleanup_record.id, file_paths=file_paths, schedule_id=schedule_id)
@@ -623,9 +631,10 @@ def check_file_changes_async(app, check_id, file_paths=None, schedule_id=None):
                         logger.error(f"File changes record {check_id} not found")
                         return
 
-                    # Create maintenance service instance
-                    database_url = os.environ.get('DATABASE_URL', 'sqlite:///media_checker.db')
-                    maintenance_service = MaintenanceService(database_url)
+                    # Create maintenance service instance using the app's real DB URI
+                    # (DATABASE_URL is unset in the PostgreSQL-only deployment, so the
+                    # old os.environ fallback pointed at a stray sqlite file).
+                    maintenance_service = MaintenanceService(app.config['SQLALCHEMY_DATABASE_URI'])
 
                     # Run the file changes check using the maintenance service logic with optional file_paths filter
                     maintenance_service._run_file_changes_check(check_record.check_id, file_paths=file_paths, schedule_id=schedule_id)

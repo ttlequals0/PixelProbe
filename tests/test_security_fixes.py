@@ -368,3 +368,21 @@ class TestSafeSubprocessTimeout:
         from pixelprobe.media_checker import _ffprobe_with_timeout
         with pytest.raises(ffmpeg.Error):
             _ffprobe_with_timeout('/nonexistent/path/never.mkv', timeout=10)
+
+
+class TestSafeSessionRetry:
+    """create_safe_session must mount a retry/backoff adapter so transient
+    failures don't drop healthcheck pings / notifications (v2.6.47)."""
+
+    def test_session_has_retry_adapter(self):
+        from pixelprobe.utils.security import create_safe_session
+        session = create_safe_session()
+        adapter = session.get_adapter('https://example.com')
+        retry = adapter.max_retries
+        assert retry.total == 3
+        assert 503 in retry.status_forcelist
+        assert 429 in retry.status_forcelist
+        # Only idempotent GET is retried; POST must not be (avoids duplicate
+        # notification delivery on a 5xx-after-delivery).
+        assert 'GET' in retry.allowed_methods
+        assert 'POST' not in retry.allowed_methods

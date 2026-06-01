@@ -222,6 +222,21 @@ class MediaScheduler:
         )
         logger.info("Scheduled daily log retention cleanup at 03:00")
 
+        # Schedule daily DATA retention cleanup at 4 AM. Replaces the Celery beat
+        # entry that was configured but never launched (no beat process ran), so
+        # the retention task never executed and the DB grew unbounded.
+        self.scheduler.add_job(
+            func=self._run_retention_cleanup,
+            trigger="cron",
+            hour=4,
+            minute=0,
+            id="data_retention_cleanup",
+            name="Clean up data per retention policy",
+            misfire_grace_time=3600,
+            coalesce=True
+        )
+        logger.info("Scheduled daily data retention cleanup at 04:00")
+
         # Schedule stuck scan detection every 5 minutes
         self.scheduler.add_job(
             func=self._check_stuck_scans,
@@ -913,6 +928,20 @@ class MediaScheduler:
                 MaintenanceService.cleanup_old_logs()
         except Exception as e:
             logger.error(f"Failed to run log retention cleanup: {e}")
+
+    def _run_retention_cleanup(self):
+        """Enqueue the daily data-retention cleanup to a Celery worker.
+
+        Runs from the single-leader scheduler instead of Celery beat (which was
+        configured but never launched), so it cannot fire on more than one
+        process even if workers are scaled.
+        """
+        try:
+            from pixelprobe.tasks import run_retention_cleanup
+            run_retention_cleanup.delay()
+            logger.info("Enqueued daily data retention cleanup task")
+        except Exception as e:
+            logger.error(f"Failed to enqueue data retention cleanup: {e}")
 
     def shutdown(self):
         """Shutdown the scheduler"""
