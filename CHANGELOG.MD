@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.44] - 2026-06-01
+
+### Fixed (reliability hardening - phase 1: data loss and permanent wedges)
+
+- **Orphan cleanup could delete valid database rows when a mount flapped.** `check_file_exists_task` used `os.path.exists()`, which swallows `OSError` and returns `False`, so a down/stale NFS mount made every file read as absent and orphan cleanup irreversibly deleted its `ScanResult` row. Existence is now classified as a tri-state (`exists` / `absent` / `unknown`) via the new `classify_path_existence()` helper, which uses `os.stat()` (raises on error) and only treats `ENOENT`/`ENOTDIR` as absent; transient/IO errors return `unknown` and are skipped, never deleted. `maintenance_service` now also aborts the whole cleanup (deleting nothing) when an implausibly large fraction of checked files read as absent (defaults: >=100 files and >=50%, env-overridable via `ORPHAN_CLEANUP_ABORT_FLOOR` / `ORPHAN_CLEANUP_MAX_DELETE_FRACTION`), as a safety net against a disappeared mount.
+- **ffprobe metadata reads could hang a scan worker forever.** `ffmpeg-python`'s `probe()` calls `Popen.communicate()` with no timeout, so a stalled mount or crafted container permanently consumed a scan thread. Probing now goes through the new `_ffprobe_with_timeout()` helper (env-overridable `FFPROBE_TIMEOUT_SECS`, default 120s) backed by `safe_subprocess_run`; a timeout flags the file rather than wedging the worker.
+- **Subprocess timeouts now isolate the child session.** `safe_subprocess_run` starts media subprocesses with `start_new_session=True` (POSIX) so subprocess.run's timeout-kill targets the child without signalling PixelProbe's own process group. (The audio probe path now also handles the resulting `TimeoutExpired`, so an ffprobe timeout flags the file instead of raising.)
+- **Scheduler distributed-lock heartbeat no longer abandons the lock on a Redis blip.** The heartbeat thread previously `break`-ed out of its loop forever on the first exception, silently abandoning the 60s-TTL lock. It now retries indefinitely; when Redis recovers, the next refresh re-establishes the TTL. A full Redis outage expires the lock for every container (no sibling can acquire it either), so this process simply resumes ownership on recovery -- it does not shut the scheduler down, since a `BackgroundScheduler` cannot be restarted and a single-container deployment has no sibling to take over.
+- **Files left stuck in `scanning` by a dead worker are now reclaimed.** A chunk marks files `scanning` before processing; if its worker died they were never re-selected (retry only picks `pending`) and the scan reported complete with them unscanned. The stuck-scan check (every 5 min) now resets orphaned `scanning` rows to `pending` whenever no scan is active. The stuck-scan handler also rolls back its session on error.
+
 ## [2.6.43] - 2026-05-25
 
 ### Security

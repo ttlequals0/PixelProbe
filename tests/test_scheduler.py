@@ -294,3 +294,102 @@ class TestQueueConflictRetry:
         scheduler = MediaScheduler()
         assert scheduler.retry_delay_minutes == MediaScheduler.DEFAULT_RETRY_DELAY_MINUTES
         assert scheduler.retry_max_count == 0  # clamped via min_value=0
+
+
+class TestHeartbeatRecovery:
+    """The lock heartbeat must keep retrying through Redis failures rather than
+    breaking out forever (which silently abandoned the lock). It must never
+    relinquish the lock on a transient error, and it stops only when the loop's
+    initialized flag is cleared (process teardown)."""
+
+    def test_keeps_retrying_through_failures_and_recovers(self, monkeypatch):
+        from unittest.mock import MagicMock
+        import pixelprobe.scheduler_lock as sl
+
+        monkeypatch.setattr(sl.time, 'sleep', lambda _s: None)
+        initialized = [True]
+        calls = {'n': 0}
+
+        def set_side_effect(*_a, **_k):
+            calls['n'] += 1
+            if calls['n'] <= 2:
+                raise Exception('transient blip')
+            # Recovered after 2 failures: stop the loop deterministically.
+            initialized[0] = False
+            return True
+
+        redis_client = MagicMock()
+        redis_client.set.side_effect = set_side_effect
+
+        t = sl._start_heartbeat('k', redis_client, 'host', initialized)
+        t.join(timeout=5)
+
+        assert not t.is_alive()
+        # Two failures did NOT stop refreshing; it kept going and recovered.
+        assert calls['n'] >= 3
+
+    def test_sustained_failure_does_not_abandon_loop(self, monkeypatch):
+        from unittest.mock import MagicMock
+        import pixelprobe.scheduler_lock as sl
+
+        monkeypatch.setattr(sl.time, 'sleep', lambda _s: None)
+        initialized = [True]
+        calls = {'n': 0}
+
+        def set_side_effect(*_a, **_k):
+            calls['n'] += 1
+            if calls['n'] >= 5:
+                # Stop the test loop; in production it would keep retrying.
+                initialized[0] = False
+            raise Exception('redis down')
+
+        redis_client = MagicMock()
+        redis_client.set.side_effect = set_side_effect
+
+        t = sl._start_heartbeat('k', redis_client, 'host', initialized)
+        t.join(timeout=5)
+
+        assert not t.is_alive()
+        # The loop retried every interval instead of bailing on the first error.
+        assert calls['n'] >= 5
+
+
+class TestScanningReclaim:
+    """A worker that dies mid-chunk leaves files stuck in 'scanning'. When no
+    scan is active the stuck-scan check must reclaim them to 'pending'."""
+
+    @pytest.fixture
+    def scheduler(self, app):
+        scheduler = MediaScheduler()
+        scheduler.init_app(app)
+        yield scheduler
+        scheduler.shutdown()
+
+    def test_orphaned_scanning_reset_when_no_active_scan(self, scheduler, app, db):
+        from pixelprobe.models import ScanResult
+        with app.app_context():
+            db.session.add(ScanResult(file_path='/m/a.mkv', scan_status='scanning'))
+            db.session.add(ScanResult(file_path='/m/b.mkv', scan_status='scanning'))
+            db.session.add(ScanResult(file_path='/m/c.mkv', scan_status='pending'))
+            db.session.commit()
+
+        scheduler._check_stuck_scans()
+
+        with app.app_context():
+            statuses = {r.file_path: r.scan_status for r in ScanResult.query.all()}
+            assert statuses['/m/a.mkv'] == 'pending'
+            assert statuses['/m/b.mkv'] == 'pending'
+            assert statuses['/m/c.mkv'] == 'pending'
+
+    def test_scanning_preserved_when_scan_active(self, scheduler, app, db):
+        from pixelprobe.models import ScanResult, ScanState
+        with app.app_context():
+            db.session.add(ScanResult(file_path='/m/live.mkv', scan_status='scanning'))
+            db.session.add(ScanState(scan_id='live-1', is_active=True, phase='scanning'))
+            db.session.commit()
+
+        scheduler._check_stuck_scans()
+
+        with app.app_context():
+            r = ScanResult.query.filter_by(file_path='/m/live.mkv').first()
+            assert r.scan_status == 'scanning'

@@ -1226,12 +1226,8 @@ class ScanService:
             logger.info(f"Marked {chunks_updated} chunks as cancelled")
             
             # Reset any files stuck in 'scanning' status
-            files_reset = db.session.query(ScanResult).filter_by(
-                scan_status='scanning'
-            ).update({
-                'scan_status': 'pending'
-            }, synchronize_session=False)
-            
+            files_reset = ScanResult.reclaim_scanning()
+
             logger.info(f"Reset {files_reset} files from 'scanning' to 'pending'")
         
             # Cancel the scan state
@@ -2010,12 +2006,8 @@ class ScanService:
         scan_state.cancel_scan()
         
         # Clean up any files stuck in 'scanning' state
-        from pixelprobe.models import ScanResult
-        stuck_count = ScanResult.query.filter_by(scan_status='scanning').update(
-            {'scan_status': 'pending'},
-            synchronize_session=False
-        )
-        
+        stuck_count = ScanResult.reclaim_scanning()
+
         if stuck_count > 0:
             logger.info(f"Reset {stuck_count} files from 'scanning' to 'pending' state")
         

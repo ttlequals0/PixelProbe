@@ -338,3 +338,33 @@ class TestTrustedInternalHosts:
         ]
         is_safe, error = validate_safe_url('http://other.internal/')
         assert not is_safe
+
+
+# ==================== Subprocess timeout hardening (v2.6.44) ====================
+
+
+class TestSafeSubprocessTimeout:
+    """safe_subprocess_run must bound runtime and isolate the child session so a
+    stalled ffmpeg/ffprobe cannot hang a scan worker forever."""
+
+    def test_timeout_raises(self):
+        import subprocess
+        from pixelprobe.utils.security import safe_subprocess_run
+        with pytest.raises(subprocess.TimeoutExpired):
+            safe_subprocess_run(['sleep', '5'], timeout=1)
+
+    def test_start_new_session_set_on_posix(self):
+        import os
+        from unittest.mock import patch as _patch
+        from pixelprobe.utils.security import safe_subprocess_run
+        with _patch('subprocess.run') as mock_run:
+            safe_subprocess_run(['echo', 'hi'], capture_output=True)
+            _, kwargs = mock_run.call_args
+            if os.name == 'posix':
+                assert kwargs.get('start_new_session') is True
+
+    def test_ffprobe_with_timeout_raises_on_missing_file(self):
+        import ffmpeg
+        from pixelprobe.media_checker import _ffprobe_with_timeout
+        with pytest.raises(ffmpeg.Error):
+            _ffprobe_with_timeout('/nonexistent/path/never.mkv', timeout=10)

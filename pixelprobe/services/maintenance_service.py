@@ -397,7 +397,8 @@ class MaintenanceService:
             active_tasks = []
             file_index = 0
             total_files_processed = 0
-            orphaned_files = []  # Collect orphaned file info
+            orphaned_files = []  # Collect orphaned file info (status == 'absent' only)
+            unknown_count = 0  # Files we could not verify (mount down, IO error, etc.)
             phase2_start_time = time.time()  # Track start time for ETA calculation
 
             # Track when we last updated progress
@@ -428,13 +429,21 @@ class MaintenanceService:
                             check_result = safe_task_get(task, timeout=1)
                             total_files_processed += 1
 
-                            if not check_result.get('exists'):
-                                # File doesn't exist - add to orphaned list
+                            # Only a definitive 'absent' is an orphan. Anything
+                            # else ('unknown' from a mount/IO error, or an
+                            # unexpected/missing value) is skipped, never deleted
+                            # -- defaulting to "skip" keeps the data-loss guard
+                            # intact even if the result shape is unexpected.
+                            status = check_result.get('status')
+                            if status == 'absent':
                                 orphaned_files.append({
                                     'file_id': check_result['file_id'],
                                     'file_path': check_result['file_path']
                                 })
                                 logger.info(f"Found orphaned entry: {check_result['file_path']}")
+                            elif status != 'exists':
+                                unknown_count += 1
+                                logger.warning(f"Skipping unverifiable entry (not deleting): {check_result['file_path']}")
                         except Exception as e:
                             logger.error(f"Error processing existence check result: {e}")
                             total_files_processed += 1
@@ -488,7 +497,8 @@ class MaintenanceService:
             cleanup_record.orphaned_found = len(orphaned_files)
             db.session.commit()
 
-            logger.info(f"Phase 2 complete: Checked {total_files_processed} files, found {len(orphaned_files)} orphaned entries")
+            logger.info(f"Phase 2 complete: Checked {total_files_processed} files, "
+                        f"found {len(orphaned_files)} orphaned, {unknown_count} unverifiable (skipped)")
 
             # Extract IDs and paths for Phase 3
             orphaned_ids = [f['file_id'] for f in orphaned_files]
@@ -497,7 +507,36 @@ class MaintenanceService:
 
             # Store for report
             self.orphaned_files_list = orphaned_paths
-            
+
+            # Safety net: if an implausibly large fraction of checked files read as
+            # absent, a whole mount likely disappeared (the mountpoint dir survives
+            # but is empty, so each child stats ENOENT). Abort rather than mass-delete.
+            try:
+                abort_floor = int(os.environ.get('ORPHAN_CLEANUP_ABORT_FLOOR', '100'))
+            except (TypeError, ValueError):
+                abort_floor = 100
+            try:
+                max_fraction = float(os.environ.get('ORPHAN_CLEANUP_MAX_DELETE_FRACTION', '0.5'))
+            except (TypeError, ValueError):
+                max_fraction = 0.5
+            if (total_files_processed > 0 and orphaned_count >= abort_floor
+                    and (orphaned_count / total_files_processed) >= max_fraction):
+                msg = (f'Aborted: {orphaned_count:,} of {total_files_processed:,} checked files '
+                       f'({orphaned_count / total_files_processed:.0%}) read as missing - likely a '
+                       f'mount/storage outage, not real orphans. No entries were deleted.')
+                logger.error(msg)
+                cleanup_record.phase = 'error'
+                cleanup_record.error_message = msg
+                cleanup_record.progress_message = msg
+                cleanup_record.orphaned_found = orphaned_count
+                cleanup_record.is_active = False
+                cleanup_record.end_time = datetime.now(timezone.utc)
+                db.session.commit()
+                with self.cleanup_lock:
+                    self.cleanup_state['is_running'] = False
+                    self.cleanup_state['phase'] = 'error'
+                return
+
             # Check if cancelled before proceeding to deletion phase
             if self._is_cancelled(cleanup_record):
                 logger.info("Cleanup cancelled before deletion phase")

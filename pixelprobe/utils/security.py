@@ -309,30 +309,43 @@ def validate_command_args(args):
 
 def safe_subprocess_run(args, **kwargs):
     """
-    Safe wrapper for subprocess.run that validates arguments
-    
+    Safe wrapper for subprocess.run that validates arguments.
+
+    Starts the child in its own session (POSIX) so that on a `timeout` the
+    process is cleanly killed by subprocess.run without signalling the parent,
+    and any stray children are isolated from PixelProbe's process group. This
+    bounds ffmpeg/ffprobe calls that would otherwise hang a scan worker forever
+    on a stalled mount.
+
     Args:
         args: Command arguments as a list
         **kwargs: Additional arguments for subprocess.run
-        
+
     Returns:
         subprocess.CompletedProcess instance
-        
+
     Raises:
         ValueError: If arguments are invalid
+        subprocess.TimeoutExpired: If the command exceeds `timeout` seconds
     """
+    import os
     import subprocess
-    
+
     # Validate arguments
     validated_args = validate_command_args(args)
-    
+
     # Ensure shell=False (default)
     if kwargs.get('shell', False):
         raise ValueError("Shell mode is not allowed for security reasons")
-    
+
     # Force shell=False
     kwargs['shell'] = False
-    
+
+    # Isolate the child in its own session so a timeout-kill targets it (and not
+    # the parent), and orphaned helpers don't share PixelProbe's process group.
+    if os.name == 'posix':
+        kwargs.setdefault('start_new_session', True)
+
     # Run the command
     return subprocess.run(validated_args, **kwargs)
 

@@ -74,6 +74,18 @@ class ScanResult(db.Model):
         db.Index('idx_exists_status', 'file_exists', 'scan_status'),
     )
 
+    @classmethod
+    def reclaim_scanning(cls):
+        """Reset files stuck in 'scanning' back to 'pending' and return the count.
+
+        Files are claimed as 'scanning' before processing; if the owning worker
+        or scan dies they would otherwise never be re-selected (only 'pending'
+        is). Used by scan cancellation and the scheduler's orphan sweeper.
+        """
+        return db.session.query(cls).filter_by(scan_status='scanning').update(
+            {'scan_status': 'pending'}, synchronize_session=False
+        )
+
     def to_dict(self):
         return {
             'id': self.id,

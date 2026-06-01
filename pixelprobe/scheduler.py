@@ -765,8 +765,28 @@ class MediaScheduler:
                 if scans_to_mark:
                     db.session.commit()
                     logger.info(f"Marked {len(scans_to_mark)} stuck scans as crashed")
-                    
+
+                # Sweeper: reclaim files left in 'scanning' by a dead worker. A
+                # chunk claims files as 'scanning' before processing; if its
+                # worker dies, those rows are never re-selected (retry only picks
+                # 'pending') and the scan reports complete with them unscanned.
+                #
+                # Only sweep when there were NO active scans this pass (stuck_scans
+                # holds every active non-terminal scan). This deliberately skips a
+                # pass that just marked a scan crashed: a slow-but-live chunk of a
+                # falsely-flagged scan may still own 'scanning' rows, so it gets
+                # reclaimed on the next pass (5 min later) once it is truly idle.
+                if not stuck_scans:
+                    reclaimed = ScanResult.reclaim_scanning()
+                    if reclaimed:
+                        db.session.commit()
+                        logger.warning(
+                            f"Reclaimed {reclaimed} orphaned 'scanning' files to "
+                            f"'pending' (no active scan in progress)"
+                        )
+
         except Exception as e:
+            db.session.rollback()
             logger.error(f"Error checking for stuck scans: {e}")
     
     @staticmethod
