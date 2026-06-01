@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.48] - 2026-06-01
+
+### Fixed (integrity scan reliability at scale: 1.2M files up to ~55GB)
+
+- **Celery worker no longer crashes mid-scan with `Unrecoverable error: AssertionError()`.** Under a high-throughput integrity scan (1M+ tiny immich thumbnails hashing in sub-millisecond bursts) the worker event stream flooded the kombu event-loop hub and tripped an assertion in `hub.fire_timers`, wedging the worker so every subsequent task was abandoned at the timeout and the scan got stuck. Disabled Celery task events (`worker_send_task_events` / `task_send_sent_event`; PixelProbe reads progress from the DB, not Celery events) and launched the worker with `--without-gossip --without-mingle --without-heartbeat` to remove the worker-to-worker event-loop timers (unused with a single worker on a Redis broker) that fed the crash.
+- **Reduced the fork storm on tiny-file scans.** Raised the default `--max-tasks-per-child` from 50 to 1000 (env `CELERY_MAX_TASKS_PER_CHILD`); 50 sub-millisecond hashes recycled a child in well under a second, producing tens of thousands of forks that hammered the pool. Per-child memory is still capped at 2GB for heavy/large-file tasks.
+- **Worker now auto-restarts after an unrecoverable Celery shutdown.** `celery_worker.py` exits non-zero when `worker_main` returns unexpectedly, so `restart: unless-stopped` brings the container back instead of leaving a dead/idle worker.
+- **The largest files are no longer skipped.** The integrity per-task timeout default was raised from 30 minutes to 3 hours (env `INTEGRITY_TASK_TIMEOUT_SECS`). The hash task reads the whole file; a ~55GB sequential read on slow/contended storage can exceed 30 minutes, which previously abandoned (skipped) the biggest files mid-hash.
+
 ## [2.6.47] - 2026-06-01
 
 ### Fixed (reliability hardening - phase 4: observability + cleanup)
