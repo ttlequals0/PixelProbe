@@ -48,22 +48,50 @@ def should_force_acquire_lock(lock_hostname, lock_pid, lock_age,
     return False, "active-remote"
 
 
-def _start_heartbeat(lock_key, redis_client, container_hostname):
-    """Start a daemon thread that refreshes the scheduler lock every 30 seconds."""
+HEARTBEAT_INTERVAL_SECS = 30
+
+
+def _start_heartbeat(lock_key, redis_client, container_hostname, scheduler_initialized):
+    """Start a daemon thread that refreshes the scheduler lock periodically.
+
+    Critically, a refresh failure is RETRIED indefinitely rather than breaking
+    the loop. The previous implementation broke out on the first exception, so a
+    single transient Redis blip permanently stopped refreshing and silently
+    abandoned the lock. Now the loop keeps trying; when Redis recovers the next
+    refresh re-establishes the TTL and the lock is never abandoned.
+
+    A full Redis outage expires the lock for everyone (no sibling can acquire it
+    either), so this process simply resumes ownership on recovery -- it does not
+    shut the scheduler down (a BackgroundScheduler cannot be restarted, and in a
+    single-container deployment there is no sibling to take over).
+    """
     def heartbeat_loop():
-        while True:
+        consecutive_failures = 0
+        while scheduler_initialized[0]:
+            time.sleep(HEARTBEAT_INTERVAL_SECS)
+            if not scheduler_initialized[0]:
+                break
             try:
-                time.sleep(30)
                 refresh_value = f"{container_hostname}:{os.getpid()}:{datetime.now(timezone.utc).isoformat()}"
                 redis_client.set(lock_key, refresh_value, ex=60)
+                if consecutive_failures:
+                    logger.info(
+                        f"Scheduler lock refresh recovered after "
+                        f"{consecutive_failures} failure(s) in process {os.getpid()}"
+                    )
+                consecutive_failures = 0
                 logger.debug(f"Refreshed scheduler lock in process {os.getpid()}")
             except Exception as e:
-                logger.warning(f"Failed to refresh scheduler lock: {e}")
-                break
+                consecutive_failures += 1
+                logger.warning(
+                    f"Failed to refresh scheduler lock "
+                    f"(consecutive failure {consecutive_failures}), will keep retrying: {e}"
+                )
 
     heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
     heartbeat_thread.start()
     logger.info(f"Started scheduler lock heartbeat thread in process {os.getpid()}")
+    return heartbeat_thread
 
 
 def _try_acquire_and_init(redis_client, lock_key, lock_value, container_hostname,
@@ -72,7 +100,7 @@ def _try_acquire_and_init(redis_client, lock_key, lock_value, container_hostname
     scheduler.init_app(app)
     scheduler_initialized[0] = True
     app.scheduler_redis_lock_key = lock_key
-    _start_heartbeat(lock_key, redis_client, container_hostname)
+    _start_heartbeat(lock_key, redis_client, container_hostname, scheduler_initialized)
 
 
 def _start_retry_thread(redis_client, lock_key, container_hostname,

@@ -2,6 +2,7 @@
 Helper utilities for PixelProbe
 """
 
+import errno
 import os
 import logging
 import time
@@ -10,6 +11,36 @@ from datetime import datetime, timezone
 from pixelprobe.constants import VIDEO_EXTENSIONS, IMAGE_EXTENSIONS, AUDIO_EXTENSIONS
 
 logger = logging.getLogger(__name__)
+
+# errno values that mean a path is genuinely not there (vs a transient/IO error).
+# ENOENT: no such file/dir. ENOTDIR: a path component is not a directory (the
+# entry can no longer exist at that location). Everything else (mount down,
+# stale NFS handle, permission, timeout) is treated as "unknown", never absent.
+_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR})
+
+PATH_EXISTS = 'exists'
+PATH_ABSENT = 'absent'
+PATH_UNKNOWN = 'unknown'
+
+
+def classify_path_existence(path):
+    """Classify a filesystem path as PATH_EXISTS, PATH_ABSENT, or PATH_UNKNOWN.
+
+    Uses os.stat (which RAISES on error) instead of os.path.exists (which
+    swallows OSError and returns False). A down/flapping mount therefore yields
+    PATH_UNKNOWN rather than being misreported as absent, so callers such as
+    orphan cleanup never delete database rows for files they could not verify.
+    """
+    try:
+        os.stat(path)
+        return PATH_EXISTS
+    except OSError as e:
+        if e.errno in _ABSENT_ERRNOS:
+            # ENOENT also covers a broken symlink (target gone) -> a real orphan.
+            return PATH_ABSENT
+        logger.warning(f"Existence check inconclusive for {path}: {e}")
+        return PATH_UNKNOWN
+
 
 def format_file_size(size_bytes):
     """Format file size in human readable format"""

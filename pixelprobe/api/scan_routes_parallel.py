@@ -12,7 +12,8 @@ import logging
 from pixelprobe.utils.security import validate_directory_path, AuditLogger, PathTraversalError, validate_json_input
 from pixelprobe.utils.rate_limiting import rate_limit
 from pixelprobe.auth import auth_required
-from pixelprobe.models import ScanState
+from pixelprobe.models import db, ScanState
+from pixelprobe.constants import TERMINAL_SCAN_PHASES
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,19 @@ parallel_scan_bp = Blueprint('parallel_scan', __name__, url_prefix='/api')
 
 
 from pixelprobe.utils.celery_utils import check_celery_available
+
+
+def _release_scan_claim(scan_id):
+    """Release a scan slot claimed for a parallel scan that then failed to launch,
+    so a failed launch doesn't leave the scan state stuck active."""
+    try:
+        st = ScanState.query.filter_by(scan_id=scan_id).first()
+        if st and st.is_active:
+            st.is_active = False
+            st.phase = 'error'
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 
 @parallel_scan_bp.route('/scan-parallel', methods=['POST'])
@@ -60,32 +74,51 @@ def scan_parallel():
     if not validated_dirs:
         return {'error': 'No valid directories to scan'}, 400
 
-    # Check if a scan is already running
+    # ATOMIC start guard (mirrors /api/scan): lock the scan-state row, re-check
+    # under the lock, and claim it so concurrent /scan or /scan-parallel calls get
+    # a 409 instead of both starting. The claimed scan_id is reused by the
+    # orchestrator (which looks up ScanState by scan_id), avoiding a duplicate row.
+    scan_id = str(uuid4())
     try:
-        scan_state = ScanState.get_or_create()
-        if scan_state.is_active and scan_state.phase in ['initializing', 'discovering', 'adding', 'scanning']:
+        scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
+        if not scan_state:
+            scan_state = ScanState()
+            db.session.add(scan_state)
+            db.session.flush()
+            scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
+
+        if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
+            db.session.rollback()
             return {
                 'error': 'A scan is already in progress',
                 'scan_id': scan_state.scan_id,
                 'phase': scan_state.phase
             }, 409
-    except Exception as e:
-        logger.error(f"Error checking scan status: {e}")
 
-    # Check if Celery is available
+        scan_state.scan_id = scan_id
+        scan_state.is_active = True
+        scan_state.phase = 'initializing'
+        db.session.commit()
+    except Exception as lock_error:
+        db.session.rollback()
+        logger.warning(f"Could not acquire scan lock for parallel scan: {lock_error}")
+        return {
+            'error': 'A scan is already starting. Please wait a moment and try again.'
+        }, 409
+
+    # Celery must be available to actually run the scan; if not, release the claim
+    # so the slot isn't left stuck active.
     if not check_celery_available():
+        _release_scan_claim(scan_id)
         return {
             'error': 'Celery workers not available',
             'message': 'Parallel scanning requires Celery workers to be running'
         }, 503
-    
+
     try:
         from pixelprobe.tasks_parallel import parallel_scan_orchestrator
-        
-        # Generate unique scan ID
-        scan_id = str(uuid4())
-        
-        # Launch the parallel scan orchestrator
+
+        # Launch the parallel scan orchestrator (reuses the claimed scan_id)
         task = parallel_scan_orchestrator.delay(
             scan_id=scan_id,
             paths=validated_dirs,
@@ -93,12 +126,19 @@ def scan_parallel():
         )
         
         logger.info(f"Launched parallel scan orchestrator {task.id} for scan {scan_id}")
-        
-        # Get worker count for informational purposes
-        from celery import current_app as celery_app
-        stats = celery_app.control.inspect().stats()
-        total_workers = sum(len(worker_stats.get('pool', {}).get('processes', []))
-                           for worker_stats in stats.values()) if stats else 0
+
+        # Get worker count for informational purposes only. This must NOT be able
+        # to fail the request after the task is already dispatched -- a broker/
+        # inspect hiccup here would otherwise release the claim and mark a live
+        # scan inactive (causing its chunks to self-cancel).
+        total_workers = 0
+        try:
+            from celery import current_app as celery_app
+            stats = celery_app.control.inspect().stats()
+            total_workers = sum(len(worker_stats.get('pool', {}).get('processes', []))
+                               for worker_stats in stats.values()) if stats else 0
+        except Exception as stats_err:
+            logger.warning(f"Could not get worker stats (non-fatal): {stats_err}")
 
         return {
             'status': 'launched',
@@ -113,9 +153,11 @@ def scan_parallel():
 
     except ImportError as e:
         logger.error(f"Failed to import parallel tasks: {e}", exc_info=True)
+        _release_scan_claim(scan_id)
         return {'error': 'Parallel scanning module not available'}, 500
     except Exception as e:
         logger.error(f"Failed to launch parallel scan: {e}", exc_info=True)
+        _release_scan_claim(scan_id)
         return {'error': 'Failed to launch parallel scan'}, 500
 
 

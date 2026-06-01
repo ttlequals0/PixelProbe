@@ -640,44 +640,25 @@ def check_file_exists_task(self, file_id, file_path):
         file_path (str): Path to the file to check
 
     Returns:
-        dict: {file_id, file_path, exists: bool}
+        dict: {file_id, file_path, status, exists}
+            status is one of 'exists', 'absent', 'unknown'. 'exists' is kept as a
+            convenience bool but callers that delete rows MUST gate on
+            status == 'absent' so a transient/mount error ('unknown') never
+            looks like an orphan.
     """
     # ContextTask wrapper in celery_config.py automatically provides Flask app context
     # NOTE: Do NOT call db.session.remove() here - it corrupts the connection pool
     # The ContextTask wrapper handles session management properly
 
-    import os
+    from pixelprobe.utils.helpers import classify_path_existence, PATH_EXISTS
 
-    try:
-        # Check if file exists - use multiple methods for robust detection
-        file_exists = False
-
-        # Method 1: os.path.exists() - fast but may have issues with symlinks
-        if os.path.exists(file_path):
-            file_exists = True
-        # Method 2: Try to stat the file directly - more reliable
-        elif os.path.isfile(file_path):
-            file_exists = True
-        # Method 3: Check if path exists at all (directory or file)
-        elif os.path.lexists(file_path):
-            # lexists returns True even for broken symlinks
-            # If lexists is True but exists is False, it's a broken symlink - treat as not existing
-            file_exists = False
-
-        return {
-            'file_id': file_id,
-            'file_path': file_path,
-            'exists': file_exists
-        }
-
-    except (OSError, IOError) as e:
-        # If we get an error accessing the file, treat it as not existing
-        logger.warning(f"Error checking file existence {file_path}: {e}")
-        return {
-            'file_id': file_id,
-            'file_path': file_path,
-            'exists': False
-        }
+    status = classify_path_existence(file_path)
+    return {
+        'file_id': file_id,
+        'file_path': file_path,
+        'status': status,
+        'exists': status == PATH_EXISTS
+    }
 
 
 @celery_app.task(bind=True, max_retries=2,
@@ -801,11 +782,14 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
             retry_delay = 10 * (self.request.retries + 1)  # 10s, 20s
             raise self.retry(exc=exc, countdown=retry_delay)
         else:
-            # Max retries exceeded, return error result
+            # Max retries exceeded. Report this as changed=True (change_type
+            # 'error') rather than changed=False: a file we could not hash must
+            # be re-examined by a full scan, not silently treated as unchanged
+            # (which would mask corruption the integrity check exists to catch).
             return {
                 'file_id': file_id,
                 'file_path': file_path,
-                'changed': False,
+                'changed': True,
                 'change_type': 'error',
                 'error': str(exc),
                 'stored_hash': stored_hash,

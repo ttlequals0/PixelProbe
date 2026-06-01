@@ -52,7 +52,7 @@ class TestMediaChecker:
     @patch('os.path.getsize')
     @patch('os.path.exists')
     @patch('subprocess.run')
-    @patch('ffmpeg.probe')
+    @patch('pixelprobe.media_checker._ffprobe_with_timeout')
     def test_hevc_main10_detection(self, mock_probe, mock_run, mock_exists, mock_getsize):
         """Test detection of HEVC Main 10 profile issues"""
         # Mock file exists and size
@@ -92,7 +92,7 @@ class TestMediaChecker:
     @patch('os.path.getsize')
     @patch('os.path.exists')
     @patch('subprocess.run')
-    @patch('ffmpeg.probe')
+    @patch('pixelprobe.media_checker._ffprobe_with_timeout')
     def test_hevc_main10_hdr_detection(self, mock_probe, mock_run, mock_exists, mock_getsize):
         """Test detection of HDR content in HEVC Main 10"""
         # Mock file exists and size
@@ -499,7 +499,7 @@ class TestVideoFreezeDetection:
     @patch('os.path.getsize')
     @patch('os.path.exists')
     @patch('subprocess.run')
-    @patch('ffmpeg.probe')
+    @patch('pixelprobe.media_checker._ffprobe_with_timeout')
     def test_video_freeze_integrated_in_corruption_check(
         self, mock_probe, mock_run, mock_exists, mock_getsize
     ):
@@ -570,7 +570,7 @@ class TestVideoFreezeDetection:
     @patch('os.path.getsize')
     @patch('os.path.exists')
     @patch('subprocess.run')
-    @patch('ffmpeg.probe')
+    @patch('pixelprobe.media_checker._ffprobe_with_timeout')
     def test_freeze_detection_disabled_via_env(
         self, mock_probe, mock_run, mock_exists, mock_getsize
     ):

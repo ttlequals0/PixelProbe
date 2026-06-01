@@ -26,6 +26,33 @@ from pixelprobe.utils.security import safe_subprocess_run, validate_file_path
 
 logger = logging.getLogger(__name__)
 
+# Hard ceiling for ffprobe metadata reads. ffmpeg-python's probe() calls
+# Popen.communicate() with no timeout, so a stalled mount or crafted container
+# could hang a scan worker forever; this bounds it. Env-overridable.
+try:
+    FFPROBE_TIMEOUT_SECS = max(10, int(os.environ.get('FFPROBE_TIMEOUT_SECS', '120')))
+except (TypeError, ValueError):
+    FFPROBE_TIMEOUT_SECS = 120
+
+
+def _ffprobe_with_timeout(file_path, timeout=None):
+    """Drop-in replacement for ffmpeg.probe() with a hard timeout.
+
+    Runs the same ffprobe invocation ffmpeg-python uses, but through
+    safe_subprocess_run so it cannot hang indefinitely. Raises ffmpeg.Error on a
+    non-zero exit (matching ffmpeg.probe) and subprocess.TimeoutExpired if
+    ffprobe exceeds the timeout.
+    """
+    if timeout is None:
+        timeout = FFPROBE_TIMEOUT_SECS
+    result = safe_subprocess_run(
+        ['ffprobe', '-show_format', '-show_streams', '-of', 'json', file_path],
+        capture_output=True, timeout=timeout
+    )
+    if result.returncode != 0:
+        raise ffmpeg.Error('ffprobe', result.stdout, result.stderr)
+    return json.loads(result.stdout.decode('utf-8'))
+
 # Pre-compiled patterns for parsing FFmpeg freezedetect filter output
 _RE_FREEZE_START = re.compile(r'freeze_start:\s*([\d.]+)')
 _RE_FREEZE_END = re.compile(r'freeze_end:\s*([\d.]+)')
@@ -1312,7 +1339,7 @@ class PixelProbe:
         try:
             # Enhanced probe with additional validation parameters
             # Note: ffmpeg-python probe doesn't accept boolean kwargs directly
-            probe = ffmpeg.probe(file_path)
+            probe = _ffprobe_with_timeout(file_path)
             
             if 'streams' not in probe or len(probe['streams']) == 0:
                 corruption_details.append("No video streams found")
@@ -1580,7 +1607,7 @@ class PixelProbe:
         # Step 1: Basic FFprobe analysis
         logger.info(f"Running FFprobe on audio file: {file_path}")
         try:
-            probe = ffmpeg.probe(file_path)
+            probe = _ffprobe_with_timeout(file_path)
             scan_output.append("FFprobe: PASSED")
             
             # Check for audio streams
@@ -1629,7 +1656,14 @@ class PixelProbe:
             scan_output.append(f"FFprobe: FAILED - {stderr[:200]}")
             logger.error(f"FFprobe error on audio {file_path}: {stderr[:200]}")
             return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
-        
+        except subprocess.TimeoutExpired:
+            corruption_details.append(f"FFprobe timed out after {FFPROBE_TIMEOUT_SECS}s")
+            is_corrupted = True
+            scan_tool = "ffmpeg"
+            scan_output.append("FFprobe: FAILED - timed out")
+            logger.warning(f"FFprobe timed out for audio {file_path}")
+            return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
+
         # Step 2: Attempt to decode audio to check for corruption
         logger.info(f"Performing comprehensive audio validation for: {file_path}")
         try:
@@ -2157,8 +2191,10 @@ class PixelProbe:
             corruption_details.append(f"Temporal outlier check crashed (possible memory error)")
             is_corrupted = True
         except Exception as e:
-            logger.debug(f"Temporal outlier check error: {str(e)}")
-        
+            # Don't hide an incomplete deep check at debug level: a swallowed
+            # error here means this corruption signal did not actually run.
+            logger.warning(f"Temporal outlier check did not complete for {file_path}: {str(e)}")
+
         return is_corrupted, corruption_details
     
     def _check_multipoint_sampling(self, file_path):
@@ -2172,7 +2208,7 @@ class PixelProbe:
 
         try:
             # Get video duration first - try stream level, then container level
-            probe = ffmpeg.probe(file_path)
+            probe = _ffprobe_with_timeout(file_path)
             video_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
             
             duration = None
@@ -2231,7 +2267,10 @@ class PixelProbe:
                     logger.debug(f"Stage 3 {location} timeout (informational)")
                     
         except Exception as e:
-            logger.debug(f"Multi-point sampling error: {str(e)}")
+            # Surface that a deep check did not complete instead of silently
+            # reporting the file healthy.
+            logger.warning(f"Multi-point sampling did not complete for {file_path}: {str(e)}")
+            warning_details.append("Multi-point sampling did not complete")
 
         return is_corrupted, corruption_details, warning_details
     

@@ -14,6 +14,8 @@ from flask import request, jsonify, current_app
 from werkzeug.utils import safe_join
 from pixelprobe.models import db, ScanConfiguration
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -309,30 +311,43 @@ def validate_command_args(args):
 
 def safe_subprocess_run(args, **kwargs):
     """
-    Safe wrapper for subprocess.run that validates arguments
-    
+    Safe wrapper for subprocess.run that validates arguments.
+
+    Starts the child in its own session (POSIX) so that on a `timeout` the
+    process is cleanly killed by subprocess.run without signalling the parent,
+    and any stray children are isolated from PixelProbe's process group. This
+    bounds ffmpeg/ffprobe calls that would otherwise hang a scan worker forever
+    on a stalled mount.
+
     Args:
         args: Command arguments as a list
         **kwargs: Additional arguments for subprocess.run
-        
+
     Returns:
         subprocess.CompletedProcess instance
-        
+
     Raises:
         ValueError: If arguments are invalid
+        subprocess.TimeoutExpired: If the command exceeds `timeout` seconds
     """
+    import os
     import subprocess
-    
+
     # Validate arguments
     validated_args = validate_command_args(args)
-    
+
     # Ensure shell=False (default)
     if kwargs.get('shell', False):
         raise ValueError("Shell mode is not allowed for security reasons")
-    
+
     # Force shell=False
     kwargs['shell'] = False
-    
+
+    # Isolate the child in its own session so a timeout-kill targets it (and not
+    # the parent), and orphaned helpers don't share PixelProbe's process group.
+    if os.name == 'posix':
+        kwargs.setdefault('start_new_session', True)
+
     # Run the command
     return subprocess.run(validated_args, **kwargs)
 
@@ -537,6 +552,24 @@ def create_safe_session(max_redirects: int = 5) -> requests.Session:
     """
     session = requests.Session()
     session.max_redirects = max_redirects
+
+    # Retry transient failures (connection errors, 429, 5xx) with backoff so a
+    # momentary blip does not drop an idempotent GET healthcheck ping. POST is
+    # deliberately NOT retried: a notification/webhook POST that the provider
+    # already delivered before returning 5xx must not be re-sent (duplicate
+    # alerts), so only idempotent methods are retried.
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(['GET']),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
 
     def _check_redirect(response, *args, **kwargs):
         """Response hook that validates redirect Location headers."""

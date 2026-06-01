@@ -565,26 +565,43 @@ with app.app_context():
     # the celery_task_id column that the ScanState model expects.
     create_tables()
 
-    # Initialize database log handler (after migrations ensure log_entries table exists)
-    _db_log_handler = DatabaseLogHandler(app)
-    _db_log_handler.setLevel(logging.INFO)
-    logging.getLogger().addHandler(_db_log_handler)
-    atexit.register(_db_log_handler.shutdown)
-
+    # init_services wires up the core services the app cannot serve without, so a
+    # failure here is allowed to propagate (fail fast -> container restart) rather
+    # than booting a half-initialized app.
     init_services()
 
-    # Sync SCAN_PATHS from environment to database
-    # This allows celery-worker to read paths from DB instead of needing env var
-    sync_scan_paths_to_db()
+    # The remaining startup steps are NON-critical: wrap each one so a single
+    # failure is logged and does not crash every gunicorn worker at import time.
+    try:
+        # Initialize database log handler (after migrations ensure log_entries table exists)
+        _db_log_handler = DatabaseLogHandler(app)
+        _db_log_handler.setLevel(logging.INFO)
+        logging.getLogger().addHandler(_db_log_handler)
+        atexit.register(_db_log_handler.shutdown)
+    except Exception as e:
+        logger.error(f"Failed to initialize database log handler (non-critical): {e}")
 
-    # Initialize scheduler with distributed lock coordination
-    from pixelprobe.scheduler_lock import initialize_scheduler_with_lock
-    initialize_scheduler_with_lock(app, scheduler)
+    try:
+        # Sync SCAN_PATHS from environment to database so the celery-worker can read
+        # paths from the DB instead of needing the env var.
+        sync_scan_paths_to_db()
+    except Exception as e:
+        logger.error(f"Failed to sync SCAN_PATHS to database (non-critical): {e}")
 
-    # Clean up stale state from previous runs
-    from pixelprobe.startup import cleanup_stuck_scans, cleanup_bloated_scan_results
-    cleanup_stuck_scans(db)
-    cleanup_bloated_scan_results(db)
+    try:
+        # Initialize scheduler with distributed lock coordination
+        from pixelprobe.scheduler_lock import initialize_scheduler_with_lock
+        initialize_scheduler_with_lock(app, scheduler)
+    except Exception as e:
+        logger.error(f"Failed to initialize scheduler (non-critical): {e}")
+
+    try:
+        # Clean up stale state from previous runs
+        from pixelprobe.startup import cleanup_stuck_scans, cleanup_bloated_scan_results
+        cleanup_stuck_scans(db)
+        cleanup_bloated_scan_results(db)
+    except Exception as e:
+        logger.error(f"Failed startup state cleanup (non-critical): {e}")
 
 if __name__ == '__main__':
     # Start the application (initialization already done above)
