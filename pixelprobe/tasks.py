@@ -782,11 +782,14 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
             retry_delay = 10 * (self.request.retries + 1)  # 10s, 20s
             raise self.retry(exc=exc, countdown=retry_delay)
         else:
-            # Max retries exceeded, return error result
+            # Max retries exceeded. Report this as changed=True (change_type
+            # 'error') rather than changed=False: a file we could not hash must
+            # be re-examined by a full scan, not silently treated as unchanged
+            # (which would mask corruption the integrity check exists to catch).
             return {
                 'file_id': file_id,
                 'file_path': file_path,
-                'changed': False,
+                'changed': True,
                 'change_type': 'error',
                 'error': str(exc),
                 'stored_hash': stored_hash,

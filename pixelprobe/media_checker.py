@@ -2191,8 +2191,10 @@ class PixelProbe:
             corruption_details.append(f"Temporal outlier check crashed (possible memory error)")
             is_corrupted = True
         except Exception as e:
-            logger.debug(f"Temporal outlier check error: {str(e)}")
-        
+            # Don't hide an incomplete deep check at debug level: a swallowed
+            # error here means this corruption signal did not actually run.
+            logger.warning(f"Temporal outlier check did not complete for {file_path}: {str(e)}")
+
         return is_corrupted, corruption_details
     
     def _check_multipoint_sampling(self, file_path):
@@ -2265,7 +2267,10 @@ class PixelProbe:
                     logger.debug(f"Stage 3 {location} timeout (informational)")
                     
         except Exception as e:
-            logger.debug(f"Multi-point sampling error: {str(e)}")
+            # Surface that a deep check did not complete instead of silently
+            # reporting the file healthy.
+            logger.warning(f"Multi-point sampling did not complete for {file_path}: {str(e)}")
+            warning_details.append("Multi-point sampling did not complete")
 
         return is_corrupted, corruption_details, warning_details
     

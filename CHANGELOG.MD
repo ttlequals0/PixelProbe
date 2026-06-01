@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.45] - 2026-06-01
+
+### Fixed (reliability hardening - phase 2: silent / dropped work)
+
+- **Scheduled scans no longer silently drop a cron fire.** Closes the gap behind the missed Integrity scan: (a) when `scan_lock` is held by another schedule firing at the same instant, the loser now queues a retry instead of returning; (b) `_execute_scan_request` returns its status and a shared `_handle_scan_response` queues a retry on a 409 (a scan slipped into the check->POST window) or a connection error -- now unified across scheduled, periodic, and cleanup fires; (c) `last_run`/`next_run` advance only after a confirmed HTTP 200 (on a freshly re-fetched row), so a failed fire is retried rather than recorded as a successful run that skips a full interval; (d) the healthcheck start ping is sent only after a confirmed start, so a conflicted/failed fire no longer leaves a dangling "start" that trips a false down-alert; (e) cron/interval jobs now set `misfire_grace_time=3600` and `coalesce=True` so a fire missed during a brief scheduler restart still runs. The retry counter is cleared on benign no-op fires (no paths / disabled schedule) so it cannot drift upward.
+- **Parallel discovery no longer reports completion on a truncated file set.** `discover_directory_task` now returns a structured `{files, complete, error}` result; a walk timeout or error marks the directory incomplete. The orchestrator aborts the scan with an error (instead of scanning a partial set and reporting it complete) when a discovery target did not finish; a spurious result-collection error where every task actually completed does not abort. The discovery wait is env-overridable via `DISCOVERY_RESULT_TIMEOUT_SECS` (default 3600s).
+- **A file that cannot be hashed is no longer reported as unchanged.** `calculate_file_hash_task` now returns `changed=True` (change_type `error`) after exhausting retries, so the file is re-examined by a full scan instead of being silently treated as unchanged -- which previously masked the corruption the integrity check exists to catch.
+- **Incomplete deep media checks are surfaced.** Swallowed exceptions in the temporal-outlier and multi-point sampling checks are now logged at warning level (and multi-point sampling adds a "did not complete" warning detail) instead of being hidden at debug level, so a deep check that did not run is visible rather than implicitly passing.
+
 ## [2.6.44] - 2026-06-01
 
 ### Fixed (reliability hardening - phase 1: data loss and permanent wedges)

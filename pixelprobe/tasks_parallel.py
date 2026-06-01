@@ -415,7 +415,11 @@ def discover_directory_task(self, directory: str, scan_id: str,
         start_time = time.time()
         last_log_time = start_time
         files_checked = 0
-        
+        # Whether the walk finished cleanly. A timeout or error makes the result
+        # PARTIAL; the orchestrator must not treat a truncated list as complete.
+        complete = True
+        error = None
+
         # Walk directory and discover files with progress reporting
         try:
             for root, dirs, files in os.walk(directory):
@@ -461,20 +465,23 @@ def discover_directory_task(self, directory: str, scan_id: str,
                         
         except SoftTimeLimitExceeded:
             logger.warning(f"Discovery task for {directory} timed out after checking {files_checked} files")
-            # Return what we found so far
-            
+            complete = False
+            error = 'soft_time_limit'
+
         except Exception as e:
             logger.error(f"Error during directory walk of {directory}: {e}")
-            # Return what we found so far
-        
+            complete = False
+            error = str(e)
+
         elapsed_time = time.time() - start_time
         logger.info(f"Worker discovered {len(discovered_files)} files in {directory} "
-                   f"(checked {files_checked} total files in {elapsed_time:.2f} seconds)")
-        return discovered_files
-        
+                   f"(checked {files_checked} total files in {elapsed_time:.2f} seconds, complete={complete})")
+        return {'directory': directory, 'files': discovered_files,
+                'complete': complete, 'error': error}
+
     except Exception as e:
         logger.error(f"Error discovering files in {directory}: {e}")
-        return []
+        return {'directory': directory, 'files': [], 'complete': False, 'error': str(e)}
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
@@ -560,29 +567,65 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
                 job = group(discovery_tasks)
                 result = job.apply_async()
                 
-                # Wait for all discovery tasks to complete with longer timeout for large directories
+                # Wait for all discovery tasks to complete. Track any directory whose
+                # discovery did not finish cleanly so we never scan a truncated set
+                # and falsely report completion. Timeout is env-overridable for very
+                # large trees on slow storage.
                 try:
-                    discovery_results = result.get(timeout=3600)  # 60 minute timeout for very large directories
-                    
-                    # Combine all discovered files
-                    for task_files in discovery_results:
-                        if task_files:
-                            discovered_files.extend(task_files)
-                    
-                    logger.info(f"Parallel discovery complete: found {len(discovered_files)} total files")
-                    
+                    discovery_timeout = max(60, int(os.environ.get('DISCOVERY_RESULT_TIMEOUT_SECS', '3600')))
+                except (TypeError, ValueError):
+                    discovery_timeout = 3600
+                discovery_incomplete = []
+                try:
+                    discovery_results = result.get(timeout=discovery_timeout)
+
+                    for res in discovery_results:
+                        if not res:
+                            continue
+                        discovered_files.extend(res.get('files', []))
+                        if not res.get('complete', False):
+                            discovery_incomplete.append(res.get('directory', '?'))
+
+                    logger.info(f"Parallel discovery finished: found {len(discovered_files)} total files")
+
                 except Exception as e:
                     logger.error(f"Error getting discovery results: {e}")
-                    # Try to get partial results
+                    # Harvest whatever finished. Only treat the group as incomplete
+                    # if a task genuinely did not finish/complete -- a spurious
+                    # result.get() error when every task actually completed cleanly
+                    # should not abort an otherwise-complete discovery.
                     for task_result in result.results:
                         try:
                             if task_result and task_result.ready():
-                                task_files = task_result.get(timeout=1)
-                                if task_files:
-                                    discovered_files.extend(task_files)
-                        except:
+                                res = task_result.get(timeout=1)
+                                if res:
+                                    discovered_files.extend(res.get('files', []))
+                                    if not res.get('complete', False):
+                                        discovery_incomplete.append(res.get('directory', '?'))
+                                else:
+                                    discovery_incomplete.append('unreadable-discovery-result')
+                            else:
+                                discovery_incomplete.append('discovery-task-unfinished')
+                        except Exception:
+                            discovery_incomplete.append('discovery-task-error')
                             continue
-                    logger.warning(f"Partial discovery results: found {len(discovered_files)} files before timeout")
+                    logger.warning(f"Partial discovery results: found {len(discovered_files)} files "
+                                   f"({len(discovery_incomplete)} target(s) incomplete)")
+
+                # Never proceed to scan (and report 'completed') on a truncated set.
+                if discovery_incomplete:
+                    msg = (f"Discovery incomplete for {len(discovery_incomplete)} target(s): "
+                           f"{discovery_incomplete[:5]} - aborting so a partial file set is not "
+                           f"scanned and reported as complete. Re-run the scan.")
+                    logger.error(msg)
+                    scan_state.phase = 'error'
+                    scan_state.is_active = False
+                    scan_state.error_message = msg[:1000]
+                    scan_state.end_time = datetime.now(timezone.utc)
+                    db.session.commit()
+                    return {'status': 'error', 'scan_id': scan_id,
+                            'error': 'discovery_incomplete',
+                            'incomplete_targets': discovery_incomplete}
                 
                 # Filter out files already in database
                 if discovered_files:

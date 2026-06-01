@@ -146,6 +146,43 @@ class MediaScheduler:
             logger.error(f"Failed to call API for {scan_label}: {e}")
             return None
 
+    def _send_healthcheck_start(self, schedule_id):
+        """Send the healthcheck start ping for a schedule, if configured.
+
+        Called only after a scan is confirmed started, so a conflicted/failed
+        fire never leaves a dangling 'start' with no matching completion (which
+        would trip a false 'down' alert), and a retry does not re-ping.
+        """
+        healthcheck_config = HealthcheckConfig.query.filter_by(schedule_id=schedule_id).first()
+        if not (healthcheck_config and healthcheck_config.is_active
+                and healthcheck_config.send_start_ping):
+            return
+        try:
+            success = HealthcheckService().ping_start(healthcheck_config.healthcheck_url)
+            healthcheck_config.last_ping_status = 'success' if success else 'failure'
+            healthcheck_config.last_ping_time = datetime.now(timezone.utc)
+            db.session.commit()
+            logger.info(f"Healthcheck start ping sent for schedule {schedule_id}: "
+                        f"{'success' if success else 'failure'}")
+        except Exception as e:
+            logger.error(f"Failed to send healthcheck start ping for schedule {schedule_id}: {e}")
+
+    def _handle_scan_response(self, retry_key, retry_func, retry_args, response):
+        """Clear the retry counter on a confirmed start, or queue a retry on a
+        conflict/failure so the cron fire is not silently dropped.
+
+        Returns True only if the scan actually started (HTTP 200). A 409 (a scan
+        slipped in during the check->POST window) or a connection error/unexpected
+        status both queue a retry rather than losing the fire.
+        """
+        status_code = response.status_code if response is not None else None
+        if status_code == 200:
+            self._clear_pending_retry(retry_key)
+            return True
+        reason = "api returned 409" if status_code == 409 else f"api status={status_code}"
+        self._queue_conflict_retry(retry_key, retry_func, retry_args, reason)
+        return False
+
     def _get_api_base_url(self):
         """
         Get the base URL for API calls.
@@ -267,19 +304,25 @@ class MediaScheduler:
             func,
             trigger,
             id=job_id,
-            replace_existing=True
+            replace_existing=True,
+            # Still run a fire that was missed during a brief scheduler restart
+            # (deploys take ~30s); coalesce collapses several missed fires into one.
+            misfire_grace_time=3600,
+            coalesce=True
         )
-        
+
     def _add_interval_job(self, job_id: str, func, unit: str, value: int):
         """Add an interval-based job"""
         kwargs = {unit: value}
         trigger = IntervalTrigger(**kwargs)
-        
+
         self.scheduler.add_job(
             func,
             trigger,
             id=job_id,
-            replace_existing=True
+            replace_existing=True,
+            misfire_grace_time=3600,
+            coalesce=True
         )
         
     def _load_saved_schedules(self):
@@ -386,7 +429,12 @@ class MediaScheduler:
     def _run_periodic_scan(self):
         """Run periodic scan on configured paths via HTTP self-call"""
         if not self.scan_lock.acquire(blocking=False):
-            logger.warning("Periodic scan already in progress, skipping")
+            # Another scheduled scan holds the lock; queue a retry so this fire
+            # is not silently dropped (APScheduler consumes the original fire).
+            self._queue_conflict_retry(
+                'periodic', self._run_periodic_scan, (),
+                "scan_lock held by another scheduled scan"
+            )
             return
 
         try:
@@ -400,8 +448,6 @@ class MediaScheduler:
                     )
                     return
 
-                self._clear_pending_retry('periodic')
-
                 from pixelprobe.utils.helpers import get_configured_scan_paths
                 scan_paths = get_configured_scan_paths()
 
@@ -410,9 +456,11 @@ class MediaScheduler:
                 filtered_paths = self._filter_excluded_paths(scan_paths)
                 if not filtered_paths:
                     logger.warning("No paths to scan after exclusions")
+                    # Not a conflict -- this fire is resolved, clear any retry.
+                    self._clear_pending_retry('periodic')
                     return
 
-                self._execute_scan_request(
+                response = self._execute_scan_request(
                     '/api/scan',
                     {
                         'scan_type': 'full',
@@ -423,7 +471,8 @@ class MediaScheduler:
                     'Periodic scan',
                     timeout=30
                 )
-                
+                self._handle_scan_response('periodic', self._run_periodic_scan, (), response)
+
         except Exception as e:
             logger.error(f"Failed to run periodic scan: {e}")
         finally:
@@ -433,7 +482,12 @@ class MediaScheduler:
         """Run a scheduled scan via HTTP self-call to avoid Flask context issues"""
         retry_key = f"schedule_{schedule_id}"
         if not self.scan_lock.acquire(blocking=False):
-            logger.warning(f"Scheduled scan {schedule_id} already in progress, skipping")
+            # Another scheduled scan holds the lock (e.g. two crons firing at the
+            # same instant). Queue a retry so this fire is not silently dropped.
+            self._queue_conflict_retry(
+                retry_key, self._run_scheduled_scan, (schedule_id,),
+                "scan_lock held by another scheduled scan"
+            )
             return
 
         try:
@@ -447,55 +501,27 @@ class MediaScheduler:
                     )
                     return
 
-                self._clear_pending_retry(retry_key)
-
                 schedule = db.session.get(ScanSchedule, schedule_id)
                 if not schedule or not schedule.is_active:
+                    # Not a conflict -- this fire is resolved, clear any retry.
+                    self._clear_pending_retry(retry_key)
                     return
 
-                # Cache schedule attributes BEFORE any commits
+                # Cache schedule attributes BEFORE any commits/HTTP call.
                 # SQLAlchemy expires objects after commit(), and lazy-loading can fail
-                # in the celery worker context, returning None for these attributes
+                # in the celery worker context, returning None for these attributes.
                 cached_scan_type = getattr(schedule, 'scan_type', 'normal')
                 cached_schedule_name = schedule.name
-
-                # Check for healthcheck configuration and send start ping
-                healthcheck_config = HealthcheckConfig.query.filter_by(schedule_id=schedule_id).first()
-                if healthcheck_config and healthcheck_config.is_active and healthcheck_config.send_start_ping:
-                    try:
-                        healthcheck_service = HealthcheckService()
-                        success = healthcheck_service.ping_start(healthcheck_config.healthcheck_url)
-
-                        # Update ping status
-                        healthcheck_config.last_ping_status = 'success' if success else 'failure'
-                        healthcheck_config.last_ping_time = datetime.now(timezone.utc)
-                        db.session.commit()
-
-                        logger.info(f"Healthcheck start ping sent for schedule {schedule_id}: {'success' if success else 'failure'}")
-                    except Exception as e:
-                        logger.error(f"Failed to send healthcheck start ping for schedule {schedule_id}: {e}")
-                    
-                # Update last run time
-                schedule.last_run = datetime.now(timezone.utc)
-                
-                # Update next run time from APScheduler
-                job_id = f"schedule_{schedule_id}"
-                jobs = self.scheduler.get_jobs()
-                for job in jobs:
-                    if job.id == job_id:
-                        schedule.next_run = job.next_run_time
-                        break
-                
-                db.session.commit()
+                cached_force_rescan = getattr(schedule, 'force_rescan', False)
 
                 from pixelprobe.utils.helpers import get_configured_scan_paths
                 scan_paths = get_configured_scan_paths()
 
                 if not scan_paths:
                     logger.error(f"Scheduled scan {schedule_id}: No scan paths configured in database or SCAN_PATHS env var!")
+                    self._clear_pending_retry(retry_key)
                     return
 
-                # Use cached scan_type
                 scan_type = cached_scan_type
 
                 logger.info(f"Running scheduled scan '{cached_schedule_name}' (type: {scan_type}) on paths: {scan_paths}")
@@ -504,34 +530,53 @@ class MediaScheduler:
                 if not filtered_paths:
                     logger.error(f"Scheduled scan {schedule_id} has no valid paths after filtering. "
                                  f"SCAN_PATHS={scan_paths}, excluded_paths={self.excluded_paths}")
+                    self._clear_pending_retry(retry_key)
                     return
 
                 scan_label = f"Scheduled scan {schedule_id}"
                 if scan_type == 'orphan':
-                    self._execute_scan_request(
+                    response = self._execute_scan_request(
                         '/api/cleanup-orphaned',
                         {'schedule_id': schedule_id},
                         scan_label, timeout=60
                     )
                 elif scan_type == 'file_changes':
-                    self._execute_scan_request(
+                    response = self._execute_scan_request(
                         '/api/file-changes',
                         {'schedule_id': schedule_id},
                         scan_label, timeout=60
                     )
                 else:
                     timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-                    self._execute_scan_request(
+                    response = self._execute_scan_request(
                         '/api/scan',
                         {
                             'scan_type': 'full',
                             'directories': filtered_paths,
-                            'force_rescan': schedule.force_rescan if hasattr(schedule, 'force_rescan') else False,
+                            'force_rescan': cached_force_rescan,
                             'source': f'scheduled_{schedule_id}_{timestamp}'
                         },
                         scan_label, timeout=60
                     )
-                    
+
+                # Only advance last_run/next_run once the scan actually started.
+                # A failed or conflicted (409) fire is retried instead of being
+                # recorded as a successful run that skips ahead a full interval.
+                if self._handle_scan_response(retry_key, self._run_scheduled_scan, (schedule_id,), response):
+                    # Send the start ping now that the scan is confirmed started.
+                    self._send_healthcheck_start(schedule_id)
+                    # Re-fetch the row: the object above may be expired after the
+                    # ping commit / the up-to-60s HTTP call.
+                    fresh = db.session.get(ScanSchedule, schedule_id)
+                    if fresh:
+                        fresh.last_run = datetime.now(timezone.utc)
+                        job_id = f"schedule_{schedule_id}"
+                        for job in self.scheduler.get_jobs():
+                            if job.id == job_id:
+                                fresh.next_run = job.next_run_time
+                                break
+                        db.session.commit()
+
         except Exception as e:
             logger.error(f"Failed to run scheduled scan {schedule_id}: {e}")
         finally:
@@ -547,33 +592,14 @@ class MediaScheduler:
             with self.app.app_context():
                 logger.info("Starting scheduled cleanup of orphaned records")
 
-                base_url = self._get_api_base_url()
-                
-                # Add internal request header with cryptographic secret
-                headers = {
-                    'X-Internal-Secret': self.app.config.get('INTERNAL_API_SECRET', ''),
-                    'Content-Type': 'application/json'
-                }
-                
-                try:
-                    response = requests.post(f'{base_url}/api/cleanup-orphaned',
-                                          headers=headers,
-                                          timeout=60)
+                # Unified handling: clears the retry on a confirmed start (200),
+                # and queues a retry on 409 / connection error / other failure,
+                # matching scheduled and periodic scans.
+                response = self._execute_scan_request(
+                    '/api/cleanup-orphaned', {}, 'Cleanup', timeout=60
+                )
+                self._handle_scan_response('default_cleanup', self._run_cleanup, (), response)
 
-                    if response.status_code == 200:
-                        logger.info("Cleanup task started successfully")
-                        self._clear_pending_retry('default_cleanup')
-                    elif response.status_code == 409:
-                        self._queue_conflict_retry(
-                            'default_cleanup', self._run_cleanup, (),
-                            "api returned 409"
-                        )
-                    else:
-                        logger.error(f"Cleanup API call failed: {response.status_code} - {response.text}")
-
-                except requests.exceptions.RequestException as e:
-                    logger.error(f"Failed to call API for cleanup: {e}")
-                
         except Exception as e:
             logger.error(f"Failed to run cleanup: {e}")
         finally:

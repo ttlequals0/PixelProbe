@@ -393,3 +393,49 @@ class TestScanningReclaim:
         with app.app_context():
             r = ScanResult.query.filter_by(file_path='/m/live.mkv').first()
             assert r.scan_status == 'scanning'
+
+
+class TestSchedulerRetryGaps:
+    """Phase 2: a scheduled fire must never be silently dropped on lock
+    contention or an API 409, and last_run advances only on a confirmed start."""
+
+    @pytest.fixture
+    def scheduler(self, app):
+        scheduler = MediaScheduler()
+        scheduler.init_app(app)
+        yield scheduler
+        scheduler.shutdown()
+
+    def test_scheduled_lock_contention_queues_retry(self, scheduler):
+        assert scheduler.scan_lock.acquire(blocking=False)
+        try:
+            scheduler._run_scheduled_scan(8)
+        finally:
+            scheduler.scan_lock.release()
+        assert scheduler.pending_retries.get('schedule_8') == 1
+        assert scheduler.scheduler.get_job('schedule_8_retry_1') is not None
+
+    def test_periodic_lock_contention_queues_retry(self, scheduler):
+        assert scheduler.scan_lock.acquire(blocking=False)
+        try:
+            scheduler._run_periodic_scan()
+        finally:
+            scheduler.scan_lock.release()
+        assert scheduler.pending_retries.get('periodic') == 1
+
+    def test_handle_response_200_clears_and_returns_true(self, scheduler):
+        from unittest.mock import MagicMock
+        scheduler.pending_retries['schedule_5'] = 2
+        resp = MagicMock(status_code=200)
+        assert scheduler._handle_scan_response('schedule_5', lambda _i: None, (5,), resp) is True
+        assert 'schedule_5' not in scheduler.pending_retries
+
+    def test_handle_response_409_queues_retry(self, scheduler):
+        from unittest.mock import MagicMock
+        resp = MagicMock(status_code=409)
+        assert scheduler._handle_scan_response('schedule_6', lambda _i: None, (6,), resp) is False
+        assert scheduler.pending_retries.get('schedule_6') == 1
+
+    def test_handle_response_connection_error_queues_retry(self, scheduler):
+        assert scheduler._handle_scan_response('schedule_7', lambda _i: None, (7,), None) is False
+        assert scheduler.pending_retries.get('schedule_7') == 1
