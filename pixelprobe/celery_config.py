@@ -27,10 +27,14 @@ def create_celery(app=None):
     Follows the audit plan specifications for task queue implementation
     """
     
-    # Get broker and backend URLs from environment or app config
+    # Get broker and backend URLs from environment or app config.
+    # CELERY_RESULT_BACKEND is never in app.config (an uppercase Config attr
+    # would be an old-style Celery key and break conf.update at boot), so the
+    # app path falls back to the environment.
     if app:
         broker_url = app.config.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-        result_backend = app.config.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+        result_backend = (app.config.get('CELERY_RESULT_BACKEND')
+                          or os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0'))
         app_name = app.import_name
     else:
         broker_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
