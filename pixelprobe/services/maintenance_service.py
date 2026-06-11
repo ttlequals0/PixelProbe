@@ -11,6 +11,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 import uuid
 
+from celery import states
+from celery.exceptions import TimeoutError as CeleryTimeoutError
 from sqlalchemy import text
 from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
 from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState, ScanReport, LogEntry, AppConfig
@@ -55,6 +57,21 @@ def forget_task_result(task):
     """
     try:
         task.forget()
+    except Exception:
+        pass
+
+
+def unsubscribe_result(task):
+    """Drop the result-channel subscription Celery makes at dispatch (best-effort).
+
+    apply_async outside a worker subscribes the producer to the task's result
+    pub/sub channel (RedisBackend.on_task_call). These loops poll the stored
+    meta instead and never read that socket, so each published result would
+    sit unread in the connection's output buffer until Redis force-closes the
+    connection (client-output-buffer-limit, observed every ~70s live).
+    """
+    try:
+        task.backend.result_consumer.cancel_for(task.id)
     except Exception:
         pass
 
@@ -125,26 +142,37 @@ def safe_task_ready(task, max_retries=5, base_delay=1.0):
 
 
 def safe_task_get(task, timeout=1, max_retries=5, base_delay=1.0):
-    """
-    Safely get a Celery task result with enhanced retry logic for Redis connection errors.
+    """Get a completed task's result without AsyncResult.get().
 
-    v2.5.54: Enhanced with exponential backoff and connection pool reset.
+    get() on the Redis backend subscribes to the task's result pub/sub channel
+    even when the result is already stored, and these producer loops never
+    read that socket; task.state/task.result poll the stored meta instead
+    (served from the AsyncResult cache after the ready() gate).
 
-    Args:
-        task: Celery AsyncResult object
-        timeout: Timeout for getting the result
-        max_retries: Number of retry attempts (default 5 for longer recovery window)
-        base_delay: Base delay between retries in seconds (exponential backoff)
-
-    Returns:
-        Result dict or None on error
+    Mirrors get() semantics: returns the result on SUCCESS, raises the stored
+    exception on FAILURE/REVOKED, raises celery TimeoutError if not ready
+    within `timeout` seconds. Redis connection errors are retried with
+    exponential backoff and a pool reset, as before.
     """
     import redis
     from pixelprobe.progress_utils import reset_redis_pool
 
     for attempt in range(max_retries):
         try:
-            return task.get(timeout=timeout)
+            deadline = time.monotonic() + timeout
+            while True:
+                status = task.state
+                if status in states.PROPAGATE_STATES:
+                    result = task.result
+                    if isinstance(result, Exception):
+                        raise result
+                    raise RuntimeError(f"Task {task.id} {status}: {result}")
+                if status in states.READY_STATES:
+                    return task.result
+                if time.monotonic() >= deadline:
+                    raise CeleryTimeoutError(
+                        f"Task {task.id} result not ready after {timeout}s")
+                time.sleep(0.1)
         except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
             # Reset connection pool on first failure to get fresh connections
             if attempt == 0:
@@ -157,9 +185,6 @@ def safe_task_get(task, timeout=1, max_retries=5, base_delay=1.0):
             else:
                 logger.error(f"Failed to get task result after {max_retries} attempts: {type(e).__name__}: {e}")
                 raise
-        except Exception:
-            raise
-    return None
 
 class MaintenanceService:
     """Service for maintenance operations like cleanup and file monitoring"""
@@ -515,6 +540,7 @@ class MaintenanceService:
                         args=[result.id, result.file_path],
                         priority=6
                     )
+                    unsubscribe_result(task)
                     active_tasks.append({
                         'task': task,
                         'path': result.file_path,
@@ -1082,6 +1108,7 @@ class MaintenanceService:
                         task_result = calculate_file_hash_task.apply_async(
                             args=[result['id'], result['file_path'], result['file_hash'], stored_modified_iso]
                         )
+                        unsubscribe_result(task_result)
                         active_tasks.append({
                             'task': task_result,
                             'size': file_size,

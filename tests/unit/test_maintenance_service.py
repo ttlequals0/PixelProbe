@@ -233,6 +233,93 @@ class TestAbandonIfStuck:
         assert abandon_if_stuck(stale, 600, 'existence-check') is True
 
 
+class TestSafeTaskGet:
+    """safe_task_get must consume results via task.state/task.result, never
+    AsyncResult.get(), whose pub/sub subscription stalled the producer loops
+    (Redis killed the never-drained connection every ~70s, observed live)."""
+
+    @staticmethod
+    def _task(status, result=None):
+        task = MagicMock()
+        task.id = 'task-1'
+        task.state = status
+        task.result = result
+        return task
+
+    def test_success_returns_stored_result_without_calling_get(self):
+        from pixelprobe.services.maintenance_service import safe_task_get
+
+        result = {'file_id': 1, 'file_path': '/m/x.mkv', 'status': 'exists'}
+        task = self._task('SUCCESS', result)
+
+        assert safe_task_get(task, timeout=1) == result
+        task.get.assert_not_called()
+
+    def test_failure_raises_stored_exception(self):
+        import pytest
+        from pixelprobe.services.maintenance_service import safe_task_get
+
+        task = self._task('FAILURE', ValueError('boom'))
+
+        with pytest.raises(ValueError, match='boom'):
+            safe_task_get(task, timeout=1)
+
+    def test_failure_with_non_exception_result_raises_runtime_error(self):
+        import pytest
+        from pixelprobe.services.maintenance_service import safe_task_get
+
+        task = self._task('FAILURE', 'oops')
+
+        with pytest.raises(RuntimeError, match='oops'):
+            safe_task_get(task, timeout=1)
+
+    def test_not_ready_raises_timeout(self):
+        import pytest
+        from celery.exceptions import TimeoutError as CeleryTimeoutError
+        from pixelprobe.services.maintenance_service import safe_task_get
+
+        task = self._task('PENDING')
+
+        with pytest.raises(CeleryTimeoutError):
+            safe_task_get(task, timeout=0.2)
+
+    def test_redis_error_retries_then_succeeds(self):
+        import redis
+        from unittest.mock import PropertyMock
+        from pixelprobe.services.maintenance_service import safe_task_get
+
+        result = {'status': 'exists'}
+        task = MagicMock()
+        task.id = 'task-1'
+        type(task).state = PropertyMock(
+            side_effect=[redis.ConnectionError('killed'), 'SUCCESS'])
+        task.result = result
+
+        with patch.object(progress_utils, 'reset_redis_pool'), \
+                patch('time.sleep'):
+            assert safe_task_get(task, timeout=1) == result
+
+
+class TestUnsubscribeResult:
+    """Dispatch-time pub/sub subscriptions must be dropped: the producer loops
+    never read that socket, so Redis kills the connection on buffer overrun."""
+
+    def test_cancels_result_channel_subscription(self):
+        from pixelprobe.services.maintenance_service import unsubscribe_result
+
+        task = MagicMock()
+        task.id = 'task-1'
+        unsubscribe_result(task)
+        task.backend.result_consumer.cancel_for.assert_called_once_with('task-1')
+
+    def test_swallows_backend_errors(self):
+        from pixelprobe.services.maintenance_service import unsubscribe_result
+
+        task = MagicMock()
+        task.backend.result_consumer.cancel_for.side_effect = RuntimeError('dead socket')
+        unsubscribe_result(task)
+
+
 class TestEnvInt:
 
     def test_default_on_missing(self, monkeypatch):

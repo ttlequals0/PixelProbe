@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.54] - 2026-06-11
+
+### Fixed
+
+- **Cleanup/integrity producer loops no longer stall for minutes on Redis pub/sub disconnects.** With the checkpoint storms fixed (2.6.53), residual multi-minute stalls remained where workers sat idle. Root cause: Celery's Redis result backend subscribes the producer to each task's result pub/sub channel - once at dispatch (`on_task_call` inside `apply_async`) and again inside `AsyncResult.get()`. The producer loops never read that socket, so every completed task's published result accumulated in its output buffer until Redis force-closed the connection (default pubsub client-output-buffer-limit, observed every ~70 seconds during the verified cleanup run); reconnect/resubscribe churn mid-pass over the 5,000-task window froze the loop for up to 7 minutes per incident. Two-part fix in the shared producer helpers: the dispatch-time subscription is cancelled immediately after `apply_async` (new `unsubscribe_result()`), and `safe_task_get()` now consumes results via the stored meta (`task.state`/`task.result`, cache-served after the `ready()` gate) instead of `get()` - same success/failure/timeout semantics, no subscription, no extra Redis round-trips. Applies to both orphan cleanup (Phase 2) and file-changes/integrity scans. The orchestrator's discovery join keeps `get()`: it genuinely waits on a handful of per-directory tasks and drains its socket while waiting.
+
 ## [2.6.53] - 2026-06-11
 
 ### Fixed
