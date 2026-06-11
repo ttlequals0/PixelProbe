@@ -3385,7 +3385,23 @@ class PixelProbeApp {
             detailsHtml += `<tr><th>Duration:</th><td>${report.duration_formatted || 'N/A'}</td></tr>`;
             
             if (report.directories_scanned && Array.isArray(report.directories_scanned) && report.directories_scanned.length > 0) {
-                detailsHtml += `<tr><th>Directories:</th><td>${report.directories_scanned.join('<br>')}</td></tr>`;
+                // Cleanup and file-changes reports store file lists (objects with
+                // file_path/change_type) in this field; scan reports store paths
+                const label = report.scan_type === 'cleanup' ? 'Orphaned Files:'
+                    : report.scan_type === 'file_changes' ? 'Changed Files:'
+                    : 'Directories:';
+                const maxEntries = 100;
+                const entries = report.directories_scanned.slice(0, maxEntries).map(entry => {
+                    if (entry && typeof entry === 'object') {
+                        const path = entry.file_path || JSON.stringify(entry);
+                        return escapeHtml(entry.change_type ? `${path} (${entry.change_type})` : path);
+                    }
+                    return escapeHtml(String(entry));
+                });
+                if (report.directories_scanned.length > maxEntries) {
+                    entries.push(`... and ${report.directories_scanned.length - maxEntries} more`);
+                }
+                detailsHtml += `<tr><th>${label}</th><td>${entries.join('<br>')}</td></tr>`;
             }
             
             detailsHtml += '</table>';

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.52] - 2026-06-11
+
+### Fixed
+
+- **Maintenance runs no longer flood Redis with a million result keys.** Task results were never forgotten and expire only after 24h, so a full-library cleanup or integrity run accumulated 1M+ result keys in the noeviction Redis - observed live as every broker/backend operation slowing ~100x once roughly 1M files had been processed (heartbeats minutes apart in the final stretch, "0 active tasks" snapshots, misleading "ETA: 0m"). Both maintenance loops now forget each result after consuming it (and on abandonment), bounding Redis to in-flight tasks only (~5,000 keys instead of 1.18M).
+- **Scan report details no longer render "[object Object]" rows.** Cleanup and file-changes reports store file lists (objects with file_path/change_type) in the directories field; the report modal now renders those as labeled file lists (Orphaned Files / Changed Files, capped at 100 entries) instead of joining raw objects.
+- Cleanup ETA under one minute reads "<1m" instead of "0m".
+
 ## [2.6.51] - 2026-06-11
 
 ### Fixed

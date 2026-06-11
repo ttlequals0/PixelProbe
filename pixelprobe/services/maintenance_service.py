@@ -45,6 +45,20 @@ INTEGRITY_TASK_TIMEOUT_SECS = int(
 CLEANUP_TASK_TIMEOUT_SECS = env_int('CLEANUP_TASK_TIMEOUT_SECS', 600, floor=60)
 
 
+def forget_task_result(task):
+    """Delete a consumed result from the backend (best-effort).
+
+    Results otherwise live for result_expires (24h): a full-library run leaves
+    1M+ result keys in Redis, driving the noeviction store toward its memory
+    cap - observed live as every broker/backend op slowing ~100x once ~1M
+    files had been processed.
+    """
+    try:
+        task.forget()
+    except Exception:
+        pass
+
+
 def abandon_if_stuck(task_info, timeout_secs, label):
     """Revoke and drop a dispatched task whose result never arrived.
 
@@ -62,6 +76,7 @@ def abandon_if_stuck(task_info, timeout_secs, label):
         task.revoke(terminate=False)
     except Exception:
         pass
+    forget_task_result(task)
     return True
 
 
@@ -451,7 +466,12 @@ class MaintenanceService:
                     eta_seconds = avg_time_per_file * (total_files - total_files_processed)
                     eta_hours = int(eta_seconds // 3600)
                     eta_minutes = int((eta_seconds % 3600) // 60)
-                    eta_str = f"{eta_hours}h {eta_minutes}m" if eta_hours > 0 else f"{eta_minutes}m"
+                    if eta_hours > 0:
+                        eta_str = f"{eta_hours}h {eta_minutes}m"
+                    elif eta_minutes > 0:
+                        eta_str = f"{eta_minutes}m"
+                    else:
+                        eta_str = "<1m"
                 else:
                     eta_str = "calculating..."
 
@@ -529,6 +549,8 @@ class MaintenanceService:
                         except Exception as e:
                             logger.error(f"Error processing existence check result: {e}")
                             total_files_processed += 1
+                        finally:
+                            forget_task_result(task)
                     elif abandon_if_stuck(task_info, CLEANUP_TASK_TIMEOUT_SECS, 'existence-check'):
                         # Abandoned work counts as unverifiable - NEVER deleted
                         files_abandoned += 1
@@ -1007,6 +1029,8 @@ class MaintenanceService:
                                 })
                         except Exception as e:
                             logger.error(f"Error getting task result: {e}")
+                        finally:
+                            forget_task_result(task)
                     elif abandon_if_stuck(task_info, INTEGRITY_TASK_TIMEOUT_SECS, 'integrity'):
                         files_abandoned += 1
                     else:
