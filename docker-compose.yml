@@ -63,7 +63,7 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.6.49}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.6.50}
     container_name: pixelprobe-app
     environment:
       # Security
@@ -120,16 +120,18 @@ services:
     networks:
       - pixelprobe-network
     
+    restart: unless-stopped
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 120s  # migrations run before workers serve requests
 
   # P1 Celery Worker for distributed task processing
   celery-worker:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.6.49}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.6.50}
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.50] - 2026-06-11
+
+### Fixed (startup wedge during app-only container updates)
+
+- **Startup can no longer hang forever behind a blocked migration.** Observed live: an app-only container update (worker kept running) wedged the entire boot - the v2.6.0 migration ran an unconditional `ALTER TABLE app_configs ... SET DEFAULT` on every start, which needs an ACCESS EXCLUSIVE lock; the still-running worker container held idle-in-transaction locks, the ALTER waited forever, and all gunicorn workers sat behind the migration step serving nothing. All migration connections now apply fail-fast session timeouts (`MIGRATION_LOCK_TIMEOUT_MS`, default 10s; `MIGRATION_STATEMENT_TIMEOUT_MS`, default 300s) so a blocked migration logs an error and the boot continues - migrations are idempotent and retry next start. The v2.6.0 ALTER is also now conditional (only runs when the defaults are actually missing), so it stops taking an exclusive lock on every boot.
+- **The app container restarts itself again.** The `pixelprobe` service had no restart policy (only the worker did) - a killed or crashed boot stayed dead. Added `restart: unless-stopped` and raised the healthcheck `start_period` to 120s so migration time is not counted against liveness.
+- Misleading "Created X table via migration" log lines (emitted unconditionally for `CREATE TABLE IF NOT EXISTS`) now read "Ensured X table exists".
+
 ## [2.6.49] - 2026-06-10
 
 External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus convergence of the two scan engines onto the chunk-distributed path.

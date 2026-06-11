@@ -7,12 +7,41 @@ is up-to-date. Each migration is idempotent (safe to re-run).
 
 import os
 import logging
+from contextlib import contextmanager
+
 from sqlalchemy import text, inspect, exc
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS, CONFIG_LOG_EXCLUDE_LOGGERS, DEFAULT_LOG_EXCLUDE_LOGGERS
 
 logger = logging.getLogger(__name__)
 
 MIGRATION_ADVISORY_LOCK_ID = 7283945162
+
+# DDL that blocks behind another session's lock (e.g. a still-running worker
+# container holding idle-in-transaction locks during an app-only update) must
+# fail fast, not wedge every gunicorn worker behind the migration step forever.
+# Migrations are idempotent: a timed-out one is retried on the next boot.
+try:
+    MIGRATION_LOCK_TIMEOUT_MS = int(os.environ.get('MIGRATION_LOCK_TIMEOUT_MS', 10000))
+except (TypeError, ValueError):
+    MIGRATION_LOCK_TIMEOUT_MS = 10000
+try:
+    MIGRATION_STATEMENT_TIMEOUT_MS = int(os.environ.get('MIGRATION_STATEMENT_TIMEOUT_MS', 300000))
+except (TypeError, ValueError):
+    MIGRATION_STATEMENT_TIMEOUT_MS = 300000
+
+
+def set_ddl_timeouts(conn):
+    """Apply session-level lock/statement timeouts to a migration connection."""
+    conn.execute(text(f"SET lock_timeout = {MIGRATION_LOCK_TIMEOUT_MS}"))
+    conn.execute(text(f"SET statement_timeout = {MIGRATION_STATEMENT_TIMEOUT_MS}"))
+
+
+@contextmanager
+def migration_connection(db):
+    """Engine connection with fail-fast DDL timeouts applied."""
+    with db.engine.connect() as conn:
+        set_ddl_timeouts(conn)
+        yield conn
 
 
 def run_auth_migration(db):
@@ -21,7 +50,7 @@ def run_auth_migration(db):
         inspector = inspect(db.engine)
         existing_tables = inspector.get_table_names()
 
-        with db.engine.connect() as conn:
+        with migration_connection(db) as conn:
             if 'users' not in existing_tables:
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS users (
@@ -67,7 +96,7 @@ def run_auth_migration(db):
 def run_v2_4_35_migrations(db):
     """Run migrations for v2.4.35 - add last_heartbeat column to file_changes_state"""
     try:
-        with db.engine.connect() as conn:
+        with migration_connection(db) as conn:
             table_check = conn.execute(text("""
                 SELECT table_name
                 FROM information_schema.tables
@@ -103,7 +132,7 @@ def run_v2_4_35_migrations(db):
 def run_v2_4_113_migrations(db):
     """Run migrations for v2.4.113 - add last_integrity_check_date column to scan_results"""
     try:
-        with db.engine.connect() as conn:
+        with migration_connection(db) as conn:
             table_check = conn.execute(text("""
                 SELECT table_name
                 FROM information_schema.tables
@@ -143,7 +172,7 @@ def run_v2_4_113_migrations(db):
 def run_v2_6_0_migrations(db):
     """Run migrations for v2.6.0 - add log_entries and app_configs tables"""
     try:
-        with db.engine.connect() as conn:
+        with migration_connection(db) as conn:
             # Create log_entries table
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS log_entries (
@@ -162,7 +191,7 @@ def run_v2_6_0_migrations(db):
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_log_level ON log_entries(level)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_log_scan_id ON log_entries(scan_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_log_celery_task_id ON log_entries(celery_task_id)"))
-            logger.info("Created log_entries table via migration")
+            logger.info("Ensured log_entries table exists")
 
             # Create app_configs table
             conn.execute(text("""
@@ -175,15 +204,26 @@ def run_v2_6_0_migrations(db):
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
             """))
-            logger.info("Created app_configs table via migration")
+            logger.info("Ensured app_configs table exists")
 
             # Ensure server defaults exist on timestamp columns (fixes seed INSERT
-            # failure when SQLAlchemy's create_all() created the table without them)
-            conn.execute(text("""
-                ALTER TABLE app_configs
-                    ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP,
-                    ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP
-            """))
+            # failure when SQLAlchemy's create_all() created the table without
+            # them). Conditional: the unconditional ALTER took an ACCESS
+            # EXCLUSIVE lock on every boot and wedged startup behind any other
+            # session's lock (observed 2026-06-10 during an app-only update).
+            missing_default = conn.execute(text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'app_configs'
+                  AND column_name IN ('created_at', 'updated_at')
+                  AND column_default IS NULL
+            """)).fetchone()
+            if missing_default:
+                conn.execute(text("""
+                    ALTER TABLE app_configs
+                        ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP,
+                        ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP
+                """))
+                logger.info("Added missing timestamp defaults on app_configs")
 
             # Seed default configuration values
             conn.execute(text("""
@@ -225,7 +265,7 @@ def run_v2_6_33_migrations(db):
     ]
 
     try:
-        with db.engine.connect() as conn:
+        with migration_connection(db) as conn:
             for table, column, col_type in missing_cols:
                 exists = conn.execute(text(
                     "SELECT 1 FROM information_schema.columns "
@@ -251,7 +291,7 @@ def run_v2_6_49_migrations(db):
       paths as JSON, which can exceed the old VARCHAR(500).
     """
     try:
-        with db.engine.connect() as conn:
+        with migration_connection(db) as conn:
             exists = conn.execute(text(
                 "SELECT 1 FROM information_schema.columns "
                 "WHERE table_name = 'scan_state' AND column_name = 'scan_type'"

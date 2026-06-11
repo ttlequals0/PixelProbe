@@ -10,6 +10,14 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 logger = logging.getLogger(__name__)
 
 
+def _set_ddl_timeouts(conn):
+    """Fail-fast lock/statement timeouts so DDL blocked behind another
+    session's lock cannot wedge startup (lazy import: this module is imported
+    by pixelprobe.migrations.startup)."""
+    from pixelprobe.migrations.startup import set_ddl_timeouts
+    set_ddl_timeouts(conn)
+
+
 def run_scan_id_column_widening(db):
     """
     Widen scan_id columns from VARCHAR(36) to VARCHAR(64) (v2.5.47)
@@ -24,6 +32,7 @@ def run_scan_id_column_widening(db):
 
     try:
         with db.engine.begin() as conn:
+            _set_ddl_timeouts(conn)
             for table_name, column_name, new_size in column_changes:
                 try:
                     # Check current column size (PostgreSQL-specific)
@@ -103,6 +112,7 @@ def run_index_optimizations(db):
 
     try:
         with db.engine.begin() as conn:
+            _set_ddl_timeouts(conn)
             # Drop duplicate indexes
             for index_name in duplicate_indexes:
                 try:
@@ -214,6 +224,7 @@ def run_startup_migrations(db):
             try:
                 logger.info(f"Running migration: {migration['description']}")
                 with db.engine.begin() as conn:
+                    _set_ddl_timeouts(conn)
                     conn.execute(text(migration['migration_sql']))
                 logger.info(f"Migration successful: {migration['description']}")
             except (OperationalError, ProgrammingError) as e:
