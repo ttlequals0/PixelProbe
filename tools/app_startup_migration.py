@@ -7,15 +7,11 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
+# Safe top-level import: migrations.startup imports this module only inside
+# _run_all_migrations (function scope), so there is no import cycle
+from pixelprobe.migrations.startup import set_ddl_timeouts
+
 logger = logging.getLogger(__name__)
-
-
-def _set_ddl_timeouts(conn):
-    """Fail-fast lock/statement timeouts so DDL blocked behind another
-    session's lock cannot wedge startup (lazy import: this module is imported
-    by pixelprobe.migrations.startup)."""
-    from pixelprobe.migrations.startup import set_ddl_timeouts
-    set_ddl_timeouts(conn)
 
 
 def run_scan_id_column_widening(db):
@@ -32,7 +28,7 @@ def run_scan_id_column_widening(db):
 
     try:
         with db.engine.begin() as conn:
-            _set_ddl_timeouts(conn)
+            set_ddl_timeouts(conn)
             for table_name, column_name, new_size in column_changes:
                 try:
                     # Check current column size (PostgreSQL-specific)
@@ -112,7 +108,7 @@ def run_index_optimizations(db):
 
     try:
         with db.engine.begin() as conn:
-            _set_ddl_timeouts(conn)
+            set_ddl_timeouts(conn)
             # Drop duplicate indexes
             for index_name in duplicate_indexes:
                 try:
@@ -224,7 +220,7 @@ def run_startup_migrations(db):
             try:
                 logger.info(f"Running migration: {migration['description']}")
                 with db.engine.begin() as conn:
-                    _set_ddl_timeouts(conn)
+                    set_ddl_timeouts(conn)
                     conn.execute(text(migration['migration_sql']))
                 logger.info(f"Migration successful: {migration['description']}")
             except (OperationalError, ProgrammingError) as e:

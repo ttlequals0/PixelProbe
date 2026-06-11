@@ -11,6 +11,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import text, inspect, exc
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS, CONFIG_LOG_EXCLUDE_LOGGERS, DEFAULT_LOG_EXCLUDE_LOGGERS
+from pixelprobe.utils.helpers import env_int
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +21,19 @@ MIGRATION_ADVISORY_LOCK_ID = 7283945162
 # container holding idle-in-transaction locks during an app-only update) must
 # fail fast, not wedge every gunicorn worker behind the migration step forever.
 # Migrations are idempotent: a timed-out one is retried on the next boot.
-try:
-    MIGRATION_LOCK_TIMEOUT_MS = int(os.environ.get('MIGRATION_LOCK_TIMEOUT_MS', 10000))
-except (TypeError, ValueError):
-    MIGRATION_LOCK_TIMEOUT_MS = 10000
-try:
-    MIGRATION_STATEMENT_TIMEOUT_MS = int(os.environ.get('MIGRATION_STATEMENT_TIMEOUT_MS', 300000))
-except (TypeError, ValueError):
-    MIGRATION_STATEMENT_TIMEOUT_MS = 300000
+MIGRATION_LOCK_TIMEOUT_MS = env_int('MIGRATION_LOCK_TIMEOUT_MS', 10000, floor=1000)
+MIGRATION_STATEMENT_TIMEOUT_MS = env_int('MIGRATION_STATEMENT_TIMEOUT_MS', 300000, floor=10000)
 
 
 def set_ddl_timeouts(conn):
-    """Apply session-level lock/statement timeouts to a migration connection."""
-    conn.execute(text(f"SET lock_timeout = {MIGRATION_LOCK_TIMEOUT_MS}"))
-    conn.execute(text(f"SET statement_timeout = {MIGRATION_STATEMENT_TIMEOUT_MS}"))
+    """Apply lock/statement timeouts to a migration connection.
+
+    SET LOCAL: the timeouts must die with the migration transaction. A plain
+    SET is session-scoped and survives the connection's return to the pool,
+    silently imposing migration timeouts on unrelated app queries.
+    """
+    conn.execute(text(f"SET LOCAL lock_timeout = {MIGRATION_LOCK_TIMEOUT_MS}"))
+    conn.execute(text(f"SET LOCAL statement_timeout = {MIGRATION_STATEMENT_TIMEOUT_MS}"))
 
 
 @contextmanager
@@ -442,6 +442,11 @@ def migrate_database(db):
                 logger.info("Released PostgreSQL advisory lock")
         else:
             logger.info(f"Migrations already running in another process, waiting for completion (process {os.getpid()})...")
+            # Bound the wait: if the lock holder hangs for a non-DDL reason,
+            # this would otherwise be the last remaining infinite-wait path.
+            # SET LOCAL scopes the timeout to this connection's open
+            # transaction (rolled back at close), so nothing leaks to the pool.
+            lock_conn.execute(text(f"SET LOCAL statement_timeout = {MIGRATION_STATEMENT_TIMEOUT_MS}"))
             lock_conn.execute(
                 text("SELECT pg_advisory_lock(:lock_id)"),
                 {"lock_id": MIGRATION_ADVISORY_LOCK_ID}

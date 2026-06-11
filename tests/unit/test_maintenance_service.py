@@ -191,29 +191,66 @@ class TestDeltaCheckSemantics:
         assert fires == len([t for t in totals_seen if t > 0])
 
 
-class TestCleanupTaskAbandonment:
-    """Cleanup Phase 2 mirrors the file-changes hardening: pending tasks past
-    CLEANUP_TASK_TIMEOUT_SECS are abandoned as unverifiable (never deleted),
-    so the producer loop cannot pin at max concurrency and spin forever.
-    Observed live on 2026-06-10: the loop froze at 20,000/1,187,442 with the
-    workers idle and no log output, because un-ready handles were retried
+class TestAbandonIfStuck:
+    """Tasks whose results never arrive are revoked and dropped so producer
+    loops (cleanup Phase 2, file-changes) cannot pin at max concurrency and
+    spin forever. Observed live on 2026-06-10: cleanup froze at
+    20,000/1,187,442 with idle workers because un-ready handles were retried
     indefinitely with no timeout.
     """
 
-    def test_timeout_constant_is_env_tunable(self):
-        from pixelprobe.services.maintenance_service import CLEANUP_TASK_TIMEOUT_SECS
-        assert CLEANUP_TASK_TIMEOUT_SECS == 600
-
-    def test_stale_task_is_abandoned_not_kept(self):
+    def test_stale_task_is_revoked_and_abandoned(self):
         import time as _time
-        from pixelprobe.services.maintenance_service import CLEANUP_TASK_TIMEOUT_SECS
+        from pixelprobe.services.maintenance_service import abandon_if_stuck
 
-        now = _time.monotonic()
-        fresh = {'submitted_at': now - 5}
-        stale = {'submitted_at': now - CLEANUP_TASK_TIMEOUT_SECS - 1}
+        task = MagicMock()
+        stale = {'task': task, 'path': '/m/x.mkv',
+                 'submitted_at': _time.monotonic() - 601}
 
-        def is_abandoned(task_info):
-            return (_time.monotonic() - task_info['submitted_at']) > CLEANUP_TASK_TIMEOUT_SECS
+        assert abandon_if_stuck(stale, 600, 'existence-check') is True
+        task.revoke.assert_called_once_with(terminate=False)
 
-        assert is_abandoned(stale) is True
-        assert is_abandoned(fresh) is False
+    def test_fresh_task_is_kept(self):
+        import time as _time
+        from pixelprobe.services.maintenance_service import abandon_if_stuck
+
+        task = MagicMock()
+        fresh = {'task': task, 'path': '/m/x.mkv',
+                 'submitted_at': _time.monotonic() - 5}
+
+        assert abandon_if_stuck(fresh, 600, 'existence-check') is False
+        task.revoke.assert_not_called()
+
+    def test_revoke_failure_still_abandons(self):
+        import time as _time
+        from pixelprobe.services.maintenance_service import abandon_if_stuck
+
+        task = MagicMock()
+        task.revoke.side_effect = RuntimeError('broker down')
+        stale = {'task': task, 'path': '/m/x.mkv',
+                 'submitted_at': _time.monotonic() - 601}
+
+        assert abandon_if_stuck(stale, 600, 'existence-check') is True
+
+
+class TestEnvInt:
+
+    def test_default_on_missing(self, monkeypatch):
+        from pixelprobe.utils.helpers import env_int
+        monkeypatch.delenv('PP_TEST_ENV_INT', raising=False)
+        assert env_int('PP_TEST_ENV_INT', 42) == 42
+
+    def test_parses_value(self, monkeypatch):
+        from pixelprobe.utils.helpers import env_int
+        monkeypatch.setenv('PP_TEST_ENV_INT', '7')
+        assert env_int('PP_TEST_ENV_INT', 42) == 7
+
+    def test_garbage_falls_back(self, monkeypatch):
+        from pixelprobe.utils.helpers import env_int
+        monkeypatch.setenv('PP_TEST_ENV_INT', 'not-a-number')
+        assert env_int('PP_TEST_ENV_INT', 42) == 42
+
+    def test_floor_clamps(self, monkeypatch):
+        from pixelprobe.utils.helpers import env_int
+        monkeypatch.setenv('PP_TEST_ENV_INT', '3')
+        assert env_int('PP_TEST_ENV_INT', 42, floor=10) == 10

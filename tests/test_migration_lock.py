@@ -116,4 +116,5 @@ def test_migrate_database_waiter_path(app):
             mig_mod.migrate_database(mock_db)
 
             mock_migrations.assert_not_called()
-            assert call_count[0] == 3
+            # try_lock + SET LOCAL statement_timeout (bounds the wait) + lock + unlock
+            assert call_count[0] == 4

@@ -30,23 +30,16 @@ from pixelprobe.services.scan_engine import (
     maybe_finalize_scan, sync_progress_from_chunks
 )
 from pixelprobe.services.scan_reporting import create_scan_report, add_files_batch_to_db
-from pixelprobe.utils.helpers import batch_process
+from pixelprobe.utils.helpers import batch_process, env_int
 from pixelprobe.utils.paths import is_path_under, like_prefix
 
 logger = logging.getLogger(__name__)
 
 
-def _env_secs(name, default, floor=60):
-    try:
-        return max(floor, int(os.environ.get(name, default)))
-    except (TypeError, ValueError):
-        return default
-
-
 # Discovery is the only scan task with a time limit: the incompleteness guard
 # below depends on it. Default sized for multi-hour walks of 1M+ files on
 # network storage; override via env for slower mounts.
-DISCOVERY_TASK_TIMEOUT_SECS = _env_secs('DISCOVERY_TASK_TIMEOUT_SECS', 3600)
+DISCOVERY_TASK_TIMEOUT_SECS = env_int('DISCOVERY_TASK_TIMEOUT_SECS', 3600, floor=60)
 
 _DISCOVERY_INSERT_BATCH = 500
 _CHUNK_COMMIT_BATCH = 100
@@ -415,7 +408,7 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         scan_state.start_scan(paths, force_rescan)  # phase='discovering', resets counters
         scan_state.celery_task_id = self.request.id
         scan_state.scan_type = scan_type
-        scan_state.num_workers = _env_secs('CELERY_CONCURRENCY', 4, floor=1)
+        scan_state.num_workers = env_int('CELERY_CONCURRENCY', 4, floor=1)
         scan_state.phase_number = 1
         scan_state.progress_message = 'Discovering files...'
         db.session.commit()
@@ -442,7 +435,7 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
                 logger.info(f"Launching {len(discovery_tasks)} discovery tasks")
                 result = group(discovery_tasks).apply_async()
 
-                discovery_timeout = _env_secs('DISCOVERY_RESULT_TIMEOUT_SECS', 7200)
+                discovery_timeout = env_int('DISCOVERY_RESULT_TIMEOUT_SECS', 7200, floor=60)
                 discovery_incomplete = []
                 # allow_join_result: Celery forbids result.get() inside a task
                 # by default (prefork raises RuntimeError). Blocking one slot

@@ -9,9 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (startup wedge during app-only container updates)
 
-- **Startup can no longer hang forever behind a blocked migration.** Observed live: an app-only container update (worker kept running) wedged the entire boot - the v2.6.0 migration ran an unconditional `ALTER TABLE app_configs ... SET DEFAULT` on every start, which needs an ACCESS EXCLUSIVE lock; the still-running worker container held idle-in-transaction locks, the ALTER waited forever, and all gunicorn workers sat behind the migration step serving nothing. All migration connections now apply fail-fast session timeouts (`MIGRATION_LOCK_TIMEOUT_MS`, default 10s; `MIGRATION_STATEMENT_TIMEOUT_MS`, default 300s) so a blocked migration logs an error and the boot continues - migrations are idempotent and retry next start. The v2.6.0 ALTER is also now conditional (only runs when the defaults are actually missing), so it stops taking an exclusive lock on every boot.
+- **Startup can no longer hang forever behind a blocked migration.** Observed live: an app-only container update (worker kept running) wedged the entire boot - the v2.6.0 migration ran an unconditional `ALTER TABLE app_configs ... SET DEFAULT` on every start, which needs an ACCESS EXCLUSIVE lock; the still-running worker container held idle-in-transaction locks, the ALTER waited forever, and all gunicorn workers sat behind the migration step serving nothing. All migration connections now apply fail-fast timeouts via `SET LOCAL` (`MIGRATION_LOCK_TIMEOUT_MS`, default 10s; `MIGRATION_STATEMENT_TIMEOUT_MS`, default 300s) so a blocked migration logs an error and the boot continues - migrations are idempotent and retry next start. `SET LOCAL` scopes the timeouts to the migration transaction; a plain `SET` would survive the connection's return to the pool and impose migration timeouts on unrelated app queries. The advisory-lock waiter path is bounded by the same statement timeout (it was the last remaining infinite wait), and the v2.6.0 ALTER is now conditional (only runs when the defaults are actually missing), so it stops taking an exclusive lock on every boot.
 - **The app container restarts itself again.** The `pixelprobe` service had no restart policy (only the worker did) - a killed or crashed boot stayed dead. Added `restart: unless-stopped` and raised the healthcheck `start_period` to 120s so migration time is not counted against liveness.
 - Misleading "Created X table via migration" log lines (emitted unconditionally for `CREATE TABLE IF NOT EXISTS`) now read "Ensured X table exists".
+
+### Changed
+
+- Cleanup Phase 2 progress is written by the 10-second heartbeat only (the per-100-file write added in 2.6.49 would have produced ~12,000 commits per full run for no UI benefit). Task abandonment is now a shared `abandon_if_stuck()` helper used by both the cleanup and file-changes loops, and integer env knobs parse through one `env_int()` utility.
+
+### Diagnosis notes (cleanup "stuck" reports on 2026-06-10)
+
+- The recurring frozen progress display ("Checking 4,999 / 1,187,442") was the 2.6.49 modulo display bug on a container still running the first 2.6.49 build - the worker was processing existence checks at full rate the whole time. Same-tag image rebuilds do not redeploy via the Portainer webhook; this release's version bump exists to force a clean recreate with all fixes aboard.
 
 ## [2.6.49] - 2026-06-10
 

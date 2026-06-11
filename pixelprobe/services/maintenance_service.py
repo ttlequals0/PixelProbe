@@ -14,7 +14,7 @@ import uuid
 from sqlalchemy import text
 from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
 from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState, ScanReport, LogEntry, AppConfig
-from pixelprobe.utils.helpers import ProgressTracker
+from pixelprobe.utils.helpers import ProgressTracker, env_int
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
 from pixelprobe.progress_utils import (
     update_file_changes_progress_redis,
@@ -42,9 +42,27 @@ INTEGRITY_TASK_TIMEOUT_SECS = int(
 # task pending this long is lost (worker died, broker dropped it, result
 # unreadable) and is abandoned as unverifiable - never deleted - so the
 # producer loop cannot pin at max concurrency and spin forever.
-CLEANUP_TASK_TIMEOUT_SECS = int(
-    os.environ.get('CLEANUP_TASK_TIMEOUT_SECS', 600)
-)
+CLEANUP_TASK_TIMEOUT_SECS = env_int('CLEANUP_TASK_TIMEOUT_SECS', 600, floor=60)
+
+
+def abandon_if_stuck(task_info, timeout_secs, label):
+    """Revoke and drop a dispatched task whose result never arrived.
+
+    Returns True when the task was abandoned (worker died, broker dropped the
+    message, or its result is unreadable); callers count it as unverifiable
+    work - never as a deletion candidate.
+    """
+    age = time.monotonic() - task_info.get('submitted_at', 0)
+    if age <= timeout_secs:
+        return False
+    task = task_info['task']
+    logger.warning("Abandoning stuck %s task id=%s path=%s age=%.0fs",
+                   label, task.id, task_info.get('path'), age)
+    try:
+        task.revoke(terminate=False)
+    except Exception:
+        pass
+    return True
 
 
 def safe_task_ready(task, max_retries=5, base_delay=1.0):
@@ -415,9 +433,6 @@ class MaintenanceService:
             unknown_count = 0  # Files we could not verify (mount down, IO error, etc.)
             files_abandoned = 0
             phase2_start_time = time.time()  # Track start time for ETA calculation
-
-            # Track when we last updated progress
-            last_progress_update = 0
             last_heartbeat_time = time.time()
 
             def write_cleanup_progress():
@@ -451,9 +466,9 @@ class MaintenanceService:
                     logger.info("Cleanup cancelled during file checking")
                     break
 
-                # Heartbeat every 10 s: progress write + log line so a stalled
-                # loop is visible (the delta block below may not fire for long
-                # stretches when results arrive in bursts)
+                # Heartbeat every 10 s: the only progress writer for this loop
+                # (a count-based write here misses bursts and floods commits;
+                # the log line makes a stalled loop visible)
                 current_time = time.time()
                 if current_time - last_heartbeat_time >= 10:
                     write_cleanup_progress()
@@ -463,7 +478,6 @@ class MaintenanceService:
                         f"{files_abandoned} abandoned"
                     )
                     last_heartbeat_time = current_time
-                    last_progress_update = total_files_processed
 
                 # Submit new tasks while under the limit
                 while len(active_tasks) < max_active_tasks and file_index < len(all_results):
@@ -508,39 +522,19 @@ class MaintenanceService:
                         except Exception as e:
                             logger.error(f"Error processing existence check result: {e}")
                             total_files_processed += 1
+                    elif abandon_if_stuck(task_info, CLEANUP_TASK_TIMEOUT_SECS, 'existence-check'):
+                        # Abandoned work counts as unverifiable - NEVER deleted
+                        files_abandoned += 1
+                        unknown_count += 1
+                        total_files_processed += 1
                     else:
-                        # A task pending past the timeout is orphaned (worker
-                        # died, broker lost it, or its result is unreadable).
-                        # Drop it as unverifiable - NEVER deleted - so the loop
-                        # cannot pin at max concurrency and spin forever.
-                        age = time.monotonic() - task_info['submitted_at']
-                        if age > CLEANUP_TASK_TIMEOUT_SECS:
-                            logger.warning(
-                                "Abandoning stuck existence-check task id=%s path=%s age=%.0fs",
-                                task.id, task_info['path'], age,
-                            )
-                            try:
-                                task.revoke(terminate=False)
-                            except Exception:
-                                pass
-                            files_abandoned += 1
-                            unknown_count += 1
-                            total_files_processed += 1
-                        else:
-                            still_active.append(task_info)
+                        still_active.append(task_info)
 
                 active_tasks = still_active
 
                 # If no new tasks submitted and active tasks exist, wait a bit
                 if file_index < len(all_results) and len(active_tasks) > 0:
                     time.sleep(0.1)  # Brief sleep to avoid busy waiting
-
-                # Delta progress: write once at least 100 files completed since
-                # the last write (a modulo check here misses bursts that skip
-                # over exact multiples, freezing the UI counter)
-                if total_files_processed - last_progress_update >= 100:
-                    write_cleanup_progress()
-                    last_progress_update = total_files_processed
 
             # Final update
             cleanup_record.files_processed = total_files_processed
@@ -1006,24 +1000,10 @@ class MaintenanceService:
                                 })
                         except Exception as e:
                             logger.error(f"Error getting task result: {e}")
+                    elif abandon_if_stuck(task_info, INTEGRITY_TASK_TIMEOUT_SECS, 'integrity'):
+                        files_abandoned += 1
                     else:
-                        # If the task has been pending longer than the timeout,
-                        # treat it as orphaned (worker died or broker lost it)
-                        # and drop it so the producer loop can advance instead
-                        # of pinning at max concurrency forever.
-                        age = time.monotonic() - task_info.get('submitted_at', 0)
-                        if age > INTEGRITY_TASK_TIMEOUT_SECS:
-                            logger.warning(
-                                "Abandoning stuck integrity task id=%s path=%s age=%.0fs",
-                                task.id, task_info['path'], age,
-                            )
-                            try:
-                                task.revoke(terminate=False)
-                            except Exception:
-                                pass
-                            files_abandoned += 1
-                        else:
-                            still_active.append(task_info)
+                        still_active.append(task_info)
                 active_tasks = still_active
 
                 # Submit new tasks based on available slots
