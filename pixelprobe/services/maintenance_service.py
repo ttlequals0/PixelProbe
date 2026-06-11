@@ -38,6 +38,14 @@ INTEGRITY_TASK_TIMEOUT_SECS = int(
     os.environ.get('INTEGRITY_TASK_TIMEOUT_SECS', 10800)
 )
 
+# Cleanup existence-check task timeout. These tasks stat() one path (~ms), so a
+# task pending this long is lost (worker died, broker dropped it, result
+# unreadable) and is abandoned as unverifiable - never deleted - so the
+# producer loop cannot pin at max concurrency and spin forever.
+CLEANUP_TASK_TIMEOUT_SECS = int(
+    os.environ.get('CLEANUP_TASK_TIMEOUT_SECS', 600)
+)
+
 
 def safe_task_ready(task, max_retries=5, base_delay=1.0):
     """
@@ -400,20 +408,62 @@ class MaintenanceService:
 
             # Parallel checking with throttling (similar to file changes check)
             max_active_tasks = 5000  # Limit concurrent tasks
-            active_tasks = []
+            active_tasks = []  # [{'task', 'path', 'submitted_at'}]
             file_index = 0
             total_files_processed = 0
             orphaned_files = []  # Collect orphaned file info (status == 'absent' only)
             unknown_count = 0  # Files we could not verify (mount down, IO error, etc.)
+            files_abandoned = 0
             phase2_start_time = time.time()  # Track start time for ETA calculation
 
             # Track when we last updated progress
             last_progress_update = 0
+            last_heartbeat_time = time.time()
+
+            def write_cleanup_progress():
+                pct = int((total_files_processed / total_files * 100)) if total_files > 0 else 0
+
+                elapsed_seconds = time.time() - phase2_start_time
+                if total_files_processed > 0:
+                    avg_time_per_file = elapsed_seconds / total_files_processed
+                    eta_seconds = avg_time_per_file * (total_files - total_files_processed)
+                    eta_hours = int(eta_seconds // 3600)
+                    eta_minutes = int((eta_seconds % 3600) // 60)
+                    eta_str = f"{eta_hours}h {eta_minutes}m" if eta_hours > 0 else f"{eta_minutes}m"
+                else:
+                    eta_str = "calculating..."
+
+                cleanup_record.files_processed = total_files_processed
+                cleanup_record.phase_current = total_files_processed
+                cleanup_record.orphaned_found = len(orphaned_files)
+                cleanup_record.progress_message = (
+                    f'Phase 2 of 3: Checking {total_files_processed:,} / {total_files:,} files ({pct}%) - '
+                    f'{len(orphaned_files)} orphaned found, {len(active_tasks)} active tasks, ETA: {eta_str}'
+                )
+                db.session.commit()
+
+                with self.cleanup_lock:
+                    self.cleanup_state['files_processed'] = total_files_processed
+                    self.cleanup_state['orphaned_found'] = len(orphaned_files)
 
             while file_index < len(all_results) or len(active_tasks) > 0:
                 if self._is_cancelled(cleanup_record):
                     logger.info("Cleanup cancelled during file checking")
                     break
+
+                # Heartbeat every 10 s: progress write + log line so a stalled
+                # loop is visible (the delta block below may not fire for long
+                # stretches when results arrive in bursts)
+                current_time = time.time()
+                if current_time - last_heartbeat_time >= 10:
+                    write_cleanup_progress()
+                    logger.info(
+                        f"Cleanup progress: {total_files_processed}/{total_files} processed, "
+                        f"{len(active_tasks)} active, {len(all_results) - file_index} remaining, "
+                        f"{files_abandoned} abandoned"
+                    )
+                    last_heartbeat_time = current_time
+                    last_progress_update = total_files_processed
 
                 # Submit new tasks while under the limit
                 while len(active_tasks) < max_active_tasks and file_index < len(all_results):
@@ -424,12 +474,17 @@ class MaintenanceService:
                         args=[result.id, result.file_path],
                         priority=6
                     )
-                    active_tasks.append(task)
+                    active_tasks.append({
+                        'task': task,
+                        'path': result.file_path,
+                        'submitted_at': time.monotonic(),
+                    })
                     file_index += 1
 
                 # Collect completed tasks and free up slots
                 still_active = []
-                for task in active_tasks:
+                for task_info in active_tasks:
+                    task = task_info['task']
                     if safe_task_ready(task):
                         try:
                             check_result = safe_task_get(task, timeout=1)
@@ -454,7 +509,25 @@ class MaintenanceService:
                             logger.error(f"Error processing existence check result: {e}")
                             total_files_processed += 1
                     else:
-                        still_active.append(task)
+                        # A task pending past the timeout is orphaned (worker
+                        # died, broker lost it, or its result is unreadable).
+                        # Drop it as unverifiable - NEVER deleted - so the loop
+                        # cannot pin at max concurrency and spin forever.
+                        age = time.monotonic() - task_info['submitted_at']
+                        if age > CLEANUP_TASK_TIMEOUT_SECS:
+                            logger.warning(
+                                "Abandoning stuck existence-check task id=%s path=%s age=%.0fs",
+                                task.id, task_info['path'], age,
+                            )
+                            try:
+                                task.revoke(terminate=False)
+                            except Exception:
+                                pass
+                            files_abandoned += 1
+                            unknown_count += 1
+                            total_files_processed += 1
+                        else:
+                            still_active.append(task_info)
 
                 active_tasks = still_active
 
@@ -462,40 +535,11 @@ class MaintenanceService:
                 if file_index < len(all_results) and len(active_tasks) > 0:
                     time.sleep(0.1)  # Brief sleep to avoid busy waiting
 
-                # Update progress periodically (every 100 files OR if this is the first update)
-                if (total_files_processed % 100 == 0 and total_files_processed > last_progress_update) or (total_files_processed > 0 and last_progress_update == 0):
-                    cleanup_record.files_processed = total_files_processed
-                    cleanup_record.phase_current = total_files_processed
-                    cleanup_record.orphaned_found = len(orphaned_files)
-                    pct = int((total_files_processed / total_files * 100)) if total_files > 0 else 0
-
-                    # Calculate ETA
-                    elapsed_seconds = time.time() - phase2_start_time
-                    if total_files_processed > 0:
-                        avg_time_per_file = elapsed_seconds / total_files_processed
-                        files_remaining = total_files - total_files_processed
-                        eta_seconds = avg_time_per_file * files_remaining
-
-                        # Format ETA as hours:minutes
-                        eta_hours = int(eta_seconds // 3600)
-                        eta_minutes = int((eta_seconds % 3600) // 60)
-                        if eta_hours > 0:
-                            eta_str = f"{eta_hours}h {eta_minutes}m"
-                        else:
-                            eta_str = f"{eta_minutes}m"
-                    else:
-                        eta_str = "calculating..."
-
-                    cleanup_record.progress_message = (
-                        f'Phase 2 of 3: Checking {total_files_processed:,} / {total_files:,} files ({pct}%) - '
-                        f'{len(orphaned_files)} orphaned found, {len(active_tasks)} active tasks, ETA: {eta_str}'
-                    )
-                    db.session.commit()
-
-                    with self.cleanup_lock:
-                        self.cleanup_state['files_processed'] = total_files_processed
-                        self.cleanup_state['orphaned_found'] = len(orphaned_files)
-
+                # Delta progress: write once at least 100 files completed since
+                # the last write (a modulo check here misses bursts that skip
+                # over exact multiples, freezing the UI counter)
+                if total_files_processed - last_progress_update >= 100:
+                    write_cleanup_progress()
                     last_progress_update = total_files_processed
 
             # Final update
@@ -504,7 +548,8 @@ class MaintenanceService:
             db.session.commit()
 
             logger.info(f"Phase 2 complete: Checked {total_files_processed} files, "
-                        f"found {len(orphaned_files)} orphaned, {unknown_count} unverifiable (skipped)")
+                        f"found {len(orphaned_files)} orphaned, {unknown_count} unverifiable (skipped), "
+                        f"{files_abandoned} abandoned")
 
             # Extract IDs and paths for Phase 3
             orphaned_ids = [f['file_id'] for f in orphaned_files]

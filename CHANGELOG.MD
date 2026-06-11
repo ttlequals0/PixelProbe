@@ -31,6 +31,7 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 - **Per-scan completion totals (WORKER-7 adjacent).** The never-dispatched `scan_completion_monitor` computed "files processed" from a full-table count across all scans ever; the finalizer sums this scan's chunks.
 - **Scheduler duplicate-schedule cleanup commits once after iteration (SCHED-3, Low)** instead of committing inside the loop over live query results.
 - **Interval schedule fire-time is computed before the job is added (SCHED-4, Low).** Extracted `compute_next_interval_run()` (unit-testable branches: future-from-last-run, stored-future, past -> now+interval, no history) and passed into `add_job` directly, removing the add-then-modify window where a job could fire at the wrong time.
+- **Orphan cleanup can no longer wedge silently at max concurrency.** Observed live: cleanup froze at 20,000/1,187,442 files with idle workers and zero log output - un-ready task handles were retried forever with no timeout, and progress only wrote when the counter landed on an exact multiple of 100. Cleanup Phase 2 now mirrors the file-changes hardening: per-task `submitted_at` tracking with abandonment after `CLEANUP_TASK_TIMEOUT_SECS` (default 600s; abandoned files are counted unverifiable and NEVER deleted), a 10-second progress heartbeat with a log line, and delta-based progress writes instead of the modulo check.
 
 ### Security
 

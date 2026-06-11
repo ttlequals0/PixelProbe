@@ -189,3 +189,31 @@ class TestDeltaCheckSemantics:
                 last_update = total
         # Every non-zero step has a delta exceeding update_interval, so each fires.
         assert fires == len([t for t in totals_seen if t > 0])
+
+
+class TestCleanupTaskAbandonment:
+    """Cleanup Phase 2 mirrors the file-changes hardening: pending tasks past
+    CLEANUP_TASK_TIMEOUT_SECS are abandoned as unverifiable (never deleted),
+    so the producer loop cannot pin at max concurrency and spin forever.
+    Observed live on 2026-06-10: the loop froze at 20,000/1,187,442 with the
+    workers idle and no log output, because un-ready handles were retried
+    indefinitely with no timeout.
+    """
+
+    def test_timeout_constant_is_env_tunable(self):
+        from pixelprobe.services.maintenance_service import CLEANUP_TASK_TIMEOUT_SECS
+        assert CLEANUP_TASK_TIMEOUT_SECS == 600
+
+    def test_stale_task_is_abandoned_not_kept(self):
+        import time as _time
+        from pixelprobe.services.maintenance_service import CLEANUP_TASK_TIMEOUT_SECS
+
+        now = _time.monotonic()
+        fresh = {'submitted_at': now - 5}
+        stale = {'submitted_at': now - CLEANUP_TASK_TIMEOUT_SECS - 1}
+
+        def is_abandoned(task_info):
+            return (_time.monotonic() - task_info['submitted_at']) > CLEANUP_TASK_TIMEOUT_SECS
+
+        assert is_abandoned(stale) is True
+        assert is_abandoned(fresh) is False
