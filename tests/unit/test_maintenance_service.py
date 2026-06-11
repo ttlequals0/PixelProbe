@@ -300,24 +300,21 @@ class TestSafeTaskGet:
             assert safe_task_get(task, timeout=1) == result
 
 
-class TestUnsubscribeResult:
-    """Dispatch-time pub/sub subscriptions must be dropped: the producer loops
-    never read that socket, so Redis kills the connection on buffer overrun."""
+class TestDispatchResultSubscriptionDisabled:
+    """apply_async must not subscribe the producer to result pub/sub channels:
+    nothing in the producer reads that socket, so Redis kills the connection
+    on output-buffer overrun (observed every ~3min during cleanup runs)."""
 
-    def test_cancels_result_channel_subscription(self):
-        from pixelprobe.services.maintenance_service import unsubscribe_result
+    def test_on_task_call_is_noop_instance_override(self):
+        from celery import Celery
+        from pixelprobe.utils.celery_utils import disable_dispatch_result_subscription
 
-        task = MagicMock()
-        task.id = 'task-1'
-        unsubscribe_result(task)
-        task.backend.result_consumer.cancel_for.assert_called_once_with('task-1')
+        celery = Celery('t', broker='redis://localhost:6379/0',
+                        backend='redis://localhost:6379/0')
+        disable_dispatch_result_subscription(celery)
 
-    def test_swallows_backend_errors(self):
-        from pixelprobe.services.maintenance_service import unsubscribe_result
-
-        task = MagicMock()
-        task.backend.result_consumer.cancel_for.side_effect = RuntimeError('dead socket')
-        unsubscribe_result(task)
+        assert 'on_task_call' in vars(celery.backend)
+        assert celery.backend.on_task_call(MagicMock(), 'task-1') is None
 
 
 class TestEnvInt:

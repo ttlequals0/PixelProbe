@@ -25,6 +25,22 @@ def check_celery_available():
     return celery_enabled
 
 
+def disable_dispatch_result_subscription(celery_instance):
+    """Stop apply_async subscribing the producer to result pub/sub channels.
+
+    send_task calls backend.on_task_call -> SUBSCRIBE per dispatched task.
+    Producers read stored result meta (safe_task_get) and never drain that
+    socket, so its replies pile up until Redis force-closes the connection
+    (client-output-buffer-limit, observed every ~3min during cleanup runs).
+    AsyncResult.get() still works: it subscribes itself (add_pending_result)
+    and reconciles from stored meta. Producer-side GroupResult.join_native()
+    would NOT resolve promptly without the dispatch-time subscription - the
+    only group joins live worker-side (discovery), where this hook was
+    already skipped via task_join_will_block().
+    """
+    celery_instance.backend.on_task_call = lambda producer, task_id: None
+
+
 def is_db_connection_corruption(exc) -> bool:
     """Detect post-fork PostgreSQL connection corruption.
 

@@ -61,21 +61,6 @@ def forget_task_result(task):
         pass
 
 
-def unsubscribe_result(task):
-    """Drop the result-channel subscription Celery makes at dispatch (best-effort).
-
-    apply_async outside a worker subscribes the producer to the task's result
-    pub/sub channel (RedisBackend.on_task_call). These loops poll the stored
-    meta instead and never read that socket, so each published result would
-    sit unread in the connection's output buffer until Redis force-closes the
-    connection (client-output-buffer-limit, observed every ~70s live).
-    """
-    try:
-        task.backend.result_consumer.cancel_for(task.id)
-    except Exception:
-        pass
-
-
 def abandon_if_stuck(task_info, timeout_secs, label):
     """Revoke and drop a dispatched task whose result never arrived.
 
@@ -540,7 +525,6 @@ class MaintenanceService:
                         args=[result.id, result.file_path],
                         priority=6
                     )
-                    unsubscribe_result(task)
                     active_tasks.append({
                         'task': task,
                         'path': result.file_path,
@@ -1108,7 +1092,6 @@ class MaintenanceService:
                         task_result = calculate_file_hash_task.apply_async(
                             args=[result['id'], result['file_path'], result['file_hash'], stored_modified_iso]
                         )
-                        unsubscribe_result(task_result)
                         active_tasks.append({
                             'task': task_result,
                             'size': file_size,

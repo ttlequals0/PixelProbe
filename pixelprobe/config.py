@@ -80,7 +80,8 @@ class Config:
     # Celery 5.x requires lowercase config keys - keep both for compatibility
     CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
     broker_url = CELERY_BROKER_URL  # New style for Celery 5.x
-    result_backend = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+    CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+    result_backend = CELERY_RESULT_BACKEND  # New style for Celery 5.x
     task_serializer = 'json'
     result_serializer = 'json'
     accept_content = ['json']

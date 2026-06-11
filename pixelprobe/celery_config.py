@@ -9,6 +9,8 @@ import os
 from celery import Celery
 from celery.signals import worker_process_init
 
+from pixelprobe.utils.celery_utils import disable_dispatch_result_subscription
+
 
 def _make_context_task(celery_instance, flask_app):
     """Create a ContextTask class that runs Celery tasks inside a Flask app context."""
@@ -131,7 +133,9 @@ def create_celery(app=None):
     if app:
         _make_context_task(celery, app)
         celery.conf.update(app.config)
-    
+
+    disable_dispatch_result_subscription(celery)
+
     return celery
 
 

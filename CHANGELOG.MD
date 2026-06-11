@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.55] - 2026-06-11
+
+### Fixed
+
+- **The Flask app's Celery instance now reads the correct result backend URL in containers.** `config.py` exposed only the lowercase `result_backend` attribute, which Flask's `init_app` (uppercase-only) never copied into `app.config`, so the app-bound Celery instance silently defaulted its result backend to `redis://localhost:6379/0` - every `AsyncResult.state` check in scan routes and the scheduler failed against a nonexistent local Redis and returned unknown. Added the uppercase `CELERY_RESULT_BACKEND` mirror, matching the existing broker-URL pattern. (Pre-existing bug surfaced by review of the change below.)
+- **Producer dispatches no longer open a result pub/sub connection at all, eliminating the recurring Redis forced-disconnect cycle.** The 2.6.54 fix removed the stall mechanism (verified: 24-minute cleanup run, zero stalls), but Redis still force-closed the producer's pub/sub connection every ~3 minutes during runs: `apply_async` subscribes to each task's result channel (`backend.on_task_call`), and the subscribe/unsubscribe replies themselves accumulated unread in the socket's output buffer. The result backend's dispatch-time subscription hook is now disabled for app instances (`disable_dispatch_result_subscription` in `utils/celery_utils.py`) - producers consume results via stored meta and need no subscription, and `result.get()` users are unaffected because `get()` subscribes itself and reconciles from stored meta. The now-redundant per-dispatch `unsubscribe_result()` from 2.6.54 was removed. Also saves ~1,600 useless Redis ops/s during maintenance runs.
+
 ## [2.6.54] - 2026-06-11
 
 ### Fixed
