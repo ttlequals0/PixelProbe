@@ -394,13 +394,20 @@ class MaintenanceService:
                 cleanup_record.progress_message = f'Phase 1 of 3: Scanning {len(file_paths)} specific file(s) in database...'
                 db.session.commit()
                 # Filter to only the specified file paths
-                all_results = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+                all_results = ScanResult.query.filter(
+                    ScanResult.file_path.in_(file_paths)
+                ).with_entities(ScanResult.id, ScanResult.file_path).all()
                 logger.info(f"Cleanup scoped to {len(file_paths)} specific file(s), found {len(all_results)} in database")
             else:
                 cleanup_record.progress_message = 'Phase 1 of 3: Scanning database entries...'
                 db.session.commit()
                 # Get all database entries
-                all_results = ScanResult.query.all()
+                # (id, file_path) tuples only: full ORM objects for 1.18M rows
+                # cost multiple GB inside the gunicorn worker hosting this
+                # thread, and the loop below reads exactly these two fields
+                all_results = ScanResult.query.with_entities(
+                    ScanResult.id, ScanResult.file_path
+                ).all()
                 logger.info(f"Cleanup scanning all {len(all_results)} files in database")
 
             total_files = len(all_results)

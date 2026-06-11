@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.51] - 2026-06-11
+
+### Fixed
+
+- **Orphan cleanup no longer loads 1.18M full ORM objects into the web worker.** Phase 1 used `ScanResult.query.all()` - several GB of resident memory inside the gunicorn worker hosting the cleanup thread, the most likely driver of the original silent-stall symptoms (memory pressure makes every loop iteration glacial, so the producer looks blocked, cancel windows get missed, and nothing logs). The loop reads exactly two fields, so Phase 1 now loads `(id, file_path)` tuples via `with_entities` - roughly a 20-30x memory reduction at 1.18M files. The file-changes flow already loaded lean tuples; cleanup was the only full-ORM holdout.
+
 ## [2.6.50] - 2026-06-11
 
 ### Fixed (startup wedge during app-only container updates)
