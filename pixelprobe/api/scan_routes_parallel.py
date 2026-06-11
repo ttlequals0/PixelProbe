@@ -5,35 +5,17 @@ This module provides an improved scan endpoint that properly utilizes all
 available Celery workers instead of creating a single monolithic task.
 """
 
-from flask import Blueprint, request, current_app
-from uuid import uuid4
+from flask import Blueprint, request
 import logging
 
 from pixelprobe.utils.security import validate_directory_path, AuditLogger, PathTraversalError, validate_json_input
 from pixelprobe.utils.rate_limiting import rate_limit
 from pixelprobe.auth import auth_required
-from pixelprobe.models import db, ScanState
-from pixelprobe.constants import TERMINAL_SCAN_PHASES
+from pixelprobe.api.scan_launch import launch_directory_scan
 
 logger = logging.getLogger(__name__)
 
 parallel_scan_bp = Blueprint('parallel_scan', __name__, url_prefix='/api')
-
-
-from pixelprobe.utils.celery_utils import check_celery_available
-
-
-def _release_scan_claim(scan_id):
-    """Release a scan slot claimed for a parallel scan that then failed to launch,
-    so a failed launch doesn't leave the scan state stuck active."""
-    try:
-        st = ScanState.query.filter_by(scan_id=scan_id).first()
-        if st and st.is_active:
-            st.is_active = False
-            st.phase = 'error'
-            db.session.commit()
-    except Exception:
-        db.session.rollback()
 
 
 @parallel_scan_bp.route('/scan-parallel', methods=['POST'])
@@ -44,23 +26,12 @@ def _release_scan_claim(scan_id):
     'force_rescan': {'required': False, 'type': bool}
 })
 def scan_parallel():
-    """
-    Enhanced parallel scan endpoint that distributes chunks across all workers
-    
-    This endpoint uses the new parallel_scan_orchestrator task which:
-    1. Discovers all files to scan
-    2. Creates manageable chunks (~1000 files each)
-    3. Spawns parallel tasks for each chunk
-    4. Distributes work across ALL available Celery workers
-    
-    Returns:
-        JSON response with scan status and task information
-    """
+    """DEPRECATED alias of /api/scan: both run the chunk-distributed engine.
+    Kept for API compatibility; will be removed in a future major release."""
     data = request.get_json()
     directories = data['directories']
     force_rescan = data.get('force_rescan', False)
-    
-    # Validate directories
+
     validated_dirs = []
     for directory in directories:
         try:
@@ -74,91 +45,14 @@ def scan_parallel():
     if not validated_dirs:
         return {'error': 'No valid directories to scan'}, 400
 
-    # ATOMIC start guard (mirrors /api/scan): lock the scan-state row, re-check
-    # under the lock, and claim it so concurrent /scan or /scan-parallel calls get
-    # a 409 instead of both starting. The claimed scan_id is reused by the
-    # orchestrator (which looks up ScanState by scan_id), avoiding a duplicate row.
-    scan_id = str(uuid4())
-    try:
-        scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
-        if not scan_state:
-            scan_state = ScanState()
-            db.session.add(scan_state)
-            db.session.flush()
-            scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
-
-        if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
-            db.session.rollback()
-            return {
-                'error': 'A scan is already in progress',
-                'scan_id': scan_state.scan_id,
-                'phase': scan_state.phase
-            }, 409
-
-        scan_state.scan_id = scan_id
-        scan_state.is_active = True
-        scan_state.phase = 'initializing'
-        db.session.commit()
-    except Exception as lock_error:
-        db.session.rollback()
-        logger.warning(f"Could not acquire scan lock for parallel scan: {lock_error}")
-        return {
-            'error': 'A scan is already starting. Please wait a moment and try again.'
-        }, 409
-
-    # Celery must be available to actually run the scan; if not, release the claim
-    # so the slot isn't left stuck active.
-    if not check_celery_available():
-        _release_scan_claim(scan_id)
-        return {
-            'error': 'Celery workers not available',
-            'message': 'Parallel scanning requires Celery workers to be running'
-        }, 503
-
-    try:
-        from pixelprobe.tasks_parallel import parallel_scan_orchestrator
-
-        # Launch the parallel scan orchestrator (reuses the claimed scan_id)
-        task = parallel_scan_orchestrator.delay(
-            scan_id=scan_id,
-            paths=validated_dirs,
-            force_rescan=force_rescan
-        )
-        
-        logger.info(f"Launched parallel scan orchestrator {task.id} for scan {scan_id}")
-
-        # Get worker count for informational purposes only. This must NOT be able
-        # to fail the request after the task is already dispatched -- a broker/
-        # inspect hiccup here would otherwise release the claim and mark a live
-        # scan inactive (causing its chunks to self-cancel).
-        total_workers = 0
-        try:
-            from celery import current_app as celery_app
-            stats = celery_app.control.inspect().stats()
-            total_workers = sum(len(worker_stats.get('pool', {}).get('processes', []))
-                               for worker_stats in stats.values()) if stats else 0
-        except Exception as stats_err:
-            logger.warning(f"Could not get worker stats (non-fatal): {stats_err}")
-
-        return {
-            'status': 'launched',
-            'scan_id': scan_id,
-            'task_id': task.id,
-            'message': f'Parallel scan launched - will distribute work across {total_workers} workers',
-            'celery_workers': total_workers,
-            'scan_type': 'parallel_v2',
-            'force_rescan': force_rescan,
-            'directories': validated_dirs
-        }
-
-    except ImportError as e:
-        logger.error(f"Failed to import parallel tasks: {e}", exc_info=True)
-        _release_scan_claim(scan_id)
-        return {'error': 'Parallel scanning module not available'}, 500
-    except Exception as e:
-        logger.error(f"Failed to launch parallel scan: {e}", exc_info=True)
-        _release_scan_claim(scan_id)
-        return {'error': 'Failed to launch parallel scan'}, 500
+    payload, status = launch_directory_scan(validated_dirs, force_rescan=force_rescan,
+                                            scan_type='parallel')
+    if status == 200:
+        payload['status'] = 'launched'  # legacy response shape for this endpoint
+        payload['scan_type'] = 'parallel_v2'
+        payload['force_rescan'] = force_rescan
+        payload['directories'] = validated_dirs
+    return payload, status
 
 
 @parallel_scan_bp.route('/scan-parallel/status/<scan_id>', methods=['GET'])

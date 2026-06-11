@@ -5,6 +5,7 @@ Handles user authentication, session management, and API token validation
 
 import hmac
 import logging
+import os
 from functools import wraps
 from datetime import datetime, timezone
 
@@ -47,9 +48,11 @@ def init_auth(app):
     login_manager.login_view = 'auth_ui.login'
     login_manager.login_message = 'Please log in to access this page.'
 
-    # Session configuration for security
+    # Session configuration for security. Secure cookies default ON; plain-HTTP
+    # LAN deployments must opt out with SESSION_COOKIE_SECURE=false.
+    cookie_secure = os.environ.get('SESSION_COOKIE_SECURE', 'true').lower() != 'false'
     app.config.update(
-        SESSION_COOKIE_SECURE=app.config.get('SESSION_COOKIE_SECURE', False),  # Set True for HTTPS
+        SESSION_COOKIE_SECURE=app.config.get('SESSION_COOKIE_SECURE', cookie_secure),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax',
         PERMANENT_SESSION_LIFETIME=86400  # 24 hours

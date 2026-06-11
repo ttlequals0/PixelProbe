@@ -156,6 +156,9 @@ class TestFileChangesProgressRedis:
             )
 
         keys_used = {call.args[0] for call in fake_client.hset.call_args_list}
+        # scan progress writes go through a pipeline since v2.6.49
+        keys_used |= {call.args[0]
+                      for call in fake_client.pipeline.return_value.hset.call_args_list}
         assert 'file_changes_progress:abc' in keys_used
         assert 'scan_progress:abc' in keys_used
 

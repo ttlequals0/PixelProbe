@@ -116,12 +116,11 @@ User Request → Flask App → Celery Task → Redis Queue → Worker Pool → E
 All tasks use a single queue for simplicity and load balancing.
 
 **Task Types**:
-- `scan_media_task`: Scan files for corruption
-- `scan_files_task`: Batch file scanning
-- `discover_directory_task`: Parallel directory discovery
-- `process_chunk_task`: Process file chunks
-- `cleanup_orphaned_task`: Remove missing files
-- `scheduled_scan_task`: Automated scans
+- `parallel_scan_orchestrator`: Directory scan orchestration (discover -> chunk -> fan out)
+- `discover_directory_task`: Parallel directory discovery (bulk-inserts pending rows)
+- `process_chunk_task`: Process FCP path-range chunks (last chunk finalizes the scan)
+- `scan_media_task`: Single-file scans + compatibility shim for queued directory scans
+- `scan_files_task`: Selected-file batch rescans
 - `health_check_task`: System health monitoring
 
 ### Parallel Scanning Workflow
@@ -187,14 +186,15 @@ Web UI → API Request → Flask Route → Scan Service → Celery Task → Redi
 
 ### Progress Update Flow
 ```
-Celery Worker → Redis (scan_progress:{id}) → API Poll → Web UI
-        ↓ (periodic + on completion)
-   PostgreSQL (final sync via _mark_scan_completed / _final_sync_redis_to_db)
+Chunk task → PostgreSQL (scan_state + scan_chunks, every 100 files or 60s)
+        ↓ (mirrored on each write)
+   Redis (scan_progress:{id}) → API Poll → Web UI
 ```
 
-Redis is the primary real-time progress store. Workers write counters to Redis on every
-file processed. The API reads Redis for active scans and PostgreSQL for completed scans.
-PostgreSQL is updated periodically by the UI worker task and at scan completion.
+PostgreSQL is the source of truth for progress; chunk tasks mirror each write to Redis
+for low-latency UI polling, and the API reads Redis first with a database fallback.
+The last finishing chunk finalizes the scan (totals, report, healthcheck ping) under a
+row lock; the stuck-scan sweeper is the backstop.
 
 ### Result Storage Flow
 ```

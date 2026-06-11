@@ -22,7 +22,8 @@ import tempfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
-from pixelprobe.utils.security import safe_subprocess_run, validate_file_path
+from pixelprobe.utils.security import safe_subprocess_run, validate_file_path, ensure_cli_safe_path
+from pixelprobe.utils.paths import is_path_under
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def _ffprobe_with_timeout(file_path, timeout=None):
     if timeout is None:
         timeout = FFPROBE_TIMEOUT_SECS
     result = safe_subprocess_run(
-        ['ffprobe', '-show_format', '-show_streams', '-of', 'json', file_path],
+        ['ffprobe', '-show_format', '-show_streams', '-of', 'json', ensure_cli_safe_path(file_path)],
         capture_output=True, timeout=timeout
     )
     if result.returncode != 0:
@@ -443,7 +444,7 @@ class PixelProbe:
                         
                         if entry.is_dir(follow_symlinks=False):
                             # Skip excluded directories
-                            if not any(full_path.startswith(exc) for exc in self.excluded_paths):
+                            if not any(is_path_under(full_path, exc) for exc in self.excluded_paths):
                                 # Recursively scan subdirectory
                                 scan_directory(full_path)
                         elif entry.is_file(follow_symlinks=False):
@@ -489,7 +490,7 @@ class PixelProbe:
             
         # Check if path is excluded
         for excluded_path in self.excluded_paths:
-            if file_path.startswith(excluded_path):
+            if is_path_under(file_path, excluded_path):
                 return False
         
         # Check if filename matches exclusion patterns
@@ -990,7 +991,7 @@ class PixelProbe:
             # This forces ImageMagick to decode the entire image, detecting deeper corruption
             result = safe_subprocess_run(
                 ['convert',
-                 file_path,               # Input file
+                 ensure_cli_safe_path(file_path),  # convert has no '--' separator; './'-prefix relative paths
                  '-regard-warnings',      # Treat warnings as errors for strict validation
                  'null:'],                # Null output (discard result, we only check for errors)
                 capture_output=True,
@@ -1793,11 +1794,11 @@ class PixelProbe:
         try:
             # Check for B-frame decoding issues common in HEVC Main 10
             # Using more aggressive error detection to catch issues that cause playback freezing
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffmpeg',
                 '-v', 'warning',
                 '-err_detect', 'aggressive',
-                '-i', file_path,
+                '-i', ensure_cli_safe_path(file_path),
                 '-vf', 'showinfo',
                 '-frames:v', '100',
                 '-f', 'null',
@@ -1830,13 +1831,13 @@ class PixelProbe:
                     hevc_output.append("SEI metadata errors found")
             
             # Check for color space conversion issues (10-bit to 8-bit)
-            result = subprocess.run([
+            result = safe_subprocess_run([
                 'ffprobe',
                 '-v', 'error',
                 '-select_streams', 'v:0',
                 '-show_entries', 'stream=color_space,color_transfer,color_primaries',
                 '-of', 'json',
-                file_path
+                ensure_cli_safe_path(file_path)
             ], capture_output=True, text=True, timeout=10)
             
             if result.returncode == 0 and result.stdout:

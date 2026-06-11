@@ -40,7 +40,7 @@ def create_celery(app=None):
         app_name,
         broker=broker_url,
         backend=result_backend,
-        include=['pixelprobe.tasks']  # Auto-discover tasks
+        include=['pixelprobe.tasks', 'pixelprobe.tasks_parallel']  # Register all task modules with the worker
     )
     
     # Configure Celery settings
@@ -71,7 +71,7 @@ def create_celery(app=None):
         
         # Worker settings
         'worker_prefetch_multiplier': 1,  # One task per worker at a time
-        'worker_max_tasks_per_child': 50,  # Restart worker after 50 tasks
+        # max-tasks-per-child is set by the CLI flag in celery_worker.py (CLI wins)
 
         # Task deduplication to prevent multiple workers from picking up same retry
         'task_track_started': True,  # Track when tasks actually start execution

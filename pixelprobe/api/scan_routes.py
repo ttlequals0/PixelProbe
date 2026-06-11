@@ -17,6 +17,8 @@ from pixelprobe.utils.security import (
     PathTraversalError, AuditLogger, validate_json_input
 )
 from pixelprobe.utils.helpers import get_configured_scan_paths
+from pixelprobe.utils.paths import like_prefix
+from pixelprobe.api.scan_launch import launch_directory_scan
 # Remove direct limiter imports as we'll use decorators
 
 logger = logging.getLogger(__name__)
@@ -219,8 +221,7 @@ def get_scan_results():
     if path_filter:
         configured = get_configured_scan_paths()
         if path_filter in configured:
-            safe_path = path_filter.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-            query = query.filter(ScanResult.file_path.like(f'{safe_path}%', escape='\\'))
+            query = query.filter(ScanResult.file_path.like(like_prefix(path_filter), escape='\\'))
         else:
             # Invalid path -- return empty results
             return {'results': [], 'total': 0, 'page': page, 'per_page': per_page, 'pages': 0}
@@ -394,7 +395,7 @@ def scan_file():
         
         if celery_enabled:
             # Use Celery task queue
-            from pixelprobe.tasks import scan_media_task, ui_progress_update_task
+            from pixelprobe.tasks import scan_media_task
             from uuid import uuid4
 
             # Generate scan ID
@@ -404,13 +405,6 @@ def scan_file():
             scan_state = ScanState.create_new_scan()
             scan_state.scan_id = scan_id
             scan_state.start_scan([validated_path], force_rescan=True)
-
-            # Start UI progress worker for single file scan
-            try:
-                ui_progress_update_task.delay(scan_id)
-                logger.info(f"Started UI progress worker for scan {scan_id}")
-            except Exception as e:
-                logger.warning(f"Failed to start UI progress worker: {e}")
 
             # Queue the single file scan task
             task = scan_media_task.delay(
@@ -453,116 +447,29 @@ def scan():
     if request.method == 'OPTIONS':
         return '', 200
 
-    # ATOMIC: Use database row-level locking to prevent race conditions
-    # Lock the scan state row for update to ensure only one scan can start
-    try:
-        scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
-        if not scan_state:
-            scan_state = ScanState()
-            db.session.add(scan_state)
-            db.session.flush()
-            scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
-
-        # Check if a scan is already running while we hold the lock
-        if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
-            phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
-            db.session.rollback()
-            return {
-                'error': f'A scan is already in progress{phase_info}. Please wait for it to complete or use /api/cancel-scan to stop it.'
-            }, 409
-
-        # If we got here, no scan is running - we can proceed with the lock held
-        # Mark as starting immediately while we hold the lock
-        scan_state.is_active = True
-        scan_state.phase = 'initializing'
-        db.session.commit()
-
-    except Exception as lock_error:
-        # If we can't acquire the lock, another scan is starting
-        db.session.rollback()
-        logger.warning(f"Could not acquire scan lock: {lock_error}")
-        return {
-            'error': 'A scan is already starting. Please wait a moment and try again.'
-        }, 409
-
-    # Get scan configuration
+    # All validation happens BEFORE the scan slot is claimed, so a 400 can
+    # never leave the scan state stuck active.
     data = request.get_json() or {}
     force_rescan = data.get('force_rescan', False)
     scan_dirs = data.get('directories', [])
-    source = data.get('source')  # For scheduled scans, this will be 'scheduled_XX'
-    
-    # If no directories provided, use configured ones
+    source = data.get('source')  # Scheduled scans pass 'scheduled_{id}_{ts}'
+
     if not scan_dirs:
         scan_dirs = get_configured_scan_paths()
-
     if not scan_dirs:
         return {'error': 'No directories configured for scanning. Set SCAN_PATHS environment variable or configure paths in the admin interface.'}, 400
 
-    # Validate directories
     validated_dirs = []
     for dir_path in scan_dirs:
         try:
-            validated_path = validate_directory_path(dir_path)
-            validated_dirs.append(validated_path)
+            validated_dirs.append(validate_directory_path(dir_path))
         except Exception as e:
             AuditLogger.log_security_event('invalid_scan_directory', str(e), 'warning')
             return {'error': f'Invalid directory path: {dir_path}'}, 400
 
     AuditLogger.log_action('scan_all', {'directories': validated_dirs, 'force_rescan': force_rescan})
-    
-    # P1 Implementation: Use Celery task queue instead of direct scan service
-    try:
-        # Check if Celery is available
-        celery_enabled = check_celery_available()
-        
-        if celery_enabled:
-            # Use Celery task queue
-            from pixelprobe.tasks import scan_media_task
-            from uuid import uuid4
 
-            # Use source as scan_id for scheduled scans, otherwise generate UUID
-            # This allows healthcheck completion pings to identify scheduled scans
-            # The scheduler already adds a unique timestamp to the source
-            # (format: scheduled_{schedule_id}_{YYYYMMDD_HHMMSS})
-            if source and source.startswith('scheduled_'):
-                scan_id = source  # Already has unique timestamp from scheduler
-                logger.info(f"Using scheduled scan source as scan_id: {scan_id}")
-            else:
-                scan_id = str(uuid4())
-
-            # Queue the scan task
-            task = scan_media_task.delay(
-                scan_id=scan_id,
-                paths=validated_dirs,
-                scan_type='full',
-                force_rescan=force_rescan
-            )
-
-            logger.info(f"Queued full scan task {task.id} for scan_id {scan_id}")
-            
-            return {
-                'status': 'queued',
-                'scan_id': scan_id,
-                'task_id': task.id,
-                'message': 'Scan queued successfully using Celery task queue',
-                'celery_enabled': True
-            }
-        else:
-            # Fallback to direct scan service (backward compatibility)
-            logger.info("Celery not available, using direct scan service")
-            from pixelprobe.config import Config
-            result = current_app.scan_service.scan_directories(
-                validated_dirs,
-                force_rescan=force_rescan,
-                num_workers=Config.MAX_WORKERS  # Use configured MAX_WORKERS instead of hardcoded 1
-            )
-            result['celery_enabled'] = False
-            return result
-            
-    except RuntimeError as e:
-        return _scan_conflict_response(e)
-    except ValueError:
-        return {'error': 'Invalid request'}, 400
+    return launch_directory_scan(validated_dirs, force_rescan=force_rescan, source=source)
 
 @scan_bp.route('/scan-status')
 @exempt_from_rate_limit
@@ -916,7 +823,7 @@ def get_scan_status():
             active_chunks = ScanChunk.query.filter_by(
                 scan_id=scan_state.scan_id
             ).filter(
-                ScanChunk.status.in_(['processing', 'completed', 'error'])
+                ScanChunk.status.in_(['processing', 'completed', 'error', 'cancelled'])
             ).order_by(ScanChunk.start_time.desc()).all()
 
             if active_chunks:
@@ -1095,56 +1002,12 @@ def scan_files_parallel():
             return {'error': f'Invalid directory path: {dir_path}'}, 400
     
     AuditLogger.log_action('scan_parallel', {'directories': validated_dirs, 'force_rescan': force_rescan, 'num_workers': num_workers})
-    
-    # P1 Implementation: Use Celery task queue for parallel directory scanning
-    try:
-        # Check if Celery is available
-        celery_enabled = check_celery_available()
-        
-        if celery_enabled:
-            # Use Celery task queue for parallel scanning
-            from pixelprobe.tasks import scan_media_task
-            from uuid import uuid4
-            
-            # Generate scan ID
-            scan_id = str(uuid4())
-            
-            # Determine scan type based on options
-            scan_type = 'parallel'
-            
-            # Queue the scan task
-            task = scan_media_task.delay(
-                scan_id=scan_id,
-                paths=validated_dirs,
-                scan_type=scan_type,
-                force_rescan=force_rescan
-            )
-            
-            logger.info(f"Queued parallel scan task {task.id} for scan_id {scan_id}")
-            
-            return {
-                'status': 'queued',
-                'scan_id': scan_id,
-                'task_id': task.id,
-                'scan_type': scan_type,
-                'directories': validated_dirs,
-                'message': 'Parallel scan queued successfully using Celery task queue',
-                'celery_enabled': True
-            }
-        else:
-            # Fallback to direct scan service with parallel workers
-            result = current_app.scan_service.scan_directories(
-                validated_dirs,
-                force_rescan=force_rescan,
-                num_workers=num_workers
-            )
-            result['celery_enabled'] = False
-            return result
-            
-    except RuntimeError as e:
-        return _scan_conflict_response(e)
-    except ValueError:
-        return {'error': 'Invalid request'}, 400
+
+    payload, status = launch_directory_scan(validated_dirs, force_rescan=force_rescan, scan_type='parallel')
+    if status == 200:
+        payload['scan_type'] = 'parallel'
+        payload['directories'] = validated_dirs
+    return payload, status
 
 @scan_bp.route('/reset-for-rescan', methods=['POST'])
 @rate_limit("5 per minute")
@@ -1225,56 +1088,12 @@ def force_scan_pending():
                 'pending_count': 0
             }
         
-        # Check if a scan is already running (thread or Celery)
-        if is_scan_running():
-            return {'error': 'A scan is already in progress'}, 409
-        
-        # P1 Implementation: Use Celery task queue for pending files scan
-        celery_enabled = check_celery_available()
-        
-        if celery_enabled:
-            # Use Celery task queue for pending scan
-            from pixelprobe.tasks import scan_media_task
-            from uuid import uuid4
-            
-            # Generate scan ID
-            scan_id = str(uuid4())
-            
-            # Queue the pending files scan task using special marker
-            task = scan_media_task.delay(
-                scan_id=scan_id,
-                paths=['PENDING_FILES_SCAN'],  # Special marker for pending files
-                scan_type='pending',
-                force_rescan=False
-            )
-            
-            logger.info(f"Queued pending files scan task {task.id} for {pending_count} files")
+        payload, status = launch_directory_scan([], scan_type='pending')
+        if status == 200:
+            payload['pending_count'] = pending_count
+            payload['message'] = f'Pending files scan queued for {pending_count} files'
+        return payload, status
 
-            return {
-                'status': 'queued',
-                'scan_id': scan_id,
-                'task_id': task.id,
-                'message': f'Pending files scan queued for {pending_count} files using Celery task queue',
-                'pending_count': pending_count,
-                'celery_enabled': True
-            }
-        else:
-            # Fallback to direct scan service
-            from pixelprobe.config import Config
-            result = current_app.scan_service.scan_directories(
-                directories=['PENDING_FILES_SCAN'],  # Special marker
-                force_rescan=False,
-                num_workers=Config.MAX_WORKERS  # Use configured MAX_WORKERS instead of hardcoded 1
-            )
-
-            result['celery_enabled'] = False
-            result['pending_count'] = pending_count
-            return {
-                'message': f'Started scan for {pending_count} pending files',
-                'pending_count': pending_count,
-                'status': result.get('status', 'started')
-            }
-        
     except Exception as e:
         logger.error(f"Error starting pending files scan: {e}", exc_info=True)
         return {'error': 'Internal server error'}, 500

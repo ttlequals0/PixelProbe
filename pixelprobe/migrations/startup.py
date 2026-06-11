@@ -242,6 +242,41 @@ def run_v2_6_33_migrations(db):
         logger.error(f"Migration v2.6.33 failed: {e}")
 
 
+def run_v2_6_49_migrations(db):
+    """Chunk-engine convergence schema changes.
+
+    - scan_state.scan_type: lets the finalizer (incl. the sweeper backstop)
+      pick the right report type without threading it through task signatures.
+    - scan_chunks.directory_path -> TEXT: FCP range chunks store two full file
+      paths as JSON, which can exceed the old VARCHAR(500).
+    """
+    try:
+        with db.engine.connect() as conn:
+            exists = conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'scan_state' AND column_name = 'scan_type'"
+            )).fetchone()
+            if not exists:
+                logger.info("Adding column scan_state.scan_type (VARCHAR(20))")
+                conn.execute(text(
+                    "ALTER TABLE scan_state ADD COLUMN scan_type VARCHAR(20)"
+                ))
+
+            current_type = conn.execute(text(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_name = 'scan_chunks' AND column_name = 'directory_path'"
+            )).fetchone()
+            if current_type and current_type[0] != 'text':
+                logger.info("Widening scan_chunks.directory_path to TEXT")
+                conn.execute(text(
+                    "ALTER TABLE scan_chunks ALTER COLUMN directory_path TYPE TEXT"
+                ))
+            conn.commit()
+            logger.info("v2.6.49 schema sync completed")
+    except Exception as e:
+        logger.error(f"Migration v2.6.49 failed: {e}")
+
+
 def create_performance_indexes(db):
     """Create performance indexes"""
     indexes = [
@@ -320,6 +355,12 @@ def _run_all_migrations(db):
         run_v2_6_33_migrations(db)
     except Exception as e:
         logger.error(f"v2.6.33 migration failed: {e}")
+
+    logger.info("Running v2.6.49 migration (chunk engine schema)...")
+    try:
+        run_v2_6_49_migrations(db)
+    except Exception as e:
+        logger.error(f"v2.6.49 migration failed: {e}")
 
     logger.info("Creating performance indexes...")
     try:

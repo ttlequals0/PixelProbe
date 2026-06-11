@@ -1,982 +1,573 @@
-"""
-Enhanced Parallel Celery Tasks for PixelProbe
-Distributes work across all available workers for maximum performance
+"""Chunk-distributed scan engine tasks.
 
-This module contains improved Celery tasks that properly distribute work
-across all available workers instead of processing everything in a single task.
+The orchestrator discovers files (one Celery task per directory, bulk-inserting
+pending rows), builds disjoint FCP path-range chunks, and fans them out as
+process_chunk_task across all workers. Completion uses last-chunk-finalizes:
+every chunk exit marks the chunk terminal and the last one finalizes the scan
+under a row lock (exactly-once). The scheduler's stuck-scan sweeper is the
+backstop if the winner dies between chunk-complete and finalize.
+Celery-free engine logic lives in pixelprobe.services.scan_engine.
 """
 
-from celery import current_task, group, chord
-from celery.exceptions import Retry
 import logging
+import os
+import time
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List
+
+from celery import current_task, group
+from celery.exceptions import SoftTimeLimitExceeded
+from celery.result import allow_join_result
+from sqlalchemy import update
 
 from pixelprobe.celery_config import celery_app
+from pixelprobe.constants import SCAN_PHASES
 from pixelprobe.models import db, ScanState, ScanResult, ScanChunk
-from pixelprobe.media_checker import PixelProbe
-from pixelprobe.services.scan_service import ScanService
+from pixelprobe.media_checker import PixelProbe, load_exclusions_with_patterns
+from pixelprobe.progress_utils import clear_scan_progress_redis, update_scan_progress_redis
+from pixelprobe.services.scan_engine import (
+    build_scan_chunks, claim_scan_slot, finalize_scan,
+    maybe_finalize_scan, sync_progress_from_chunks
+)
+from pixelprobe.services.scan_reporting import create_scan_report, add_files_batch_to_db
+from pixelprobe.utils.helpers import batch_process
+from pixelprobe.utils.paths import is_path_under, like_prefix
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def process_chunk_task(self, chunk_id: int, scan_id: str, scan_type: str = 'full',
-                       force_rescan: bool = False):
+def _env_secs(name, default, floor=60):
+    try:
+        return max(floor, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+# Discovery is the only scan task with a time limit: the incompleteness guard
+# below depends on it. Default sized for multi-hour walks of 1M+ files on
+# network storage; override via env for slower mounts.
+DISCOVERY_TASK_TIMEOUT_SECS = _env_secs('DISCOVERY_TASK_TIMEOUT_SECS', 3600)
+
+_DISCOVERY_INSERT_BATCH = 500
+_CHUNK_COMMIT_BATCH = 100
+_PROGRESS_WRITE_INTERVAL_SECS = 60  # also write progress at least this often (stuck-sweeper safety)
+
+
+def _mark_chunk_terminal(chunk, status: str, files_scanned: int = None, error: str = None):
+    chunk.status = status
+    chunk.is_complete = True
+    chunk.end_time = datetime.now(timezone.utc)
+    if files_scanned is not None:
+        chunk.files_scanned = files_scanned
+    if error:
+        chunk.error_message = str(error)[:1000]
+    db.session.commit()
+
+
+def _reclaim_chunk_range(first_path: str, last_path: str):
+    """Return unscanned claimed rows in a chunk's range to pending."""
+    ScanResult.query.filter(
+        ScanResult.file_path >= first_path,
+        ScanResult.file_path <= last_path,
+        ScanResult.scan_status == 'scanning'
+    ).update({'scan_status': 'pending'}, synchronize_session=False)
+    db.session.commit()
+
+
+def _write_chunk_progress(chunk, files_scanned: int, scan_id: str, current_file: str = None):
+    """Persist batch scan results + chunk/aggregate progress, mirror to Redis.
+
+    The commit also persists the batch's ScanResult updates, so a commit
+    failure must PROPAGATE: the task-level retry reclaims the chunk range and
+    re-scans it. Swallowing it here would lose up to a batch of results while
+    still counting them as scanned.
     """
-    Process a single chunk of files
-    
-    This task processes a specific chunk independently, allowing multiple
-    chunks to be processed in parallel by different workers.
-    
-    Args:
-        chunk_id: ID of the ScanChunk to process
-        scan_id: Unique scan identifier
-        scan_type: Type of scan being performed
-        force_rescan: Whether to force rescan of existing files
-        
-    Returns:
-        dict: Chunk processing results
-    """
-    logger.info(f"Worker processing chunk {chunk_id} for scan {scan_id}")
-    
+    chunk.files_scanned = files_scanned
+    scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
+    if scan_state:
+        sync_progress_from_chunks(scan_state, scan_id)
+        scan_state.last_update = datetime.now(timezone.utc)
+        if current_file:
+            scan_state.current_file = current_file
+    db.session.commit()
+    if scan_state:
+        try:
+            update_scan_progress_redis(
+                scan_id,
+                files_processed=scan_state.files_processed,
+                estimated_total=scan_state.estimated_total,
+                phase=scan_state.phase,
+                current_file=os.path.basename(current_file) if current_file else ''
+            )
+        except Exception as e:
+            logger.warning(f"Redis progress mirror failed for {scan_id}: {e}")
+
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60,
+                 soft_time_limit=None, time_limit=None)
+def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool = False):
+    """Scan one FCP path-range chunk. Every exit path marks the chunk terminal
+    and runs the finalization check."""
+    logger.info(f"Worker processing chunk {chunk_db_id} for scan {scan_id}")
+    first_path = last_path = None
+
     try:
         from flask import current_app
-        
-        # Get the chunk from database
-        chunk = db.session.get(ScanChunk, chunk_id)
+
+        chunk = db.session.get(ScanChunk, chunk_db_id)
         if not chunk:
-            logger.error(f"Chunk {chunk_id} not found")
-            return {
-                'status': 'ERROR',
-                'chunk_id': chunk_id,
-                'error': 'Chunk not found'
-            }
-        
-        # Get scan state
-        scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
-        if not scan_state:
-            logger.error(f"Scan state {scan_id} not found")
-            return {
-                'status': 'ERROR',
-                'chunk_id': chunk_id,
-                'error': 'Scan state not found'
-            }
-        
-        # Initialize media checker
-        database_uri = current_app.config['SQLALCHEMY_DATABASE_URI']
-        checker = PixelProbe(database_path=database_uri)
-        
-        # Get files in this chunk that need scanning
-        files_to_scan = []
-        
-        if chunk.directory_path == 'PENDING_FILES':
-            # Special handling for pending files
-            # CRITICAL: Only get 'pending' files, NOT 'scanning' (which are claimed by other chunks)
-            pending_files = ScanResult.query.filter_by(
-                scan_status='pending'
-            ).limit(1000).all()  # Process 1000 pending files per chunk
+            logger.error(f"Chunk {chunk_db_id} not found")
+            return {'status': 'ERROR', 'chunk_id': chunk_db_id, 'error': 'Chunk not found'}
 
-            files_to_scan = [f.file_path for f in pending_files]
-            logger.info(f"Processing {len(files_to_scan)} pending files in chunk {chunk_id} (excluding files already being scanned)")
-        else:
-            # Regular directory chunk - get files from database
-            # CRITICAL: Only get 'pending' files, NOT 'scanning' (which are claimed by other chunks)
-            files_in_chunk = ScanResult.query.filter(
-                ScanResult.file_path.like(f"{chunk.directory_path}%")
-            ).filter(
-                db.or_(
-                    ScanResult.scan_status == 'pending',  # New files to scan
-                    db.and_(
-                        force_rescan == True,
-                        ScanResult.scan_status == 'completed'  # Rescan completed files if force_rescan
-                    )
-                )
-            ).limit(1000).all()  # Process up to 1000 files per chunk
+        fcp = chunk.fcp_range()
+        if not fcp:
+            _mark_chunk_terminal(chunk, 'error', files_scanned=0,
+                                 error=f'Invalid chunk range: {chunk.directory_path[:200]}')
+            maybe_finalize_scan(scan_id)
+            return {'status': 'ERROR', 'chunk_id': chunk_db_id, 'error': 'Invalid chunk range'}
+        first_path, last_path = fcp
 
-            files_to_scan = [f.file_path for f in files_in_chunk]
-            logger.info(f"Chunk {chunk.chunk_id}: Found {len(files_to_scan)} files to scan in {chunk.directory_path} (excluding files already being scanned)")
-        
-        # Skip empty chunks
-        if not files_to_scan:
-            logger.info(f"Chunk {chunk_id} is empty, marking as complete")
-            chunk.is_complete = True
-            chunk.files_processed = 0
+        chunk.status = 'processing'
+        chunk.start_time = datetime.now(timezone.utc)
+        db.session.commit()
 
-            # IMPORTANT: Clear the current_file in scan_state when skipping empty chunks
-            # Otherwise the UI will show stale directory paths
-            scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
-            if scan_state:
-                # Don't show directory path as current file
-                scan_state.current_file = ''
-                # Update the message to reflect we're skipping empty directories
-                scan_state.progress_message = f'Scanning: skipping empty directory {chunk.directory_path}'
+        # Bulk claim: one statement, race-free (ranges are disjoint by construction)
+        claimed = db.session.execute(
+            update(ScanResult)
+            .where(ScanResult.file_path >= first_path,
+                   ScanResult.file_path <= last_path,
+                   ScanResult.scan_status == 'pending')
+            .values(scan_status='scanning')
+            .returning(ScanResult.id)
+        ).fetchall()
+        db.session.commit()
+        claimed_ids = [row[0] for row in claimed]
 
-            db.session.commit()
-            return {
-                'status': 'SKIPPED',
-                'chunk_id': chunk_id,
-                'scan_type': scan_type,
-                'files_processed': 0,
-                'reason': 'No files to scan in chunk'
-            }
+        if not claimed_ids:
+            # Empty chunk: terminal, but never touch shared progress fields
+            logger.info(f"Chunk {chunk_db_id} has no pending files, marking complete")
+            _mark_chunk_terminal(chunk, 'completed', files_scanned=0)
+            maybe_finalize_scan(scan_id)
+            return {'status': 'SKIPPED', 'chunk_id': chunk_db_id, 'files_processed': 0}
 
-        # CRITICAL FIX: Claim these files by marking them as 'scanning' to prevent other chunks from processing them
-        # This prevents race conditions where multiple chunks process the same files
-        if scan_type != 'orphan_cleanup':
-            logger.info(f"Chunk {chunk_id}: Claiming {len(files_to_scan)} files by marking as 'scanning'")
-            claimed_count = 0
-            for file_path in files_to_scan:
-                db_result = ScanResult.query.filter_by(file_path=file_path).first()
-                if db_result and db_result.scan_status in ['pending', 'completed']:
-                    db_result.scan_status = 'scanning'
-                    claimed_count += 1
-            db.session.commit()
-            logger.info(f"Chunk {chunk_id}: Successfully claimed {claimed_count} files")
-        
-        # Process files based on scan type
+        logger.info(f"Chunk {chunk_db_id}: claimed {len(claimed_ids)} files")
+
+        # database_path=None: this task persists the results itself; a DB-backed
+        # checker would double-write every row through its own engine (and leak
+        # one engine per chunk task)
+        checker = PixelProbe(database_path=None)
+
         files_processed = 0
         files_corrupted = 0
-        orphans_removed = 0
-        
-        if scan_type == 'orphan_cleanup':
-            # Special handling for orphan cleanup
-            for file_path in files_to_scan:
-                try:
-                    # Update task state
-                    current_task.update_state(
-                        state='PROGRESS',
-                        meta={
-                            'chunk_id': chunk_id,
-                            'current': files_processed,
-                            'total': len(files_to_scan),
-                            'current_file': file_path,
-                            'scan_id': scan_id,
-                            'scan_type': 'orphan_cleanup'
-                        }
-                    )
-                    
-                    # Remove orphaned entry from database
-                    db_result = ScanResult.query.filter_by(file_path=file_path).first()
-                    if db_result:
-                        db.session.delete(db_result)
-                        orphans_removed += 1
-                        
-                        # Commit every 100 removals
-                        if orphans_removed % 100 == 0:
-                            db.session.commit()
-                    
-                    files_processed += 1
-                    
-                except Exception as e:
-                    logger.error(f"Error removing orphan {file_path}: {e}")
-                    # Rollback the session to prevent "prepared state" errors
-                    db.session.rollback()
-                    continue
-        else:
-            # Regular file scanning
-            for file_path in files_to_scan:
-                # Check if scan was cancelled
-                scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
-                if scan_state and not scan_state.is_active:
-                    logger.info(f"Chunk {chunk_id}: Scan cancelled, stopping processing")
-                    chunk.status = 'cancelled'
-                    chunk.end_time = datetime.now(timezone.utc)
-                    db.session.commit()
-                    return {
-                        'status': 'CANCELLED',
-                        'chunk_id': chunk_id,
-                        'files_processed': files_processed,
-                        'reason': 'Scan was cancelled'
-                    }
-                
-                try:
-                    # Initialize variables to prevent NameError in exception handlers
-                    warning_details = ''
-                    corruption_details = ''
+        last_progress_write = time.time()
 
-                    # Update task state
-                    current_task.update_state(
-                        state='PROGRESS',
-                        meta={
-                            'chunk_id': chunk_id,
-                            'current': files_processed,
-                            'total': len(files_to_scan),
-                            'current_file': file_path,
-                            'scan_id': scan_id,
-                            'scan_type': scan_type
-                        }
-                    )
+        for batch_ids in batch_process(claimed_ids, _CHUNK_COMMIT_BATCH):
+            # Cancellation check once per batch
+            is_active = db.session.query(ScanState.is_active).filter_by(scan_id=scan_id).scalar()
+            if not is_active:
+                logger.info(f"Chunk {chunk_db_id}: scan cancelled, stopping")
+                _reclaim_chunk_range(first_path, last_path)
+                _mark_chunk_terminal(chunk, 'cancelled', files_scanned=files_processed)
+                return {'status': 'CANCELLED', 'chunk_id': chunk_db_id,
+                        'files_processed': files_processed}
 
-                    # Scan the file
+            batch_rows = ScanResult.query.filter(ScanResult.id.in_(batch_ids)).all()
+            current_file = None
+
+            for db_result in batch_rows:
+                file_path = db_result.file_path
+                try:
                     scan_result = checker.scan_file(file_path, force_rescan=force_rescan)
-                    
+
                     if scan_result:
-                        # Update database with result
-                        db_result = ScanResult.query.filter_by(file_path=file_path).first()
-                        if db_result:
-                            # CRITICAL FIX: Properly classify files as Corrupted, Warning, or Healthy
-                            corruption_details = scan_result.get('corruption_details', '')
-                            warning_details = scan_result.get('warning_details', '')
-                            is_corrupted = scan_result.get('is_corrupted', False)
-                            has_warnings = scan_result.get('has_warnings', False)
-                            
-                            # If we have corruption_details with serious errors, mark as corrupted
-                            if corruption_details:
-                                details_lower = corruption_details.lower()
-                                if any(err in details_lower for err in ['error', 'failed', 'no such file', 'corrupted']):
-                                    is_corrupted = True
-                                elif 'warning' in details_lower:
-                                    # If it says "warning" but not marked as corrupted, it's a warning
-                                    has_warnings = True
-                                    if not warning_details:
-                                        warning_details = corruption_details
-                            
-                            # If we have warning_details but no has_warnings flag, set it
-                            if warning_details and not has_warnings:
+                        corruption_details = scan_result.get('corruption_details', '')
+                        warning_details = scan_result.get('warning_details', '')
+                        is_corrupted = scan_result.get('is_corrupted', False)
+                        has_warnings = scan_result.get('has_warnings', False)
+
+                        # Classify: serious errors -> corrupted; "warning" text -> warning
+                        if corruption_details:
+                            details_lower = corruption_details.lower()
+                            if any(err in details_lower for err in ['error', 'failed', 'no such file', 'corrupted']):
+                                is_corrupted = True
+                            elif 'warning' in details_lower:
                                 has_warnings = True
-                            
-                            db_result.is_corrupted = is_corrupted
-                            db_result.scan_status = 'completed'
-                            db_result.scan_date = datetime.now(timezone.utc)
-                            db_result.corruption_details = corruption_details  # Keep all details for debugging
-                            db_result.scan_output = str(scan_result.get('scan_output', ''))[:10000]
-                            
-                            # Save warning fields with proper classification
-                            db_result.has_warnings = has_warnings
-                            db_result.warning_details = warning_details
-                            
-                            # Save other important fields that were missing
-                            db_result.file_hash = scan_result.get('file_hash')
-                            db_result.scan_tool = scan_result.get('scan_tool', 'unknown')
-                            db_result.scan_duration = scan_result.get('scan_duration')
-                            db_result.file_size = scan_result.get('file_size', 0)
-                            db_result.file_type = scan_result.get('file_type', 'unknown')
-                            
-                            if is_corrupted:
-                                files_corrupted += 1
-                            
-                            # Commit every 100 files and update scan state
-                            if files_processed % 100 == 0:
-                                db.session.commit()
-                                
-                                # CRITICAL FIX: Update scan state's last_update to prevent stuck scan detection
-                                # Workers must update the main scan state or it appears frozen
-                                try:
-                                    scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
-                                    if scan_state:
-                                        # Update last_update to show activity
-                                        scan_state.last_update = datetime.now(timezone.utc)
-                                        # Update overall progress (aggregate all chunks)
-                                        total_processed = db.session.query(
-                                            db.func.sum(ScanChunk.files_processed)
-                                        ).filter_by(scan_id=scan_id).scalar() or 0
-                                        scan_state.files_processed = total_processed + files_processed
-                                        db.session.commit()
-                                        logger.debug(f"Updated scan state progress: {scan_state.files_processed} files")
-                                except Exception as e:
-                                    logger.error(f"Failed to update scan state progress: {e}")
-                                    db.session.rollback()
-                    
+                                if not warning_details:
+                                    warning_details = corruption_details
+                        if warning_details and not has_warnings:
+                            has_warnings = True
+
+                        db_result.is_corrupted = is_corrupted
+                        db_result.scan_status = 'completed'
+                        db_result.scan_date = datetime.now(timezone.utc)
+                        db_result.corruption_details = corruption_details
+                        db_result.scan_output = str(scan_result.get('scan_output', ''))[:10000]
+                        db_result.has_warnings = has_warnings
+                        db_result.warning_details = warning_details
+                        db_result.file_hash = scan_result.get('file_hash')
+                        db_result.scan_tool = scan_result.get('scan_tool', 'unknown')
+                        db_result.scan_duration = scan_result.get('scan_duration')
+                        db_result.file_size = scan_result.get('file_size', 0)
+                        db_result.file_type = scan_result.get('file_type', 'unknown')
+
+                        if is_corrupted:
+                            files_corrupted += 1
+                    else:
+                        db_result.scan_status = 'error'
+                        db_result.error_message = 'Scanner returned no result'
+
                     files_processed += 1
-                    
+                    current_file = file_path
+
                 except Exception as e:
-                    logger.error(f"Error scanning file {file_path} in chunk {chunk_id}: {e}")
-                    # Rollback the session to prevent "prepared state" errors
-                    db.session.rollback()
-                    # Mark file as error in database
+                    logger.error(f"Error scanning {file_path} in chunk {chunk_db_id}: {e}")
+                    # Preserve already-scanned results in this batch (a rollback
+                    # would force them through a full ffmpeg re-scan later)
                     try:
-                        db_result = ScanResult.query.filter_by(file_path=file_path).first()
-                        if db_result:
-                            db_result.scan_status = 'error'
-                            db_result.error_message = str(e)[:500]
+                        db.session.commit()
+                    except Exception:
+                        db.session.rollback()
+                    try:
+                        row = db.session.get(ScanResult, db_result.id)
+                        if row:
+                            row.scan_status = 'error'
+                            row.error_message = str(e)[:500]
                             db.session.commit()
                     except Exception as db_error:
                         logger.error(f"Failed to mark file as error: {db_error}")
                         db.session.rollback()
+                    files_processed += 1
                     continue
-        
-        # Final commit
-        db.session.commit()
-        
-        # Mark chunk as complete
-        chunk.is_complete = True
-        chunk.files_processed = files_processed
-        db.session.commit()
-        
-        # CRITICAL: Final update of scan state when chunk completes
-        try:
-            scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
-            if scan_state:
-                # Update last_update to show recent activity
-                scan_state.last_update = datetime.now(timezone.utc)
 
-                # Recalculate total progress from ALL chunks (including in-progress ones)
-                # This ensures we don't lose progress when chunks complete out of order
-                total_processed = db.session.query(
-                    db.func.sum(ScanChunk.files_processed)
-                ).filter_by(scan_id=scan_id).scalar() or 0
+                # Time-based progress write for slow large files (sweeper safety)
+                if time.time() - last_progress_write > _PROGRESS_WRITE_INTERVAL_SECS:
+                    _write_chunk_progress(chunk, files_processed, scan_id, current_file)
+                    last_progress_write = time.time()
 
-                # Count completed chunks for debugging
-                completed_chunks = db.session.query(
-                    db.func.count(ScanChunk.id)
-                ).filter_by(scan_id=scan_id, is_complete=True).scalar() or 0
+            _write_chunk_progress(chunk, files_processed, scan_id, current_file)
+            last_progress_write = time.time()
 
-                # CRITICAL FIX: Never decrease the progress counter
-                # When chunks complete out of order in parallel, ensure we only move forward
-                # This prevents the counter from appearing to reset when processing large files
-                if total_processed > scan_state.files_processed:
-                    logger.info(f"Chunk {chunk_id} complete ({files_processed} files). Total progress: {scan_state.files_processed} -> {total_processed}/{scan_state.estimated_total} ({completed_chunks} chunks done)")
-                    scan_state.files_processed = total_processed
-                elif total_processed < scan_state.files_processed:
-                    # This shouldn't happen, but log it if it does for debugging
-                    logger.warning(f"Chunk {chunk_id} complete, but sum of chunks ({total_processed}) < current progress ({scan_state.files_processed})! Not updating. ({completed_chunks} chunks done)")
-                else:
-                    logger.debug(f"Chunk {chunk_id} complete ({files_processed} files), progress unchanged at {total_processed}/{scan_state.estimated_total}")
-
-                db.session.commit()
-        except Exception as e:
-            logger.error(f"Failed to update scan state on chunk completion: {e}")
-            db.session.rollback()
-        
-        if scan_type == 'orphan_cleanup':
-            logger.info(f"Chunk {chunk_id} completed: {orphans_removed} orphans removed")
-            return {
-                'status': 'SUCCESS',
-                'chunk_id': chunk_id,
-                'scan_type': scan_type,
-                'orphans_removed': orphans_removed,
-                'completed_at': datetime.now(timezone.utc).isoformat()
-            }
-        else:
-            logger.info(f"Chunk {chunk_id} completed: {files_processed} files processed, {files_corrupted} corrupted")
-            return {
-                'status': 'SUCCESS',
-                'chunk_id': chunk_id,
-                'scan_type': scan_type,
-                'files_processed': files_processed,
-                'files_corrupted': files_corrupted,
-                'completed_at': datetime.now(timezone.utc).isoformat()
-            }
-        
-    except Exception as exc:
-        logger.error(f"Chunk processing task {self.request.id} failed: {str(exc)}")
-        
-        # Retry with exponential backoff
-        if self.request.retries < self.max_retries:
-            retry_delay = 30 * (2 ** self.request.retries)  # 30s, 60s, 120s
-            raise self.retry(exc=exc, countdown=retry_delay)
-        else:
-            # Mark chunk as failed after max retries
-            try:
-                chunk = db.session.get(ScanChunk, chunk_id)
-                if chunk:
-                    chunk.error_message = str(exc)
-                    db.session.commit()
-            except:
-                pass
-            raise exc
-
-
-@celery_app.task(bind=True, soft_time_limit=120, time_limit=180)
-def discover_directory_task(self, directory: str, scan_id: str, 
-                           excluded_paths: List[str] = None, 
-                           excluded_extensions: List[str] = None):
-    """
-    Discover files in a single directory - runs on a separate Celery worker
-    
-    Args:
-        directory: Directory path to discover
-        scan_id: Scan identifier for tracking
-        excluded_paths: List of paths to exclude
-        excluded_extensions: List of extensions to exclude
-        
-    Returns:
-        List of discovered file paths
-    """
-    logger.info(f"Worker {self.request.id} discovering files in {directory}")
-    
-    try:
-        import os
-        import time
-        from celery.exceptions import SoftTimeLimitExceeded
-        from pixelprobe.media_checker import PixelProbe
-        
-        discovered_files = []
-        excluded_paths = excluded_paths or []
-        excluded_extensions = excluded_extensions or []
-        
-        # Initialize media checker for file type detection only
-        checker = PixelProbe(
-            database_path=None  # No DB needed for discovery
-        )
-        
-        # Track progress
-        start_time = time.time()
-        last_log_time = start_time
-        files_checked = 0
-        # Whether the walk finished cleanly. A timeout or error makes the result
-        # PARTIAL; the orchestrator must not treat a truncated list as complete.
-        complete = True
-        error = None
-
-        # Walk directory and discover files with progress reporting
-        try:
-            for root, dirs, files in os.walk(directory):
-                # Skip excluded directories
-                dirs[:] = [d for d in dirs if not any(
-                    os.path.join(root, d).startswith(exc) for exc in excluded_paths
-                )]
-                
-                for file in files:
-                    files_checked += 1
-                    
-                    # Report progress every 1000 files or every 10 seconds
-                    current_time = time.time()
-                    if files_checked % 1000 == 0 or (current_time - last_log_time) > 10:
-                        logger.info(f"Discovery progress in {directory}: checked {files_checked} files, found {len(discovered_files)} media files")
-                        last_log_time = current_time
-                        
-                        # Update task state for monitoring
-                        self.update_state(
-                            state='PROGRESS',
-                            meta={
-                                'directory': directory,
-                                'files_checked': files_checked,
-                                'files_found': len(discovered_files),
-                                'elapsed_time': current_time - start_time
-                            }
-                        )
-                    
-                    file_path = os.path.join(root, file)
-                    
-                    # Skip excluded extensions
-                    ext = os.path.splitext(file)[1].lower()
-                    if ext in excluded_extensions:
-                        continue
-                    
-                    # Skip excluded paths
-                    if any(file_path.startswith(exc) for exc in excluded_paths):
-                        continue
-                    
-                    # Check if file is supported media type
-                    if checker._is_supported_file(file_path):
-                        discovered_files.append(file_path)
-                        
-        except SoftTimeLimitExceeded:
-            logger.warning(f"Discovery task for {directory} timed out after checking {files_checked} files")
-            complete = False
-            error = 'soft_time_limit'
-
-        except Exception as e:
-            logger.error(f"Error during directory walk of {directory}: {e}")
-            complete = False
-            error = str(e)
-
-        elapsed_time = time.time() - start_time
-        logger.info(f"Worker discovered {len(discovered_files)} files in {directory} "
-                   f"(checked {files_checked} total files in {elapsed_time:.2f} seconds, complete={complete})")
-        return {'directory': directory, 'files': discovered_files,
-                'complete': complete, 'error': error}
-
-    except Exception as e:
-        logger.error(f"Error discovering files in {directory}: {e}")
-        return {'directory': directory, 'files': [], 'complete': False, 'error': str(e)}
-
-
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
-                               scan_type: str = 'full', force_rescan: bool = False):
-    """
-    Universal orchestrator task that handles ALL scan types with parallel processing
-    
-    This orchestrator handles:
-    - Full scan: Scan all files in specified directories
-    - Parallel scan: Same as full but explicitly parallel
-    - Pending scan: Scan only files marked as pending
-    - File changes scan: Detect and scan changed files
-    - Orphan cleanup: Remove orphaned entries
-    
-    All scan types are distributed across all available workers for maximum performance.
-    Discovery phase is also parallelized across workers.
-    
-    Args:
-        scan_id: Unique scan identifier
-        paths: List of paths to scan (optional for pending/orphan scans)
-        scan_type: Type of scan ('full', 'parallel', 'pending', 'file_changes', 'orphan_cleanup')
-        force_rescan: Whether to force rescan of existing files
-        
-    Returns:
-        dict: Overall scan results
-    """
-    logger.info(f"Starting parallel scan orchestrator for scan {scan_id}, type: {scan_type}")
-    
-    try:
-        from flask import current_app
-        from celery import group
-        import os
-        
-        # Update scan state
-        scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
-        if not scan_state:
-            # Create new scan state
-            scan_state = ScanState(
-                scan_id=scan_id,
-                phase='discovering',
-                is_active=True,
-                celery_task_id=self.request.id
-            )
-            db.session.add(scan_state)
-            db.session.commit()
-        
-        # Phase 1: Discovery - find files based on scan type
-        logger.info(f"Phase 1: Discovering files for {scan_type} scan")
-        scan_state.phase = 'discovering'
-        db.session.commit()
-        
-        discovered_files = []
-        
-        if scan_type in ['full', 'parallel']:
-            # Parallel directory discovery across Celery workers
-            if not paths:
-                raise ValueError("Paths required for full/parallel scan")
-            
-            # Load exclusions from database
-            from pixelprobe.models import Exclusion
-            exclusions = Exclusion.query.filter_by(is_active=True).all()
-            excluded_paths = [exc.pattern for exc in exclusions if exc.exclusion_type == 'path']
-            excluded_extensions = [exc.pattern for exc in exclusions if exc.exclusion_type == 'extension']
-            
-            logger.info(f"Loaded {len(excluded_paths)} path exclusions and {len(excluded_extensions)} extension exclusions")
-            
-            # Create discovery tasks for each path
-            discovery_tasks = []
-            for path in paths:
-                # For each path, create sub-tasks for major subdirectories
-                if os.path.exists(path):
-                    # Always add the main path as a discovery task
-                    discovery_tasks.append(
-                        discover_directory_task.s(path, scan_id, excluded_paths, excluded_extensions)
-                    )
-                    logger.info(f"Added discovery task for {path}")
-            
-            if discovery_tasks:
-                logger.info(f"Launching {len(discovery_tasks)} parallel discovery tasks")
-                
-                # Execute discovery tasks in parallel
-                job = group(discovery_tasks)
-                result = job.apply_async()
-                
-                # Wait for all discovery tasks to complete. Track any directory whose
-                # discovery did not finish cleanly so we never scan a truncated set
-                # and falsely report completion. Timeout is env-overridable for very
-                # large trees on slow storage.
-                try:
-                    discovery_timeout = max(60, int(os.environ.get('DISCOVERY_RESULT_TIMEOUT_SECS', '3600')))
-                except (TypeError, ValueError):
-                    discovery_timeout = 3600
-                discovery_incomplete = []
-                try:
-                    discovery_results = result.get(timeout=discovery_timeout)
-
-                    for res in discovery_results:
-                        if not res:
-                            continue
-                        discovered_files.extend(res.get('files', []))
-                        if not res.get('complete', False):
-                            discovery_incomplete.append(res.get('directory', '?'))
-
-                    logger.info(f"Parallel discovery finished: found {len(discovered_files)} total files")
-
-                except Exception as e:
-                    logger.error(f"Error getting discovery results: {e}")
-                    # Harvest whatever finished. Only treat the group as incomplete
-                    # if a task genuinely did not finish/complete -- a spurious
-                    # result.get() error when every task actually completed cleanly
-                    # should not abort an otherwise-complete discovery.
-                    for task_result in result.results:
-                        try:
-                            if task_result and task_result.ready():
-                                res = task_result.get(timeout=1)
-                                if res:
-                                    discovered_files.extend(res.get('files', []))
-                                    if not res.get('complete', False):
-                                        discovery_incomplete.append(res.get('directory', '?'))
-                                else:
-                                    discovery_incomplete.append('unreadable-discovery-result')
-                            else:
-                                discovery_incomplete.append('discovery-task-unfinished')
-                        except Exception:
-                            discovery_incomplete.append('discovery-task-error')
-                            continue
-                    logger.warning(f"Partial discovery results: found {len(discovered_files)} files "
-                                   f"({len(discovery_incomplete)} target(s) incomplete)")
-
-                # Never proceed to scan (and report 'completed') on a truncated set.
-                if discovery_incomplete:
-                    msg = (f"Discovery incomplete for {len(discovery_incomplete)} target(s): "
-                           f"{discovery_incomplete[:5]} - aborting so a partial file set is not "
-                           f"scanned and reported as complete. Re-run the scan.")
-                    logger.error(msg)
-                    scan_state.phase = 'error'
-                    scan_state.is_active = False
-                    scan_state.error_message = msg[:1000]
-                    scan_state.end_time = datetime.now(timezone.utc)
-                    db.session.commit()
-                    return {'status': 'error', 'scan_id': scan_id,
-                            'error': 'discovery_incomplete',
-                            'incomplete_targets': discovery_incomplete}
-                
-                # Filter out files already in database
-                if discovered_files:
-                    existing_files = set()
-                    # Load existing paths in chunks to avoid memory issues
-                    chunk_size = 10000
-                    for i in range(0, len(discovered_files), chunk_size):
-                        chunk = discovered_files[i:i+chunk_size]
-                        existing = ScanResult.query.filter(
-                            ScanResult.file_path.in_(chunk)
-                        ).with_entities(ScanResult.file_path).all()
-                        existing_files.update([r[0] for r in existing])
-                    
-                    # Filter to only new files
-                    new_files = [f for f in discovered_files if f not in existing_files]
-                    logger.info(f"Filtered to {len(new_files)} new files (excluded {len(existing_files)} existing)")
-                    discovered_files = new_files
-            
-        elif scan_type == 'pending':
-            # Get all pending files from database
-            pending_results = ScanResult.query.filter_by(
-                scan_status='pending'
-            ).all()
-            discovered_files = [r.file_path for r in pending_results]
-            logger.info(f"Found {len(discovered_files)} pending files to scan")
-            
-        elif scan_type == 'file_changes':
-            # Detect changed files based on modification time
-            if not paths:
-                raise ValueError("Paths required for file changes scan")
-            
-            # Get files with their modification times
-            all_files = []
-            for path in paths:
-                for root, dirs, files in os.walk(path):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        try:
-                            mtime = os.path.getmtime(file_path)
-                            all_files.append((file_path, mtime))
-                        except:
-                            continue
-            
-            # Check against database for changes
-            for file_path, mtime in all_files:
-                db_result = ScanResult.query.filter_by(file_path=file_path).first()
-                if db_result:
-                    # Check if file was modified after last scan
-                    if db_result.scan_date:
-                        last_scan_time = db_result.scan_date.timestamp()
-                        if mtime > last_scan_time:
-                            discovered_files.append(file_path)
-                            logger.debug(f"File changed: {file_path}")
-                else:
-                    # New file not in database
-                    discovered_files.append(file_path)
-            
-            logger.info(f"Found {len(discovered_files)} changed/new files")
-            
-        elif scan_type == 'orphan_cleanup':
-            # Find orphaned entries (files that no longer exist)
-            if not paths:
-                # Get all scan results
-                all_results = ScanResult.query.all()
-            else:
-                # Get results for specific paths
-                all_results = []
-                for path in paths:
-                    path_results = ScanResult.query.filter(
-                        ScanResult.file_path.like(f"{path}%")
-                    ).all()
-                    all_results.extend(path_results)
-            
-            # Check which files no longer exist
-            orphaned_files = []
-            for result in all_results:
-                if not os.path.exists(result.file_path):
-                    orphaned_files.append(result.file_path)
-            
-            discovered_files = orphaned_files
-            logger.info(f"Found {len(discovered_files)} orphaned entries to clean up")
-        
-        else:
-            raise ValueError(f"Unknown scan type: {scan_type}")
-        
-        total_files = len(discovered_files)
-        
-        logger.info(f"Discovered {total_files} files to scan")
-        
-        # Phase 2: Create chunks for parallel processing
-        logger.info(f"Phase 2: Creating chunks for parallel processing")
-        scan_state.phase = 'chunking'
-        db.session.commit()
-        
-        # Get the number of available workers dynamically
-        from celery import current_app as celery_app
-        inspect = celery_app.control.inspect()
-        stats = inspect.stats()
-        
-        total_workers = 0
-        if stats:
-            for worker_name, worker_stats in stats.items():
-                pool_info = worker_stats.get('pool', {})
-                concurrency = pool_info.get('max-concurrency', 0)
-                total_workers += concurrency
-                logger.info(f"Worker {worker_name} has {concurrency} processes")
-        
-        if total_workers == 0:
-            # Fallback to environment variable or default
-            total_workers = int(os.environ.get('CELERY_CONCURRENCY', 4))
-            logger.warning(f"Could not detect workers, using configured value: {total_workers}")
-        
-        logger.info(f"Total available worker processes: {total_workers}")
-        
-        # Calculate optimal chunk size based on number of files and workers
-        # We want at least 2-3 chunks per worker for good load balancing
-        # But not too many chunks to avoid overhead
-        if total_files > 0:
-            min_chunks = total_workers * 2  # At least 2 chunks per worker
-            max_chunks = total_workers * 10  # At most 10 chunks per worker
-            
-            # Calculate chunk size
-            if total_files <= min_chunks * 100:
-                # Small dataset - create minimum chunks
-                chunk_size = max(1, total_files // min_chunks)
-            elif total_files >= max_chunks * 1000:
-                # Large dataset - limit chunk count
-                chunk_size = total_files // max_chunks
-            else:
-                # Medium dataset - aim for ~1000 files per chunk
-                chunk_size = 1000
-            
-            # Ensure chunk size is reasonable
-            chunk_size = max(100, min(10000, chunk_size))
-            
-            logger.info(f"Using chunk size of {chunk_size} files for {total_workers} workers")
-        else:
-            logger.warning("No files to process")
-            return {
-                'status': 'NO_FILES',
+            current_task.update_state(state='PROGRESS', meta={
+                'chunk_id': chunk_db_id,
+                'current': files_processed,
+                'total': len(claimed_ids),
                 'scan_id': scan_id,
-                'message': 'No files found to process'
-            }
-        
-        # Delete old chunks based on scan type
-        if scan_type == 'orphan_cleanup':
-            # Clean up orphan chunks
-            ScanChunk.query.filter_by(scan_id=scan_id).delete(synchronize_session=False)
-        elif paths:
-            # Delete old chunks for these paths
-            for path in paths:
-                ScanChunk.query.filter(
-                    ScanChunk.directory_path.like(f"{path}%")
-                ).delete(synchronize_session=False)
-        db.session.commit()
-        
-        chunks_created = []
-        
-        # Group files by directory for better locality
-        # For efficiency, batch check which files need scanning
-        files_by_dir = {}
-        
-        # Get all pending files in one query
-        # ALWAYS filter to only files that need scanning, regardless of scan_type
-        if force_rescan:
-            # Get all files (new, pending, and completed for rescan)
-            files_to_scan = ScanResult.query.filter(
-                db.or_(
-                    ScanResult.scan_status == 'pending',
-                    ScanResult.scan_status == 'completed'
-                )
-            ).with_entities(ScanResult.file_path).all()
-            files_needing_scan = [f[0] for f in files_to_scan]
-        else:
-            # Just get pending files (new and never scanned)
-            files_to_scan = ScanResult.query.filter_by(
-                scan_status='pending'
-            ).with_entities(ScanResult.file_path).all()
-            files_needing_scan = [f[0] for f in files_to_scan]
+            })
 
-        logger.info(f"Found {len(files_needing_scan)} files that need scanning (pending or force rescan) out of {len(discovered_files)} discovered")
+        _mark_chunk_terminal(chunk, 'completed', files_scanned=files_processed)
+        logger.info(f"Chunk {chunk_db_id} completed: {files_processed} files, {files_corrupted} corrupted")
+        maybe_finalize_scan(scan_id)
 
-        # Group by directory for chunk creation
-        for file_path in files_needing_scan:
-            dir_path = '/'.join(file_path.split('/')[:-1])
-            if dir_path not in files_by_dir:
-                files_by_dir[dir_path] = []
-            files_by_dir[dir_path].append(file_path)
-        
-        # Log how many files actually need scanning
-        total_files_to_scan = sum(len(files) for files in files_by_dir.values())
-        logger.info(f"Found {total_files_to_scan} files that need scanning out of {len(discovered_files)} discovered")
-        
-        # Create chunks
-        chunk_id = 1
-        for dir_path, dir_files in files_by_dir.items():
-            # Create chunks for this directory
-            for i in range(0, len(dir_files), chunk_size):
-                chunk_files = dir_files[i:i+chunk_size]
-                
-                chunk = ScanChunk(
-                    scan_id=scan_id,
-                    chunk_id=chunk_id,
-                    directory_path=dir_path,
-                    files_discovered=len(chunk_files),
-                    is_complete=False
-                )
-                db.session.add(chunk)
-                chunks_created.append(chunk_id)
-                chunk_id += 1
-                
-                # Add files to database as pending
-                for file_path in chunk_files:
-                    # Check if file exists in DB
-                    existing = ScanResult.query.filter_by(file_path=file_path).first()
-                    if not existing:
-                        # Add as pending
-                        result = ScanResult(
-                            file_path=file_path,
-                            scan_status='pending',
-                            is_corrupted=None,
-                            discovered_date=datetime.now(timezone.utc)
-                        )
-                        db.session.add(result)
-                    elif force_rescan and existing.scan_status == 'completed':
-                        # Mark for rescan
-                        existing.scan_status = 'pending'
-                
-                # Commit every 10 chunks
-                if chunk_id % 10 == 0:
-                    db.session.commit()
-        
-        db.session.commit()
-        logger.info(f"Created {len(chunks_created)} chunks for parallel processing")
-        
-        # Phase 3: Spawn parallel chunk processing tasks
-        logger.info(f"Phase 3: Spawning {len(chunks_created)} parallel tasks")
-        scan_state.phase = 'scanning'
-        scan_state.estimated_total = total_files_to_scan
-        db.session.commit()
-        
-        # Create a group of parallel tasks
-        job = group(
-            process_chunk_task.s(chunk_id, scan_id, scan_type, force_rescan)
-            for chunk_id in chunks_created
-        )
-        
-        # Execute all tasks in parallel
-        result = job.apply_async()
-        
-        # Save all child task IDs to chunks for cancellation support
-        if hasattr(result, 'children') and result.children:
-            logger.info(f"Saving {len(result.children)} task IDs to chunks for cancellation support")
-            try:
-                for idx, (chunk_id, child_result) in enumerate(zip(chunks_created, result.children)):
-                    chunk = ScanChunk.query.filter_by(chunk_id=chunk_id).first()
-                    if chunk and hasattr(child_result, 'id'):
-                        chunk.celery_task_id = child_result.id
-                        logger.debug(f"Saved task ID {child_result.id} to chunk {chunk_id}")
-                db.session.commit()
-                logger.info(f"Successfully saved task IDs for {len(result.children)} chunks")
-            except Exception as e:
-                logger.error(f"Error saving task IDs to chunks: {e}")
-        
-        # Monitor completion (this could be moved to a separate monitoring task)
-        logger.info(f"Parallel scan orchestrator spawned {len(chunks_created)} tasks")
-        
         return {
-            'status': 'LAUNCHED',
-            'scan_id': scan_id,
-            'total_files': total_files,
-            'chunks_created': len(chunks_created),
-            'task_id': self.request.id,
-            'message': f'Launched {len(chunks_created)} parallel tasks across all workers'
+            'status': 'SUCCESS',
+            'chunk_id': chunk_db_id,
+            'files_processed': files_processed,
+            'files_corrupted': files_corrupted,
+            'completed_at': datetime.now(timezone.utc).isoformat()
         }
-        
+
     except Exception as exc:
-        logger.error(f"Parallel scan orchestrator failed: {str(exc)}")
-        
-        # Update scan state to crashed
+        logger.error(f"Chunk task {self.request.id} failed: {exc}")
+        db.session.rollback()
+
+        # Always reclaim claimed-but-unscanned rows: the retried attempt's
+        # bulk claim selects only 'pending', so without this a retry would
+        # find nothing and mark the chunk completed with 0 files
         try:
-            scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
-            if scan_state:
-                scan_state.phase = 'crashed'
-                scan_state.is_active = False
-                scan_state.error_message = str(exc)
-                db.session.commit()
-        except:
-            pass
-        
+            if first_path and last_path:
+                _reclaim_chunk_range(first_path, last_path)
+        except Exception as reclaim_error:
+            logger.error(f"Chunk {chunk_db_id} reclaim failed: {reclaim_error}")
+            db.session.rollback()
+
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+
+        # Max retries: terminal error so finalization still fires, then re-raise
+        try:
+            chunk = db.session.get(ScanChunk, chunk_db_id)
+            if chunk:
+                _mark_chunk_terminal(chunk, 'error', error=exc)
+            maybe_finalize_scan(scan_id)
+        except Exception as cleanup_error:
+            logger.error(f"Chunk {chunk_db_id} terminal-error cleanup failed: {cleanup_error}")
+            db.session.rollback()
         raise exc
 
 
-@celery_app.task
-def scan_completion_monitor(scan_id: str):
+@celery_app.task(bind=True, soft_time_limit=DISCOVERY_TASK_TIMEOUT_SECS,
+                 time_limit=DISCOVERY_TASK_TIMEOUT_SECS + 120)
+def discover_directory_task(self, directory: str, scan_id: str,
+                            excluded_paths: List[str] = None,
+                            excluded_extensions: List[str] = None,
+                            excluded_patterns: List[str] = None):
+    """Walk one directory and bulk-insert discovered media as pending rows.
+
+    Returns counts only (never file lists -- 1M+ paths through the result
+    backend would exhaust Redis). complete=False means truncated; the
+    orchestrator aborts rather than report a partial scan as complete.
     """
-    Monitor task that checks if all chunks are complete and updates scan state
-    
-    This task runs periodically to check if all chunks for a scan are complete
-    and updates the overall scan status accordingly.
-    """
+    logger.info(f"Worker {self.request.id} discovering files in {directory}")
+
+    excluded_paths = excluded_paths or []
+    excluded_extensions = excluded_extensions or []
+    excluded_patterns = excluded_patterns or []
+
+    checker = PixelProbe(
+        database_path=None,  # No DB connection needed for discovery
+        excluded_paths=excluded_paths,
+        excluded_extensions=excluded_extensions,
+        excluded_patterns=excluded_patterns,
+    )
+
+    start_time = time.time()
+    files_checked = 0
+    files_inserted = 0
+    buffer = []
+    complete = True
+    error = None
+
+    def flush():
+        nonlocal files_inserted
+        if buffer:
+            added, _ = add_files_batch_to_db(buffer)
+            files_inserted += added
+            buffer.clear()
+            # Atomic increment: multiple discovery tasks update one row
+            db.session.execute(
+                update(ScanState)
+                .where(ScanState.scan_id == scan_id)
+                .values(discovery_count=ScanState.discovery_count + added,
+                        last_update=datetime.now(timezone.utc),
+                        progress_message=f'Discovering files... ({directory})')
+            )
+            db.session.commit()
+
     try:
-        # Check if all chunks are complete
-        total_chunks = ScanChunk.query.filter_by(scan_id=scan_id).count()
-        complete_chunks = ScanChunk.query.filter_by(
-            scan_id=scan_id, 
-            is_complete=True
-        ).count()
-        
-        logger.info(f"Scan {scan_id}: {complete_chunks}/{total_chunks} chunks complete")
-        
-        if total_chunks > 0 and complete_chunks == total_chunks:
-            # All chunks complete - mark scan as complete
+        for root, dirs, files in os.walk(directory):
+            dirs[:] = [d for d in dirs if not any(
+                is_path_under(os.path.join(root, d), exc) for exc in excluded_paths
+            )]
+
+            for file in files:
+                files_checked += 1
+                file_path = os.path.join(root, file)
+
+                # _is_supported_file applies path, extension, and filename-
+                # pattern exclusions (checker was built with all three)
+                if not checker._is_supported_file(file_path):
+                    continue
+
+                buffer.append(file_path)
+                if len(buffer) >= _DISCOVERY_INSERT_BATCH:
+                    flush()
+
+        flush()
+
+    except SoftTimeLimitExceeded:
+        logger.warning(f"Discovery of {directory} timed out after {files_checked} files "
+                       f"({DISCOVERY_TASK_TIMEOUT_SECS}s limit; raise DISCOVERY_TASK_TIMEOUT_SECS)")
+        complete = False
+        error = 'soft_time_limit'
+    except Exception as e:
+        logger.error(f"Error during directory walk of {directory}: {e}")
+        db.session.rollback()
+        complete = False
+        error = str(e)
+
+    elapsed = time.time() - start_time
+    logger.info(f"Discovery of {directory}: checked {files_checked}, inserted {files_inserted} "
+                f"in {elapsed:.1f}s (complete={complete})")
+    return {'directory': directory, 'files_checked': files_checked,
+            'files_inserted': files_inserted, 'complete': complete, 'error': error}
+
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60,
+                 soft_time_limit=None, time_limit=None)
+def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
+                               scan_type: str = 'full', force_rescan: bool = False):
+    """Orchestrate a directory scan: discover -> chunk -> fan out.
+
+    scan_type: 'full' (discover + scan; 'parallel' is a legacy alias) or
+    'pending' (scan existing pending rows only).
+    """
+    logger.info(f"Starting scan orchestrator for {scan_id}, type={scan_type}, force={force_rescan}")
+    paths = paths or []
+    if scan_type == 'parallel':  # legacy alias, identical to 'full'
+        scan_type = 'full'
+
+    try:
+        if scan_type not in ('full', 'pending'):
+            raise ValueError(f"Unknown scan type: {scan_type}")
+        if scan_type == 'full' and not paths:
+            raise ValueError("Paths required for full scan")
+
+        scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
+        if not scan_state:
+            # Dispatched without a route-level claim (scan_media_task shim);
+            # claim properly so a concurrent scan still conflicts.
+            ok, err_payload, _ = claim_scan_slot(scan_id, scan_type)
+            if not ok:
+                logger.warning(f"Orchestrator could not claim scan slot for {scan_id}: {err_payload}")
+                return {'status': 'CONFLICT', 'scan_id': scan_id, **(err_payload or {})}
+            scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
+
+        scan_state.start_scan(paths, force_rescan)  # phase='discovering', resets counters
+        scan_state.celery_task_id = self.request.id
+        scan_state.scan_type = scan_type
+        scan_state.num_workers = _env_secs('CELERY_CONCURRENCY', 4, floor=1)
+        scan_state.phase_number = 1
+        scan_state.progress_message = 'Discovering files...'
+        db.session.commit()
+
+        try:
+            clear_scan_progress_redis(scan_id)
+        except Exception:
+            pass
+        ScanChunk.query.filter_by(scan_id=scan_id).delete(synchronize_session=False)
+        db.session.commit()
+
+        files_added = 0
+
+        # Phase 1: discovery (one task per directory, counts only)
+        if scan_type == 'full':
+            excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
+            discovery_tasks = [
+                discover_directory_task.s(path, scan_id, excluded_paths,
+                                          excluded_extensions, excluded_patterns)
+                for path in paths if os.path.exists(path)
+            ]
+
+            if discovery_tasks:
+                logger.info(f"Launching {len(discovery_tasks)} discovery tasks")
+                result = group(discovery_tasks).apply_async()
+
+                discovery_timeout = _env_secs('DISCOVERY_RESULT_TIMEOUT_SECS', 7200)
+                discovery_incomplete = []
+                # allow_join_result: Celery forbids result.get() inside a task
+                # by default (prefork raises RuntimeError). Blocking one slot
+                # for discovery is the accepted price of the incompleteness
+                # guard's harvest logic.
+                with allow_join_result():
+                    try:
+                        for res in result.get(timeout=discovery_timeout):
+                            if not res:
+                                discovery_incomplete.append('unreadable-discovery-result')
+                                continue
+                            files_added += res.get('files_inserted', 0)
+                            if not res.get('complete', False):
+                                discovery_incomplete.append(res.get('directory', '?'))
+                    except Exception as e:
+                        # Harvest what finished; only genuinely unfinished tasks count as incomplete
+                        logger.error(f"Error getting discovery results: {e}")
+                        for task_result in result.results:
+                            try:
+                                if task_result and task_result.ready():
+                                    res = task_result.get(timeout=1)
+                                    if res:
+                                        files_added += res.get('files_inserted', 0)
+                                        if not res.get('complete', False):
+                                            discovery_incomplete.append(res.get('directory', '?'))
+                                    else:
+                                        discovery_incomplete.append('unreadable-discovery-result')
+                                else:
+                                    discovery_incomplete.append('discovery-task-unfinished')
+                            except Exception:
+                                discovery_incomplete.append('discovery-task-error')
+
+                # Never scan (and report 'completed') on a truncated file set
+                if discovery_incomplete:
+                    msg = (f"Discovery incomplete for {len(discovery_incomplete)} target(s): "
+                           f"{discovery_incomplete[:5]} - aborting so a partial file set is not "
+                           f"reported as complete. Re-run the scan.")
+                    logger.error(msg)
+                    scan_state.error_scan(msg[:1000])
+                    create_scan_report(scan_state)
+                    return {'status': 'error', 'scan_id': scan_id,
+                            'error': 'discovery_incomplete',
+                            'incomplete_targets': discovery_incomplete}
+
+            scan_state.files_added = files_added
+
+        # Phase 2: adding/chunking
+        scan_state.phase = SCAN_PHASES['ADDING']
+        scan_state.phase_number = 2
+        scan_state.progress_message = 'Preparing scan chunks...'
+        scan_state.last_update = datetime.now(timezone.utc)
+        db.session.commit()
+
+        if force_rescan and paths:
+            # Scoped to requested directories (never a DB-wide reset)
+            for d in paths:
+                ScanResult.query.filter(
+                    ScanResult.scan_status.in_(['completed', 'error', 'scanning']),
+                    ScanResult.file_path.like(like_prefix(d), escape='\\')
+                ).update({'scan_status': 'pending'}, synchronize_session=False)
+            db.session.commit()
+
+        chunks = build_scan_chunks(scan_id)  # list of {'id', 'files_discovered'}
+        total_to_scan = sum(c['files_discovered'] for c in chunks)
+
+        # Phase 3: fan out
+        scan_state.phase = SCAN_PHASES['SCANNING']
+        scan_state.phase_number = 3
+        scan_state.estimated_total = total_to_scan
+        scan_state.phase_total = total_to_scan
+        scan_state.phase_current = 0
+        scan_state.progress_message = f'Scanning {total_to_scan} files in {len(chunks)} chunks...'
+        scan_state.last_update = datetime.now(timezone.utc)
+        db.session.commit()
+
+        if not chunks:
+            # Zero-chunk scans bypass maybe_finalize_scan (it requires chunks
+            # so it can never finalize a live legacy-engine scan)
+            logger.info(f"Scan {scan_id}: no files to scan, finalizing")
+            scan_state = ScanState.query.filter_by(scan_id=scan_id).with_for_update().first()
+            finalize_scan(scan_state)
+            return {'status': 'COMPLETED', 'scan_id': scan_id, 'total_files': 0}
+
+        job = group(
+            process_chunk_task.s(chunk['id'], scan_id, force_rescan)
+            for chunk in chunks
+        )
+        result = job.apply_async()
+
+        # Save child task IDs for cancellation support
+        if getattr(result, 'children', None):
+            try:
+                mappings = [
+                    {'id': chunk['id'], 'celery_task_id': child.id}
+                    for chunk, child in zip(chunks, result.children)
+                    if hasattr(child, 'id')
+                ]
+                db.session.bulk_update_mappings(ScanChunk, mappings)
+                db.session.commit()
+            except Exception as e:
+                logger.error(f"Error saving chunk task IDs: {e}")
+                db.session.rollback()
+
+        logger.info(f"Scan {scan_id}: launched {len(chunks)} chunk tasks for {total_to_scan} files")
+        return {
+            'status': 'LAUNCHED',
+            'scan_id': scan_id,
+            'total_files': total_to_scan,
+            'chunks_created': len(chunks),
+            'task_id': self.request.id,
+        }
+
+    except Exception as exc:
+        logger.error(f"Scan orchestrator failed for {scan_id}: {exc}")
+        db.session.rollback()
+        try:
             scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
             if scan_state:
-                scan_state.phase = 'completed'
+                scan_state.phase = SCAN_PHASES['CRASHED']
                 scan_state.is_active = False
+                scan_state.error_message = str(exc)[:1000]
                 scan_state.end_time = datetime.now(timezone.utc)
-                
-                # Calculate final statistics
-                total_files = ScanResult.query.filter_by(scan_status='completed').count()
-                corrupted_files = ScanResult.query.filter_by(
-                    scan_status='completed',
-                    is_corrupted=True
-                ).count()
-                
-                scan_state.files_processed = total_files
-                scan_state.progress_message = f"Scan completed: {total_files} files processed, {corrupted_files} corrupted"
-                
                 db.session.commit()
-                logger.info(f"Scan {scan_id} completed successfully")
-                
-                return {
-                    'status': 'COMPLETED',
-                    'scan_id': scan_id,
-                    'total_files': total_files,
-                    'corrupted_files': corrupted_files
-                }
-        else:
-            # Still processing
-            return {
-                'status': 'IN_PROGRESS',
-                'scan_id': scan_id,
-                'complete': complete_chunks,
-                'total': total_chunks
-            }
-            
-    except Exception as e:
-        logger.error(f"Error monitoring scan {scan_id}: {e}")
-        return {
-            'status': 'ERROR',
-            'scan_id': scan_id,
-            'error': str(e)
-        }
+                # Failed report so scheduled scans send the healthcheck failure ping
+                create_scan_report(scan_state)
+        except Exception:
+            db.session.rollback()
+        raise exc

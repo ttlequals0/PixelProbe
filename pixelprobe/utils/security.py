@@ -158,15 +158,14 @@ def validate_file_path(file_path, allowed_paths=None):
     
     # Normalize and get absolute path
     normalized = os.path.normpath(os.path.abspath(file_path))
-    
-    # Check for suspicious patterns
+
+    # ~/$/% are legal in media filenames; containment is enforced below via
+    # realpath + safe_join against the allowlist.
     suspicious_patterns = [
-        r'\.\.',  # Parent directory references
-        r'~',     # Home directory references
-        r'\$',    # Environment variable references
-        r'%',     # Windows environment variables
+        r'\.\.',          # Parent directory references
+        r'[\x00-\x1f]',   # Null byte and control characters
     ]
-    
+
     for pattern in suspicious_patterns:
         if re.search(pattern, file_path):
             raise PathTraversalError(f"Suspicious pattern detected: {pattern}")
@@ -274,39 +273,37 @@ def sanitize_filename(filename):
     
     return filename
 
+def ensure_cli_safe_path(path):
+    """Prefix relative paths with './' so a leading '-' is never parsed as a
+    CLI option (convert has no '--' separator). Absolute paths pass through."""
+    if not isinstance(path, str):
+        path = str(path)
+    if os.path.isabs(path):
+        return path
+    return os.path.join(os.curdir, path)
+
 def validate_command_args(args):
-    """
-    Validate command arguments to prevent injection
-    
-    Args:
-        args: List of command arguments
-        
-    Returns:
-        Validated arguments
-        
-    Raises:
-        ValueError: If arguments contain dangerous patterns
-    """
+    """Reject null bytes/newlines in argv. With shell=False this is NOT
+    injection protection -- callers must use ensure_cli_safe_path() for paths."""
     if not isinstance(args, list):
         raise ValueError("Command arguments must be a list")
-    
+
     dangerous_patterns = [
-        r'[|`]',     # Shell metacharacters (removed ; & and $ which are safe in filenames with shell=False)
-        r'\n|\r',    # Newlines
-        r'\\x00',    # Null bytes
+        r'\n|\r',  # Newlines
+        r'\x00',   # Null bytes
     ]
-    
+
     validated = []
     for arg in args:
         if not isinstance(arg, str):
             arg = str(arg)
-        
+
         for pattern in dangerous_patterns:
             if re.search(pattern, arg):
                 raise ValueError(f"Dangerous pattern in argument: {pattern}")
-        
+
         validated.append(arg)
-    
+
     return validated
 
 def safe_subprocess_run(args, **kwargs):

@@ -93,6 +93,12 @@ def create_test_app():
     # Add basic routes (with auth_required to match production app)
     from pixelprobe.auth import auth_required as _auth_required
 
+    @test_app.route('/healthz')
+    def liveness_check():
+        # Mirrors app.py: unauthenticated liveness probe for container healthchecks
+        from pixelprobe.version import __version__
+        return {'status': 'ok', 'version': __version__}
+
     @test_app.route('/health')
     @_auth_required
     def health_check():

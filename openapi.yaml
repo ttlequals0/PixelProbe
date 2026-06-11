@@ -760,7 +760,8 @@ paths:
     post:
       summary: Start full media scan
       description: |
-        Initiate a full scan of all configured media directories.
+        Initiate a full scan of all configured media directories. Since
+        v2.6.49 the scan is chunk-distributed across all Celery workers.
 
         **Example:**
         ```bash
@@ -794,6 +795,8 @@ paths:
           description: Invalid request
         '409':
           description: Scan already in progress
+        '503':
+          description: Celery workers not available
 
   /scan-status:
     get:
@@ -865,7 +868,8 @@ paths:
     post:
       summary: Start parallel file scan (legacy)
       description: |
-        Legacy parallel scanning endpoint. For directory scanning, prefer `/scan-parallel`.
+        Legacy parallel scanning endpoint. For directory scanning, prefer `/scan`;
+        the `file_paths` form remains the supported way to rescan selected files.
 
         **Example:**
         ```bash
@@ -908,9 +912,11 @@ paths:
 
   /scan-parallel:
     post:
-      summary: Start enhanced parallel scan
+      summary: Start parallel scan (deprecated alias of /scan)
+      deprecated: true
       description: |
-        Enhanced parallel scanning that distributes work across all available Celery workers.
+        Deprecated alias of `/scan` - both run the same chunk-distributed engine.
+        Will be removed in a future major release.
 
         **Example:**
         ```bash

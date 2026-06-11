@@ -141,10 +141,12 @@ app.celery = celery
 
 # PostgreSQL is the only supported database (v2.2.0+)
 
-CORS(app, resources={
-    r"/api/*": {"origins": "*"},
-    r"/": {"origins": "*"}
-})
+# CORS is enabled only when cross-origin access is explicitly configured.
+# Same-origin browsers need no CORS; server-side callers (scheduler) and API
+# tokens ignore it entirely.
+_cors_origins = [o.strip() for o in os.environ.get('CORS_ORIGINS', '').split(',') if o.strip()]
+if _cors_origins:
+    CORS(app, resources={r"/api/*": {"origins": _cors_origins}})
 
 # Security headers middleware (P1 audit fix)
 @app.after_request
@@ -194,12 +196,24 @@ def get_rate_limit_key():
         return None  # Returning None exempts from rate limiting
     return remote_addr
 
-# Initialize rate limiter with proper configuration
+# Rate limit counters live in Redis so limits hold across all gunicorn
+# workers (memory:// gave each worker its own counters, multiplying every
+# limit by the worker count). Falls back to per-process memory if Redis is down.
+def _rate_limit_storage_uri():
+    explicit = os.environ.get('RATELIMIT_STORAGE_URI')
+    if explicit:
+        return explicit
+    broker = os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0')
+    if broker.startswith('redis://'):
+        return broker.rsplit('/', 1)[0] + '/1'  # separate DB from the broker
+    return 'memory://'
+
 limiter = Limiter(
     app=app,
     key_func=get_rate_limit_key,
     default_limits=[],  # Remove default limits to prevent spam when key_func returns None
-    storage_uri="memory://",
+    storage_uri=_rate_limit_storage_uri(),
+    in_memory_fallback_enabled=True,
     headers_enabled=True,
     swallow_errors=True  # Don't fail requests if rate limiting has issues
 )
@@ -373,6 +387,13 @@ def index():
 def api_docs():
     """Serve API documentation page"""
     return render_template('api_docs.html')
+
+@app.route('/healthz')
+@limiter.exempt
+def liveness_check():
+    """Unauthenticated liveness probe for container healthchecks.
+    No DB ping: a DB blip must not restart-loop the container."""
+    return jsonify({'status': 'ok', 'version': __version__})
 
 @app.route('/health')
 @limiter.exempt

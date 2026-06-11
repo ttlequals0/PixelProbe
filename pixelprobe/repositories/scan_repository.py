@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import text, and_, or_
 
 from pixelprobe.models import ScanResult, ScanState
+from pixelprobe.utils.paths import like_prefix
 from .base_repository import BaseRepository
 
 class ScanRepository(BaseRepository[ScanResult]):
@@ -156,9 +157,9 @@ class ScanRepository(BaseRepository[ScanResult]):
         }
     
     def get_files_by_path_prefix(self, path_prefix: str) -> int:
-        """Get count of files with specific path prefix"""
+        """Get count of files under a directory (path-boundary safe)"""
         return self.query().filter(
-            ScanResult.file_path.like(f"{path_prefix}%")
+            ScanResult.file_path.like(like_prefix(path_prefix), escape='\\')
         ).count()
     
     def update_file_hash(self, file_path: str, new_hash: str, 

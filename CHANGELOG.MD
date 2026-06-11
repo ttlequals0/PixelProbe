@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.49] - 2026-06-10
+
+External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus convergence of the two scan engines onto the chunk-distributed path.
+
+### Changed (scan engine convergence - WORKER-2)
+
+- **`/api/scan` now runs the chunk-distributed engine.** Directory scans are split into disjoint path-range (FCP) chunks and fanned out as `process_chunk_task` across ALL Celery worker slots, instead of a thread pool inside one Celery task. Scan throughput now scales with `CELERY_CONCURRENCY` (8-12 recommended; was bounded by `MAX_WORKERS` threads in one slot). `MAX_WORKERS` still applies to selected-file rescans.
+- **Scan completion uses last-chunk-finalizes.** Every chunk exit (success, empty, cancelled, error) marks its chunk terminal; the last one finalizes the scan under a PostgreSQL row lock (exactly-once): computes per-scan totals from chunk sums, reclaims stuck `'scanning'` rows, creates the ScanReport, and sends the scheduled-scan healthcheck ping. A scan with failed chunks finalizes as `'error'` (failure ping, error message naming the chunk count) instead of claiming a clean completion. The stuck-scan sweeper finalizes as a backstop if the winning chunk dies at the wrong moment; it never touches legacy-engine (selected-file) scans or scans without chunks.
+- **Chunk task retries are loss-free.** A retried chunk reclaims its claimed range back to pending before retrying (otherwise the retry would find nothing and report the chunk complete with 0 files), and a failed batch commit propagates into the retry instead of silently dropping up to 100 files' results.
+- **Discovery is parallel and memory-safe.** One discovery task per directory bulk-inserts pending rows (ON CONFLICT DO NOTHING) and returns counts only - file lists no longer round-trip through the Redis result backend (~100MB+ at 1.2M files). The discovery-incompleteness guard is preserved: any truncated walk aborts the scan instead of reporting a partial library as complete. Discovery timeout default raised 120s -> 3600s and is now env-configurable (`DISCOVERY_TASK_TIMEOUT_SECS`); the old 120s default would have aborted every production-scale scan.
+- **`/api/scan-parallel` is now a deprecated alias of `/api/scan`** (same engine, same claim). `/api/force-scan-pending` and the directories branch of `/api/scan-files-parallel` also route through the converged launcher. The Celery-unavailable thread fallback is gone: launches return 503 and release the claim instead.
+- **Behavioral deltas:** files are scanned in path order (newest-first ordering of new files is dropped); the `adding` phase counts DB inserts during discovery rather than a separate pass; `file_type` is populated by the scan, not discovery (dropping ~1.2M libmagic reads from the discovery phase - newly discovered rows briefly show `unknown`); a single-file rescan no longer deactivates an actively progressing scan (`create_new_scan` only clears scans stale for 30+ minutes); the scan-start claim now blocks on an active scan in ANY scan-state row (single-file rescans included) and resets its staleness markers so the sweeper cannot kill a freshly queued scan; failed scan starts surface the server's reason in the UI (e.g. "Celery workers not available").
+
+### Fixed
+
+- **Validation failures no longer wedge scanning (SCHED-1, High).** `/api/scan` validated directories AFTER committing `is_active=True`, so a 400 (bad directory, none configured) left the claim stuck and every later scan got 409 until the 30-minute sweeper. Validation now happens before the claim, and any post-claim launch failure releases it.
+- **Parallel engine tasks were never registered with the worker.** `celery_config.py` only included `pixelprobe.tasks`, so `/api/scan-parallel` dispatched tasks the worker discarded as unregistered - the parallel engine had never actually run. `pixelprobe.tasks_parallel` is now in the worker's include list.
+- **Deleted the UI heartbeat task that occupied a worker slot all scan long (WORKER-1, High).** `ui_progress_update_task` busy-polled the DB at 0.5s for the entire scan, consuming 25% of scan capacity at `CELERY_CONCURRENCY=4`, and could itself be starved into triggering false stuck-scan detection. Chunk tasks now bump `last_update` every 100 files or 60 seconds, whichever comes first (sweeper-safe even on multi-minute video files).
+- **Path exclusions and chunk queries no longer over-match sibling directories (SCHED-2/WORKER-3, High/Medium).** Excluding `/media/movies` also excluded `/media/movies2`; `LIKE 'dir%'` chunk/cleanup queries had the same flaw (cross-chunk double-claims, widened deletion sets). New `pixelprobe/utils/paths.py` helpers (`is_path_under`, `like_prefix` with SQL wildcard escaping) replace all 14 sites; FCP range chunks eliminate the in-engine cases by construction.
+- **Per-file DB round-trips removed from chunk scanning (WORKER-5/EFF-1).** Chunks claim their whole disjoint range with one `UPDATE ... RETURNING` and write results on ORM objects loaded in batches of 100 (was up to 3 queries per file across claim/write/error).
+- **Empty chunks no longer stomp live progress (WORKER-4).** The empty-chunk path stops writing `current_file`/`progress_message` on the shared scan state mid-scan.
+- **`force_rescan` is scoped to the requested directories.** The old orchestrator reset every completed row in the database; now only rows under the requested directories are reset (boundary-safe LIKE).
+- **Orchestrator exclusion crash fixed.** It read `Exclusion.pattern`, an attribute that does not exist (AttributeError on any active exclusion row), and used the DB table instead of the canonical `exclusions.json`. Discovery now uses `load_exclusions_with_patterns()` including filename patterns.
+- **Per-scan completion totals (WORKER-7 adjacent).** The never-dispatched `scan_completion_monitor` computed "files processed" from a full-table count across all scans ever; the finalizer sums this scan's chunks.
+- **Scheduler duplicate-schedule cleanup commits once after iteration (SCHED-3, Low)** instead of committing inside the loop over live query results.
+- **Interval schedule fire-time is computed before the job is added (SCHED-4, Low).** Extracted `compute_next_interval_run()` (unit-testable branches: future-from-last-run, stored-future, past -> now+interval, no history) and passed into `add_job` directly, removing the add-then-modify window where a job could fire at the wrong time.
+
+### Security
+
+- **Argument-injection hardening for media tools (SEC-1, High).** The shell-metacharacter blocklist in `validate_command_args` was security theater (inert with `shell=False`) while real risks went unaddressed: `ffprobe` and ImageMagick `convert` received file paths in option position, and two `ffmpeg`/`ffprobe` call sites bypassed `safe_subprocess_run` entirely. Added `ensure_cli_safe_path()` ('./'-prefix for relative paths; `convert` has no `--` separator), applied it at the vulnerable sites, routed the raw `subprocess.run` calls through the safe wrapper, and narrowed `validate_command_args` to null bytes/newlines with an honest docstring. Also fixed the null-byte pattern, which matched the literal text `\x00` instead of an actual null byte.
+- **Legitimate filenames are scannable again (SEC-5, Low).** `validate_file_path` rejected any path containing `~`, `$`, or `%` - all legal in real media filenames. Containment is enforced by realpath + `safe_join` against the allowlist; the blocklist now rejects only traversal tokens and control characters.
+- **Container healthcheck works (SEC-2, Medium).** New unauthenticated `/healthz` liveness endpoint (no DB ping, so a DB blip cannot restart-loop the container); compose healthcheck points at it. `/health` stays authenticated.
+- **CORS is opt-in (SEC-3, Medium).** The blanket `origins: "*"` on `/api/*` is gone; set `CORS_ORIGINS` (comma-separated) only if cross-origin browser access is needed. Same-origin UI, server-side scheduler calls, and API tokens are unaffected.
+- **Session cookies default to Secure (SEC-4, Medium).** Plain-HTTP LAN deployments must set `SESSION_COOKIE_SECURE=false`.
+- **Rate limits are now cluster-wide (OPS-1, Medium).** Flask-Limiter counters move from per-process memory (each of 4 gunicorn workers kept its own, multiplying every limit by 4) to Redis (broker host, DB 1; `RATELIMIT_STORAGE_URI` to override), with in-memory fallback if Redis is down.
+- **Compose no longer exposes datastores (SEC-6/OPS-2, Low).** PostgreSQL 5432 and Redis 6379 host port publications removed (inter-container traffic uses the compose network; Redis also holds the broker and internal API secret). `POSTGRES_PASSWORD` is now required - the `changeme` default is gone. Redis `requirepass` wiring is noted as future work.
+- **Connection pool can no longer exceed PostgreSQL `max_connections` (DB-1, Medium).** `pool_size`/`max_overflow` reduced 20/40 -> 5/10 per process (env: `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`): web worst-case drops 240 -> 60 connections; compose comment now states the real math.
+
+### Removed
+
+- `ScanService` thread-pool engine internals (`scan_directories`, `resume_scan` and friends, ~1,600 lines) - replaced by the chunk engine; `scan_media_task` remains as a shim so messages queued across the deploy still execute. `scan_single_file`/`scan_files` (single/selected-file rescans) are unchanged.
+- `scan_completion_monitor` (never dispatched), `cleanup_orphaned_task` (stub returning fake success; real cleanup goes through MaintenanceService), `scheduled_scan_task` (never dispatched), `ui_progress_update_task` + `_final_sync_redis_to_db`.
+- `pixelprobe/database/connection_manager.py` (DB-2, Medium): dead code with a broken multi-yield contextmanager that would raise `RuntimeError` if ever used.
+- Dead `worker_max_tasks_per_child=50` in `celery_config.py` (EFF-2; the CLI flag in `celery_worker.py` wins).
+- Compose image pin to stale 2.5.70 (OPS-3) - now `${PIXELPROBE_VERSION:-2.6.49}`.
+
+### Deployment notes
+
+- New env knobs: `DISCOVERY_TASK_TIMEOUT_SECS` (default 3600), `DB_POOL_SIZE` (5), `DB_MAX_OVERFLOW` (10), `RATELIMIT_STORAGE_URI`, `CORS_ORIGINS` (empty = no CORS), `SESSION_COOKIE_SECURE` (default true).
+- Compose now requires `POSTGRES_PASSWORD` to be set explicitly.
+- Recommend raising `CELERY_CONCURRENCY` to 8-12: it is now the main scan-throughput knob.
+
 ## [2.6.48] - 2026-06-01
 
 ### Fixed (integrity scan reliability at scale: 1.2M files up to ~55GB)

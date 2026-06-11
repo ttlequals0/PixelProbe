@@ -166,7 +166,17 @@ class APIClient {
             }
 
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                // Surface the server's reason (e.g. "Celery workers not available")
+                let detail = '';
+                try {
+                    const data = await response.json();
+                    if (data && data.error) {
+                        detail = `: ${data.error}`;
+                    }
+                } catch (parseError) {
+                    // Non-JSON error body
+                }
+                throw new Error(`HTTP error! status: ${response.status}${detail}`);
             }
 
             return await response.json();
@@ -1999,7 +2009,8 @@ class PixelProbeApp {
             this.progress.startMonitoring('scan');
             this.showNotification('Scan started', 'success');
         } catch (error) {
-            this.showNotification('Failed to start scan', 'error');
+            const detail = error && error.message ? ` (${error.message})` : '';
+            this.showNotification(`Failed to start scan${detail}`, 'error');
         }
     }
 
