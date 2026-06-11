@@ -317,6 +317,28 @@ def run_v2_6_49_migrations(db):
         logger.error(f"Migration v2.6.49 failed: {e}")
 
 
+def run_v2_6_53_migrations(db):
+    """Append celery.app.trace to the stored log-exclusion list if absent.
+
+    The exclude config is seeded once (ON CONFLICT DO NOTHING), so default
+    changes never reach existing installs. Additive so user customizations
+    survive. celery.app.trace logs one row per task; at maintenance-run rates
+    that WAL volume drives 5-minute checkpoint IO storms.
+    """
+    try:
+        with migration_connection(db) as conn:
+            conn.execute(text("""
+                UPDATE app_configs
+                SET value = value || ',celery.app.trace'
+                WHERE key = :key
+                  AND ',' || replace(value, ' ', '') || ',' NOT LIKE '%,celery.app.trace,%'
+            """), {'key': CONFIG_LOG_EXCLUDE_LOGGERS})
+            conn.commit()
+            logger.info("v2.6.53 log-exclusion backfill completed")
+    except Exception as e:
+        logger.error(f"Migration v2.6.53 failed: {e}")
+
+
 def create_performance_indexes(db):
     """Create performance indexes"""
     indexes = [
@@ -401,6 +423,12 @@ def _run_all_migrations(db):
         run_v2_6_49_migrations(db)
     except Exception as e:
         logger.error(f"v2.6.49 migration failed: {e}")
+
+    logger.info("Running v2.6.53 migration (log-exclusion backfill)...")
+    try:
+        run_v2_6_53_migrations(db)
+    except Exception as e:
+        logger.error(f"v2.6.53 migration failed: {e}")
 
     logger.info("Creating performance indexes...")
     try:

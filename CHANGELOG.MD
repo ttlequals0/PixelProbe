@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.53] - 2026-06-11
+
+### Fixed
+
+- **Maintenance runs no longer trigger 5-minute checkpoint IO storms.** During the verified cleanup run, recurring 2-7 minute slowdowns aligned to the second with PostgreSQL checkpoint write phases. Cause: `celery.app.trace` logs one INFO row per task ("succeeded in Xs" with the full result dict), and the database log handler stored all of them - ~150-190MB of WAL per 5 minutes at ~850 tasks/s, forcing heavy checkpoints that stalled the producer's own DB operations. `celery.app.trace` is now in the default log-exclusion list, and a startup migration appends it to the stored config on existing installs (additive - user customizations survive). Container/Loki logging is unaffected.
+
 ## [2.6.52] - 2026-06-11
 
 ### Fixed

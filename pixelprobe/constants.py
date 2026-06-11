@@ -98,8 +98,11 @@ TERMINAL_SCAN_PHASES = ['idle', 'completed', 'error', 'crashed', 'cancelled']
 CONFIG_LOG_RETENTION_DAYS = 'log_retention_days'
 CONFIG_LOG_EXCLUDE_LOGGERS = 'log_exclude_loggers'
 
-# Default excluded loggers for database log storage
-DEFAULT_LOG_EXCLUDE_LOGGERS = 'urllib3,werkzeug,celery.worker.strategy,celery.bootsteps,kombu,amqp'
+# Default excluded loggers for database log storage.
+# celery.app.trace emits one INFO row per task ("succeeded in Xs" with the
+# full result): at ~850 tasks/s during maintenance runs that is ~150MB of WAL
+# per 5 minutes, driving checkpoint IO storms that stall the producer loops
+DEFAULT_LOG_EXCLUDE_LOGGERS = 'urllib3,werkzeug,celery.worker.strategy,celery.app.trace,celery.bootsteps,kombu,amqp'
 
 # Sentinel value for system (non-scan) logs
 SYSTEM_LOG_ID = 'system'
