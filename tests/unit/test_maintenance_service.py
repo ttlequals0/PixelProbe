@@ -156,6 +156,9 @@ class TestFileChangesProgressRedis:
             )
 
         keys_used = {call.args[0] for call in fake_client.hset.call_args_list}
+        # scan progress writes go through a pipeline since v2.6.49
+        keys_used |= {call.args[0]
+                      for call in fake_client.pipeline.return_value.hset.call_args_list}
         assert 'file_changes_progress:abc' in keys_used
         assert 'scan_progress:abc' in keys_used
 
@@ -186,3 +189,176 @@ class TestDeltaCheckSemantics:
                 last_update = total
         # Every non-zero step has a delta exceeding update_interval, so each fires.
         assert fires == len([t for t in totals_seen if t > 0])
+
+
+class TestAbandonIfStuck:
+    """Tasks whose results never arrive are revoked and dropped so producer
+    loops (cleanup Phase 2, file-changes) cannot pin at max concurrency and
+    spin forever. Observed live on 2026-06-10: cleanup froze at
+    20,000/1,187,442 with idle workers because un-ready handles were retried
+    indefinitely with no timeout.
+    """
+
+    def test_stale_task_is_revoked_and_abandoned(self):
+        import time as _time
+        from pixelprobe.services.maintenance_service import abandon_if_stuck
+
+        task = MagicMock()
+        stale = {'task': task, 'path': '/m/x.mkv',
+                 'submitted_at': _time.monotonic() - 601}
+
+        assert abandon_if_stuck(stale, 600, 'existence-check') is True
+        task.revoke.assert_called_once_with(terminate=False)
+
+    def test_fresh_task_is_kept(self):
+        import time as _time
+        from pixelprobe.services.maintenance_service import abandon_if_stuck
+
+        task = MagicMock()
+        fresh = {'task': task, 'path': '/m/x.mkv',
+                 'submitted_at': _time.monotonic() - 5}
+
+        assert abandon_if_stuck(fresh, 600, 'existence-check') is False
+        task.revoke.assert_not_called()
+
+    def test_revoke_failure_still_abandons(self):
+        import time as _time
+        from pixelprobe.services.maintenance_service import abandon_if_stuck
+
+        task = MagicMock()
+        task.revoke.side_effect = RuntimeError('broker down')
+        stale = {'task': task, 'path': '/m/x.mkv',
+                 'submitted_at': _time.monotonic() - 601}
+
+        assert abandon_if_stuck(stale, 600, 'existence-check') is True
+
+
+class TestSafeTaskGet:
+    """safe_task_get must consume results via task.state/task.result, never
+    AsyncResult.get(), whose pub/sub subscription stalled the producer loops
+    (Redis killed the never-drained connection every ~70s, observed live)."""
+
+    @staticmethod
+    def _task(status, result=None):
+        task = MagicMock()
+        task.id = 'task-1'
+        task.state = status
+        task.result = result
+        return task
+
+    def test_success_returns_stored_result_without_calling_get(self):
+        from pixelprobe.services.maintenance_service import safe_task_get
+
+        result = {'file_id': 1, 'file_path': '/m/x.mkv', 'status': 'exists'}
+        task = self._task('SUCCESS', result)
+
+        assert safe_task_get(task, timeout=1) == result
+        task.get.assert_not_called()
+
+    def test_failure_raises_stored_exception(self):
+        import pytest
+        from pixelprobe.services.maintenance_service import safe_task_get
+
+        task = self._task('FAILURE', ValueError('boom'))
+
+        with pytest.raises(ValueError, match='boom'):
+            safe_task_get(task, timeout=1)
+
+    def test_failure_with_non_exception_result_raises_runtime_error(self):
+        import pytest
+        from pixelprobe.services.maintenance_service import safe_task_get
+
+        task = self._task('FAILURE', 'oops')
+
+        with pytest.raises(RuntimeError, match='oops'):
+            safe_task_get(task, timeout=1)
+
+    def test_not_ready_raises_timeout(self):
+        import pytest
+        from celery.exceptions import TimeoutError as CeleryTimeoutError
+        from pixelprobe.services.maintenance_service import safe_task_get
+
+        task = self._task('PENDING')
+
+        with pytest.raises(CeleryTimeoutError):
+            safe_task_get(task, timeout=0.2)
+
+    def test_redis_error_retries_then_succeeds(self):
+        import redis
+        from unittest.mock import PropertyMock
+        from pixelprobe.services.maintenance_service import safe_task_get
+
+        result = {'status': 'exists'}
+        task = MagicMock()
+        task.id = 'task-1'
+        type(task).state = PropertyMock(
+            side_effect=[redis.ConnectionError('killed'), 'SUCCESS'])
+        task.result = result
+
+        with patch.object(progress_utils, 'reset_redis_pool'), \
+                patch('time.sleep'):
+            assert safe_task_get(task, timeout=1) == result
+
+
+class TestDispatchResultSubscriptionDisabled:
+    """apply_async must not subscribe the producer to result pub/sub channels:
+    nothing in the producer reads that socket, so Redis kills the connection
+    on output-buffer overrun (observed every ~3min during cleanup runs)."""
+
+    @staticmethod
+    def _patched_celery():
+        from celery import Celery
+        from pixelprobe.utils.celery_utils import disable_dispatch_result_subscription
+
+        celery = Celery('t', broker='redis://localhost:6379/0',
+                        backend='redis://localhost:6379/0')
+        disable_dispatch_result_subscription(celery)
+        return celery
+
+    def test_on_task_call_is_noop_instance_override(self):
+        celery = self._patched_celery()
+        assert 'on_task_call' in vars(celery.backend)
+        assert celery.backend.on_task_call(MagicMock(), 'task-1') is None
+
+    def test_on_task_call_is_noop_in_new_threads(self):
+        # Celery._backend is thread-local (one backend instance per thread
+        # unless result_backend_thread_safe); a single-instance patch missed
+        # the cleanup producer thread in production (2026-06-11, v2.6.56).
+        import threading
+
+        celery = self._patched_celery()
+        seen = {}
+
+        def probe():
+            backend = celery.backend
+            seen['fresh_instance'] = backend is not celery._backend_cache
+            seen['noop'] = 'on_task_call' in vars(backend)
+
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join()
+        assert seen['fresh_instance'] is True
+        assert seen['noop'] is True
+
+
+class TestEnvInt:
+
+    def test_default_on_missing(self, monkeypatch):
+        from pixelprobe.utils.helpers import env_int
+        monkeypatch.delenv('PP_TEST_ENV_INT', raising=False)
+        assert env_int('PP_TEST_ENV_INT', 42) == 42
+
+    def test_parses_value(self, monkeypatch):
+        from pixelprobe.utils.helpers import env_int
+        monkeypatch.setenv('PP_TEST_ENV_INT', '7')
+        assert env_int('PP_TEST_ENV_INT', 42) == 7
+
+    def test_garbage_falls_back(self, monkeypatch):
+        from pixelprobe.utils.helpers import env_int
+        monkeypatch.setenv('PP_TEST_ENV_INT', 'not-a-number')
+        assert env_int('PP_TEST_ENV_INT', 42) == 42
+
+    def test_floor_clamps(self, monkeypatch):
+        from pixelprobe.utils.helpers import env_int
+        monkeypatch.setenv('PP_TEST_ENV_INT', '3')
+        assert env_int('PP_TEST_ENV_INT', 42, floor=10) == 10

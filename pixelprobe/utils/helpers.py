@@ -193,6 +193,18 @@ def batch_process(items, batch_size=1000):
         yield items[i:i + batch_size]
 
 
+def env_int(name, default, floor=None):
+    """Parse an integer environment variable, falling back to default on a
+    garbage value and optionally clamping to a minimum."""
+    try:
+        value = int(os.environ.get(name, default))
+    except ValueError:
+        return default
+    if floor is not None:
+        value = max(floor, value)
+    return value
+
+
 def create_state_dict(state_obj, extra_fields=None):
     """Create a standardized dictionary from state objects"""
     base_dict = {

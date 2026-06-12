@@ -11,10 +11,12 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 import uuid
 
+from celery import states
+from celery.exceptions import TimeoutError as CeleryTimeoutError
 from sqlalchemy import text
 from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
 from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState, ScanReport, LogEntry, AppConfig
-from pixelprobe.utils.helpers import ProgressTracker
+from pixelprobe.utils.helpers import ProgressTracker, env_int
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
 from pixelprobe.progress_utils import (
     update_file_changes_progress_redis,
@@ -37,6 +39,47 @@ logger = logging.getLogger(__name__)
 INTEGRITY_TASK_TIMEOUT_SECS = int(
     os.environ.get('INTEGRITY_TASK_TIMEOUT_SECS', 10800)
 )
+
+# Cleanup existence-check task timeout. These tasks stat() one path (~ms), so a
+# task pending this long is lost (worker died, broker dropped it, result
+# unreadable) and is abandoned as unverifiable - never deleted - so the
+# producer loop cannot pin at max concurrency and spin forever.
+CLEANUP_TASK_TIMEOUT_SECS = env_int('CLEANUP_TASK_TIMEOUT_SECS', 600, floor=60)
+
+
+def forget_task_result(task):
+    """Delete a consumed result from the backend (best-effort).
+
+    Results otherwise live for result_expires (24h): a full-library run leaves
+    1M+ result keys in Redis, driving the noeviction store toward its memory
+    cap - observed live as every broker/backend op slowing ~100x once ~1M
+    files had been processed.
+    """
+    try:
+        task.forget()
+    except Exception:
+        pass
+
+
+def abandon_if_stuck(task_info, timeout_secs, label):
+    """Revoke and drop a dispatched task whose result never arrived.
+
+    Returns True when the task was abandoned (worker died, broker dropped the
+    message, or its result is unreadable); callers count it as unverifiable
+    work - never as a deletion candidate.
+    """
+    age = time.monotonic() - task_info.get('submitted_at', 0)
+    if age <= timeout_secs:
+        return False
+    task = task_info['task']
+    logger.warning("Abandoning stuck %s task id=%s path=%s age=%.0fs",
+                   label, task.id, task_info.get('path'), age)
+    try:
+        task.revoke(terminate=False)
+    except Exception:
+        pass
+    forget_task_result(task)
+    return True
 
 
 def safe_task_ready(task, max_retries=5, base_delay=1.0):
@@ -84,26 +127,37 @@ def safe_task_ready(task, max_retries=5, base_delay=1.0):
 
 
 def safe_task_get(task, timeout=1, max_retries=5, base_delay=1.0):
-    """
-    Safely get a Celery task result with enhanced retry logic for Redis connection errors.
+    """Get a completed task's result without AsyncResult.get().
 
-    v2.5.54: Enhanced with exponential backoff and connection pool reset.
+    get() on the Redis backend subscribes to the task's result pub/sub channel
+    even when the result is already stored, and these producer loops never
+    read that socket; task.state/task.result poll the stored meta instead
+    (served from the AsyncResult cache after the ready() gate).
 
-    Args:
-        task: Celery AsyncResult object
-        timeout: Timeout for getting the result
-        max_retries: Number of retry attempts (default 5 for longer recovery window)
-        base_delay: Base delay between retries in seconds (exponential backoff)
-
-    Returns:
-        Result dict or None on error
+    Mirrors get() semantics: returns the result on SUCCESS, raises the stored
+    exception on FAILURE/REVOKED, raises celery TimeoutError if not ready
+    within `timeout` seconds. Redis connection errors are retried with
+    exponential backoff and a pool reset, as before.
     """
     import redis
     from pixelprobe.progress_utils import reset_redis_pool
 
     for attempt in range(max_retries):
         try:
-            return task.get(timeout=timeout)
+            deadline = time.monotonic() + timeout
+            while True:
+                status = task.state
+                if status in states.PROPAGATE_STATES:
+                    result = task.result
+                    if isinstance(result, Exception):
+                        raise result
+                    raise RuntimeError(f"Task {task.id} {status}: {result}")
+                if status in states.READY_STATES:
+                    return task.result
+                if time.monotonic() >= deadline:
+                    raise CeleryTimeoutError(
+                        f"Task {task.id} result not ready after {timeout}s")
+                time.sleep(0.1)
         except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
             # Reset connection pool on first failure to get fresh connections
             if attempt == 0:
@@ -116,9 +170,6 @@ def safe_task_get(task, timeout=1, max_retries=5, base_delay=1.0):
             else:
                 logger.error(f"Failed to get task result after {max_retries} attempts: {type(e).__name__}: {e}")
                 raise
-        except Exception:
-            raise
-    return None
 
 class MaintenanceService:
     """Service for maintenance operations like cleanup and file monitoring"""
@@ -368,13 +419,20 @@ class MaintenanceService:
                 cleanup_record.progress_message = f'Phase 1 of 3: Scanning {len(file_paths)} specific file(s) in database...'
                 db.session.commit()
                 # Filter to only the specified file paths
-                all_results = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+                all_results = ScanResult.query.filter(
+                    ScanResult.file_path.in_(file_paths)
+                ).with_entities(ScanResult.id, ScanResult.file_path).all()
                 logger.info(f"Cleanup scoped to {len(file_paths)} specific file(s), found {len(all_results)} in database")
             else:
                 cleanup_record.progress_message = 'Phase 1 of 3: Scanning database entries...'
                 db.session.commit()
                 # Get all database entries
-                all_results = ScanResult.query.all()
+                # (id, file_path) tuples only: full ORM objects for 1.18M rows
+                # cost multiple GB inside the gunicorn worker hosting this
+                # thread, and the loop below reads exactly these two fields
+                all_results = ScanResult.query.with_entities(
+                    ScanResult.id, ScanResult.file_path
+                ).all()
                 logger.info(f"Cleanup scanning all {len(all_results)} files in database")
 
             total_files = len(all_results)
@@ -400,20 +458,63 @@ class MaintenanceService:
 
             # Parallel checking with throttling (similar to file changes check)
             max_active_tasks = 5000  # Limit concurrent tasks
-            active_tasks = []
+            active_tasks = []  # [{'task', 'path', 'submitted_at'}]
             file_index = 0
             total_files_processed = 0
             orphaned_files = []  # Collect orphaned file info (status == 'absent' only)
             unknown_count = 0  # Files we could not verify (mount down, IO error, etc.)
+            files_abandoned = 0
             phase2_start_time = time.time()  # Track start time for ETA calculation
+            last_heartbeat_time = time.time()
 
-            # Track when we last updated progress
-            last_progress_update = 0
+            def write_cleanup_progress():
+                pct = int((total_files_processed / total_files * 100)) if total_files > 0 else 0
+
+                elapsed_seconds = time.time() - phase2_start_time
+                if total_files_processed > 0:
+                    avg_time_per_file = elapsed_seconds / total_files_processed
+                    eta_seconds = avg_time_per_file * (total_files - total_files_processed)
+                    eta_hours = int(eta_seconds // 3600)
+                    eta_minutes = int((eta_seconds % 3600) // 60)
+                    if eta_hours > 0:
+                        eta_str = f"{eta_hours}h {eta_minutes}m"
+                    elif eta_minutes > 0:
+                        eta_str = f"{eta_minutes}m"
+                    else:
+                        eta_str = "<1m"
+                else:
+                    eta_str = "calculating..."
+
+                cleanup_record.files_processed = total_files_processed
+                cleanup_record.phase_current = total_files_processed
+                cleanup_record.orphaned_found = len(orphaned_files)
+                cleanup_record.progress_message = (
+                    f'Phase 2 of 3: Checking {total_files_processed:,} / {total_files:,} files ({pct}%) - '
+                    f'{len(orphaned_files)} orphaned found, {len(active_tasks)} active tasks, ETA: {eta_str}'
+                )
+                db.session.commit()
+
+                with self.cleanup_lock:
+                    self.cleanup_state['files_processed'] = total_files_processed
+                    self.cleanup_state['orphaned_found'] = len(orphaned_files)
 
             while file_index < len(all_results) or len(active_tasks) > 0:
                 if self._is_cancelled(cleanup_record):
                     logger.info("Cleanup cancelled during file checking")
                     break
+
+                # Heartbeat every 10 s: the only progress writer for this loop
+                # (a count-based write here misses bursts and floods commits;
+                # the log line makes a stalled loop visible)
+                current_time = time.time()
+                if current_time - last_heartbeat_time >= 10:
+                    write_cleanup_progress()
+                    logger.info(
+                        f"Cleanup progress: {total_files_processed}/{total_files} processed, "
+                        f"{len(active_tasks)} active, {len(all_results) - file_index} remaining, "
+                        f"{files_abandoned} abandoned"
+                    )
+                    last_heartbeat_time = current_time
 
                 # Submit new tasks while under the limit
                 while len(active_tasks) < max_active_tasks and file_index < len(all_results):
@@ -424,12 +525,17 @@ class MaintenanceService:
                         args=[result.id, result.file_path],
                         priority=6
                     )
-                    active_tasks.append(task)
+                    active_tasks.append({
+                        'task': task,
+                        'path': result.file_path,
+                        'submitted_at': time.monotonic(),
+                    })
                     file_index += 1
 
                 # Collect completed tasks and free up slots
                 still_active = []
-                for task in active_tasks:
+                for task_info in active_tasks:
+                    task = task_info['task']
                     if safe_task_ready(task):
                         try:
                             check_result = safe_task_get(task, timeout=1)
@@ -453,8 +559,15 @@ class MaintenanceService:
                         except Exception as e:
                             logger.error(f"Error processing existence check result: {e}")
                             total_files_processed += 1
+                        finally:
+                            forget_task_result(task)
+                    elif abandon_if_stuck(task_info, CLEANUP_TASK_TIMEOUT_SECS, 'existence-check'):
+                        # Abandoned work counts as unverifiable - NEVER deleted
+                        files_abandoned += 1
+                        unknown_count += 1
+                        total_files_processed += 1
                     else:
-                        still_active.append(task)
+                        still_active.append(task_info)
 
                 active_tasks = still_active
 
@@ -462,49 +575,14 @@ class MaintenanceService:
                 if file_index < len(all_results) and len(active_tasks) > 0:
                     time.sleep(0.1)  # Brief sleep to avoid busy waiting
 
-                # Update progress periodically (every 100 files OR if this is the first update)
-                if (total_files_processed % 100 == 0 and total_files_processed > last_progress_update) or (total_files_processed > 0 and last_progress_update == 0):
-                    cleanup_record.files_processed = total_files_processed
-                    cleanup_record.phase_current = total_files_processed
-                    cleanup_record.orphaned_found = len(orphaned_files)
-                    pct = int((total_files_processed / total_files * 100)) if total_files > 0 else 0
-
-                    # Calculate ETA
-                    elapsed_seconds = time.time() - phase2_start_time
-                    if total_files_processed > 0:
-                        avg_time_per_file = elapsed_seconds / total_files_processed
-                        files_remaining = total_files - total_files_processed
-                        eta_seconds = avg_time_per_file * files_remaining
-
-                        # Format ETA as hours:minutes
-                        eta_hours = int(eta_seconds // 3600)
-                        eta_minutes = int((eta_seconds % 3600) // 60)
-                        if eta_hours > 0:
-                            eta_str = f"{eta_hours}h {eta_minutes}m"
-                        else:
-                            eta_str = f"{eta_minutes}m"
-                    else:
-                        eta_str = "calculating..."
-
-                    cleanup_record.progress_message = (
-                        f'Phase 2 of 3: Checking {total_files_processed:,} / {total_files:,} files ({pct}%) - '
-                        f'{len(orphaned_files)} orphaned found, {len(active_tasks)} active tasks, ETA: {eta_str}'
-                    )
-                    db.session.commit()
-
-                    with self.cleanup_lock:
-                        self.cleanup_state['files_processed'] = total_files_processed
-                        self.cleanup_state['orphaned_found'] = len(orphaned_files)
-
-                    last_progress_update = total_files_processed
-
             # Final update
             cleanup_record.files_processed = total_files_processed
             cleanup_record.orphaned_found = len(orphaned_files)
             db.session.commit()
 
             logger.info(f"Phase 2 complete: Checked {total_files_processed} files, "
-                        f"found {len(orphaned_files)} orphaned, {unknown_count} unverifiable (skipped)")
+                        f"found {len(orphaned_files)} orphaned, {unknown_count} unverifiable (skipped), "
+                        f"{files_abandoned} abandoned")
 
             # Extract IDs and paths for Phase 3
             orphaned_ids = [f['file_id'] for f in orphaned_files]
@@ -961,24 +1039,12 @@ class MaintenanceService:
                                 })
                         except Exception as e:
                             logger.error(f"Error getting task result: {e}")
+                        finally:
+                            forget_task_result(task)
+                    elif abandon_if_stuck(task_info, INTEGRITY_TASK_TIMEOUT_SECS, 'integrity'):
+                        files_abandoned += 1
                     else:
-                        # If the task has been pending longer than the timeout,
-                        # treat it as orphaned (worker died or broker lost it)
-                        # and drop it so the producer loop can advance instead
-                        # of pinning at max concurrency forever.
-                        age = time.monotonic() - task_info.get('submitted_at', 0)
-                        if age > INTEGRITY_TASK_TIMEOUT_SECS:
-                            logger.warning(
-                                "Abandoning stuck integrity task id=%s path=%s age=%.0fs",
-                                task.id, task_info['path'], age,
-                            )
-                            try:
-                                task.revoke(terminate=False)
-                            except Exception:
-                                pass
-                            files_abandoned += 1
-                        else:
-                            still_active.append(task_info)
+                        still_active.append(task_info)
                 active_tasks = still_active
 
                 # Submit new tasks based on available slots

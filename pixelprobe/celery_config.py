@@ -9,6 +9,8 @@ import os
 from celery import Celery
 from celery.signals import worker_process_init
 
+from pixelprobe.utils.celery_utils import disable_dispatch_result_subscription
+
 
 def _make_context_task(celery_instance, flask_app):
     """Create a ContextTask class that runs Celery tasks inside a Flask app context."""
@@ -25,10 +27,14 @@ def create_celery(app=None):
     Follows the audit plan specifications for task queue implementation
     """
     
-    # Get broker and backend URLs from environment or app config
+    # Get broker and backend URLs from environment or app config.
+    # CELERY_RESULT_BACKEND is never in app.config (an uppercase Config attr
+    # would be an old-style Celery key and break conf.update at boot), so the
+    # app path falls back to the environment.
     if app:
         broker_url = app.config.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-        result_backend = app.config.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+        result_backend = (app.config.get('CELERY_RESULT_BACKEND')
+                          or os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0'))
         app_name = app.import_name
     else:
         broker_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
@@ -40,7 +46,7 @@ def create_celery(app=None):
         app_name,
         broker=broker_url,
         backend=result_backend,
-        include=['pixelprobe.tasks']  # Auto-discover tasks
+        include=['pixelprobe.tasks', 'pixelprobe.tasks_parallel']  # Register all task modules with the worker
     )
     
     # Configure Celery settings
@@ -71,7 +77,7 @@ def create_celery(app=None):
         
         # Worker settings
         'worker_prefetch_multiplier': 1,  # One task per worker at a time
-        'worker_max_tasks_per_child': 50,  # Restart worker after 50 tasks
+        # max-tasks-per-child is set by the CLI flag in celery_worker.py (CLI wins)
 
         # Task deduplication to prevent multiple workers from picking up same retry
         'task_track_started': True,  # Track when tasks actually start execution
@@ -131,7 +137,9 @@ def create_celery(app=None):
     if app:
         _make_context_task(celery, app)
         celery.conf.update(app.config)
-    
+
+    disable_dispatch_result_subscription(celery)
+
     return celery
 
 

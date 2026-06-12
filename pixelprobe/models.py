@@ -318,6 +318,7 @@ class ScanState(db.Model):
     error_message = db.Column(db.String(1000), nullable=True)  # Increased from 500
     directories = db.Column(db.Text, nullable=True)  # JSON array of directories being scanned
     force_rescan = db.Column(db.Boolean, nullable=False, default=False)
+    scan_type = db.Column(db.String(20), nullable=True)  # full, parallel, pending
     # P1 Celery task queue integration
     celery_task_id = db.Column(db.String(36), nullable=True, index=True)  # Celery task ID for monitoring
     # Resumable scan fields
@@ -381,15 +382,25 @@ class ScanState(db.Model):
             scan_id: Optional scan ID to use (e.g., 'scheduled_11' for scheduled scans).
                      If not provided, a UUID will be generated.
         """
-        # First, ensure no other scans are active (clean up any stale active states)
+        # Clean up genuinely stale active scans only. A live scan (recent
+        # last_update) must survive: chunk tasks self-cancel when their
+        # scan_state goes inactive, so deactivating a progressing scan here
+        # (e.g. from a single-file rescan) would abort it mid-flight.
         try:
-            # Deactivate any existing active scans
+            stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
             active_scans = ScanState.query.filter_by(is_active=True).all()
+            deactivated = 0
             for scan in active_scans:
+                check_time = scan.last_update or scan.start_time
+                if check_time and check_time.tzinfo is None:
+                    check_time = check_time.replace(tzinfo=timezone.utc)
+                if check_time and check_time >= stale_cutoff:
+                    continue  # actively progressing - leave it alone
                 logger.warning(f"Deactivating stale active scan {scan.id} before creating new scan")
                 scan.is_active = False
                 scan.phase = 'interrupted' if scan.phase != 'completed' else 'completed'
-            if active_scans:
+                deactivated += 1
+            if deactivated:
                 db.session.commit()
         except Exception as e:
             logger.error(f"Error cleaning up active scans: {e}")
@@ -427,7 +438,7 @@ class ScanState(db.Model):
         return scan_state
     
     def start_scan(self, directories, force_rescan=False):
-        """Start a new scan"""
+        """Start a new scan, resetting all per-scan counters on the reused row"""
         self.phase = 'discovering'
         self.is_active = True  # Ensure scan is marked as active
         self.start_time = datetime.now(timezone.utc)
@@ -437,8 +448,15 @@ class ScanState(db.Model):
         self.force_rescan = force_rescan
         self.files_processed = 0
         self.estimated_total = 0
+        self.discovery_count = 0
+        self.files_added = 0
+        self.files_updated = 0
         self.current_file = None
         self.error_message = None
+        # Cleared so the chunk-engine finalizer never mistakes a legacy
+        # (selected-file) scan reusing this row for a chunk-engine scan;
+        # the orchestrator re-sets it right after calling start_scan()
+        self.scan_type = None
         db.session.commit()
         logger.info(f"Scan started: directories={directories}, "
                     f"force_rescan={force_rescan}")
@@ -649,7 +667,9 @@ class ScanChunk(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     scan_id = db.Column(db.String(64), nullable=False, index=True)
     chunk_id = db.Column(db.String(100), nullable=False, index=True)  # Removed unique constraint
-    directory_path = db.Column(db.String(500), nullable=False)
+    # Either a real directory path (selected-file rescans) or an FCP path-range
+    # JSON blob (chunk engine) -- see fcp_directory_path()/fcp_range()
+    directory_path = db.Column(db.Text, nullable=False)
     phase = db.Column(db.String(20), nullable=False, default='scanning')  # discovering, adding, scanning
     status = db.Column(db.String(20), nullable=False, default='pending')  # pending, processing, completed, error
     files_discovered = db.Column(db.Integer, nullable=False, default=0)
@@ -661,9 +681,24 @@ class ScanChunk(db.Model):
     end_time = db.Column(db.DateTime, nullable=True)
     error_message = db.Column(db.Text, nullable=True)
     celery_task_id = db.Column(db.String(36), nullable=True, index=True)  # Celery task ID for chunk processing
-    
+
     # Add composite unique constraint
     __table_args__ = (db.UniqueConstraint('scan_id', 'chunk_id', name='uq_scan_chunks_scan_chunk'),)
+
+    @staticmethod
+    def fcp_directory_path(first_path, last_path):
+        """Encode an FCP path-range for directory_path (the UI parses this format)."""
+        return json.dumps({'t': 'FCP', 'f': first_path, 'l': last_path})
+
+    def fcp_range(self):
+        """Return (first_path, last_path) for an FCP chunk, or None."""
+        try:
+            meta = json.loads(self.directory_path)
+            if meta.get('t') == 'FCP':
+                return meta['f'], meta['l']
+        except (ValueError, TypeError, AttributeError, KeyError):
+            pass
+        return None
     
     def to_dict(self):
         return {

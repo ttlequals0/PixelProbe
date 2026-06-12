@@ -30,12 +30,15 @@ class Config:
     # SQLAlchemy configuration
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
-    # PostgreSQL optimized engine options
+    # PostgreSQL engine options. Pool math must stay under max_connections
+    # (PostgreSQL default 100): 4 gunicorn workers x (5+10) = 60 max for the
+    # web app, plus celery prefork children and ~MAX_WORKERS checker
+    # connections. The old 20+40 per process allowed 240+ from the app alone.
     SQLALCHEMY_ENGINE_OPTIONS = {
-        'pool_size': 20,
+        'pool_size': int(os.getenv('DB_POOL_SIZE', '5')),
         'pool_pre_ping': True,
         'pool_recycle': 3600,
-        'max_overflow': 40,
+        'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '10')),
         'pool_timeout': 30,
         'echo': os.getenv('DATABASE_ECHO', 'false').lower() == 'true',
         'connect_args': {}  # Will be populated in init_app if needed
@@ -77,6 +80,12 @@ class Config:
     # Celery 5.x requires lowercase config keys - keep both for compatibility
     CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
     broker_url = CELERY_BROKER_URL  # New style for Celery 5.x
+    # NOTE: do NOT add an uppercase CELERY_RESULT_BACKEND attribute here.
+    # celery.conf.update(app.config) would see it as an OLD-style Celery key
+    # and raise ImproperlyConfigured ("Cannot mix new and old setting keys")
+    # at boot - took production down on 2026-06-11. CELERY_BROKER_URL is safe
+    # only because the old-style broker key was BROKER_URL.
+    # create_celery() falls back to the env var instead.
     result_backend = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
     task_serializer = 'json'
     result_serializer = 'json'
@@ -169,6 +178,7 @@ class TestingConfig(Config):
     """Testing configuration"""
     TESTING = True
     DEBUG = True
+    SESSION_COOKIE_SECURE = False  # test client speaks plain HTTP
     
     # Use test PostgreSQL database
     POSTGRES_DB = os.getenv('POSTGRES_TEST_DB', 'pixelprobe_test')

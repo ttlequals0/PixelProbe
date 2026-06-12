@@ -5,6 +5,122 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.57] - 2026-06-11
+
+### Fixed
+
+- **The dispatch pub/sub no-op now actually applies to the threads that dispatch - the 2.6.55/2.6.56 fix never took effect in production.** Celery's `Celery._backend` is stored in a `threading.local` unless `result_backend_thread_safe` is set, so every thread gets its OWN backend instance. The no-op was patched onto the backend created on the import thread, while the cleanup/integrity producer threads (spawned per run by the maintenance routes) lazily created fresh, unpatched backends and kept subscribing - verified live: the first 2.6.56 cleanup run still showed 3,000-5,000 standing subscriptions and ~70-second Redis forced disconnects. Root-caused with a local reproduction (the run is clean when driven from the main thread, subscribes when driven from a `threading.Thread`, confirmed via a stack trace through `send_task -> backend.on_task_call`). `disable_dispatch_result_subscription()` now wraps `Celery._get_backend` so every backend instance created by any thread carries the no-op; validated end-to-end in a local stack where the API-triggered cleanup previously accumulated 2,633 result-channel subscriptions and now accumulates zero. The regression test now asserts the no-op holds in a freshly spawned thread. This retroactively explains all three production runs today: 2.6.53 stalled (get() subscriptions plus dispatch subscriptions), 2.6.54 was clean (its per-dispatch `cancel_for` ran on the same thread-local objects that subscribed), and 2.6.56 regressed (dispatch subscription alive in the producer thread with the unsubscribe removed).
+
+## [2.6.56] - 2026-06-11
+
+### Fixed
+
+- **Boot regression from 2.6.55 fixed; that release is yanked.** 2.6.55 added an uppercase `CELERY_RESULT_BACKEND` attribute to `Config`, but Celery treats that name as an OLD-style setting key, so `celery.conf.update(app.config)` raised `ImproperlyConfigured: Cannot mix new and old setting keys` and gunicorn workers failed to boot (production down ~6 minutes, rolled back to 2.6.54 via webhook). `CELERY_BROKER_URL` never triggered this because the old-style broker key was `BROKER_URL`.
+- **The Flask app's Celery instance now reads the correct result backend URL in containers - reimplemented safely.** The underlying bug from the 2.6.55 attempt is real: `config.py` exposes only the lowercase `result_backend` attribute, which Flask never copies into `app.config`, so the app-bound Celery instance silently defaulted its result backend to `redis://localhost:6379/0` and every `AsyncResult.state` check in scan routes and the scheduler failed against a nonexistent local Redis. `create_celery()` now falls back to the `CELERY_RESULT_BACKEND` environment variable for the app path, keeping old-style keys out of `app.config`. A regression test asserts no uppercase `Config` attribute is in Celery's `_OLD_SETTING_KEYS` and that conf finalization succeeds against the full app config.
+
+## [2.6.55] - 2026-06-11 [YANKED]
+
+Image pushed and briefly deployed, then rolled back: gunicorn workers failed to boot (see 2.6.56). The pub/sub fix below is sound and ships in 2.6.56.
+
+### Fixed
+
+- **Producer dispatches no longer open a result pub/sub connection at all, eliminating the recurring Redis forced-disconnect cycle.** The 2.6.54 fix removed the stall mechanism (verified: 24-minute cleanup run, zero stalls), but Redis still force-closed the producer's pub/sub connection every ~3 minutes during runs: `apply_async` subscribes to each task's result channel (`backend.on_task_call`), and the subscribe/unsubscribe replies themselves accumulated unread in the socket's output buffer. The result backend's dispatch-time subscription hook is now disabled for app instances (`disable_dispatch_result_subscription` in `utils/celery_utils.py`) - producers consume results via stored meta and need no subscription, and `result.get()` users are unaffected because `get()` subscribes itself and reconciles from stored meta. The now-redundant per-dispatch `unsubscribe_result()` from 2.6.54 was removed. Also saves ~1,600 useless Redis ops/s during maintenance runs.
+
+## [2.6.54] - 2026-06-11
+
+### Fixed
+
+- **Cleanup/integrity producer loops no longer stall for minutes on Redis pub/sub disconnects.** With the checkpoint storms fixed (2.6.53), residual multi-minute stalls remained where workers sat idle. Root cause: Celery's Redis result backend subscribes the producer to each task's result pub/sub channel - once at dispatch (`on_task_call` inside `apply_async`) and again inside `AsyncResult.get()`. The producer loops never read that socket, so every completed task's published result accumulated in its output buffer until Redis force-closed the connection (default pubsub client-output-buffer-limit, observed every ~70 seconds during the verified cleanup run); reconnect/resubscribe churn mid-pass over the 5,000-task window froze the loop for up to 7 minutes per incident. Two-part fix in the shared producer helpers: the dispatch-time subscription is cancelled immediately after `apply_async` (new `unsubscribe_result()`), and `safe_task_get()` now consumes results via the stored meta (`task.state`/`task.result`, cache-served after the `ready()` gate) instead of `get()` - same success/failure/timeout semantics, no subscription, no extra Redis round-trips. Applies to both orphan cleanup (Phase 2) and file-changes/integrity scans. The orchestrator's discovery join keeps `get()`: it genuinely waits on a handful of per-directory tasks and drains its socket while waiting.
+
+## [2.6.53] - 2026-06-11
+
+### Fixed
+
+- **Maintenance runs no longer trigger 5-minute checkpoint IO storms.** During the verified cleanup run, recurring 2-7 minute slowdowns aligned to the second with PostgreSQL checkpoint write phases. Cause: `celery.app.trace` logs one INFO row per task ("succeeded in Xs" with the full result dict), and the database log handler stored all of them - ~150-190MB of WAL per 5 minutes at ~850 tasks/s, forcing heavy checkpoints that stalled the producer's own DB operations. `celery.app.trace` is now in the default log-exclusion list, and a startup migration appends it to the stored config on existing installs (additive - user customizations survive). Container/Loki logging is unaffected.
+
+## [2.6.52] - 2026-06-11
+
+### Fixed
+
+- **Maintenance runs no longer flood Redis with a million result keys.** Task results were never forgotten and expire only after 24h, so a full-library cleanup or integrity run accumulated 1M+ result keys in the noeviction Redis - observed live as every broker/backend operation slowing ~100x once roughly 1M files had been processed (heartbeats minutes apart in the final stretch, "0 active tasks" snapshots, misleading "ETA: 0m"). Both maintenance loops now forget each result after consuming it (and on abandonment), bounding Redis to in-flight tasks only (~5,000 keys instead of 1.18M).
+- **Scan report details no longer render "[object Object]" rows.** Cleanup and file-changes reports store file lists (objects with file_path/change_type) in the directories field; the report modal now renders those as labeled file lists (Orphaned Files / Changed Files, capped at 100 entries) instead of joining raw objects.
+- Cleanup ETA under one minute reads "<1m" instead of "0m".
+
+## [2.6.51] - 2026-06-11
+
+### Fixed
+
+- **Orphan cleanup no longer loads 1.18M full ORM objects into the web worker.** Phase 1 used `ScanResult.query.all()` - several GB of resident memory inside the gunicorn worker hosting the cleanup thread, the most likely driver of the original silent-stall symptoms (memory pressure makes every loop iteration glacial, so the producer looks blocked, cancel windows get missed, and nothing logs). The loop reads exactly two fields, so Phase 1 now loads `(id, file_path)` tuples via `with_entities` - roughly a 20-30x memory reduction at 1.18M files. The file-changes flow already loaded lean tuples; cleanup was the only full-ORM holdout.
+
+## [2.6.50] - 2026-06-11
+
+### Fixed (startup wedge during app-only container updates)
+
+- **Startup can no longer hang forever behind a blocked migration.** Observed live: an app-only container update (worker kept running) wedged the entire boot - the v2.6.0 migration ran an unconditional `ALTER TABLE app_configs ... SET DEFAULT` on every start, which needs an ACCESS EXCLUSIVE lock; the still-running worker container held idle-in-transaction locks, the ALTER waited forever, and all gunicorn workers sat behind the migration step serving nothing. All migration connections now apply fail-fast timeouts via `SET LOCAL` (`MIGRATION_LOCK_TIMEOUT_MS`, default 10s; `MIGRATION_STATEMENT_TIMEOUT_MS`, default 300s) so a blocked migration logs an error and the boot continues - migrations are idempotent and retry next start. `SET LOCAL` scopes the timeouts to the migration transaction; a plain `SET` would survive the connection's return to the pool and impose migration timeouts on unrelated app queries. The advisory-lock waiter path is bounded by the same statement timeout (it was the last remaining infinite wait), and the v2.6.0 ALTER is now conditional (only runs when the defaults are actually missing), so it stops taking an exclusive lock on every boot.
+- **The app container restarts itself again.** The `pixelprobe` service had no restart policy (only the worker did) - a killed or crashed boot stayed dead. Added `restart: unless-stopped` and raised the healthcheck `start_period` to 120s so migration time is not counted against liveness.
+- Misleading "Created X table via migration" log lines (emitted unconditionally for `CREATE TABLE IF NOT EXISTS`) now read "Ensured X table exists".
+
+### Changed
+
+- Cleanup Phase 2 progress is written by the 10-second heartbeat only (the per-100-file write added in 2.6.49 would have produced ~12,000 commits per full run for no UI benefit). Task abandonment is now a shared `abandon_if_stuck()` helper used by both the cleanup and file-changes loops, and integer env knobs parse through one `env_int()` utility.
+
+### Diagnosis notes (cleanup "stuck" reports on 2026-06-10)
+
+- The recurring frozen progress display ("Checking 4,999 / 1,187,442") was the 2.6.49 modulo display bug on a container still running the first 2.6.49 build - the worker was processing existence checks at full rate the whole time. Same-tag image rebuilds do not redeploy via the Portainer webhook; this release's version bump exists to force a clean recreate with all fixes aboard.
+
+## [2.6.49] - 2026-06-10
+
+External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus convergence of the two scan engines onto the chunk-distributed path.
+
+### Changed (scan engine convergence - WORKER-2)
+
+- **`/api/scan` now runs the chunk-distributed engine.** Directory scans are split into disjoint path-range (FCP) chunks and fanned out as `process_chunk_task` across ALL Celery worker slots, instead of a thread pool inside one Celery task. Scan throughput now scales with `CELERY_CONCURRENCY` (8-12 recommended; was bounded by `MAX_WORKERS` threads in one slot). `MAX_WORKERS` still applies to selected-file rescans.
+- **Scan completion uses last-chunk-finalizes.** Every chunk exit (success, empty, cancelled, error) marks its chunk terminal; the last one finalizes the scan under a PostgreSQL row lock (exactly-once): computes per-scan totals from chunk sums, reclaims stuck `'scanning'` rows, creates the ScanReport, and sends the scheduled-scan healthcheck ping. A scan with failed chunks finalizes as `'error'` (failure ping, error message naming the chunk count) instead of claiming a clean completion. The stuck-scan sweeper finalizes as a backstop if the winning chunk dies at the wrong moment; it never touches legacy-engine (selected-file) scans or scans without chunks.
+- **Chunk task retries are loss-free.** A retried chunk reclaims its claimed range back to pending before retrying (otherwise the retry would find nothing and report the chunk complete with 0 files), and a failed batch commit propagates into the retry instead of silently dropping up to 100 files' results.
+- **Discovery is parallel and memory-safe.** One discovery task per directory bulk-inserts pending rows (ON CONFLICT DO NOTHING) and returns counts only - file lists no longer round-trip through the Redis result backend (~100MB+ at 1.2M files). The discovery-incompleteness guard is preserved: any truncated walk aborts the scan instead of reporting a partial library as complete. Discovery timeout default raised 120s -> 3600s and is now env-configurable (`DISCOVERY_TASK_TIMEOUT_SECS`); the old 120s default would have aborted every production-scale scan.
+- **`/api/scan-parallel` is now a deprecated alias of `/api/scan`** (same engine, same claim). `/api/force-scan-pending` and the directories branch of `/api/scan-files-parallel` also route through the converged launcher. The Celery-unavailable thread fallback is gone: launches return 503 and release the claim instead.
+- **Behavioral deltas:** files are scanned in path order (newest-first ordering of new files is dropped); the `adding` phase counts DB inserts during discovery rather than a separate pass; `file_type` is populated by the scan, not discovery (dropping ~1.2M libmagic reads from the discovery phase - newly discovered rows briefly show `unknown`); a single-file rescan no longer deactivates an actively progressing scan (`create_new_scan` only clears scans stale for 30+ minutes); the scan-start claim now blocks on an active scan in ANY scan-state row (single-file rescans included) and resets its staleness markers so the sweeper cannot kill a freshly queued scan; failed scan starts surface the server's reason in the UI (e.g. "Celery workers not available").
+
+### Fixed
+
+- **Validation failures no longer wedge scanning (SCHED-1, High).** `/api/scan` validated directories AFTER committing `is_active=True`, so a 400 (bad directory, none configured) left the claim stuck and every later scan got 409 until the 30-minute sweeper. Validation now happens before the claim, and any post-claim launch failure releases it.
+- **Parallel engine tasks were never registered with the worker.** `celery_config.py` only included `pixelprobe.tasks`, so `/api/scan-parallel` dispatched tasks the worker discarded as unregistered - the parallel engine had never actually run. `pixelprobe.tasks_parallel` is now in the worker's include list.
+- **Deleted the UI heartbeat task that occupied a worker slot all scan long (WORKER-1, High).** `ui_progress_update_task` busy-polled the DB at 0.5s for the entire scan, consuming 25% of scan capacity at `CELERY_CONCURRENCY=4`, and could itself be starved into triggering false stuck-scan detection. Chunk tasks now bump `last_update` every 100 files or 60 seconds, whichever comes first (sweeper-safe even on multi-minute video files).
+- **Path exclusions and chunk queries no longer over-match sibling directories (SCHED-2/WORKER-3, High/Medium).** Excluding `/media/movies` also excluded `/media/movies2`; `LIKE 'dir%'` chunk/cleanup queries had the same flaw (cross-chunk double-claims, widened deletion sets). New `pixelprobe/utils/paths.py` helpers (`is_path_under`, `like_prefix` with SQL wildcard escaping) replace all 14 sites; FCP range chunks eliminate the in-engine cases by construction.
+- **Per-file DB round-trips removed from chunk scanning (WORKER-5/EFF-1).** Chunks claim their whole disjoint range with one `UPDATE ... RETURNING` and write results on ORM objects loaded in batches of 100 (was up to 3 queries per file across claim/write/error).
+- **Empty chunks no longer stomp live progress (WORKER-4).** The empty-chunk path stops writing `current_file`/`progress_message` on the shared scan state mid-scan.
+- **`force_rescan` is scoped to the requested directories.** The old orchestrator reset every completed row in the database; now only rows under the requested directories are reset (boundary-safe LIKE).
+- **Orchestrator exclusion crash fixed.** It read `Exclusion.pattern`, an attribute that does not exist (AttributeError on any active exclusion row), and used the DB table instead of the canonical `exclusions.json`. Discovery now uses `load_exclusions_with_patterns()` including filename patterns.
+- **Per-scan completion totals (WORKER-7 adjacent).** The never-dispatched `scan_completion_monitor` computed "files processed" from a full-table count across all scans ever; the finalizer sums this scan's chunks.
+- **Scheduler duplicate-schedule cleanup commits once after iteration (SCHED-3, Low)** instead of committing inside the loop over live query results.
+- **Interval schedule fire-time is computed before the job is added (SCHED-4, Low).** Extracted `compute_next_interval_run()` (unit-testable branches: future-from-last-run, stored-future, past -> now+interval, no history) and passed into `add_job` directly, removing the add-then-modify window where a job could fire at the wrong time.
+- **Orphan cleanup can no longer wedge silently at max concurrency.** Observed live: cleanup froze at 20,000/1,187,442 files with idle workers and zero log output - un-ready task handles were retried forever with no timeout, and progress only wrote when the counter landed on an exact multiple of 100. Cleanup Phase 2 now mirrors the file-changes hardening: per-task `submitted_at` tracking with abandonment after `CLEANUP_TASK_TIMEOUT_SECS` (default 600s; abandoned files are counted unverifiable and NEVER deleted), a 10-second progress heartbeat with a log line, and delta-based progress writes instead of the modulo check.
+
+### Security
+
+- **Argument-injection hardening for media tools (SEC-1, High).** The shell-metacharacter blocklist in `validate_command_args` was security theater (inert with `shell=False`) while real risks went unaddressed: `ffprobe` and ImageMagick `convert` received file paths in option position, and two `ffmpeg`/`ffprobe` call sites bypassed `safe_subprocess_run` entirely. Added `ensure_cli_safe_path()` ('./'-prefix for relative paths; `convert` has no `--` separator), applied it at the vulnerable sites, routed the raw `subprocess.run` calls through the safe wrapper, and narrowed `validate_command_args` to null bytes/newlines with an honest docstring. Also fixed the null-byte pattern, which matched the literal text `\x00` instead of an actual null byte.
+- **Legitimate filenames are scannable again (SEC-5, Low).** `validate_file_path` rejected any path containing `~`, `$`, or `%` - all legal in real media filenames. Containment is enforced by realpath + `safe_join` against the allowlist; the blocklist now rejects only traversal tokens and control characters.
+- **Container healthcheck works (SEC-2, Medium).** New unauthenticated `/healthz` liveness endpoint (no DB ping, so a DB blip cannot restart-loop the container); compose healthcheck points at it. `/health` stays authenticated.
+- **CORS is opt-in (SEC-3, Medium).** The blanket `origins: "*"` on `/api/*` is gone; set `CORS_ORIGINS` (comma-separated) only if cross-origin browser access is needed. Same-origin UI, server-side scheduler calls, and API tokens are unaffected.
+- **Session cookies default to Secure (SEC-4, Medium).** Plain-HTTP LAN deployments must set `SESSION_COOKIE_SECURE=false`.
+- **Rate limits are now cluster-wide (OPS-1, Medium).** Flask-Limiter counters move from per-process memory (each of 4 gunicorn workers kept its own, multiplying every limit by 4) to Redis (broker host, DB 1; `RATELIMIT_STORAGE_URI` to override), with in-memory fallback if Redis is down.
+- **Compose no longer exposes datastores (SEC-6/OPS-2, Low).** PostgreSQL 5432 and Redis 6379 host port publications removed (inter-container traffic uses the compose network; Redis also holds the broker and internal API secret). `POSTGRES_PASSWORD` is now required - the `changeme` default is gone. Redis `requirepass` wiring is noted as future work.
+- **Connection pool can no longer exceed PostgreSQL `max_connections` (DB-1, Medium).** `pool_size`/`max_overflow` reduced 20/40 -> 5/10 per process (env: `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`): web worst-case drops 240 -> 60 connections; compose comment now states the real math.
+
+### Removed
+
+- `ScanService` thread-pool engine internals (`scan_directories`, `resume_scan` and friends, ~1,600 lines) - replaced by the chunk engine; `scan_media_task` remains as a shim so messages queued across the deploy still execute. `scan_single_file`/`scan_files` (single/selected-file rescans) are unchanged.
+- `scan_completion_monitor` (never dispatched), `cleanup_orphaned_task` (stub returning fake success; real cleanup goes through MaintenanceService), `scheduled_scan_task` (never dispatched), `ui_progress_update_task` + `_final_sync_redis_to_db`.
+- `pixelprobe/database/connection_manager.py` (DB-2, Medium): dead code with a broken multi-yield contextmanager that would raise `RuntimeError` if ever used.
+- Dead `worker_max_tasks_per_child=50` in `celery_config.py` (EFF-2; the CLI flag in `celery_worker.py` wins).
+- Compose image pin to stale 2.5.70 (OPS-3) - now `${PIXELPROBE_VERSION:-2.6.49}`.
+
+### Deployment notes
+
+- New env knobs: `DISCOVERY_TASK_TIMEOUT_SECS` (default 3600), `DB_POOL_SIZE` (5), `DB_MAX_OVERFLOW` (10), `RATELIMIT_STORAGE_URI`, `CORS_ORIGINS` (empty = no CORS), `SESSION_COOKIE_SECURE` (default true).
+- Compose now requires `POSTGRES_PASSWORD` to be set explicitly.
+- Recommend raising `CELERY_CONCURRENCY` to 8-12: it is now the main scan-throughput knob.
+
 ## [2.6.48] - 2026-06-01
 
 ### Fixed (integrity scan reliability at scale: 1.2M files up to ~55GB)

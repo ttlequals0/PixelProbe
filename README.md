@@ -246,15 +246,16 @@ PixelProbe uses environment variables for all configuration. Copy `.env.example`
 **Optional Variables:**
 - `SCAN_PATHS` - Comma-separated directories to monitor inside container (default: `/media`)
 - `TZ` - Timezone (default: UTC)
-- `MAX_WORKERS` - Parallel file scanning workers (default: 10, recommended: 10-24)
-  * Controls parallelism within each scan task
-  * Higher values = faster scans but more CPU/memory usage
-  * Each worker creates 1 database connection
-  * Total connections = 60 (main app) + MAX_WORKERS
+- `CELERY_CONCURRENCY` - Concurrent Celery tasks (default: 4, recommended: 8-12)
+  * Directory scans are split into chunks distributed across these slots,
+    so this is the main scan-throughput knob (since v2.6.49)
+- `MAX_WORKERS` - Parallel workers for selected-file rescans (default: 10)
 - `BATCH_SIZE` - Files per batch during discovery (default: 100)
-- `CELERY_CONCURRENCY` - Concurrent Celery tasks (default: 4)
-  * Controls how many scan tasks can run simultaneously
-  * Independent from MAX_WORKERS
+- `DISCOVERY_TASK_TIMEOUT_SECS` - Per-directory discovery walk limit (default: 3600)
+- `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` - SQLAlchemy pool per process (defaults: 5 / 10)
+- `CORS_ORIGINS` - Comma-separated origins allowed cross-origin API access (default: none)
+- `SESSION_COOKIE_SECURE` - Secure session cookies (default: `true`; set `false` for plain-HTTP LAN use)
+- `RATELIMIT_STORAGE_URI` - Rate-limit counter store (default: derived from the Redis broker URL)
 - `PERIODIC_SCAN_SCHEDULE` - Automated scanning schedule
 - `CLEANUP_SCHEDULE` - Automated cleanup schedule
 - `EXCLUDED_PATHS` - Paths to ignore during scanning
@@ -529,10 +530,10 @@ docker exec pixelprobe python tools/fix_database_schema.py
 - Check file permissions and ownership
 
 **Performance issues with large libraries**:
-- Increase `MAX_WORKERS` (default: 10, try 16-24 for powerful systems)
+- Increase `CELERY_CONCURRENCY` (default: 4, try 8-12) - directory scans are
+  distributed as chunks across these worker slots
 - Monitor system resources during scanning
 - Use SSD storage for the database if possible
-- Adjust `CELERY_CONCURRENCY` if running multiple scans simultaneously
 
 ### Getting Help
 

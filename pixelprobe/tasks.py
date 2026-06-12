@@ -7,73 +7,19 @@ Replaces ThreadPoolExecutor with proper task queue system.
 """
 
 from celery import current_task
-from celery.exceptions import Retry
 import logging
 import time
-from datetime import datetime, timezone, timedelta
-import redis
-from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from pixelprobe.celery_config import celery_app
 from pixelprobe.constants import SCAN_PHASES
 from pixelprobe.services.scan_service import ScanService
-from pixelprobe.progress_utils import get_redis_client, get_scan_progress_redis, update_scan_progress_redis
 from pixelprobe.models import db, ScanState, ScanResult, ScanReport
 from pixelprobe.utils.celery_utils import is_db_connection_corruption
 from pixelprobe.utils.log_context import current_scan_id, current_celery_task_id
 
 
 logger = logging.getLogger(__name__)
-
-
-@contextmanager
-def distributed_lock(lock_name, timeout=300, blocking_timeout=10):
-    """
-    Distributed lock using Redis to prevent race conditions across Celery workers
-
-    Args:
-        lock_name (str): Unique name for the lock
-        timeout (int): Lock auto-release timeout in seconds (default 5 minutes)
-        blocking_timeout (int): How long to wait to acquire lock (default 10 seconds)
-
-    Yields:
-        bool: True if lock was acquired, False otherwise
-    """
-    redis_client = get_redis_client()
-    lock = None
-    acquired = False
-
-    if redis_client:
-        # Try to acquire lock (separate try block to not catch exceptions from yield context)
-        try:
-            lock = redis_client.lock(
-                lock_name,
-                timeout=timeout,
-                blocking_timeout=blocking_timeout
-            )
-            acquired = lock.acquire(blocking=True, blocking_timeout=blocking_timeout)
-            logger.info(f"Distributed lock '{lock_name}' acquired: {acquired}")
-        except redis.exceptions.LockError as e:
-            logger.warning(f"Failed to acquire lock '{lock_name}': {e}")
-            acquired = False
-        except Exception as e:
-            logger.error(f"Redis lock error for '{lock_name}': {e}")
-            acquired = False
-
-        # Yield and cleanup (don't catch exceptions from user code)
-        try:
-            yield acquired
-        finally:
-            if lock and acquired:
-                try:
-                    lock.release()
-                    logger.info(f"Distributed lock '{lock_name}' released")
-                except Exception as e:
-                    logger.error(f"Error releasing lock '{lock_name}': {e}")
-    else:
-        # Redis not available, proceed without locking (degraded mode)
-        logger.warning(f"Redis not available, proceeding without distributed lock for '{lock_name}'")
-        yield True
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60,
@@ -133,146 +79,33 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
     _task_token = current_celery_task_id.set(self.request.id)
 
     try:
-        # CRITICAL: Use distributed lock to prevent race conditions when multiple workers
-        # try to start scans simultaneously (e.g., during task retries)
-        with distributed_lock('pixelprobe:scan:initialization', timeout=300, blocking_timeout=15) as lock_acquired:
-            if not lock_acquired:
-                error_msg = "Failed to acquire scan initialization lock - another worker is starting a scan"
-                logger.warning(f"Celery scan task {self.request.id}: {error_msg}")
+        # Directory scans run on the chunk-distributed engine. This shim keeps
+        # the task name alive so messages queued across a deploy still execute.
+        # Remove the directory-type branch in the next release once pre-2.6.49
+        # queued messages have drained.
+        if scan_type in ['full', 'parallel', 'pending', 'discover']:
+            from pixelprobe.tasks_parallel import parallel_scan_orchestrator
+            task = parallel_scan_orchestrator.delay(
+                scan_id=scan_id,
+                paths=paths if paths != ['PENDING_FILES_SCAN'] else [],
+                scan_type='pending' if scan_type == 'pending' else 'full',
+                force_rescan=force_rescan if scan_type != 'discover' else False
+            )
+            logger.info(f"scan_media_task shim redirected {scan_type} scan {scan_id} "
+                        f"to orchestrator task {task.id}")
+            return {
+                'status': 'REDIRECTED',
+                'scan_id': scan_id,
+                'task_id': task.id,
+                'completed_at': datetime.now(timezone.utc).isoformat()
+            }
 
-                # Retry with exponential backoff + jitter to prevent thundering herd
-                if self.request.retries < self.max_retries:
-                    import random
-                    retry_delay = (2 ** self.request.retries * 30) + random.randint(0, 10)  # 30s, 60s, 120s + jitter
-                    logger.info(f"Retrying scan task {self.request.id} in {retry_delay} seconds (attempt {self.request.retries + 1})")
-                    raise self.retry(exc=RuntimeError(error_msg), countdown=retry_delay)
-                else:
-                    logger.error(f"Task {self.request.id} failed permanently after {self.max_retries} retries")
-                    raise RuntimeError(error_msg)
-
-            # Lock acquired - now check if another scan is actually running
-            # This double-check pattern ensures we don't have stale database state
-            active_scan = ScanState.query.filter_by(is_active=True).first()
-
-            if active_scan and active_scan.scan_id != scan_id:
-                # Check if the active scan is actually stuck (no update for 5+ minutes)
-                check_time = active_scan.last_update or active_scan.start_time
-
-                if check_time:
-                    if check_time.tzinfo is None:
-                        check_time = check_time.replace(tzinfo=timezone.utc)
-
-                    time_since_update = datetime.now(timezone.utc) - check_time
-
-                    # If scan hasn't updated in 5 minutes, it's likely stuck
-                    # Reduced from 10 minutes to detect stuck scans faster
-                    if time_since_update > timedelta(minutes=5):
-                        logger.warning(f"Found stuck scan {active_scan.scan_id} (no update for {time_since_update}), marking as crashed")
-                        active_scan.is_active = False
-                        active_scan.phase = 'crashed'
-                        error_msg = f'Scan stuck - no progress for {time_since_update}'
-                        active_scan.error_message = error_msg[:950]  # Truncate to fit VARCHAR(1000)
-                        db.session.commit()
-                        # Now we can proceed with our scan
-                    else:
-                        # Another scan is genuinely running
-                        error_msg = f"Another scan is already in progress (scan_id: {active_scan.scan_id}, phase: {active_scan.phase})"
-                        logger.error(f"Celery scan task {self.request.id} failed: {error_msg}")
-
-                        # Retry with exponential backoff + jitter
-                        if self.request.retries < self.max_retries:
-                            import random
-                            retry_delay = (2 ** self.request.retries * 30) + random.randint(0, 10)
-                            logger.info(f"Retrying scan task {self.request.id} in {retry_delay} seconds")
-                            raise self.retry(exc=RuntimeError(error_msg), countdown=retry_delay)
-                        else:
-                            # Max retries reached, fail the task
-                            logger.error(f"Task {self.request.id} failed permanently after {self.max_retries} retries")
-                            raise RuntimeError(error_msg)
-        
-        # Update scan state with Celery task ID
-        scan_state_record = ScanState.query.filter_by(scan_id=scan_id, is_active=True).first()
-        if scan_state_record:
-            try:
-                scan_state_record.celery_task_id = self.request.id
-                scan_state_record.progress_message = f"Starting {scan_type} scan via Celery task queue"
-                db.session.commit()
-            except Exception as e:
-                # Record may have been updated/deleted by another process during retry
-                db.session.rollback()
-                logger.warning(f"Could not update scan_state for {scan_id}: {e}")
-        else:
-            logger.info(f"Scan {scan_id} is no longer active, skipping scan_state update")
-        
         # Create scan service instance with database URI from Flask config
         from flask import current_app
         database_uri = current_app.config['SQLALCHEMY_DATABASE_URI']
         scan_service = ScanService(database_uri)
-        
-        # Execute the scan with progress callbacks
-        def progress_callback(progress_data):
-            """Update task progress for monitoring"""
-            current_task.update_state(
-                state='PROGRESS',
-                meta={
-                    'current': progress_data.get('files_processed', 0),
-                    'total': progress_data.get('estimated_total', 0),
-                    'phase': progress_data.get('phase', 'Unknown'),
-                    'current_file': progress_data.get('current_file', ''),
-                    'scan_id': scan_id
-                }
-            )
-        
-        # Execute scan based on type
-        if scan_type in ['full', 'parallel', 'pending']:
-            # Use configured MAX_WORKERS instead of hardcoded 1
-            from pixelprobe.config import Config
-            import os
-            num_workers = Config.MAX_WORKERS
-            logger.info(f"Celery task using MAX_WORKERS={num_workers} (env var: {os.getenv('MAX_WORKERS', 'NOT SET')})")
 
-            # Note: ScanService handles progress internally via database updates
-            # The progress_callback defined above is for Celery task state updates
-            # Pass scan_id to preserve scheduled scan IDs (e.g., 'scheduled_11')
-            result = scan_service.scan_directories(
-                directories=paths,
-                force_rescan=force_rescan,
-                num_workers=num_workers,
-                async_mode=False,  # Run synchronously in Celery task
-                scan_id=scan_id  # Pass through for healthcheck completion tracking
-            )
-            
-            # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible
-            # ScanService uses its own connection, so we need to ensure Flask session sees updates
-            db.session.commit()
-            
-            # Update Celery task state based on result
-            current_task.update_state(
-                state='PROGRESS',
-                meta={
-                    'current': result.get('files_processed', 0),
-                    'total': result.get('files_processed', 0),
-                    'phase': 'completed',
-                    'scan_id': scan_id
-                }
-            )
-        elif scan_type == 'discover':
-            # Discovery is handled internally by scan_directories
-            # There's no separate discover_files method in ScanService
-            # Run a regular scan which includes discovery phase
-            from pixelprobe.config import Config
-            result = scan_service.scan_directories(
-                directories=paths,
-                force_rescan=False,  # Don't force rescan for discovery
-                num_workers=Config.MAX_WORKERS,  # Use configured MAX_WORKERS instead of hardcoded 1
-                async_mode=False,  # Run synchronously in Celery task
-                scan_id=scan_id  # Pass through for healthcheck completion tracking
-            )
-            
-            # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible
-            db.session.commit()
-            
-        elif scan_type == 'single':
+        if scan_type == 'single':
             # Single file scan
             if paths and len(paths) == 1:
                 # Pass scan_id so scan_service reuses the ScanState row this task
@@ -290,7 +123,7 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             else:
                 raise ValueError("Single scan requires exactly one file path")
         else:
-            raise ValueError(f"Unknown scan type: {scan_type}. Supported: full, parallel, deep, pending, discover, single")
+            raise ValueError(f"Unknown scan type: {scan_type}. Supported: full, parallel, pending, discover, single")
         
         logger.info(f"Celery scan task {self.request.id} completed successfully")
         
@@ -380,77 +213,6 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
         else:
             # Max retries exceeded, mark as failed
             logger.error(f"Task {self.request.id} failed permanently after {self.max_retries} retries")
-            raise exc
-    finally:
-        current_scan_id.reset(_scan_token)
-        current_celery_task_id.reset(_task_token)
-
-
-@celery_app.task(bind=True, max_retries=2,
-                 soft_time_limit=None, time_limit=None,  # No timeout for cleanup tasks
-                 priority=7)  # Low priority - maintenance runs in background
-def cleanup_orphaned_task(self, cleanup_id, batch_size=1000):
-    """
-    Background task for cleaning up orphaned database records
-
-    Args:
-        cleanup_id (str): Unique cleanup operation identifier
-        batch_size (int): Number of records to process per batch
-
-    Returns:
-        dict: Cleanup results
-    """
-    # ContextTask wrapper in celery_config.py automatically provides Flask app context
-    # NOTE: Do NOT call db.session.remove() here - it corrupts the connection pool
-    # The ContextTask wrapper handles session management properly
-
-    logger.info(f"Starting Celery cleanup task {self.request.id} for cleanup_id: {cleanup_id}")
-
-    # Tag logs with task context
-    _scan_token = current_scan_id.set(cleanup_id)
-    _task_token = current_celery_task_id.set(self.request.id)
-
-    try:
-        # MaintenanceService not yet implemented - placeholder for future functionality
-        logger.warning(f"Cleanup task {self.request.id} skipped - MaintenanceService not yet implemented")
-        
-        # For now, return a mock success to prevent task failures
-        result = {
-            'orphaned_removed': 0,
-            'files_processed': 0,
-            'skipped': True,
-            'message': 'MaintenanceService not yet implemented'
-        }
-        
-        # Update task state to show it's complete but skipped
-        current_task.update_state(
-            state='SUCCESS',
-            meta={
-                'cleanup_id': cleanup_id,
-                'skipped': True,
-                'message': 'Cleanup functionality not yet implemented'
-            }
-        )
-        
-        logger.info(f"Celery cleanup task {self.request.id} completed successfully")
-        
-        return {
-            'status': 'SUCCESS',
-            'cleanup_id': cleanup_id,
-            'task_id': self.request.id,
-            'orphaned_removed': result.get('orphaned_removed', 0),
-            'files_processed': result.get('files_processed', 0),
-            'completed_at': datetime.now(timezone.utc).isoformat()
-        }
-        
-    except Exception as exc:
-        logger.error(f"Celery cleanup task {self.request.id} failed: {str(exc)}")
-        
-        # Retry with delay
-        if self.request.retries < self.max_retries:
-            retry_delay = 30 * (self.request.retries + 1)  # 30s, 60s
-            raise self.retry(exc=exc, countdown=retry_delay)
-        else:
             raise exc
     finally:
         current_scan_id.reset(_scan_token)
@@ -569,60 +331,6 @@ def health_check_task():
         'timestamp': datetime.now(timezone.utc).isoformat(),
         'worker_id': current_task.request.hostname
     }
-
-
-@celery_app.task(priority=3)  # High priority - scans take precedence over maintenance
-def scheduled_scan_task(schedule_id, scan_type='full'):
-    """
-    Task for executing scheduled scans
-    
-    Args:
-        schedule_id (int): ID of the schedule to execute
-        scan_type (str): Type of scan to perform
-        
-    Returns:
-        dict: Scheduled scan results
-    """
-    logger.info(f"Executing scheduled scan for schedule_id: {schedule_id}")
-    
-    try:
-        from pixelprobe.models import ScanSchedule
-        from uuid import uuid4
-        
-        # Get schedule details
-        schedule = db.session.get(ScanSchedule, schedule_id)
-        if not schedule or not schedule.is_active:
-            raise ValueError(f"Schedule {schedule_id} not found or inactive")
-        
-        # Create scan ID and trigger scan task
-        scan_id = str(uuid4())
-        paths = schedule.scan_paths.split(',') if schedule.scan_paths else []
-        
-        # Queue the actual scan task
-        task = scan_media_task.delay(
-            scan_id=scan_id,
-            paths=paths,
-            scan_type=schedule.scan_type or scan_type,
-            force_rescan=schedule.force_rescan or False
-        )
-        
-        # Update schedule last run time
-        schedule.last_run = datetime.now(timezone.utc)
-        db.session.commit()
-        
-        logger.info(f"Scheduled scan queued with task_id: {task.id}")
-        
-        return {
-            'status': 'QUEUED',
-            'schedule_id': schedule_id,
-            'scan_id': scan_id,
-            'task_id': task.id,
-            'queued_at': datetime.now(timezone.utc).isoformat()
-        }
-        
-    except Exception as exc:
-        logger.error(f"Scheduled scan failed for schedule_id {schedule_id}: {str(exc)}")
-        raise exc
 
 
 @celery_app.task(bind=True, max_retries=1,
@@ -796,223 +504,6 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
                 'current_hash': None
             }
 
-
-def _final_sync_redis_to_db(scan_id, scan_state, ui_session):
-    """
-    Final sync of Redis progress values to PostgreSQL when UI worker exits.
-    Ensures the DB reflects the true final progress, not a stale partial value.
-    """
-    try:
-        redis_progress = get_scan_progress_redis(scan_id)
-        if not redis_progress:
-            return
-
-        redis_files = redis_progress.get('files_processed', 0)
-        redis_total = redis_progress.get('estimated_total', 0)
-        # Refresh ORM object to get latest DB values (may be stale after raw SQL updates)
-        ui_session.refresh(scan_state)
-        db_files = scan_state.files_processed or 0
-        db_total = scan_state.estimated_total or 0
-
-        # Only update if Redis has higher/better values
-        needs_update = False
-        if redis_files > db_files:
-            scan_state.files_processed = redis_files
-            needs_update = True
-        if redis_total > 0 and redis_total != db_total:
-            scan_state.estimated_total = redis_total
-            needs_update = True
-
-        if needs_update:
-            ui_session.commit()
-            logger.info(f"Final Redis->DB sync for scan {scan_id}: "
-                       f"files_processed={scan_state.files_processed}, "
-                       f"estimated_total={scan_state.estimated_total}")
-        else:
-            logger.debug(f"No final sync needed for scan {scan_id}: DB already up to date")
-    except Exception as e:
-        logger.warning(f"Failed final Redis->DB sync for scan {scan_id}: {e}")
-        try:
-            ui_session.rollback()
-        except Exception:
-            pass
-
-
-@celery_app.task(bind=True, priority=9)
-def ui_progress_update_task(self, scan_id, update_interval=1.0):
-    """
-    UI worker that periodically reads scan state from database and updates
-    the last_update timestamp to prevent stuck scan detection.
-
-    IMPORTANT: This worker should NOT modify progress values - only update timestamps.
-    Progress values should only be set by the scan worker to avoid race conditions.
-
-    Args:
-        scan_id (str): The scan ID to track progress for
-        update_interval (float): How often to check progress (seconds)
-
-    Returns:
-        dict: Final progress status
-    """
-    logger.info(f"Starting UI progress worker for scan {scan_id}")
-
-    import sys
-    import os
-    import time
-    from datetime import datetime, timezone
-
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from app import app, db as flask_db
-    from sqlalchemy.orm import scoped_session, sessionmaker
-    from pixelprobe.models import ScanState
-
-    # Use distributed lock to ensure only one UI worker per scan
-    lock_name = f'pixelprobe:ui_worker:{scan_id}'
-    with distributed_lock(lock_name, timeout=3600, blocking_timeout=1) as lock_acquired:
-        if not lock_acquired:
-            logger.warning(f"UI worker already running for scan {scan_id}, skipping duplicate")
-            return {'status': 'skipped', 'reason': 'duplicate_worker'}
-
-        app_context = app.app_context()
-        app_context.push()
-
-        # Clean up database session after app context is pushed
-        try:
-            flask_db.session.remove()
-        except Exception as e:
-            logger.warning(f"Failed to remove db session at task start: {e}")
-
-        # Create a separate session for the UI worker to avoid conflicts with scan workers
-        ui_session_factory = sessionmaker(bind=flask_db.engine)
-        UiSession = scoped_session(ui_session_factory)
-
-        try:
-            consecutive_no_change = 0
-            max_no_change = 1800  # Stop after 30 minutes of no activity (matches stuck scan detection timeout)
-            last_files_processed = -1
-            last_db_update = None
-
-            while True:
-                try:
-                    # Use separate UI session to avoid concurrent access issues
-                    ui_session = UiSession()
-
-                    # Ensure we're reading fresh data by committing any pending transaction
-                    # This forces the session to start a new transaction and see latest data
-                    ui_session.commit()
-
-                    # Read current scan state from database
-                    scan_state = ui_session.query(ScanState).filter_by(scan_id=scan_id).first()
-
-                    if not scan_state:
-                        logger.warning(f"Scan state not found for {scan_id}")
-                        break
-
-                    # Check if scan is complete
-                    if scan_state.phase in ['completed', 'error', 'cancelled', 'crashed']:
-                        # Final sync: ensure DB has latest Redis progress values
-                        _final_sync_redis_to_db(scan_id, scan_state, ui_session)
-                        logger.info(f"Scan {scan_id} finished with phase: {scan_state.phase}")
-                        break
-
-                    # Check if scan is still active
-                    if not scan_state.is_active:
-                        # Final sync: ensure DB has latest Redis progress values
-                        _final_sync_redis_to_db(scan_id, scan_state, ui_session)
-                        logger.info(f"Scan {scan_id} is no longer active, stopping UI worker")
-                        break
-
-                    # Get current values - store all needed attributes before commit/expire
-                    files_processed = scan_state.files_processed or 0
-                    phase_total = scan_state.phase_total or 0
-                    estimated_total = scan_state.estimated_total or 0  # Store this before commit
-                    current_phase = scan_state.phase  # Store phase before commit
-                    current_db_update = scan_state.last_update
-
-                    # Update last_update timestamp to prevent stuck scan detection
-                    scan_state.last_update = datetime.now(timezone.utc)
-
-                    # Debug logging for the "x of 0 files" issue - only log once and only after discovery phase
-                    if (estimated_total == 0 or phase_total == 0) and current_phase not in ['discovering', 'idle', 'pending']:
-                        # Only log warning once to avoid spam
-                        if not getattr(scan_state, '_zero_total_logged', False):
-                            logger.warning(f"Zero total detected in phase '{current_phase}' - estimated_total={estimated_total}, phase_total={phase_total}, files_processed={files_processed}")
-                            scan_state._zero_total_logged = True
-
-                    # IMPORTANT: Do NOT sync estimated_total and phase_total in the UI worker!
-                    # This causes race conditions where we might overwrite valid values with 0
-                    # The scan worker is responsible for setting these values correctly
-                    # The UI worker should ONLY update the last_update timestamp
-
-                    # Just commit to update last_update timestamp
-                    ui_session.commit()
-
-                    # Expire the scan_state object to release locks and allow concurrent access
-                    ui_session.expire(scan_state)
-
-                    # Check for activity: either file count changed OR database was updated by scan workers
-                    # This handles large files where file count doesn't change but workers are still active
-                    db_was_updated = (last_db_update is not None and
-                                 current_db_update is not None and
-                                 current_db_update > last_db_update)
-
-                    files_changed = files_processed != last_files_processed
-
-                    if files_changed or db_was_updated:
-                        # There's activity - reset the no-change counter
-                        consecutive_no_change = 0
-                        last_files_processed = files_processed
-                        last_db_update = current_db_update
-                        logger.debug(f"Scan {scan_id} progress: {files_processed}/{estimated_total}")
-                    else:
-                        # No activity detected
-                        consecutive_no_change += 1
-                        if consecutive_no_change >= max_no_change:
-                            logger.warning(f"No database activity for {max_no_change} seconds, stopping UI worker")
-                            break
-
-                    # Close and remove the UI session to release connections
-                    ui_session.close()
-                    UiSession.remove()
-
-                except Exception as e:
-                    logger.error(f"Error in UI worker: {e}", exc_info=True)
-                    try:
-                        ui_session.rollback()
-                        ui_session.close()
-                        UiSession.remove()
-                    except:
-                        pass
-
-                # Sleep before next update
-                time.sleep(update_interval)
-
-            return {
-                'status': 'SUCCESS',
-                'scan_id': scan_id,
-                'final_progress': last_files_processed
-            }
-
-        except Exception as exc:
-            logger.error(f"UI progress worker failed for scan {scan_id}: {str(exc)}")
-            return {
-                'status': 'ERROR',
-                'scan_id': scan_id,
-                'error': str(exc)
-            }
-        finally:
-            # Clean up UI session and Flask app context
-            try:
-                UiSession.remove()
-            except:
-                pass
-            try:
-                app_context.pop()
-            except:
-                pass
-
-
-# update_scan_progress_redis is now imported from progress_utils to avoid circular imports
 
 
 @celery_app.task(name='pixelprobe.tasks.run_retention_cleanup',

@@ -25,6 +25,41 @@ def check_celery_available():
     return celery_enabled
 
 
+def _noop_on_task_call(producer, task_id):
+    return None
+
+
+def disable_dispatch_result_subscription(celery_instance):
+    """Stop apply_async subscribing the producer to result pub/sub channels.
+
+    send_task calls backend.on_task_call -> SUBSCRIBE per dispatched task.
+    Producers read stored result meta (safe_task_get) and never drain that
+    socket, so unread data piles up until Redis force-closes the connection
+    (client-output-buffer-limit, observed every ~70s during cleanup runs).
+    AsyncResult.get() still works: it subscribes itself (add_pending_result)
+    and reconciles from stored meta. Producer-side GroupResult.join_native()
+    would NOT resolve promptly without the dispatch-time subscription - the
+    only group joins live worker-side (discovery), where this hook was
+    already skipped via task_join_will_block().
+
+    Celery creates a SEPARATE backend instance per thread (Celery._backend
+    routes through threading.local unless result_backend_thread_safe), so
+    patching one instance misses every other thread - the cleanup producer
+    thread kept subscribing after the first version of this fix. Wrapping
+    _get_backend patches every instance any thread creates.
+    """
+    orig_get_backend = celery_instance._get_backend
+
+    def _get_backend_without_dispatch_subscription():
+        backend = orig_get_backend()
+        backend.on_task_call = _noop_on_task_call
+        return backend
+
+    celery_instance._get_backend = _get_backend_without_dispatch_subscription
+    # Patch the calling thread's already-created instance too
+    celery_instance.backend.on_task_call = _noop_on_task_call
+
+
 def is_db_connection_corruption(exc) -> bool:
     """Detect post-fork PostgreSQL connection corruption.
 

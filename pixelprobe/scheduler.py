@@ -7,13 +7,43 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from pixelprobe.models import db, ScanSchedule, ScanResult, ScanState, HealthcheckConfig, ScanReport
-from pixelprobe.constants import TERMINAL_SCAN_PHASES
+from pixelprobe.constants import SCAN_PHASES, TERMINAL_SCAN_PHASES
+from pixelprobe.services.scan_engine import maybe_finalize_scan
+from pixelprobe.utils.paths import is_path_under
 from sqlalchemy import text
 import threading
 import requests
 from pixelprobe.services.healthcheck_service import HealthcheckService
 
 logger = logging.getLogger(__name__)
+
+
+def compute_next_interval_run(last_run, stored_next_run, unit, value, now=None):
+    """Next fire time for an interval schedule surviving an app restart.
+
+    Returns None when there is no history (caller lets APScheduler default to
+    now + interval). Naive datetimes are treated as UTC.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if last_run is None:
+        return None
+
+    if last_run.tzinfo is None:
+        last_run = last_run.replace(tzinfo=timezone.utc)
+
+    next_run = last_run + timedelta(**{unit: value})
+    if next_run >= now:
+        return next_run
+
+    if stored_next_run is not None:
+        if stored_next_run.tzinfo is None:
+            stored_next_run = stored_next_run.replace(tzinfo=timezone.utc)
+        if stored_next_run > now:
+            return stored_next_run
+
+    return now + timedelta(**{unit: value})
+
 
 class MediaScheduler:
     # Defaults for queue-on-conflict retry when a scheduled scan fires while
@@ -108,7 +138,7 @@ class MediaScheduler:
         """Filter out excluded paths and return the remaining ones."""
         return [
             p.strip() for p in scan_paths
-            if not any(p.strip().startswith(exc) for exc in self.excluded_paths)
+            if not any(is_path_under(p.strip(), exc) for exc in self.excluded_paths)
         ]
 
     def _execute_scan_request(self, endpoint, payload, scan_label, timeout=30):
@@ -326,19 +356,22 @@ class MediaScheduler:
             coalesce=True
         )
 
-    def _add_interval_job(self, job_id: str, func, unit: str, value: int):
-        """Add an interval-based job"""
+    def _add_interval_job(self, job_id: str, func, unit: str, value: int,
+                          next_run_time=None):
+        """Add an interval-based job, optionally with an explicit first fire time"""
         kwargs = {unit: value}
         trigger = IntervalTrigger(**kwargs)
 
-        self.scheduler.add_job(
-            func,
-            trigger,
-            id=job_id,
-            replace_existing=True,
-            misfire_grace_time=3600,
-            coalesce=True
-        )
+        job_kwargs = {
+            'id': job_id,
+            'replace_existing': True,
+            'misfire_grace_time': 3600,
+            'coalesce': True,
+        }
+        if next_run_time is not None:
+            job_kwargs['next_run_time'] = next_run_time
+
+        self.scheduler.add_job(func, trigger, **job_kwargs)
         
     def _load_saved_schedules(self):
         """Load and activate saved schedules from database"""
@@ -352,19 +385,25 @@ class MediaScheduler:
             schedules = ScanSchedule.query.filter_by(is_active=True).all()
             logger.info(f"Active schedules to load: {len(schedules)}")
             
-            # Deduplicate schedules by cron_expression and scan_paths
+            # Deduplicate schedules; commit deactivations once after the loop
+            # (committing mid-iteration can expire the objects being iterated)
             seen_schedules = {}
+            duplicates = []
             for schedule in schedules:
                 key = f"{schedule.cron_expression}:{schedule.scan_paths}:{schedule.scan_type}"
-                
+
                 if key in seen_schedules:
-                    # Deactivate duplicate schedule
                     logger.warning(f"Deactivating duplicate schedule {schedule.id}: {schedule.name}")
                     schedule.is_active = False
-                    db.session.commit()
+                    duplicates.append(schedule.id)
                     continue
-                    
+
                 seen_schedules[key] = schedule
+
+            if duplicates:
+                db.session.commit()
+
+            for schedule in seen_schedules.values():
                 self._activate_schedule(schedule)
         except Exception as e:
             # Roll back so a query/commit failure here doesn't leave the session
@@ -382,63 +421,28 @@ class MediaScheduler:
             def job_func():
                 self._run_scheduled_scan(schedule_id)
 
-            # For interval-based schedules, calculate next_run based on last_run if available
-            # This prevents the schedule from resetting on app restart
-            next_run_time = None
+            # Interval schedules preserve their cadence across app restarts:
+            # the next fire is computed BEFORE add_job (no post-hoc job.modify)
             if schedule.cron_expression.startswith('interval:'):
-                # Parse interval format: interval:unit:value
                 parts = schedule.cron_expression.split(':')
-                if len(parts) == 3:
-                    unit = parts[1]
-                    value = int(parts[2])
-
-                    # If we have a last_run time and it's in the past, calculate next run from it
-                    if schedule.last_run:
-                        from datetime import timedelta
-                        interval_kwargs = {unit: value}
-
-                        # Ensure last_run is timezone-aware
-                        last_run = schedule.last_run
-                        if last_run.tzinfo is None:
-                            last_run = last_run.replace(tzinfo=timezone.utc)
-
-                        next_run_time = last_run + timedelta(**interval_kwargs)
-
-                        # If calculated next_run is in the past, use current next_run or now + interval
-                        if next_run_time < datetime.now(timezone.utc):
-                            if schedule.next_run:
-                                # Ensure next_run is timezone-aware for comparison
-                                stored_next_run = schedule.next_run
-                                if stored_next_run.tzinfo is None:
-                                    stored_next_run = stored_next_run.replace(tzinfo=timezone.utc)
-
-                                if stored_next_run > datetime.now(timezone.utc):
-                                    next_run_time = stored_next_run
-                                else:
-                                    next_run_time = datetime.now(timezone.utc) + timedelta(**interval_kwargs)
-                            else:
-                                next_run_time = datetime.now(timezone.utc) + timedelta(**interval_kwargs)
-
-                    self._add_interval_job(job_id, job_func, unit, value)
-                else:
+                if len(parts) != 3:
                     raise ValueError(f"Invalid interval format: {schedule.cron_expression}")
+                unit = parts[1]
+                value = int(parts[2])
+                next_run_time = compute_next_interval_run(
+                    schedule.last_run, schedule.next_run, unit, value
+                )
+                self._add_interval_job(job_id, job_func, unit, value,
+                                       next_run_time=next_run_time)
             else:
                 # Standard cron format
                 self._add_cron_job(job_id, job_func, schedule.cron_expression)
 
-            # Update next run time only if we don't have a preserved value
-            jobs = self.scheduler.get_jobs()
-            for job in jobs:
-                if job.id == job_id:
-                    # For interval schedules, if we calculated a next_run_time, modify the job
-                    if next_run_time:
-                        job.modify(next_run_time=next_run_time)
-                        schedule.next_run = next_run_time
-                    else:
-                        # For cron schedules or new interval schedules, use APScheduler's calculation
-                        schedule.next_run = job.next_run_time
-                    db.session.commit()
-                    break
+            # Persist what APScheduler actually scheduled
+            job = self.scheduler.get_job(job_id)
+            if job:
+                schedule.next_run = job.next_run_time
+                db.session.commit()
 
             logger.info(f"Activated schedule: {schedule.name} (next run: {schedule.next_run})")
         except Exception as e:
@@ -708,7 +712,7 @@ class MediaScheduler:
         
     def is_path_excluded(self, path: str) -> bool:
         """Check if a path should be excluded from scanning"""
-        return any(path.startswith(exc) for exc in self.excluded_paths)
+        return any(is_path_under(path, exc) for exc in self.excluded_paths)
         
     def is_extension_excluded(self, filename: str) -> bool:
         """Check if a file extension should be excluded from scanning"""
@@ -758,6 +762,22 @@ class MediaScheduler:
                     ScanState.phase.notin_(TERMINAL_SCAN_PHASES)
                 ).all()
                 
+                # Backstop for last-chunk-finalizes: if the winning chunk died
+                # between chunk-complete and finalize, finish the scan here.
+                for scan in stuck_scans:
+                    if scan.phase == SCAN_PHASES['SCANNING']:
+                        try:
+                            if maybe_finalize_scan(scan.scan_id):
+                                logger.info(f"Sweeper finalized completed scan {scan.scan_id}")
+                        except Exception as e:
+                            logger.error(f"Sweeper finalize check failed for {scan.scan_id}: {e}")
+                            db.session.rollback()
+
+                stuck_scans = ScanState.query.filter(
+                    ScanState.is_active == True,
+                    ScanState.phase.notin_(TERMINAL_SCAN_PHASES)
+                ).all()
+
                 scans_to_mark = []
                 for scan in stuck_scans:
                     # Ensure we have timezone-aware datetimes for comparison

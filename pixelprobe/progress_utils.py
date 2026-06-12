@@ -245,15 +245,12 @@ def update_scan_progress_redis(scan_id, files_processed=0, estimated_total=0, ph
     }
 
     try:
-        result = redis_client.hset(progress_key, mapping=progress_data)
-        redis_client.expire(progress_key, 3600)
-        logger.info(f"Updated Redis progress for scan {scan_id}: {files_processed}/{estimated_total} in phase {phase}, key={progress_key}, result={result}")
-
-        verify_data = redis_client.hgetall(progress_key)
-        if verify_data:
-            logger.debug(f"Verified Redis data for {scan_id}: {verify_data}")
-        else:
-            logger.error(f"Failed to verify Redis data for {scan_id} - key might not exist!")
+        pipe = redis_client.pipeline()
+        pipe.hset(progress_key, mapping=progress_data)
+        pipe.expire(progress_key, 3600)
+        pipe.execute()
+        logger.debug(f"Updated Redis progress for scan {scan_id}: "
+                     f"{files_processed}/{estimated_total} in phase {phase}")
     except Exception as e:
         logger.error(f"Failed to update Redis progress: {e}")
 
