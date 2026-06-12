@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.57] - 2026-06-11
+
+### Fixed
+
+- **The dispatch pub/sub no-op now actually applies to the threads that dispatch - the 2.6.55/2.6.56 fix never took effect in production.** Celery's `Celery._backend` is stored in a `threading.local` unless `result_backend_thread_safe` is set, so every thread gets its OWN backend instance. The no-op was patched onto the backend created on the import thread, while the cleanup/integrity producer threads (spawned per run by the maintenance routes) lazily created fresh, unpatched backends and kept subscribing - verified live: the first 2.6.56 cleanup run still showed 3,000-5,000 standing subscriptions and ~70-second Redis forced disconnects. Root-caused with a local reproduction (the run is clean when driven from the main thread, subscribes when driven from a `threading.Thread`, confirmed via a stack trace through `send_task -> backend.on_task_call`). `disable_dispatch_result_subscription()` now wraps `Celery._get_backend` so every backend instance created by any thread carries the no-op; validated end-to-end in a local stack where the API-triggered cleanup previously accumulated 2,633 result-channel subscriptions and now accumulates zero. The regression test now asserts the no-op holds in a freshly spawned thread. This retroactively explains all three production runs today: 2.6.53 stalled (get() subscriptions plus dispatch subscriptions), 2.6.54 was clean (its per-dispatch `cancel_for` ran on the same thread-local objects that subscribed), and 2.6.56 regressed (dispatch subscription alive in the producer thread with the unsubscribe removed).
+
 ## [2.6.56] - 2026-06-11
 
 ### Fixed

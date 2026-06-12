@@ -305,16 +305,40 @@ class TestDispatchResultSubscriptionDisabled:
     nothing in the producer reads that socket, so Redis kills the connection
     on output-buffer overrun (observed every ~3min during cleanup runs)."""
 
-    def test_on_task_call_is_noop_instance_override(self):
+    @staticmethod
+    def _patched_celery():
         from celery import Celery
         from pixelprobe.utils.celery_utils import disable_dispatch_result_subscription
 
         celery = Celery('t', broker='redis://localhost:6379/0',
                         backend='redis://localhost:6379/0')
         disable_dispatch_result_subscription(celery)
+        return celery
 
+    def test_on_task_call_is_noop_instance_override(self):
+        celery = self._patched_celery()
         assert 'on_task_call' in vars(celery.backend)
         assert celery.backend.on_task_call(MagicMock(), 'task-1') is None
+
+    def test_on_task_call_is_noop_in_new_threads(self):
+        # Celery._backend is thread-local (one backend instance per thread
+        # unless result_backend_thread_safe); a single-instance patch missed
+        # the cleanup producer thread in production (2026-06-11, v2.6.56).
+        import threading
+
+        celery = self._patched_celery()
+        seen = {}
+
+        def probe():
+            backend = celery.backend
+            seen['fresh_instance'] = backend is not celery._backend_cache
+            seen['noop'] = 'on_task_call' in vars(backend)
+
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join()
+        assert seen['fresh_instance'] is True
+        assert seen['noop'] is True
 
 
 class TestEnvInt:
