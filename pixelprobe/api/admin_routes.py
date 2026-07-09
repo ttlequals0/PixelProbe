@@ -382,6 +382,13 @@ def create_schedule():
             is_active=True,
             created_at=datetime.now(timezone.utc)
         )
+        # Populate next_run immediately so the UI shows it before the first
+        # fire (the scheduler's db-sync job registers the actual APScheduler
+        # job within a minute)
+        try:
+            schedule.next_run = calculate_next_run(schedule.cron_expression)
+        except Exception as e:
+            logger.warning(f"Could not calculate next_run for new schedule: {e}")
         db.session.add(schedule)
         db.session.commit()
 

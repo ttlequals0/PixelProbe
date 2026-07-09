@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -223,6 +224,63 @@ class TestMediaScheduler:
             # The job should be removed and re-added
             # Since we don't have the actual schedule loading logic in test,
             # at least verify the method runs without error
+
+
+class TestScheduleDbSync:
+    """The db-sync job is how schedule CRUD reaches the scheduler process.
+
+    The Celery reload task always executes in a prefork pool child where the
+    scheduler is not running, so it is skipped; without the sync job a created
+    or edited schedule only registered after a container restart.
+    """
+
+    @pytest.fixture
+    def scheduler(self, app, db):
+        scheduler = MediaScheduler()
+        scheduler.init_app(app)
+        yield scheduler
+        scheduler.shutdown()
+
+    def test_sync_job_registered(self, scheduler):
+        job = scheduler.scheduler.get_job('db_schedule_sync')
+        assert job is not None
+        # update_schedules removes every job whose id starts with 'schedule_';
+        # the sync job must never match that prefix or it would delete itself
+        assert not job.id.startswith('schedule_')
+
+    def test_sync_reloads_when_definitions_change(self, scheduler, app, db):
+        with app.app_context():
+            schedule = ScanSchedule(name='Sync Test', cron_expression='0 2 * * *',
+                                    scan_type='file_changes', time_budget_minutes=10,
+                                    is_active=True)
+            db.session.add(schedule)
+            db.session.commit()
+
+        with patch.object(scheduler, 'update_schedules') as update:
+            scheduler._sync_schedules_from_db()
+        update.assert_called_once()
+
+    def test_sync_skips_when_unchanged(self, scheduler, app, db):
+        with app.app_context():
+            scheduler._schedules_fp = scheduler._schedule_fingerprint()
+        with patch.object(scheduler, 'update_schedules') as update:
+            scheduler._sync_schedules_from_db()
+        update.assert_not_called()
+
+    def test_budget_change_triggers_reload(self, scheduler, app, db):
+        with app.app_context():
+            schedule = ScanSchedule(name='Budget Sync', cron_expression='0 2 * * *',
+                                    scan_type='file_changes', time_budget_minutes=10,
+                                    is_active=True)
+            db.session.add(schedule)
+            db.session.commit()
+            scheduler._schedules_fp = scheduler._schedule_fingerprint()
+            schedule.time_budget_minutes = 30
+            db.session.commit()
+
+        with patch.object(scheduler, 'update_schedules') as update:
+            scheduler._sync_schedules_from_db()
+        update.assert_called_once()
 
 
 class TestQueueConflictRetry:

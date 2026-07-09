@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.63] - 2026-07-09
+
+### Fixed
+
+- **Created or edited schedules now take effect within a minute instead of requiring a container restart.** Schedule CRUD dispatched `reload_schedules_task` through Celery, but prefork workers execute tasks in pool children while APScheduler runs only in the scheduler-lock-holding main process - the reload always landed in a child, logged "Scheduler not running in this worker", and was skipped, so no schedule change since the mechanism was added ever reached the running scheduler without a restart (verified live: a freshly created `file_changes` schedule never fired at its cron time). The scheduler process now re-syncs its jobs directly from the database every 60 seconds, gated on a fingerprint of the schedule definitions so jobs are only rebuilt when something actually changed. New schedules also get `next_run` computed at creation so the UI shows the upcoming fire immediately instead of after the first run.
+
 ## [2.6.62] - 2026-07-09
 
 ### Added

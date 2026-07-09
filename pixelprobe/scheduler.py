@@ -62,6 +62,9 @@ class MediaScheduler:
 
         self.pending_retries: Dict[str, int] = {}
         self._retry_lock = threading.Lock()
+        # Snapshot of saved-schedule definitions; the db-sync job reloads jobs
+        # only when this changes (see _sync_schedules_from_db)
+        self._schedules_fp = None
         self.retry_delay_minutes = self._load_positive_int_env(
             'SCHEDULE_RETRY_DELAY_MINUTES', self.DEFAULT_RETRY_DELAY_MINUTES, min_value=1
         )
@@ -277,10 +280,31 @@ class MediaScheduler:
             misfire_grace_time=60
         )
         logger.info("Scheduled stuck scan detection to run every 5 minutes")
-        
+
+        # Re-sync saved schedules from the database every 60 seconds.
+        # Schedule create/update/delete happens in gunicorn workers, but
+        # APScheduler runs only in the process holding the scheduler lock; the
+        # Celery reload task always executes in a prefork pool child and can
+        # never reach it, so changes only took effect after a restart. The id
+        # must not start with 'schedule_' or update_schedules would remove it.
+        self.scheduler.add_job(
+            func=self._sync_schedules_from_db,
+            trigger="interval",
+            seconds=60,
+            id="db_schedule_sync",
+            name="Sync saved schedules from database",
+            misfire_grace_time=30,
+            coalesce=True
+        )
+        logger.info("Scheduled database schedule sync every 60 seconds")
+
         # Load saved schedules from database
         with app.app_context():
             self._load_saved_schedules()
+            try:
+                self._schedules_fp = self._schedule_fingerprint()
+            except Exception as e:
+                logger.warning(f"Could not compute initial schedule fingerprint: {e}")
             
     def _load_exclusions(self):
         """Load path and extension exclusions from environment variables"""
@@ -743,6 +767,38 @@ class MediaScheduler:
         # Reload from database
         with self.app.app_context():
             self._load_saved_schedules()
+            self._schedules_fp = self._schedule_fingerprint()
+
+    def _schedule_fingerprint(self):
+        """Snapshot of every field that affects job registration.
+
+        Must be called inside an app context.
+        """
+        return tuple(db.session.query(
+            ScanSchedule.id, ScanSchedule.name, ScanSchedule.cron_expression,
+            ScanSchedule.scan_type, ScanSchedule.scan_paths,
+            ScanSchedule.force_rescan, ScanSchedule.time_budget_minutes,
+            ScanSchedule.is_active
+        ).order_by(ScanSchedule.id).all())
+
+    def _sync_schedules_from_db(self):
+        """Reload saved schedules when their definitions change in the database.
+
+        Schedule CRUD runs in gunicorn workers; APScheduler runs only in the
+        process holding the scheduler lock. The Celery reload task executes in
+        a prefork pool child where the scheduler is never running, so it was
+        always skipped and new/edited schedules never registered until a
+        restart. Polling a fingerprint keeps the job store in sync without
+        cross-process messaging, and only churns jobs when something changed.
+        """
+        try:
+            with self.app.app_context():
+                fingerprint = self._schedule_fingerprint()
+            if fingerprint != self._schedules_fp:
+                logger.info("Schedule definitions changed in database; reloading scheduler jobs")
+                self.update_schedules()
+        except Exception as e:
+            logger.error(f"Schedule database sync failed: {e}")
             
     def _check_stuck_scans(self):
         """Check for stuck scans and mark them as crashed"""
