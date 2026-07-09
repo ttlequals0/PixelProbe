@@ -209,6 +209,7 @@ def get_scan_results():
     scan_status = request.args.get('scan_status', 'all')
     is_corrupted = request.args.get('is_corrupted', 'all')
     has_warnings = request.args.get('has_warnings', 'all')
+    bitrot_suspected = request.args.get('bitrot_suspected', 'all')
     search_query = request.args.get('search', '').strip()
     sort_field = request.args.get('sort_field', 'scan_date')
     sort_order = request.args.get('sort_order', 'desc')
@@ -255,7 +256,13 @@ def get_scan_results():
             (ScanResult.has_warnings == False) |
             (ScanResult.has_warnings == None)
         )
-    
+
+    # Apply bitrot filter
+    if bitrot_suspected == 'true':
+        query = query.filter(ScanResult.bitrot_suspected == True)
+    elif bitrot_suspected == 'false':
+        query = query.filter(ScanResult.bitrot_suspected == False)
+
     # Apply sorting
     # Map frontend field names to model attributes
     field_mapping = {

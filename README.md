@@ -20,6 +20,7 @@ PixelProbe detects corrupted video, image, and audio files across your media lib
 - FFmpeg-based deep video analysis
 - Video freeze detection (stuck frames while audio continues) via FFmpeg freezedetect filter with black frame false positive filtering
 - ImageMagick and PIL image validation
+- Bitrot detection: a content hash change without a matching mtime change flags the file for review instead of silently adopting the new hash
 - Smart warning system for minor issues vs critical corruption
 - Multi-stage detection with configurable thresholds
 - Automatic retry logic for transient failures
@@ -28,6 +29,7 @@ PixelProbe detects corrupted video, image, and audio files across your media lib
 - **Parallel multi-threaded scanning**: Configurable worker threads (10-24 workers recommended) with thread-safe database access
 - **Real-time progress**: Live updates with ETA calculations and phase tracking
 - **Multiple scan types**: Full scan, cleanup, integrity check
+- **Rolling integrity queue**: Integrity checks sweep the library stalest-first in batches and resume where they left off; schedules can carry a per-run time budget so no single run monopolizes IO
 - **Scheduled automated scans**: Cron expressions or simple intervals for hands-free monitoring
 - **Smart exclusions**: Configure paths and file extensions to skip
 - **Phase-based scanning**: Discovery → Database → Validation workflow
@@ -342,8 +344,9 @@ PixelProbe provides a REST API with OpenAPI/Swagger documentation.
 #### Maintenance Endpoints
 - `POST /api/cleanup` - Remove orphaned database entries
 - `GET /api/cleanup-status` - Get cleanup operation status
-- `POST /api/file-changes` - Detect file system changes
+- `POST /api/file-changes` - Detect file system changes (optional `time_budget_minutes`)
 - `GET /api/file-changes-status` - Get file changes scan status
+- `POST /api/bitrot/accept` - Accept a bitrot-suspected file's current content as the new baseline
 - `POST /api/reset-for-rescan` - Reset files for rescanning
 - `POST /api/reset-files-by-path` - Reset specific files by path
 

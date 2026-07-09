@@ -59,6 +59,21 @@ class ScanResult(db.Model):
     error_message = db.Column(db.Text, nullable=True)  # Error message from scan
     media_info = db.Column(db.Text, nullable=True)  # JSON string of media metadata
     file_exists = db.Column(db.Boolean, nullable=False, default=True, index=True)  # Whether file exists on disk
+
+    # Bitrot classification: a hash mismatch with unchanged mtime is suspected
+    # bitrot, not a legitimate edit (see calculate_file_hash_task). The flag
+    # auto-expires after BITROT_STABLE_CHECKS_TO_EXPIRE stable checks plus a
+    # clean rescan; detection date/details are permanent once set so "files
+    # that ever tripped bitrot" stays queryable (dying-disk signal).
+    bitrot_suspected = db.Column(db.Boolean, nullable=False, default=False, server_default='false', index=True)
+    bitrot_detected_date = db.Column(db.DateTime, nullable=True)
+    bitrot_details = db.Column(db.Text, nullable=True)  # JSON: stored vs current hash/mtime/size
+    bitrot_candidate_hash = db.Column(db.String(64), nullable=True)  # stability reference for auto-expire
+    bitrot_stable_checks = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    # True once last_modified was written as UTC by post-v2.6.61 code.
+    # Pre-upgrade baselines are naive local time and must not trigger bitrot
+    # classification; their first check re-baselines instead.
+    mtime_baseline_utc = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     
     # Legacy column kept for backward compatibility with older database schemas
     deep_scan = db.Column(db.Boolean, nullable=True, default=False, server_default='false')
@@ -109,7 +124,12 @@ class ScanResult(db.Model):
             'discovered_date': convert_to_tz(self.discovered_date),
             'error_message': self.error_message,
             'media_info': self.media_info,
-            'file_exists': self.file_exists
+            'file_exists': self.file_exists,
+            'bitrot_suspected': self.bitrot_suspected,
+            'bitrot_detected_date': convert_to_tz(self.bitrot_detected_date),
+            'bitrot_details': self.bitrot_details,
+            'bitrot_candidate_hash': self.bitrot_candidate_hash,
+            'bitrot_stable_checks': self.bitrot_stable_checks
         }
     
     def append_output(self, new_output):
@@ -205,6 +225,9 @@ class ScanSchedule(db.Model):
     scan_paths = db.Column(db.Text)  # JSON array of paths to scan
     scan_type = db.Column(db.String(20), nullable=False, default='normal')  # normal, orphan, file_changes
     force_rescan = db.Column(db.Boolean, nullable=False, default=False)
+    # file_changes only: stop dispatching new hash tasks after this many
+    # minutes; the rolling queue resumes at the next run. NULL = unlimited.
+    time_budget_minutes = db.Column(db.Integer, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     last_run = db.Column(db.DateTime, nullable=True)
     next_run = db.Column(db.DateTime, nullable=True)
@@ -219,6 +242,7 @@ class ScanSchedule(db.Model):
             'scan_paths': json.loads(self.scan_paths) if self.scan_paths else [],
             'scan_type': self.scan_type,
             'force_rescan': self.force_rescan,
+            'time_budget_minutes': self.time_budget_minutes,
             'is_active': self.is_active,
             'last_run': convert_to_tz(self.last_run),
             'next_run': convert_to_tz(self.next_run),
@@ -1026,7 +1050,8 @@ class NotificationRule(db.Model):
                            nullable=False, index=True)
     event_type = db.Column(db.String(50), nullable=False, index=True)
     # Event types: 'scan_start', 'scan_complete', 'scan_failed', 'scan_missed',
-    #              'user_added', 'user_deleted', 'api_key_added', 'api_key_deleted', 'auth_failed'
+    #              'corruption_found', 'bitrot_suspected', 'user_added', 'user_deleted',
+    #              'api_key_added', 'api_key_deleted', 'auth_failed'
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     priority = db.Column(db.String(10), nullable=False, default='normal')  # 'low', 'normal', 'high'
     conditions = db.Column(db.JSON, nullable=True)  # Optional conditions (e.g., {"corrupted_count": ">0"})

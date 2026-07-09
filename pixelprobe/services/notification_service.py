@@ -11,9 +11,66 @@ import logging
 import requests
 from typing import Dict, Optional, List
 from datetime import datetime, timezone
+from pixelprobe.models import db, NotificationRule
 from pixelprobe.utils.security import validate_safe_url, create_safe_session
 
 logger = logging.getLogger(__name__)
+
+
+def dispatch_event(event_type, title, message, priority='normal', additional_data=None):
+    """Send an event through every active NotificationRule for event_type.
+
+    This is the rule-evaluation layer the CRUD-only rules previously lacked:
+    it joins active rules to their active providers and delivers via
+    NotificationService, recording per-provider delivery status. Returns the
+    number of successful deliveries. Failures are logged, never raised -
+    notification must not break the operation that triggered it.
+    """
+    try:
+        rules = NotificationRule.query.filter_by(event_type=event_type, is_active=True).all()
+    except Exception as e:
+        logger.error(f"Could not load notification rules for {event_type}: {e}")
+        return 0
+
+    if not rules:
+        logger.debug(f"No active notification rules for event {event_type}")
+        return 0
+
+    service = NotificationService()
+    sent = 0
+    for rule in rules:
+        provider = rule.provider
+        if not provider or not provider.is_active:
+            continue
+        try:
+            success, error = service.send_notification(
+                provider_type=provider.provider_type,
+                provider_config=provider.configuration,
+                title=title,
+                message=message,
+                # rule.priority defaults to 'normal' (NOT NULL), so it cannot
+                # simply win over the event: an explicitly raised/lowered rule
+                # priority applies, otherwise the event's priority does (e.g.
+                # bitrot dispatches at 'high')
+                priority=rule.priority if rule.priority and rule.priority != 'normal' else priority,
+                additional_data=additional_data
+            )
+            provider.last_notification_status = 'success' if success else 'failure'
+            provider.last_notification_time = datetime.now(timezone.utc)
+            if success:
+                sent += 1
+            else:
+                logger.warning(f"Notification via {provider.name} failed for {event_type}: {error}")
+        except Exception as e:
+            logger.error(f"Notification via provider {provider.id} raised for {event_type}: {e}")
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        logger.error(f"Could not record notification delivery status: {e}")
+        db.session.rollback()
+
+    return sent
 
 
 class NotificationService:

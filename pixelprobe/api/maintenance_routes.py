@@ -11,6 +11,7 @@ from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState
 from pixelprobe.media_checker import PixelProbe
 from pixelprobe.auth import auth_required
 from pixelprobe.utils.helpers import ProgressTracker
+from pixelprobe.utils.validators import validate_time_budget
 from pixelprobe.services.maintenance_service import MaintenanceService
 from pixelprobe.progress_utils import get_file_changes_progress_redis
 
@@ -506,6 +507,16 @@ def check_file_changes():
     file_paths = data.get('file_paths', [])
     schedule_id = data.get('schedule_id')  # For healthcheck integration
 
+    # Time budget: explicit request value wins (manual runs are unlimited by
+    # default). Scheduled runs inherit their schedule's budget inside
+    # MaintenanceService, so every entry point resolves it identically.
+    time_budget_minutes = data.get('time_budget_minutes')
+    if time_budget_minutes is not None:
+        time_budget_minutes, budget_error = validate_time_budget(time_budget_minutes, 'file_changes')
+        if budget_error:
+            db.session.rollback()  # release the advisory lock
+            return {'error': budget_error}, 400
+
     # Create unique check ID
     check_id = str(uuid.uuid4())
 
@@ -555,7 +566,7 @@ def check_file_changes():
     app = current_app._get_current_object()
     current_file_changes_thread = threading.Thread(
         target=check_file_changes_async,
-        args=(app, check_id, file_paths, schedule_id)
+        args=(app, check_id, file_paths, schedule_id, time_budget_minutes)
     )
     current_file_changes_thread.start()
 
@@ -612,7 +623,7 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
         except Exception as commit_error:
             logger.error(f"Failed to update cleanup record on error: {str(commit_error)}")
 
-def check_file_changes_async(app, check_id, file_paths=None, schedule_id=None):
+def check_file_changes_async(app, check_id, file_paths=None, schedule_id=None, time_budget_minutes=None):
     """Async function to check file changes
 
     Args:
@@ -620,6 +631,8 @@ def check_file_changes_async(app, check_id, file_paths=None, schedule_id=None):
         check_id: Unique ID for this check
         file_paths: Optional list of specific file paths to check (if None, checks all files)
         schedule_id: Optional schedule ID for healthcheck integration
+        time_budget_minutes: Optional soft deadline; dispatch stops when it
+            expires and the rolling queue resumes at the next run
     """
     try:
         with app.app_context():
@@ -637,7 +650,9 @@ def check_file_changes_async(app, check_id, file_paths=None, schedule_id=None):
                     maintenance_service = MaintenanceService(app.config['SQLALCHEMY_DATABASE_URI'])
 
                     # Run the file changes check using the maintenance service logic with optional file_paths filter
-                    maintenance_service._run_file_changes_check(check_record.check_id, file_paths=file_paths, schedule_id=schedule_id)
+                    maintenance_service._run_file_changes_check(
+                        check_record.check_id, file_paths=file_paths, schedule_id=schedule_id,
+                        time_budget_minutes=time_budget_minutes)
 
     except Exception as e:
         logger.error(f"Error in check_file_changes_async: {str(e)}", exc_info=True)

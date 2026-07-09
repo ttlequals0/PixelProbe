@@ -72,9 +72,11 @@ class ExportService:
                 'Scan Date',
                 'Scan Status',
                 'Discovered Date',
-                'Marked as Good'
+                'Marked as Good',
+                'Bitrot Suspected',
+                'Bitrot Detected Date'
             ])
-            
+
             # Write data rows
             for result in results:
                 writer.writerow([
@@ -87,9 +89,11 @@ class ExportService:
                     result.corruption_details or '',
                     result.scan_date.isoformat() if result.scan_date else '',
                     getattr(result, 'scan_status', 'completed'),
-                    getattr(result, 'discovered_date', result.scan_date).isoformat() 
+                    getattr(result, 'discovered_date', result.scan_date).isoformat()
                         if getattr(result, 'discovered_date', result.scan_date) else '',
-                    'Yes' if result.marked_as_good else 'No'
+                    'Yes' if result.marked_as_good else 'No',
+                    'Yes' if result.bitrot_suspected else 'No',
+                    result.bitrot_detected_date.isoformat() if result.bitrot_detected_date else ''
                 ])
             
             # Prepare response
@@ -150,7 +154,9 @@ class ExportService:
                     'corruption_details': result.corruption_details,
                     'scan_date': result.scan_date.isoformat() if result.scan_date else None,
                     'scan_status': getattr(result, 'scan_status', 'completed'),
-                    'marked_as_good': result.marked_as_good
+                    'marked_as_good': result.marked_as_good,
+                    'bitrot_suspected': result.bitrot_suspected,
+                    'bitrot_detected_date': result.bitrot_detected_date.isoformat() if result.bitrot_detected_date else None
                 })
             
             return export_data

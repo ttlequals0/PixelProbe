@@ -339,6 +339,77 @@ def run_v2_6_53_migrations(db):
         logger.error(f"Migration v2.6.53 failed: {e}")
 
 
+def run_v2_6_60_migrations(db):
+    """Add scan_schedules.time_budget_minutes for budgeted integrity runs.
+
+    NULL = unlimited (current behavior). Only meaningful for
+    scan_type='file_changes'; the API rejects it on other types.
+    """
+    try:
+        with migration_connection(db) as conn:
+            exists = conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'scan_schedules' AND column_name = 'time_budget_minutes'"
+            )).fetchone()
+            if not exists:
+                logger.info("Adding column scan_schedules.time_budget_minutes (INTEGER)")
+                conn.execute(text(
+                    "ALTER TABLE scan_schedules ADD COLUMN time_budget_minutes INTEGER"
+                ))
+            conn.commit()
+            logger.info("v2.6.60 schedule budget migration completed")
+    except Exception as e:
+        logger.error(f"Migration v2.6.60 failed: {e}")
+
+
+def run_v2_6_61_migrations(db):
+    """Bitrot classification columns on scan_results.
+
+    bitrot_suspected: hash changed while mtime did not - flagged for review.
+    bitrot_detected_date/bitrot_details: permanent detection record.
+    bitrot_candidate_hash/bitrot_stable_checks: auto-expire state machine.
+    mtime_baseline_utc: false for all pre-upgrade rows, whose last_modified
+    was written as naive local time; bitrot classification requires a
+    trusted (UTC) baseline, so those rows re-baseline on first check.
+    """
+    columns = [
+        ("bitrot_suspected", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("bitrot_detected_date", "TIMESTAMP"),
+        ("bitrot_details", "TEXT"),
+        ("bitrot_candidate_hash", "VARCHAR(64)"),
+        ("bitrot_stable_checks", "INTEGER NOT NULL DEFAULT 0"),
+        ("mtime_baseline_utc", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ]
+    try:
+        with migration_connection(db) as conn:
+            for name, ddl in columns:
+                exists = conn.execute(text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'scan_results' AND column_name = :col"
+                ), {'col': name}).fetchone()
+                if not exists:
+                    logger.info(f"Adding column scan_results.{name}")
+                    conn.execute(text(
+                        f"ALTER TABLE scan_results ADD COLUMN {name} {ddl}"
+                    ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_scan_results_bitrot_suspected "
+                "ON scan_results(bitrot_suspected)"
+            ))
+            # Supports the rolling-queue fetch ordering exactly; without it
+            # every ~10k-row batch fetch is a full-table scan + top-N sort
+            # (~100 scans per run at 1M files).
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_scan_results_integrity_queue "
+                "ON scan_results (bitrot_suspected DESC, "
+                "last_integrity_check_date ASC NULLS FIRST, id ASC)"
+            ))
+            conn.commit()
+            logger.info("v2.6.61 bitrot classification migration completed")
+    except Exception as e:
+        logger.error(f"Migration v2.6.61 failed: {e}")
+
+
 def create_performance_indexes(db):
     """Create performance indexes"""
     indexes = [
@@ -429,6 +500,18 @@ def _run_all_migrations(db):
         run_v2_6_53_migrations(db)
     except Exception as e:
         logger.error(f"v2.6.53 migration failed: {e}")
+
+    logger.info("Running v2.6.60 migration (schedule time budget)...")
+    try:
+        run_v2_6_60_migrations(db)
+    except Exception as e:
+        logger.error(f"v2.6.60 migration failed: {e}")
+
+    logger.info("Running v2.6.61 migration (bitrot classification)...")
+    try:
+        run_v2_6_61_migrations(db)
+    except Exception as e:
+        logger.error(f"v2.6.61 migration failed: {e}")
 
     logger.info("Creating performance indexes...")
     try:

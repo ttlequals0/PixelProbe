@@ -8,6 +8,16 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// Single source of truth for a file's status badge (used by the desktop
+// table, mobile cards, and the details modal - keep them in lockstep)
+function fileStatus(file) {
+    if (file.marked_as_good) return { cls: 'success', text: 'Healthy' };
+    if (file.bitrot_suspected) return { cls: 'bitrot', text: 'Bitrot?' };
+    if (file.is_corrupted) return { cls: 'danger', text: 'Corrupted' };
+    if (file.has_warnings) return { cls: 'warning', text: 'Warning' };
+    return { cls: 'success', text: 'Healthy' };
+}
+
 // Theme Management
 class ThemeManager {
     constructor() {
@@ -233,6 +243,13 @@ class APIClient {
     // File operations
     async markAsGood(fileIds) {
         return this.request('/mark-as-good', {
+            method: 'POST',
+            body: JSON.stringify({ file_ids: fileIds })
+        });
+    }
+
+    async acceptBitrot(fileIds) {
+        return this.request('/bitrot/accept', {
             method: 'POST',
             body: JSON.stringify({ file_ids: fileIds })
         });
@@ -1170,6 +1187,9 @@ class TableManager {
                     case 'warning':
                         params.has_warnings = 'true';
                         break;
+                    case 'bitrot':
+                        params.bitrot_suspected = 'true';
+                        break;
                     case 'all':
                     default:
                         params.is_corrupted = 'all';
@@ -1230,8 +1250,9 @@ class TableManager {
     }
 
     renderMobileCard(file) {
-        const statusClass = file.marked_as_good ? 'success' : (file.is_corrupted ? 'danger' : (file.has_warnings ? 'warning' : 'success'));
-        const statusText = file.marked_as_good ? 'HEALTHY' : (file.is_corrupted ? 'CORRUPTED' : (file.has_warnings ? 'WARNING' : 'HEALTHY'));
+        const status = fileStatus(file);
+        const statusClass = status.cls;
+        const statusText = status.text.toUpperCase();
         
         return `
             <div class="result-card">
@@ -1275,6 +1296,11 @@ class TableManager {
                             <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
                                 <i class="fas fa-shield-alt"></i> Integrity Check
                             </a></li>
+                            ${file.bitrot_suspected ? `
+                            <li><a class="dropdown-item" href="#" onclick="app.acceptBitrot(${file.id}); return false;">
+                                <i class="fas fa-check-double"></i> Accept Current State
+                            </a></li>
+                            ` : ''}
                         </ul>
                     </div>
                     ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
@@ -1295,8 +1321,7 @@ class TableManager {
     }
 
     renderRow(file) {
-        const statusClass = file.marked_as_good ? 'success' : (file.is_corrupted ? 'danger' : (file.has_warnings ? 'warning' : 'success'));
-        const statusText = file.marked_as_good ? 'Healthy' : (file.is_corrupted ? 'Corrupted' : (file.has_warnings ? 'Warning' : 'Healthy'));
+        const { cls: statusClass, text: statusText } = fileStatus(file);
         
         return `
             <tr>
@@ -1328,6 +1353,11 @@ class TableManager {
                             <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
                                 <i class="fas fa-shield-alt"></i> Integrity Check
                             </a></li>
+                            ${file.bitrot_suspected ? `
+                            <li><a class="dropdown-item" href="#" onclick="app.acceptBitrot(${file.id}); return false;">
+                                <i class="fas fa-check-double"></i> Accept Current State
+                            </a></li>
+                            ` : ''}
                         </ul>
                     </div>
                     ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
@@ -2309,6 +2339,49 @@ class PixelProbeApp {
         } catch (error) {
             this.showNotification('Failed to mark file as good', 'error');
         }
+    }
+
+    async acceptBitrot(fileId) {
+        if (!confirm("Accept this file's current content as the new baseline? The bitrot flag will be cleared (the detection record is kept).")) {
+            return;
+        }
+        try {
+            await this.api.acceptBitrot([fileId]);
+            this.showNotification('Current state accepted as new baseline', 'success');
+            await this.table.loadData();
+        } catch (error) {
+            this.showNotification('Failed to accept current state', 'error');
+        }
+    }
+
+    renderBitrotDetails(file) {
+        if (!file.bitrot_suspected && !file.bitrot_detected_date) return '';
+        let details = {};
+        try { details = JSON.parse(file.bitrot_details || '{}'); } catch (e) { details = {}; }
+        const esc = (v) => this.escapeHtml(String(v == null || v === '' ? 'N/A' : v));
+        const rows = [
+            ['Detected', file.bitrot_detected_date ? new Date(file.bitrot_detected_date).toLocaleString() : null],
+            ['Baseline Hash', details.stored_hash],
+            ['Current Hash', details.current_hash || file.bitrot_candidate_hash],
+            ['Baseline mtime', details.stored_modified],
+            ['Current mtime', details.current_modified],
+            ['Baseline Size', details.stored_size],
+            ['Current Size', details.current_size],
+            ['Stable Checks', file.bitrot_stable_checks || 0]
+        ];
+        return `
+            <hr>
+            <h4>${file.bitrot_suspected ? 'Bitrot Suspected' : 'Past Bitrot Detection (resolved)'}</h4>
+            <p>Content hash changed while the file's modification time did not - possible silent corruption. Review the file, then accept its current state or restore from backup and rescan.</p>
+            <table class="bitrot-details-table">
+                ${rows.map(([label, value]) => `<tr><th>${esc(label)}:</th><td>${esc(value)}</td></tr>`).join('')}
+            </table>
+            ${file.bitrot_suspected ? `
+                <button class="btn btn-sm btn-primary" onclick="app.acceptBitrot(${Number(file.id)})">
+                    <i class="fas fa-check-double"></i> Accept Current State
+                </button>
+            ` : ''}
+        `;
     }
 
     async markSelectedAsGood() {
@@ -3985,10 +4058,11 @@ class PixelProbeApp {
         modalBody.innerHTML = `
             <div class="scan-output-details">
                 <h4>File: ${this.escapeHtml(file.file_path)}</h4>
-                <p><strong>Status:</strong> ${file.marked_as_good ? 'Healthy' : (file.is_corrupted ? 'Corrupted' : (file.has_warnings ? 'Warning' : 'Healthy'))}</p>
+                <p><strong>Status:</strong> ${fileStatus(file).text}</p>
                 <p><strong>Tool:</strong> ${file.scan_tool || 'N/A'}</p>
                 <p><strong>Scanned:</strong> ${file.scan_date ? new Date(file.scan_date).toLocaleString() : 'N/A'}</p>
                 ${file.last_integrity_check_date ? `<p><strong>Last Integrity Check:</strong> ${new Date(file.last_integrity_check_date).toLocaleString()}</p>` : ''}
+                ${this.renderBitrotDetails(file)}
                 <hr>
                 ${detailsHtml}
             </div>
@@ -4094,6 +4168,7 @@ class PixelProbeApp {
                             <div class="schedule-info">
                                 <p><strong>Schedule:</strong> ${this.escapeHtml(schedule.cron_expression)}</p>
                                 <p><strong>Type:</strong> ${this.formatScanType(schedule.scan_type || 'normal')}</p>
+                                ${schedule.time_budget_minutes ? `<p><strong>Time Budget:</strong> ${schedule.time_budget_minutes} min/run</p>` : ''}
                                 <p><strong>Next Run:</strong> ${nextRun}</p>
                                 <p><strong>Last Run:</strong> ${lastRun}</p>
                                 ${schedule.scan_paths && schedule.scan_paths.length > 0 ? `<p><strong>Paths:</strong> ${this.escapeHtml(schedule.scan_paths.join(', '))}</p>` : ''}
@@ -4115,10 +4190,11 @@ class PixelProbeApp {
         const modal = document.querySelector('#add-schedule-modal');
         if (modal) {
             modal.style.display = 'block';
-            
+
             // Reset form
             const form = document.querySelector('#add-schedule-form');
             if (form) form.reset();
+            this.toggleBudgetInput();
         }
     }
 
@@ -4150,6 +4226,12 @@ class PixelProbeApp {
         }
     }
 
+    toggleBudgetInput(prefix = '') {
+        const scanType = document.querySelector(`#${prefix}scan-type`).value;
+        document.querySelector(`#${prefix}budget-input`).style.display =
+            scanType === 'file_changes' ? 'block' : 'none';
+    }
+
     async showEditSchedule(scheduleId) {
         try {
             // Load schedule data
@@ -4165,6 +4247,8 @@ class PixelProbeApp {
             document.getElementById('edit-schedule-paths').value = schedule.scan_paths ? schedule.scan_paths.join('\n') : '';
             document.getElementById('edit-force-rescan').checked = schedule.force_rescan || false;
             document.getElementById('edit-is-active').checked = schedule.is_active !== undefined ? schedule.is_active : true;
+            document.getElementById('edit-time-budget-minutes').value = schedule.time_budget_minutes || '';
+            this.toggleBudgetInput('edit-');
 
             // Determine if it's cron or interval
             const cronExpression = schedule.cron_expression || '';
@@ -4220,6 +4304,9 @@ class PixelProbeApp {
             }
 
             const scanPaths = paths.trim() ? paths.split('\n').map(p => p.trim()).filter(p => p) : [];
+            const budgetValue = document.getElementById('edit-time-budget-minutes').value;
+            const timeBudget = (scanType === 'file_changes' && budgetValue)
+                ? parseInt(budgetValue, 10) : null;
 
             const response = await fetch(`/api/schedules/${scheduleId}`, {
                 method: 'PUT',
@@ -4230,7 +4317,8 @@ class PixelProbeApp {
                     scan_type: scanType,
                     scan_paths: scanPaths,
                     force_rescan: forceRescan,
-                    is_active: isActive
+                    is_active: isActive,
+                    time_budget_minutes: timeBudget
                 })
             });
 
@@ -4607,7 +4695,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const pathsText = document.querySelector('#schedule-paths').value;
             const scanPaths = pathsText.trim() ? pathsText.split('\n').filter(p => p.trim()) : [];
             const scanType = document.querySelector('#scan-type').value;
-            
+            const budgetValue = document.querySelector('#time-budget-minutes').value;
+            const timeBudget = (scanType === 'file_changes' && budgetValue)
+                ? parseInt(budgetValue, 10) : null;
+
             try {
                 const response = await fetch('/api/schedules', {
                     method: 'POST',
@@ -4616,7 +4707,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         name: name,
                         cron_expression: cronExpression,
                         scan_paths: scanPaths,
-                        scan_type: scanType
+                        scan_type: scanType,
+                        time_budget_minutes: timeBudget
                     })
                 });
                 

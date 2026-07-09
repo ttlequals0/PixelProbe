@@ -966,6 +966,11 @@ input:checked + .toggle-slider:before {
     color: var(--danger-color);
 }
 
+.badge-bitrot {
+    background-color: rgba(111, 66, 193, 0.12);
+    color: #6f42c1;
+}
+
 /* Scan Output Modal */
 .scan-output-details h4 {
     color: var(--text-primary);

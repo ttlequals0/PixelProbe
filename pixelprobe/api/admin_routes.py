@@ -9,6 +9,8 @@ from apscheduler.triggers.cron import CronTrigger
 from pixelprobe.models import db, ScanResult, IgnoredErrorPattern, ScanConfiguration, ScanSchedule
 from pixelprobe.scheduler import MediaScheduler
 from pixelprobe.utils.security import validate_json_input, AuditLogger, validate_directory_path
+from pixelprobe.utils.validators import validate_time_budget
+from pixelprobe.utils.integrity import adopt_bitrot_baseline
 from pixelprobe.auth import auth_required
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,20 @@ def calculate_next_run(cron_expression: str, last_run=None):
         return trigger.get_next_fire_time(None, now)
 
 
+def _parse_file_ids(data):
+    """Coerce and bound the file_ids list shared by batch file endpoints.
+
+    Returns (file_ids, error_response).
+    """
+    try:
+        file_ids = [int(fid) for fid in data.get('file_ids', [])]
+    except (ValueError, TypeError):
+        return None, ({'error': 'Invalid file ID format'}, 400)
+    if len(file_ids) > 1000:  # Prevent excessive updates
+        return None, ({'error': 'Too many file IDs (max 1000)'}, 400)
+    return file_ids, None
+
+
 @admin_bp.route('/mark-as-good', methods=['POST'])
 @rate_limit("10 per minute")
 @auth_required
@@ -85,17 +101,10 @@ def calculate_next_run(cron_expression: str, last_run=None):
 def mark_as_good():
     """Mark files as good/healthy"""
     data = request.get_json()
-    file_ids = data.get('file_ids', [])
-    
-    # Validate file IDs are integers
-    try:
-        file_ids = [int(fid) for fid in file_ids]
-    except (ValueError, TypeError):
-        return {'error': 'Invalid file ID format'}, 400
-    
-    if len(file_ids) > 1000:  # Prevent excessive updates
-        return {'error': 'Too many file IDs (max 1000)'}, 400
-    
+    file_ids, id_error = _parse_file_ids(data)
+    if id_error:
+        return id_error
+
     try:
         for file_id in file_ids:
             result = db.session.get(ScanResult, file_id)
@@ -117,6 +126,66 @@ def mark_as_good():
         logger.error(f"Error marking files as good: {str(e)}", exc_info=True)
         db.session.rollback()
         return {'error': 'Internal server error'}, 500
+
+@admin_bp.route('/bitrot/accept', methods=['POST'])
+@rate_limit("10 per minute")
+@auth_required
+@validate_json_input({
+    'file_ids': {'required': True, 'type': list}
+})
+def accept_bitrot_current_state():
+    """Accept a bitrot-suspected file's current content as the new baseline.
+
+    Adopts the candidate hash and current on-disk mtime, clears the flag and
+    stability counter. bitrot_detected_date/bitrot_details are preserved so
+    files that ever tripped bitrot stay queryable (dying-disk signal).
+    """
+    data = request.get_json()
+    file_ids, id_error = _parse_file_ids(data)
+    if id_error:
+        return id_error
+
+    try:
+        rows = ScanResult.query.filter(ScanResult.id.in_(file_ids)).all() if file_ids else []
+        rows_by_id = {row.id: row for row in rows}
+        accepted = 0
+        skipped = []
+        for file_id in file_ids:
+            result = rows_by_id.get(file_id)
+            if not result or not result.bitrot_suspected:
+                skipped.append(file_id)
+                continue
+
+            # Baseline mtime: the one recorded when the candidate hash was
+            # computed. A fresh os.stat could pair the candidate hash with a
+            # NEWER mtime if the file changed again after the last check,
+            # storing a baseline pair that never described real content. If
+            # no recorded mtime exists the row re-baselines its mtime on the
+            # next hash-match integrity check.
+            mtime = None
+            try:
+                details = json.loads(result.bitrot_details or '{}')
+                if details.get('current_modified'):
+                    mtime = datetime.fromisoformat(details['current_modified'])
+            except (ValueError, TypeError):
+                mtime = None
+
+            adopt_bitrot_baseline(result, mtime)
+            accepted += 1
+            logger.info(f"Accepted current state for bitrot-suspected file: {result.file_path}")
+            AuditLogger.log_action('bitrot_accept', {'file_id': file_id, 'file_path': result.file_path})
+
+        db.session.commit()
+        return {
+            'message': f'Accepted current state for {accepted} file(s)',
+            'accepted': accepted,
+            'skipped': skipped
+        }
+    except Exception as e:
+        logger.error(f"Error accepting bitrot state: {str(e)}", exc_info=True)
+        db.session.rollback()
+        return {'error': 'Internal server error'}, 500
+
 
 @admin_bp.route('/ignored-patterns')
 @auth_required
@@ -277,25 +346,39 @@ def get_schedule(schedule_id):
     schedule = db.get_or_404(ScanSchedule, schedule_id)
     return jsonify(schedule.to_dict())
 
+def _validate_time_budget(data, scan_type):
+    """Validate time_budget_minutes from a schedule payload. Returns (value, error_response)."""
+    value, error = validate_time_budget(data.get('time_budget_minutes'), scan_type)
+    if error:
+        return None, ({'error': error}, 400)
+    return value, None
+
+
 @admin_bp.route('/schedules', methods=['POST'])
 @auth_required
 def create_schedule():
     """Create a new scan schedule"""
     data = request.get_json()
-    
+
     try:
         # Check for duplicate name
         name = data.get('name', 'Unnamed Schedule')
         existing = ScanSchedule.query.filter_by(name=name, is_active=True).first()
         if existing:
             return {'error': f'Schedule with name "{name}" already exists'}, 400
-        
+
+        scan_type = data.get('scan_type', 'full')
+        time_budget, budget_error = _validate_time_budget(data, scan_type)
+        if budget_error:
+            return budget_error
+
         schedule = ScanSchedule(
             name=name,
             cron_expression=data['cron_expression'],
             scan_paths=json.dumps(data.get('scan_paths', [])),
-            scan_type=data.get('scan_type', 'full'),
+            scan_type=scan_type,
             force_rescan=data.get('force_rescan', False),
+            time_budget_minutes=time_budget,
             is_active=True,
             created_at=datetime.now(timezone.utc)
         )
@@ -333,12 +416,23 @@ def update_schedule(schedule_id):
         new_cron = data.get('cron_expression', schedule.cron_expression)
         cron_changed = new_cron != schedule.cron_expression
 
+        new_scan_type = data.get('scan_type', schedule.scan_type)
+        if 'time_budget_minutes' in data:
+            time_budget, budget_error = _validate_time_budget(data, new_scan_type)
+            if budget_error:
+                return budget_error
+            schedule.time_budget_minutes = time_budget
+        elif new_scan_type != 'file_changes' and schedule.time_budget_minutes is not None:
+            # Type changed away from file_changes: the budget no longer applies
+            logger.info(f"Clearing time_budget_minutes on schedule {schedule_id} (scan_type now {new_scan_type})")
+            schedule.time_budget_minutes = None
+
         # Update fields
         schedule.name = data.get('name', schedule.name)
         schedule.cron_expression = new_cron
         if 'scan_paths' in data:
             schedule.scan_paths = json.dumps(data['scan_paths'])
-        schedule.scan_type = data.get('scan_type', schedule.scan_type)
+        schedule.scan_type = new_scan_type
         schedule.force_rescan = data.get('force_rescan', schedule.force_rescan)
         schedule.is_active = new_is_active
 

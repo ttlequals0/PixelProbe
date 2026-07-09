@@ -3,6 +3,7 @@ Maintenance service for cleanup and file monitoring operations
 """
 
 import os
+import json
 import threading
 import time
 import logging
@@ -13,10 +14,12 @@ import uuid
 
 from celery import states
 from celery.exceptions import TimeoutError as CeleryTimeoutError
-from sqlalchemy import text
+from sqlalchemy import text, or_
 from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
-from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState, ScanReport, LogEntry, AppConfig
+from pixelprobe.models import db, ScanResult, ScanSchedule, CleanupState, FileChangesState, ScanReport, LogEntry, AppConfig
+from pixelprobe.services.notification_service import dispatch_event
 from pixelprobe.utils.helpers import ProgressTracker, env_int
+from pixelprobe.utils.integrity import adopt_bitrot_baseline
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
 from pixelprobe.progress_utils import (
     update_file_changes_progress_redis,
@@ -45,6 +48,23 @@ INTEGRITY_TASK_TIMEOUT_SECS = int(
 # unreadable) and is abandoned as unverifiable - never deleted - so the
 # producer loop cannot pin at max concurrency and spin forever.
 CLEANUP_TASK_TIMEOUT_SECS = env_int('CLEANUP_TASK_TIMEOUT_SECS', 600, floor=60)
+
+# Consecutive stable-hash integrity checks (plus a clean rescan) required
+# before a bitrot flag auto-expires and the stable content becomes the new
+# baseline. Override via the BITROT_STABLE_CHECKS_TO_EXPIRE environment
+# variable.
+BITROT_STABLE_CHECKS_TO_EXPIRE = env_int('BITROT_STABLE_CHECKS_TO_EXPIRE', 2, floor=1)
+
+
+def _size_tier(size_bytes):
+    """Concurrency tier for a file size; must match the MAX_CONCURRENT_* gating."""
+    if size_bytes < 10 * 1024 * 1024:
+        return 'small'
+    if size_bytes < 100 * 1024 * 1024:
+        return 'medium'
+    if size_bytes < 1024 * 1024 * 1024:
+        return 'large'
+    return 'huge'
 
 
 def forget_task_result(task):
@@ -170,6 +190,70 @@ def safe_task_get(task, timeout=1, max_retries=5, base_delay=1.0):
             else:
                 logger.error(f"Failed to get task result after {max_retries} attempts: {type(e).__name__}: {e}")
                 raise
+
+
+def fetch_integrity_batch(file_paths, run_watermark, excluded_ids, batch_size,
+                          largest_first=False):
+    """Fetch the stalest slice of the integrity queue as plain dicts.
+
+    Queue order: never-checked files first (NULL last_integrity_check_date),
+    then oldest check date, id as tiebreak. Rows stamped at or after
+    run_watermark were already processed by this run and are skipped (the
+    table never empties, so fetch-until-empty alone would loop forever).
+    excluded_ids covers rows the ordering cannot exclude: in-flight tasks and
+    rows whose timestamp write failed, neither of which have a committed
+    fresh timestamp yet.
+
+    Returned dicts are sorted smallest-first by default: small files backfill
+    the wide small-file concurrency slots while the few large-file slots
+    grind. Budgeted runs pass largest_first=True so big files start hashing
+    early in the window instead of at the deadline.
+    Plain dicts (not ORM rows) are immune to session expiration during the
+    long-running producer loop and to concurrent row deletion (v2.5.61).
+    """
+    query = db.session.query(
+        ScanResult.id,
+        ScanResult.file_path,
+        ScanResult.file_hash,
+        ScanResult.file_size,
+        ScanResult.last_modified,
+        ScanResult.mtime_baseline_utc,
+        ScanResult.bitrot_suspected,
+        ScanResult.bitrot_candidate_hash
+    ).filter(
+        or_(
+            ScanResult.last_integrity_check_date.is_(None),
+            ScanResult.last_integrity_check_date < run_watermark
+        )
+    )
+    if file_paths:
+        query = query.filter(ScanResult.file_path.in_(file_paths))
+    if excluded_ids:
+        query = query.filter(ScanResult.id.notin_(excluded_ids))
+    rows = query.order_by(
+        # Flagged files jump the queue so auto-expire resolves in a few runs
+        # instead of a few full sweep cycles.
+        ScanResult.bitrot_suspected.desc(),
+        ScanResult.last_integrity_check_date.asc().nullsfirst(),
+        ScanResult.id.asc()
+    ).limit(batch_size).all()
+    batch = [
+        {
+            'id': r.id,
+            'file_path': r.file_path,
+            'file_hash': r.file_hash,
+            'file_size': r.file_size,
+            'last_modified': r.last_modified,
+            'mtime_baseline_utc': r.mtime_baseline_utc,
+            'bitrot_suspected': r.bitrot_suspected,
+            'bitrot_candidate_hash': r.bitrot_candidate_hash
+        }
+        for r in rows
+    ]
+    batch.sort(key=lambda x: x['file_size'] if x['file_size'] else 0,
+               reverse=largest_first)
+    return batch
+
 
 class MaintenanceService:
     """Service for maintenance operations like cleanup and file monitoring"""
@@ -748,7 +832,6 @@ class MaintenanceService:
             # Store the list of orphaned files in directories_scanned field as JSON
             # This field is repurposed for cleanup reports to store the orphaned files list
             if orphaned_files_list:
-                import json
                 report.directories_scanned = json.dumps(orphaned_files_list)
 
             db.session.add(report)
@@ -771,16 +854,31 @@ class MaintenanceService:
             # Don't fail the cleanup operation if report creation fails
             return None
     
-    def _run_file_changes_check(self, check_id: str, file_paths=None, schedule_id=None):
+    def _run_file_changes_check(self, check_id: str, file_paths=None, schedule_id=None,
+                                time_budget_minutes=None):
         """Run the file changes check operation
 
         Args:
             check_id: Unique ID for this check
             file_paths: Optional list of specific file paths to check (if None, checks all files)
             schedule_id: Optional schedule ID for healthcheck integration
+            time_budget_minutes: Optional soft deadline. When it expires, no
+                new hash tasks are dispatched; in-flight tasks drain (still
+                stamping last_integrity_check_date) and the run completes.
+                The rolling queue resumes at the next run.
         """
         # Store schedule_id for report creation
         self._file_changes_schedule_id = schedule_id
+
+        # Resolve the budget here, not in the HTTP route, so every entry point
+        # (scheduler-triggered, manual API, service-level) honors a schedule's
+        # configured budget. An explicit argument always wins.
+        if time_budget_minutes is None and schedule_id:
+            schedule = db.session.get(ScanSchedule, schedule_id)
+            if schedule and schedule.time_budget_minutes:
+                time_budget_minutes = schedule.time_budget_minutes
+                logger.info(f"Using schedule {schedule_id} time budget: {time_budget_minutes} minutes")
+
         try:
             # Use READ COMMITTED isolation level to reduce lock contention
             # This allows reads to see committed data without holding locks
@@ -829,55 +927,35 @@ class MaintenanceService:
 
             logger.info(f"Starting Phase 2a: parallel hash calculation for {total_files} files using Celery workers")
 
-            # Import Celery task
+            # Imported here, not at module top: tasks.py pulls in the Celery
+            # app (and on the worker path, the Flask app), which must not load
+            # on service import
             from pixelprobe.tasks import calculate_file_hash_task
-            from celery import group
 
-            # Track dispatched tasks and changed files
-            task_results = []
+            # Track changed files for the report
             changed_files = []
 
-            # OPTIMIZATION: Load all files at once (like cleanup does) to avoid pagination issues
-            # This is more memory-intensive but eliminates the progressive slowdown problem
-            # with ID-based pagination on large datasets
-            logger.info(f"Loading all {total_files} files from database in a single query...")
+            # Rolling integrity queue: instead of loading every row into
+            # memory in one query (hundreds of MB at 1M+ files), the queue is
+            # re-fetched in ordered batches, stalest first. Files are stamped
+            # with last_integrity_check_date on ANY terminal outcome, pushing
+            # them behind run_watermark, so a crashed or cancelled run resumes
+            # where it left off by construction.
+            batch_size = env_int('INTEGRITY_BATCH_SIZE', 10000, floor=100)
+            failed_stamp_ids = set()
+            timestamp_write_failures = 0
+            dispatch_failures = 0
+            run_watermark = datetime.now(timezone.utc)
 
-            # Get database entries - either all or filtered by file_paths (same as cleanup)
-            # CRITICAL FIX v2.5.61: Load only needed columns as dictionaries to avoid
-            # detached instance errors during long-running scans (20+ hours for 1M+ files).
-            # ORM objects held in memory get expired by db.session.commit() calls, and if
-            # concurrent jobs delete rows, subsequent attribute access crashes with
-            # "Instance has been deleted" errors.
-            if file_paths:
-                results_query = db.session.query(
-                    ScanResult.id,
-                    ScanResult.file_path,
-                    ScanResult.file_hash,
-                    ScanResult.file_size,
-                    ScanResult.last_modified
-                ).filter(ScanResult.file_path.in_(file_paths)).all()
-                logger.info(f"Loaded {len(results_query)} specific files from database")
-            else:
-                results_query = db.session.query(
-                    ScanResult.id,
-                    ScanResult.file_path,
-                    ScanResult.file_hash,
-                    ScanResult.file_size,
-                    ScanResult.last_modified
-                ).all()
-                logger.info(f"Loaded all {len(results_query)} files from database")
-
-            # Convert to list of dicts immediately - immune to session expiration
-            all_results = [
-                {
-                    'id': r.id,
-                    'file_path': r.file_path,
-                    'file_hash': r.file_hash,
-                    'file_size': r.file_size,
-                    'last_modified': r.last_modified
-                }
-                for r in results_query
-            ]
+            # Soft budget deadline: stops NEW dispatch only; in-flight tasks
+            # drain to completion, so overshoot is bounded by the size-aware
+            # concurrency slots. Budgeted runs dispatch largest-first within
+            # each batch so a huge file is not started at the last minute.
+            budget_deadline = None
+            budget_expired = False
+            if time_budget_minutes:
+                budget_deadline = time.monotonic() + time_budget_minutes * 60
+                logger.info(f"Integrity run budget: {time_budget_minutes} minutes")
 
             # CRITICAL FIX v2.4.60: Adaptive memory-aware task management
             # Problem: Files vary from 1KB to 40GB, systems vary in resources
@@ -922,6 +1000,8 @@ class MaintenanceService:
             MAX_CONCURRENT_MEDIUM = min(max_safe_tasks // 10, int(os.environ.get('MAX_CONCURRENT_MEDIUM', '500')))
             MAX_CONCURRENT_LARGE = min(max_safe_tasks // 100, int(os.environ.get('MAX_CONCURRENT_LARGE', '50')))
             MAX_CONCURRENT_HUGE = min(max_safe_tasks // 1000, int(os.environ.get('MAX_CONCURRENT_HUGE', '5')))
+            tier_limits = {'small': MAX_CONCURRENT_SMALL, 'medium': MAX_CONCURRENT_MEDIUM,
+                           'large': MAX_CONCURRENT_LARGE, 'huge': MAX_CONCURRENT_HUGE}
 
             # Track active tasks
             active_tasks = []
@@ -929,30 +1009,23 @@ class MaintenanceService:
             files_queued = 0
             files_abandoned = 0
             last_progress_update = 0
-            task_results = []
             last_heartbeat_time = time.time()
 
-            logger.info(f"Processing {len(all_results)} files with size-aware batching...")
+            logger.info(f"Processing {total_files} files with size-aware batching (queue batch size {batch_size})...")
 
             # Set initial progress to show we're starting
             file_changes_record.phase_current = 0
-            file_changes_record.phase_total = len(all_results)
+            file_changes_record.phase_total = total_files
             file_changes_record.files_processed = 0
-            file_changes_record.progress_message = f'Phase 2 of 3: Starting to process {len(all_results):,} files...'
+            file_changes_record.progress_message = f'Phase 2 of 3: Starting to process {total_files:,} files...'
             db.session.commit()
             # Force a small delay to allow UI to see initial progress
             time.sleep(0.1)
 
-            # Sort files by size for better batch management (small files first)
-            # Handle NULL file_size by treating as 0 for sorting
-            all_results_sorted = sorted(all_results, key=lambda x: x['file_size'] if x['file_size'] else 0)
-
-            total_count = len(all_results)
-
             def write_progress_snapshot(set_heartbeat: bool):
-                pct = int((total_files_processed / total_count * 100)) if total_count > 0 else 0
+                pct = int((total_files_processed / total_files * 100)) if total_files > 0 else 0
                 msg = (
-                    f'Processing files: {total_files_processed:,}/{total_count:,} ({pct}%) - '
+                    f'Processing files: {total_files_processed:,}/{total_files:,} ({pct}%) - '
                     f'{len(changed_files)} changes found, {len(active_tasks)} active tasks'
                 )
                 if set_heartbeat:
@@ -964,13 +1037,89 @@ class MaintenanceService:
                 update_file_changes_progress_redis(
                     check_id=check_id,
                     files_processed=total_files_processed,
-                    total_files=total_count,
+                    total_files=total_files,
                     phase=file_changes_record.phase or '',
                     progress_message=msg,
                 )
 
+            # Terminal-outcome buffers, flushed in bulk before each queue
+            # re-fetch and at the end of the run: two UPDATE statements per
+            # flush instead of one SELECT + UPDATE per file (the dominant DB
+            # chatter at 1M-file scale).
+            stamp_ids = []    # rotate to the back of the queue
+            seen_ids = []     # file was readable again -> restore file_exists
+            rebaseline = []   # (id, mtime_iso): first check after the UTC fix
+
+            def flush_stamps():
+                # A row whose stamp fails would re-queue at the front forever,
+                # so failed ids are excluded from further fetches and counted.
+                nonlocal timestamp_write_failures
+                if not (stamp_ids or seen_ids or rebaseline):
+                    return
+                try:
+                    if stamp_ids:
+                        db.session.query(ScanResult).filter(
+                            ScanResult.id.in_(stamp_ids)
+                        ).update({'last_integrity_check_date': datetime.now(timezone.utc)},
+                                 synchronize_session=False)
+                    if seen_ids:
+                        # A file we just hashed exists, whatever a past run
+                        # recorded (recovers rows stranded by a mount outage)
+                        db.session.query(ScanResult).filter(
+                            ScanResult.id.in_(seen_ids),
+                            ScanResult.file_exists == False
+                        ).update({'file_exists': True}, synchronize_session=False)
+                    for file_id, mtime_iso in rebaseline:
+                        # Hash matched but the stored mtime predates the UTC
+                        # fix: refresh it so bitrot classification can trust
+                        # this baseline from the next check onward.
+                        file_record = db.session.get(ScanResult, file_id)
+                        if file_record and not file_record.bitrot_suspected:
+                            file_record.last_modified = datetime.fromisoformat(mtime_iso)
+                            file_record.mtime_baseline_utc = True
+                    db.session.commit()
+                except Exception as e:
+                    db.session.rollback()
+                    timestamp_write_failures += len(stamp_ids)
+                    failed_stamp_ids.update(stamp_ids)
+                    logger.error(f"Failed to flush {len(stamp_ids)} integrity stamps: {e}")
+                finally:
+                    stamp_ids.clear()
+                    seen_ids.clear()
+                    rebaseline.clear()
+
+            def fetch_next_batch():
+                # Flush first so completed files' fresh timestamps are visible
+                # to the ordering and they drop out of the queue front.
+                flush_stamps()
+                db.session.commit()
+                in_flight = {t['id'] for t in active_tasks}
+                return fetch_integrity_batch(
+                    file_paths, run_watermark,
+                    in_flight | failed_stamp_ids, batch_size,
+                    largest_first=budget_deadline is not None
+                )
+
+            pending = []
             file_index = 0
-            while file_index < len(all_results_sorted) or active_tasks:
+            queue_exhausted = False
+            # A refill is productive only after a dispatch, a completion, or a
+            # failure-exclusion changed the queue; otherwise re-fetching would
+            # return the same rows in a tight query loop (e.g. every size tier
+            # saturated, or a broker outage failing every dispatch).
+            refill_allowed = True
+            while True:
+                # Refill from the queue once the current batch is fully dispatched
+                if file_index >= len(pending) and not queue_exhausted and refill_allowed:
+                    pending = fetch_next_batch()
+                    file_index = 0
+                    refill_allowed = False
+                    if not pending:
+                        queue_exhausted = True
+
+                if queue_exhausted and file_index >= len(pending) and not active_tasks:
+                    break
+
                 # Heartbeat every 10 s: write-through to PostgreSQL + Redis so the
                 # UI sees motion even when the periodic-delta block below hasn't
                 # fired in the current iteration. phase_total is invariant for
@@ -979,16 +1128,29 @@ class MaintenanceService:
                 if current_time - last_heartbeat_time >= 10:
                     write_progress_snapshot(set_heartbeat=True)
                     logger.info(
-                        f"Progress: {total_files_processed}/{total_count} processed, "
-                        f"{len(active_tasks)} active, {len(all_results_sorted) - file_index} remaining, "
+                        f"Progress: {total_files_processed}/{total_files} processed, "
+                        f"{len(active_tasks)} active, {len(pending) - file_index} remaining in batch, "
                         f"{files_abandoned} abandoned"
                     )
                     last_heartbeat_time = current_time
 
                 # Check for cancellation
                 if self._is_cancelled_file_changes(file_changes_record):
-                    logger.info(f"Cancelled at {total_files_processed}/{len(all_results)} files")
+                    logger.info(f"Cancelled at {total_files_processed}/{total_files} files")
                     break
+
+                # Budget deadline: stop dispatching, let in-flight tasks drain
+                # (they still stamp timestamps), then complete normally.
+                if budget_deadline and not budget_expired and time.monotonic() >= budget_deadline:
+                    budget_expired = True
+                    pending = []
+                    file_index = 0
+                    queue_exhausted = True
+                    logger.info(
+                        f"Integrity run budget of {time_budget_minutes} minutes reached at "
+                        f"{total_files_processed}/{total_files} files; draining "
+                        f"{len(active_tasks)} in-flight tasks"
+                    )
 
                 # Collect completed tasks and free up slots
                 still_active = []
@@ -998,17 +1160,19 @@ class MaintenanceService:
                         try:
                             result = safe_task_get(task, timeout=1)
                             total_files_processed += 1
+                            refill_allowed = True
 
-                            # Update last integrity check timestamp for this file
-                            try:
-                                file_record = ScanResult.query.filter_by(file_path=result['file_path']).first()
-                                if file_record:
-                                    file_record.last_integrity_check_date = datetime.now(timezone.utc)
-                            except Exception as e:
-                                logger.error(f"Error updating last_integrity_check_date for {result['file_path']}: {e}")
+                            # Terminal outcome: rotate to the back of the queue
+                            stamp_ids.append(result['file_id'])
+                            if result.get('current_hash'):
+                                seen_ids.append(result['file_id'])
+                                if (result['change_type'] == 'unchanged'
+                                        and not task_info.get('mtime_trusted')
+                                        and result.get('current_modified')):
+                                    rebaseline.append((result['file_id'], result['current_modified']))
 
                             # For single file scans, update progress immediately so UI can see it
-                            if len(all_results) == 1:
+                            if total_files == 1:
                                 file_changes_record.phase_current = total_files_processed
                                 file_changes_record.phase_total = 1
                                 file_changes_record.progress_message = f'Phase 2 of 3: Completed checking file'
@@ -1032,24 +1196,37 @@ class MaintenanceService:
 
                             if result.get('changed'):
                                 changed_files.append({
+                                    'file_id': result['file_id'],
                                     'file_path': result['file_path'],
                                     'change_type': result['change_type'],
                                     'stored_hash': result['stored_hash'],
-                                    'current_hash': result['current_hash']
+                                    'current_hash': result['current_hash'],
+                                    'stored_modified': result.get('stored_modified'),
+                                    'current_modified': result.get('current_modified'),
+                                    'stored_size': result.get('stored_size'),
+                                    'current_size': result.get('current_size')
                                 })
                         except Exception as e:
                             logger.error(f"Error getting task result: {e}")
+                            # Unreadable result is still a terminal outcome for
+                            # this run - stamp it or it re-queues at the front.
+                            if task_info.get('id') is not None:
+                                stamp_ids.append(task_info['id'])
+                            refill_allowed = True
                         finally:
                             forget_task_result(task)
                     elif abandon_if_stuck(task_info, INTEGRITY_TASK_TIMEOUT_SECS, 'integrity'):
                         files_abandoned += 1
+                        if task_info.get('id') is not None:
+                            stamp_ids.append(task_info['id'])
+                        refill_allowed = True
                     else:
                         still_active.append(task_info)
                 active_tasks = still_active
 
                 # Submit new tasks based on available slots
-                while file_index < len(all_results_sorted):
-                    result = all_results_sorted[file_index]
+                while file_index < len(pending):
+                    result = pending[file_index]
 
                     # Use file_size from DB (it's a BigInteger field, might be NULL)
                     file_size = result['file_size'] if result['file_size'] else 0
@@ -1068,14 +1245,8 @@ class MaintenanceService:
                                 file_size = 10 * 1024 * 1024  # 10MB default
 
                     # Determine max concurrent based on file size
-                    if file_size < 10 * 1024 * 1024:  # < 10MB
-                        max_concurrent = MAX_CONCURRENT_SMALL
-                    elif file_size < 100 * 1024 * 1024:  # < 100MB
-                        max_concurrent = MAX_CONCURRENT_MEDIUM
-                    elif file_size < 1024 * 1024 * 1024:  # < 1GB
-                        max_concurrent = MAX_CONCURRENT_LARGE
-                    else:  # >= 1GB
-                        max_concurrent = MAX_CONCURRENT_HUGE
+                    tier = _size_tier(file_size)
+                    max_concurrent = tier_limits[tier]
 
                     # Count how many tasks of this size category are active
                     size_category_active = sum(1 for t in active_tasks
@@ -1083,27 +1254,40 @@ class MaintenanceService:
 
                     # Check if we can submit this task
                     if len(active_tasks) >= max_concurrent or size_category_active >= max_concurrent:
-                        # Wait for tasks to complete before submitting more
-                        break
+                        # This size tier is saturated: skip past it instead of
+                        # head-of-line blocking the whole batch. Under the
+                        # budgeted largest-first ordering the huge tier would
+                        # otherwise cap the entire window at MAX_CONCURRENT_HUGE
+                        # while thousands of small-file slots sit idle. Skipped
+                        # files are never stamped, so later fetches return them.
+                        file_index += 1
+                        while (file_index < len(pending)
+                               and _size_tier(pending[file_index]['file_size'] or 0) == tier):
+                            file_index += 1
+                        continue
 
                     # Submit the task
                     stored_modified_iso = result['last_modified'].isoformat() if result['last_modified'] else None
                     try:
                         task_result = calculate_file_hash_task.apply_async(
-                            args=[result['id'], result['file_path'], result['file_hash'], stored_modified_iso]
+                            args=[result['id'], result['file_path'], result['file_hash'], stored_modified_iso,
+                                  result['file_size'], bool(result['mtime_baseline_utc']),
+                                  bool(result['bitrot_suspected']), result['bitrot_candidate_hash']]
                         )
                         active_tasks.append({
                             'task': task_result,
+                            'id': result['id'],
                             'size': file_size,
                             'path': result['file_path'],
+                            'mtime_trusted': bool(result['mtime_baseline_utc']),
                             'submitted_at': time.monotonic(),
                         })
-                        task_results.append(task_result)
                         files_queued += 1
                         file_index += 1
+                        refill_allowed = True
 
                         # Update progress immediately when processing single files
-                        if len(all_results) == 1:
+                        if total_files == 1:
                             file_changes_record.progress_message = f'Phase 2 of 3: Processing {result["file_path"].split("/")[-1]}...'
                             db.session.commit()
                     except Exception as e:
@@ -1111,23 +1295,29 @@ class MaintenanceService:
                         if "maxmemory" in str(e):
                             logger.warning("Redis memory full, waiting for tasks to complete...")
                             break  # Wait for active tasks to complete
+                        # Exclude from re-fetch: the rolling queue would
+                        # otherwise return this row forever (e.g. broker
+                        # outage), spinning the producer without progress.
+                        failed_stamp_ids.add(result['id'])
+                        dispatch_failures += 1
+                        refill_allowed = True
                         file_index += 1  # Skip this file
 
-                # If no new tasks submitted and active tasks exist, wait a bit
-                if file_index < len(all_results_sorted) and len(active_tasks) > 0:
+                # If slots are full or the queue is draining, wait a bit
+                if len(active_tasks) > 0 and (file_index < len(pending) or queue_exhausted):
                     time.sleep(0.1)  # Brief sleep to avoid busy waiting
 
                     # Update progress while waiting for single file
-                    if len(all_results) == 1 and len(active_tasks) > 0:
+                    if total_files == 1:
                         file_changes_record.progress_message = f'Phase 2 of 3: Checking file for changes...'
                         file_changes_record.phase_current = 0
                         file_changes_record.phase_total = 1
                         db.session.commit()
 
                 # Update progress periodically - every file for tiny sets, every 10 for small, every 100 for larger
-                if len(all_results) <= 10:
+                if total_files <= 10:
                     update_interval = 1  # Update after every file for 10 or fewer files
-                elif len(all_results) < 1000:
+                elif total_files < 1000:
                     update_interval = 10
                 else:
                     update_interval = 100
@@ -1139,20 +1329,33 @@ class MaintenanceService:
                 # 5000-active steady state almost never does.
                 if total_files_processed > 0 and (
                     total_files_processed - last_progress_update >= update_interval or
-                    total_files_processed == total_count
+                    total_files_processed == total_files
                 ):
                     write_progress_snapshot(set_heartbeat=False)
                     last_progress_update = total_files_processed
 
+            # Persist any buffered terminal outcomes before finalizing
+            flush_stamps()
+
             # Final update
             file_changes_record.phase_current = total_files_processed
-            file_changes_record.phase_total = len(all_results)
-            pct = int((total_files_processed / len(all_results) * 100)) if len(all_results) > 0 else 0
+            file_changes_record.phase_total = total_files
             file_changes_record.progress_message = (
-                f'Completed: {total_files_processed:,}/{len(all_results):,} files - '
+                f'Completed: {total_files_processed:,}/{total_files:,} files - '
                 f'{len(changed_files)} changes found'
             )
             db.session.commit()
+
+            if timestamp_write_failures:
+                logger.warning(
+                    f"{timestamp_write_failures} last_integrity_check_date updates failed; "
+                    f"affected files will re-queue at the front of the next run"
+                )
+            if dispatch_failures:
+                logger.warning(
+                    f"{dispatch_failures} files could not be dispatched (broker errors); "
+                    f"they remain queued for the next run"
+                )
 
             logger.info(f"Phase 2a complete: Processed {total_files_processed} files, found {len(changed_files)} changed files")
 
@@ -1169,11 +1372,13 @@ class MaintenanceService:
                 file_changes_record.last_heartbeat = datetime.now(timezone.utc)
                 db.session.commit()
 
-                logger.info(f"Starting Phase 3: Marking {len(changed_files)} changed files as pending for rescan")
+                logger.info(f"Starting Phase 3: Applying classification for {len(changed_files)} changed files")
 
                 files_marked = 0
                 modified_count = 0
                 deleted_count = 0
+                category_counts = {}
+                flagged_paths = []
                 last_heartbeat_time = time.time()
 
                 for i, change_info in enumerate(changed_files):
@@ -1181,7 +1386,7 @@ class MaintenanceService:
                     current_time = time.time()
                     if current_time - last_heartbeat_time >= 30:
                         file_changes_record.last_heartbeat = datetime.now(timezone.utc)
-                        logger.info(f"Phase 3 heartbeat: {files_marked}/{len(changed_files)} files marked")
+                        logger.info(f"Phase 3 heartbeat: {files_marked}/{len(changed_files)} files processed")
                         db.session.commit()
                         last_heartbeat_time = current_time
 
@@ -1190,24 +1395,31 @@ class MaintenanceService:
 
                     file_changes_record.phase_current = i + 1
 
-                    # Mark the file as pending for rescan by the regular scan workers
+                    # Apply per-classification state transitions (rescan marking,
+                    # bitrot flagging/expiry, deletion recording)
                     try:
-                        file_record = ScanResult.query.filter_by(file_path=change_info['file_path']).first()
+                        file_record = None
+                        if change_info.get('file_id') is not None:
+                            file_record = db.session.get(ScanResult, change_info['file_id'])
+                        if not file_record:
+                            file_record = ScanResult.query.filter_by(file_path=change_info['file_path']).first()
                         if file_record:
-                            file_record.scan_status = 'pending'
+                            category = self._apply_change_classification(file_record, change_info)
+                            category_counts[category] = category_counts.get(category, 0) + 1
                             files_marked += 1
+                            if category in ('bitrot_new', 'bitrot_active'):
+                                flagged_paths.append(change_info['file_path'])
 
-                            # Count by type
-                            if change_info['change_type'] == 'deleted':
+                            if category == 'deleted':
                                 deleted_count += 1
-                                logger.info(f"Marked deleted file for cleanup: {change_info['file_path']}")
-                            elif change_info['change_type'] == 'modified':
+                                logger.info(f"Recorded deleted file: {change_info['file_path']}")
+                            elif category == 'modified':
                                 modified_count += 1
                                 logger.info(f"Marked modified file for rescan: {change_info['file_path']} (hash: {change_info['stored_hash'][:16]}... -> {change_info['current_hash'][:16]}...)")
                             else:
-                                logger.info(f"Marked file for rescan: {change_info['file_path']} (type: {change_info['change_type']})")
+                                logger.info(f"Processed changed file: {change_info['file_path']} (type: {change_info['change_type']}, category: {category})")
                     except Exception as e:
-                        logger.error(f"Error marking file for rescan {change_info['file_path']}: {e}")
+                        logger.error(f"Error processing changed file {change_info['file_path']}: {e}")
 
                     # Commit every 10 files for real-time progress updates
                     if (i + 1) % 10 == 0:
@@ -1216,14 +1428,21 @@ class MaintenanceService:
                         logger.info(f"Phase 3: Marked {files_marked}/{len(changed_files)} files for rescan")
 
                 # Final commit for remaining files and update counts
-                file_changes_record.progress_message = f'Phase 3 of 3: Marked {files_marked}/{len(changed_files)} files as pending for rescan'
+                file_changes_record.progress_message = f'Phase 3 of 3: Processed {files_marked}/{len(changed_files)} changed files'
                 file_changes_record.changes_found = modified_count
                 db.session.commit()
-                logger.info(f"Phase 3 complete: Marked {files_marked} files for rescan ({modified_count} modified, {deleted_count} deleted). They will be processed by parallel scan workers.")
+                logger.info(f"Phase 3 complete: Processed {files_marked} changed files "
+                            f"({modified_count} modified, {deleted_count} deleted, "
+                            f"categories: {category_counts}). Rescans run via parallel scan workers.")
+
+                # After the final commit: a delivery-status rollback inside
+                # dispatch_event can no longer clobber uncommitted flag state
+                self._notify_bitrot_summary(flagged_paths)
             else:
                 # No changes found - set counts to 0
                 modified_count = 0
                 deleted_count = 0
+                category_counts = {}
 
             # Complete check
             if self._is_cancelled_file_changes(file_changes_record):
@@ -1231,11 +1450,34 @@ class MaintenanceService:
                 file_changes_record.progress_message = 'File changes check cancelled by user'
             else:
                 file_changes_record.phase = 'complete'
-                file_changes_record.progress_message = (
-                    f'Check complete. Found {len(changed_files)} changed files '
-                    f'({modified_count} modified, {deleted_count} deleted), '
-                    f'{file_changes_record.corrupted_found} newly corrupted.'
-                )
+                if budget_expired:
+                    file_changes_record.progress_message = (
+                        f'Budget reached: {total_files_processed:,} of {total_files:,} files '
+                        f'verified this run ({len(changed_files)} changed, {modified_count} modified, '
+                        f'{deleted_count} deleted). Queue resumes at next run.'
+                    )
+                else:
+                    file_changes_record.progress_message = (
+                        f'Check complete. Found {len(changed_files)} changed files '
+                        f'({modified_count} modified, {deleted_count} deleted), '
+                        f'{file_changes_record.corrupted_found} newly corrupted.'
+                    )
+                bitrot_flagged = (category_counts.get('bitrot_new', 0)
+                                  + category_counts.get('bitrot_active', 0))
+                if bitrot_flagged:
+                    file_changes_record.progress_message += (
+                        f' WARNING: {bitrot_flagged} file(s) flagged as suspected bitrot.'
+                    )
+                if timestamp_write_failures:
+                    file_changes_record.progress_message += (
+                        f' Warning: {timestamp_write_failures} integrity timestamp '
+                        f'updates failed; those files re-queue first next run.'
+                    )
+                if dispatch_failures:
+                    file_changes_record.progress_message += (
+                        f' Warning: {dispatch_failures} files could not be dispatched '
+                        f'(broker errors); they remain queued for the next run.'
+                    )
 
             file_changes_record.is_active = False
             file_changes_record.end_time = datetime.now(timezone.utc)
@@ -1288,6 +1530,117 @@ class MaintenanceService:
             logger.warning(f"Error checking cancel status from DB: {e}")
             return self.cleanup_state.get('cancel_requested', False)
     
+    def _apply_change_classification(self, file_record, change_info):
+        """Phase 3 state transitions for one changed file.
+
+        Returns the counting category ('modified', 'deleted', 'bitrot_new',
+        'bitrot_active', 'bitrot_stable', 'bitrot_expired',
+        'bitrot_self_healed', 'other').
+        """
+        change_type = change_info['change_type']
+        now = datetime.now(timezone.utc)
+
+        if change_type == 'deleted':
+            # Row deletion stays exclusively with orphan cleanup (its
+            # mount-outage mass-delete guard is the single gate for
+            # destructive action); the integrity check only records absence.
+            file_record.file_exists = False
+            return 'deleted'
+
+        # The classification was computed at dispatch time; on budgeted runs
+        # hours can pass before this applies. If the flag was cleared in the
+        # meantime (manual accept, auto-expire), the queued bitrot-state
+        # result is stale - do not resurrect state-machine fields.
+        if change_type in ('bitrot_stable', 'bitrot_self_healed', 'bitrot_active') \
+                and not file_record.bitrot_suspected:
+            return 'other'
+
+        if change_type == 'bitrot_suspected':
+            file_record.bitrot_suspected = True
+            # First detection date is permanent; re-detections refresh details only
+            file_record.bitrot_detected_date = file_record.bitrot_detected_date or now
+            file_record.bitrot_details = json.dumps({
+                'stored_hash': change_info.get('stored_hash'),
+                'current_hash': change_info.get('current_hash'),
+                'stored_modified': change_info.get('stored_modified'),
+                'current_modified': change_info.get('current_modified'),
+                'stored_size': change_info.get('stored_size'),
+                'current_size': change_info.get('current_size'),
+                'detected': now.isoformat(),
+            })
+            file_record.bitrot_candidate_hash = change_info.get('current_hash')
+            file_record.bitrot_stable_checks = 0
+            file_record.scan_status = 'pending'  # rescan checks decodability
+            return 'bitrot_new'
+
+        if change_type == 'bitrot_active':
+            # Content changed AGAIN while flagged: active rot. New stability
+            # reference, counter restarts.
+            file_record.bitrot_candidate_hash = change_info.get('current_hash')
+            file_record.bitrot_stable_checks = 0
+            file_record.scan_status = 'pending'
+            return 'bitrot_active'
+
+        if change_type == 'bitrot_stable':
+            file_record.bitrot_stable_checks = (file_record.bitrot_stable_checks or 0) + 1
+            rescan_clean = (file_record.scan_status == 'completed'
+                            and file_record.is_corrupted is False)
+            if (file_record.bitrot_stable_checks >= BITROT_STABLE_CHECKS_TO_EXPIRE
+                    and rescan_clean and file_record.bitrot_candidate_hash):
+                # Auto-expire: adopt the stable content as the new baseline.
+                # Detection date/details stay - permanent record.
+                mtime = None
+                if change_info.get('current_modified'):
+                    mtime = datetime.fromisoformat(change_info['current_modified'])
+                adopt_bitrot_baseline(file_record, mtime)
+                logger.info(f"Bitrot flag auto-expired for {file_record.file_path}: "
+                            f"hash stable and rescan clean")
+                return 'bitrot_expired'
+            return 'bitrot_stable'
+
+        if change_type == 'bitrot_self_healed':
+            # Content matches the ORIGINAL baseline again: transient read
+            # anomaly, not rot. Clear the flag, keep the detection record.
+            file_record.bitrot_suspected = False
+            file_record.bitrot_candidate_hash = None
+            file_record.bitrot_stable_checks = 0
+            logger.info(f"Bitrot flag cleared for {file_record.file_path}: "
+                        f"content matches original baseline (self-healed)")
+            return 'bitrot_self_healed'
+
+        # 'modified', 'no_hash', 'error': rescan re-baselines via the scan path
+        file_record.scan_status = 'pending'
+        return 'modified' if change_type == 'modified' else 'other'
+
+    def _notify_bitrot_summary(self, flagged_paths):
+        """One aggregated bitrot_suspected notification per run (best-effort).
+
+        Per-file dispatch would mean thousands of serial HTTP round-trips and
+        mid-loop session commits in the dying-disk case this feature targets
+        (a dispatch failure rollback would also discard uncommitted flag
+        state). Called only after Phase 3's final commit.
+        """
+        if not flagged_paths:
+            return
+        try:
+            shown = '\n'.join(flagged_paths[:10])
+            if len(flagged_paths) > 10:
+                shown += f'\n... and {len(flagged_paths) - 10} more'
+            dispatch_event(
+                'bitrot_suspected',
+                f'Bitrot suspected on {len(flagged_paths)} file(s)',
+                'Content hash changed while file modification time did not - '
+                'possible silent corruption. Review the files, then accept '
+                'their current state or restore from backup.\n' + shown,
+                priority='high',
+                additional_data={
+                    'count': len(flagged_paths),
+                    'file_paths': flagged_paths[:50],
+                }
+            )
+        except Exception as e:
+            logger.error(f"Failed to dispatch bitrot notification: {e}")
+
     def _is_cancelled_file_changes(self, record: FileChangesState) -> bool:
         """Check if file changes check has been cancelled"""
         try:
@@ -1456,7 +1809,6 @@ class MaintenanceService:
             # Store the list of changed files with hash comparison details in directories_scanned field as JSON
             # This field is repurposed for file changes reports to store the changed files list with hash info
             if changed_files_list:
-                import json
                 report.directories_scanned = json.dumps(changed_files_list)
 
             db.session.add(report)
