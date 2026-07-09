@@ -360,6 +360,25 @@ class StatsDashboard {
         this.updateStatCard('warning-files', stats.warning_files || 0);
         this.updateStatCard('pending-files', stats.pending_files);
         this.updateStatCard('scanning-files', stats.scanning_files);
+        this.renderIntegrityCoverage(stats.integrity);
+    }
+
+    renderIntegrityCoverage(integrity) {
+        const element = document.querySelector('#integrity-checked');
+        if (!element || !integrity || !integrity.total_files) return;
+        element.textContent = `${integrity.checked_percent}%`;
+        let title = `${integrity.checked_files.toLocaleString()} of ` +
+            `${integrity.total_files.toLocaleString()} files integrity-checked`;
+        if (integrity.never_checked > 0) {
+            title += `; ${integrity.never_checked.toLocaleString()} never checked`;
+        }
+        if (integrity.oldest_check_date) {
+            title += `; every checked file verified since ${new Date(integrity.oldest_check_date).toLocaleString()}`;
+        }
+        if (integrity.bitrot_suspected > 0) {
+            title += `; ${integrity.bitrot_suspected.toLocaleString()} bitrot suspected`;
+        }
+        element.title = title;
     }
 
     updateStatCard(id, value) {

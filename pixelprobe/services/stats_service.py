@@ -5,7 +5,7 @@ Statistics service for PixelProbe
 import os
 import logging
 from typing import Dict, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import text, func
 
 from pixelprobe.models import db, ScanResult, ScanReport
@@ -57,6 +57,49 @@ class StatsService:
             # Fallback to individual queries
             return self._get_stats_fallback()
     
+    def get_integrity_coverage(self) -> Dict:
+        """Cumulative rolling-integrity coverage.
+
+        The integrity check sweeps the library stalest-first in budgeted
+        slices, so no single run report answers "has every file been
+        verified?". Coverage counts files by last_integrity_check_date:
+        checked ever and within the last 30 days, plus the oldest check date
+        (every checked file has been verified at least once since then) and
+        how many files have never been checked.
+        """
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            row = db.session.execute(
+                text("""
+                    SELECT
+                        COUNT(*) as total_files,
+                        SUM(CASE WHEN last_integrity_check_date IS NOT NULL THEN 1 ELSE 0 END) as checked_files,
+                        SUM(CASE WHEN last_integrity_check_date >= :cutoff THEN 1 ELSE 0 END) as checked_last_30_days,
+                        MIN(last_integrity_check_date) as oldest_check,
+                        SUM(CASE WHEN bitrot_suspected = TRUE THEN 1 ELSE 0 END) as bitrot_suspected
+                    FROM scan_results
+                """),
+                {'cutoff': cutoff}
+            ).fetchone()
+
+            total = row[0] or 0
+            checked = row[1] or 0
+            oldest = row[3]
+            if oldest is not None and hasattr(oldest, 'isoformat'):
+                oldest = oldest.isoformat()
+            return {
+                'total_files': total,
+                'checked_files': checked,
+                'checked_percent': round(checked / total * 100, 1) if total else 0.0,
+                'checked_last_30_days': row[2] or 0,
+                'never_checked': total - checked,
+                'oldest_check_date': oldest,
+                'bitrot_suspected': row[4] or 0,
+            }
+        except Exception as e:
+            logger.error(f"Error getting integrity coverage: {e}")
+            return {}
+
     def get_system_info(self) -> Dict:
         """Get comprehensive system information"""
         try:

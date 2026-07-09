@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.64] - 2026-07-09
+
+### Added
+
+- **Rolling-integrity coverage is now visible.** Because budgeted integrity runs sweep the library in slices, no single run report answers "has every file been verified?". `/api/stats` now returns an `integrity` block - files checked ever and within the last 30 days, percent of library covered, never-checked count, the oldest check date (every checked file has been verified at least once since then), and the current bitrot-suspected count. The dashboard gains an "Integrity Checked" stat card showing the coverage percentage, with the full breakdown in its tooltip.
+
 ## [2.6.63] - 2026-07-09
 
 ### Fixed

@@ -53,6 +53,31 @@ class TestBitrotFilter:
             assert paths == ['/m/clean.mkv']
 
 
+class TestIntegrityCoverageStats:
+
+    def test_stats_include_rolling_coverage(self, authenticated_client, app, db):
+        with app.app_context():
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            seed(db, '/m/checked_recent.mkv', last_integrity_check_date=now)
+            seed(db, '/m/checked_old.mkv',
+                 last_integrity_check_date=datetime(2025, 1, 1, 12, 0, 0))
+            seed(db, '/m/never.mkv')
+            seed(db, '/m/rotten.mkv', bitrot_suspected=True,
+                 last_integrity_check_date=now)
+
+            response = authenticated_client.get('/api/stats')
+            assert response.status_code == 200
+            integrity = response.get_json()['integrity']
+
+            assert integrity['total_files'] == 4
+            assert integrity['checked_files'] == 3
+            assert integrity['checked_percent'] == 75.0
+            assert integrity['never_checked'] == 1
+            assert integrity['checked_last_30_days'] == 2
+            assert integrity['bitrot_suspected'] == 1
+            assert integrity['oldest_check_date'].startswith('2025-01-01')
+
+
 class TestBitrotAccept:
 
     def test_accept_adopts_candidate_and_clears_flag(self, authenticated_client, app, db):
