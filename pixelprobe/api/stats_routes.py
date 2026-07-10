@@ -51,6 +51,9 @@ def get_stats():
             'marked_as_good': stats[7] or 0,
             'warning_files': stats[8] or 0
         }
+        # Rolling-integrity coverage: answers "how much of the library has
+        # been verified over time" - no single budgeted run report can
+        result['integrity'] = StatsService().get_integrity_coverage()
 
         return result
 
@@ -104,7 +107,8 @@ def get_stats():
                 'corrupted_files': corrupted_files,
                 'healthy_files': healthy_files,
                 'marked_as_good': marked_as_good,
-                'warning_files': warning_files
+                'warning_files': warning_files,
+                'integrity': StatsService().get_integrity_coverage()
             }
         except Exception as e2:
             logger.error(f"Fallback stats query also failed: {str(e2)}")

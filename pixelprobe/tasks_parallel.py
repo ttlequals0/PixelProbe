@@ -25,6 +25,7 @@ from pixelprobe.constants import SCAN_PHASES
 from pixelprobe.models import db, ScanState, ScanResult, ScanChunk
 from pixelprobe.media_checker import PixelProbe, load_exclusions_with_patterns
 from pixelprobe.progress_utils import clear_scan_progress_redis, update_scan_progress_redis
+from pixelprobe.utils.integrity import apply_scan_baseline
 from pixelprobe.services.scan_engine import (
     build_scan_chunks, claim_scan_slot, finalize_scan,
     maybe_finalize_scan, sync_progress_from_chunks
@@ -197,7 +198,13 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
                         db_result.scan_output = str(scan_result.get('scan_output', ''))[:10000]
                         db_result.has_warnings = has_warnings
                         db_result.warning_details = warning_details
-                        db_result.file_hash = scan_result.get('file_hash')
+                        # Guarded baseline write: never overwrite a
+                        # bitrot-suspected file's stored hash/mtime (this is
+                        # the writer for all chunked scans, including the
+                        # rescans Phase 3 of the integrity check queues up)
+                        if not apply_scan_baseline(db_result, scan_result.get('file_hash'),
+                                                   scan_result.get('last_modified')):
+                            logger.info(f"Preserving hash/mtime baseline for bitrot-suspected file: {file_path}")
                         db_result.scan_tool = scan_result.get('scan_tool', 'unknown')
                         db_result.scan_duration = scan_result.get('scan_duration')
                         db_result.file_size = scan_result.get('file_size', 0)

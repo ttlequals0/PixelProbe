@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.64] - 2026-07-09
+
+### Added
+
+- **Rolling-integrity coverage is now visible.** Because budgeted integrity runs sweep the library in slices, no single run report answers "has every file been verified?". `/api/stats` now returns an `integrity` block - files checked ever and within the last 30 days, percent of library covered, never-checked count, the oldest check date (every checked file has been verified at least once since then), and the current bitrot-suspected count. The dashboard gains an "Integrity Checked" stat card showing the coverage percentage, with the full breakdown in its tooltip.
+
+## [2.6.63] - 2026-07-09
+
+### Fixed
+
+- **Created or edited schedules now take effect within a minute instead of requiring a container restart.** Schedule CRUD dispatched `reload_schedules_task` through Celery, but prefork workers execute tasks in pool children while APScheduler runs only in the scheduler-lock-holding main process - the reload always landed in a child, logged "Scheduler not running in this worker", and was skipped, so no schedule change since the mechanism was added ever reached the running scheduler without a restart (verified live: a freshly created `file_changes` schedule never fired at its cron time). The scheduler process now re-syncs its jobs directly from the database every 60 seconds, gated on a fingerprint of the schedule definitions so jobs are only rebuilt when something actually changed. New schedules also get `next_run` computed at creation so the UI shows the upcoming fire immediately instead of after the first run.
+
+## [2.6.62] - 2026-07-09
+
+### Added
+
+- **Bitrot UI.** Results list shows a distinct "Bitrot?" badge (violet) taking precedence over corrupted/warning; a "Bitrot Suspected" filter button joins the corrupted/warning/healthy set (`bitrot_suspected=true` on `/api/scan-results`); the file details modal gains a bitrot section (detection date, baseline vs current hash/mtime/size, stable-check count) with an "Accept Current State" action; the same accept action appears in each flagged file's Actions dropdown (desktop and mobile), confirming before adopting the current content as the new baseline via `POST /api/bitrot/accept`.
+
+## [2.6.61] - 2026-07-09
+
+### Added
+
+- **The integrity check now distinguishes bitrot from legitimate modification.** Previously any hash mismatch was uniformly marked `modified` and rescanned - and the rescan adopted the new content's hash as baseline, silently laundering corruption (a bit flip in non-critical stream data passes decode checks). The hash task now classifies: hash mismatch with CHANGED mtime = `modified` (normal edit/replace, rescans as before); hash mismatch with UNCHANGED mtime (2-second epsilon) = `bitrot_suspected` - no legitimate write path alters content without touching mtime. Suspected files are flagged (`bitrot_suspected` + permanent `bitrot_detected_date`/`bitrot_details`, first detection date preserved across re-detections), one aggregated high-priority `bitrot_suspected` notification fires per run (a dying disk flags files in bulk; per-file dispatch would mean thousands of serial HTTP round-trips), the file is rescanned for decodability, and critically NO scan path overwrites the stored hash/mtime baseline for flagged files: the guard lives in a single shared writer (`apply_scan_baseline`) used by both the serial scan save and the parallel chunk workers that perform all normal-scan and rescan persistence.
+- **Auto-expire state machine for flagged files.** Flagged files jump the integrity queue. Each subsequent check compares against the candidate hash: stable content for `BITROT_STABLE_CHECKS_TO_EXPIRE` consecutive checks (default 2) plus a clean rescan auto-adopts the content as the new baseline and clears the flag (detection record kept permanently - a per-disk history of "files that ever tripped bitrot" is a dying-disk signal). Content matching the ORIGINAL baseline again = transient read anomaly, flag clears. A THIRD hash = active rot: counter resets, re-notification fires. Manual override: `POST /api/bitrot/accept` (file_ids) adopts the current state immediately via the same shared transition as auto-expire; the adopted baseline mtime is the one recorded with the candidate hash, not a fresh stat, so the stored hash/mtime pair always describes content that actually existed. Stale queued results for a row whose flag was cleared mid-run (accept races Phase 3 on budgeted runs) are ignored instead of resurrecting state-machine fields.
+- **Notification rules now actually fire.** `NotificationRule`/`NotificationProvider` existed as CRUD-only models - no backend code ever evaluated rules. New `dispatch_event()` in the notification service joins active rules to active providers, delivers, and records per-provider status. `bitrot_suspected` is the first wired event type.
+- `bitrot_suspected` filter on `/api/scan-results`; bitrot columns in CSV/JSON exports and `ScanResult.to_dict`.
+
+### Fixed
+
+- **`get_file_info` stored naive local mtimes; all baselines are now UTC.** `datetime.fromtimestamp(st_mtime)` without a timezone poisoned every stored `last_modified` on hosts where TZ != UTC (its error fallback even stored aware UTC, mixing both semantics in one column). Bitrot classification requires trusted baselines, so a new `mtime_baseline_utc` flag (false for all pre-upgrade rows) gates it: untrusted rows whose hash mismatches classify as `modified` and re-baseline via rescan, and untrusted rows whose hash MATCHES (the cold-archive common case) re-baseline directly during the integrity check - no false bitrot alarms from the old data, detection reliable from each file's second check. The scan-result cache validity check now treats a content-hash match as sufficient (mtime equality only as fallback for hash-less rows), so the UTC change cannot force a one-time full-library re-decode on hosts where TZ is not UTC. Scan error paths no longer fabricate a scan-time mtime for unreadable files; they leave the stored baseline untouched.
+
+## [2.6.60] - 2026-07-09
+
+### Added
+
+- **Integrity check schedules can now carry a time budget (`time_budget_minutes`).** A budgeted run dispatches hash tasks until the soft deadline expires, drains in-flight tasks (which still stamp `last_integrity_check_date`), and completes with a coverage message ("Budget reached: N of M files verified this run"). Because the rolling queue (2.6.59) is ordered stalest-first, successive budgeted runs sweep the whole library in disjoint slices - a 50-hour full pass becomes ~100 min/day for a monthly cadence - without any single run monopolizing IO. NULL budget = unlimited (current behavior); the field is valid only on `file_changes` schedules and manual runs stay unlimited unless the start request passes `time_budget_minutes` explicitly. Budgeted runs dispatch largest files first within each batch so a 70GB file is not started at minute 59; dispatch skips past saturated size tiers instead of head-of-line blocking, so a run of large files at the front of a batch cannot cap the whole window at the huge-file concurrency limit while small-file slots idle. The budget is resolved inside the service (not the HTTP route), so every entry point honors a schedule's configured budget. Schedule create/edit forms expose the field with sizing guidance.
+
+## [2.6.59] - 2026-07-09
+
+### Changed
+
+- **The integrity check (file changes) is now a rolling queue instead of a single full-table pass.** The producer previously loaded every `scan_results` row into memory in one query (hundreds of MB at 1M+ files) and lost all progress on crash or cancellation. It now re-fetches the queue in ordered batches (`INTEGRITY_BATCH_SIZE`, default 10,000): never-checked files first (`last_integrity_check_date` NULL), then stalest-first. `last_integrity_check_date` - previously written but never read - is now the queue cursor: every terminal outcome (result received, hash error after retries, abandoned task) stamps the file, pushing it to the back of the ordering, so an interrupted run resumes where it left off by construction. In-flight tasks, rows whose timestamp write failed, and rows whose task dispatch failed (broker errors) are excluded from re-fetches explicitly - ordering alone would re-hash the first two and re-fail the third forever; failure counts are surfaced in the completion message. Stamps are written in bulk (one UPDATE per batch fetch instead of one SELECT plus UPDATE per file), a queue re-fetch only runs after a dispatch, completion, or exclusion changed the queue (no tight query loops when every size tier is saturated or the broker is down), and a successfully hashed file gets `file_exists` restored, recovering rows stranded by a past mount outage. A composite index supporting the queue ordering ships in the same migration.
+
+### Fixed
+
+- **Producer no longer accumulates one AsyncResult handle per dispatched task.** `task_results` collected every dispatched task's result handle for the lifetime of the run and was never read - a per-run memory leak of 1M+ objects on large libraries. Removed.
+
+## [2.6.58] - 2026-07-09
+
+### Removed
+
+- **Legacy serial `MediaChecker.check_file_changes` deleted.** It had zero callers (all file-changes routes go through `MaintenanceService`'s Celery-based path) and was a divergent second implementation: it only hashed a file when its mtime differed, so it structurally could not detect bitrot (content change with unchanged mtime); it compared naive local timestamps; and it ran serially with no progress reporting or cancellation. Removing it ahead of the bitrot classification work ensures the integrity-check logic exists in exactly one place.
+
 ## [2.6.57] - 2026-06-11
 
 ### Fixed

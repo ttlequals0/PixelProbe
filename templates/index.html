@@ -193,6 +193,10 @@
                         <div class="stat-value" id="pending-files">0</div>
                         <div class="stat-label">Pending Files</div>
                     </div>
+                    <div class="stat-card" role="group" aria-label="Integrity coverage">
+                        <div class="stat-value" id="integrity-checked" aria-live="polite">-</div>
+                        <div class="stat-label">Integrity Checked</div>
+                    </div>
                 </div>
                 
                 <!-- Results Section -->
@@ -209,6 +213,9 @@
                                     </button>
                                     <button class="btn btn-secondary" data-filter="warning">
                                         Warnings Only
+                                    </button>
+                                    <button class="btn btn-secondary" data-filter="bitrot">
+                                        Bitrot Suspected
                                     </button>
                                     <button class="btn btn-secondary" data-filter="healthy">
                                         Healthy Only
@@ -647,12 +654,17 @@
                     </div>
                     <div class="form-group">
                         <label for="scan-type">Scan Type</label>
-                        <select id="scan-type" class="form-control">
+                        <select id="scan-type" class="form-control" onchange="app.toggleBudgetInput()">
                             <option value="normal">Normal Scan (Scan All Files)</option>
                             <option value="orphan">Cleanup</option>
                             <option value="file_changes">Integrity Scan</option>
                         </select>
                         <small class="form-text text-muted">Choose what type of operation to perform</small>
+                    </div>
+                    <div id="budget-input" class="form-group" style="display: none;">
+                        <label for="time-budget-minutes">Time Budget (minutes, optional)</label>
+                        <input type="number" id="time-budget-minutes" class="form-control" min="1" placeholder="Unlimited">
+                        <small class="form-text text-muted">Stop dispatching new files after this many minutes; the queue resumes at the next run. Example: a library that takes 50 hours to verify needs about 100 min/day for a monthly sweep.</small>
                     </div>
                     <div class="form-group">
                         <label for="schedule-paths">Scan Paths (optional)</label>
@@ -707,12 +719,17 @@
                     </div>
                     <div class="form-group">
                         <label for="edit-scan-type">Scan Type</label>
-                        <select id="edit-scan-type" class="form-control">
+                        <select id="edit-scan-type" class="form-control" onchange="app.toggleBudgetInput('edit-')">
                             <option value="normal">Normal Scan (Scan All Files)</option>
                             <option value="orphan">Cleanup</option>
                             <option value="file_changes">Integrity Scan</option>
                         </select>
                         <small class="form-text text-muted">Choose what type of operation to perform</small>
+                    </div>
+                    <div id="edit-budget-input" class="form-group" style="display: none;">
+                        <label for="edit-time-budget-minutes">Time Budget (minutes, optional)</label>
+                        <input type="number" id="edit-time-budget-minutes" class="form-control" min="1" placeholder="Unlimited">
+                        <small class="form-text text-muted">Stop dispatching new files after this many minutes; the queue resumes at the next run.</small>
                     </div>
                     <div class="form-group">
                         <label for="edit-schedule-paths">Scan Paths (optional)</label>

@@ -23,6 +23,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from pixelprobe.utils.security import safe_subprocess_run, validate_file_path, ensure_cli_safe_path
+from pixelprobe.utils.integrity import apply_scan_baseline
 from pixelprobe.utils.paths import is_path_under
 
 logger = logging.getLogger(__name__)
@@ -507,8 +508,11 @@ class PixelProbe:
         try:
             file_stats = os.stat(file_path)
             file_size = file_stats.st_size
-            creation_date = datetime.fromtimestamp(file_stats.st_ctime)
-            last_modified = datetime.fromtimestamp(file_stats.st_mtime)
+            # UTC-aware: bitrot classification compares this stored baseline
+            # against a UTC mtime, and naive local values poison it (the old
+            # naive form is why mtime_baseline_utc exists).
+            creation_date = datetime.fromtimestamp(file_stats.st_ctime, timezone.utc)
+            last_modified = datetime.fromtimestamp(file_stats.st_mtime, timezone.utc)
             file_type = magic.from_file(file_path, mime=True)
             
             return {
@@ -640,8 +644,10 @@ class PixelProbe:
                         'file_path': file_path,
                         'file_size': 0,
                         'file_type': 'unknown',
-                        'creation_date': datetime.now(),
-                        'last_modified': datetime.now(),
+                        'creation_date': datetime.now(timezone.utc),
+                        # No real file mtime available here; None keeps the
+                        # stored baseline instead of poisoning it with scan time
+                        'last_modified': None,
                         'is_corrupted': True,
                         'corruption_details': f"Scan error: {str(e)}"
                     })
@@ -718,8 +724,10 @@ class PixelProbe:
                             'file_path': file_path,
                             'file_size': 0,
                             'file_type': 'unknown',
-                            'creation_date': datetime.now(),
-                            'last_modified': datetime.now(),
+                            'creation_date': datetime.now(timezone.utc),
+                            # No real file mtime available here; None keeps the
+                            # stored baseline instead of poisoning it with scan time
+                            'last_modified': None,
                             'is_corrupted': True,
                             'corruption_details': f"Scan error: {str(e)}"
                         }
@@ -2342,42 +2350,6 @@ class PixelProbe:
         
         return is_corrupted, corruption_details
     
-    def check_file_changes(self, scan_results_db):
-        """Check for file changes by comparing current hashes with stored hashes"""
-        changed_files = []
-        
-        for result in scan_results_db:
-            file_path = result.file_path
-            stored_hash = result.file_hash
-            stored_modified = result.last_modified
-            
-            if not os.path.exists(file_path):
-                changed_files.append({
-                    'file_path': file_path,
-                    'change_type': 'deleted',
-                    'stored_hash': stored_hash,
-                    'current_hash': None
-                })
-                continue
-            
-            # Check if file was modified
-            current_stats = os.stat(file_path)
-            current_modified = datetime.fromtimestamp(current_stats.st_mtime)
-            
-            if stored_modified and current_modified != stored_modified:
-                current_hash = self.calculate_file_hash(file_path)
-                if current_hash != stored_hash:
-                    changed_files.append({
-                        'file_path': file_path,
-                        'change_type': 'modified',
-                        'stored_hash': stored_hash,
-                        'current_hash': current_hash,
-                        'stored_modified': stored_modified,
-                        'current_modified': current_modified
-                    })
-        
-        return changed_files
-    
     def find_orphaned_records(self, scan_results_db):
         """Find database records for files that no longer exist"""
         orphaned_records = []
@@ -2425,10 +2397,16 @@ class PixelProbe:
                     session.close()
                     return None
                     
-                # Check if file hasn't changed (same hash and modification time)
-                if (result.file_hash == file_hash and 
-                    result.last_modified and 
-                    result.last_modified.replace(tzinfo=None) == last_modified.replace(tzinfo=None)):
+                # Content hash equality alone proves the cached result is
+                # current. The old additional mtime-equality requirement broke
+                # after the UTC mtime fix: pre-upgrade rows store naive LOCAL
+                # time, so on any TZ != UTC host every cached row would miss
+                # and force a full library re-decode. mtime remains as the
+                # fallback for rows scanned before hashes were stored.
+                if ((result.file_hash and file_hash and result.file_hash == file_hash) or
+                    (not result.file_hash and
+                     result.last_modified and last_modified and
+                     result.last_modified.replace(tzinfo=None) == last_modified.replace(tzinfo=None))):
                     
                     # Convert database result to expected format
                     cached_data = {
@@ -2500,10 +2478,16 @@ class PixelProbe:
             db_result.file_size = scan_result.get('file_size')
             db_result.file_type = scan_result.get('file_type')
             db_result.creation_date = scan_result.get('creation_date')
-            db_result.last_modified = scan_result.get('last_modified')
+            if not apply_scan_baseline(db_result, scan_result.get('file_hash'),
+                                       scan_result.get('last_modified')):
+                # Anti-laundering: a rescan of a bitrot-suspected file must not
+                # adopt its current content as the baseline - a bit flip can
+                # pass decode checks and would silently become the new "good"
+                # hash. Baseline updates for flagged files happen only via
+                # auto-expire or the manual accept action.
+                logger.info(f"Preserving hash/mtime baseline for bitrot-suspected file: {file_path}")
             db_result.is_corrupted = scan_result.get('is_corrupted', False)
             db_result.corruption_details = scan_result.get('corruption_details')
-            db_result.file_hash = scan_result.get('file_hash')
             db_result.scan_tool = scan_result.get('scan_tool')
             db_result.scan_duration = scan_result.get('scan_duration')
             db_result.scan_output = scan_result.get('scan_output')

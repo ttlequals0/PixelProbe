@@ -41,10 +41,12 @@ class TestActiveTaskShape:
     remain in the active set forever.
     """
 
-    REQUIRED_FIELDS = {'task', 'size', 'path', 'submitted_at'}
+    REQUIRED_FIELDS = {'task', 'id', 'size', 'path', 'submitted_at'}
 
     def test_required_fields_contract(self):
-        assert self.REQUIRED_FIELDS == {'task', 'size', 'path', 'submitted_at'}
+        # 'id' feeds stamp_integrity_check on error/abandon terminal outcomes
+        # (rolling queue); 'submitted_at' feeds the abandon-on-timeout branch.
+        assert self.REQUIRED_FIELDS == {'task', 'id', 'size', 'path', 'submitted_at'}
 
 
 class TestAgeComparison:

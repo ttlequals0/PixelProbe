@@ -674,6 +674,13 @@ paths:
             type: string
             enum: [all, 'true', 'false']
             default: all
+        - name: bitrot_suspected
+          in: query
+          description: Filter files flagged as suspected bitrot (hash changed, mtime unchanged)
+          schema:
+            type: string
+            enum: [all, 'true', 'false']
+            default: all
         - name: search
           in: query
           schema:
@@ -1259,7 +1266,12 @@ paths:
     get:
       summary: Get statistics summary
       description: |
-        Retrieve comprehensive statistics about scanned files and corruption.
+        Retrieve statistics about scanned files and corruption. The response
+        includes an `integrity` block with rolling-coverage numbers: files
+        integrity-checked ever and within the last 30 days, coverage percent,
+        never-checked count, the oldest check date (every checked file has
+        been verified at least once since then), and the current
+        bitrot-suspected count.
 
         **Example:**
         ```bash
@@ -1522,6 +1534,41 @@ paths:
         '200':
           description: Files marked as good successfully
 
+  /bitrot/accept:
+    post:
+      summary: Accept current state of bitrot-suspected files
+      description: |
+        Adopt each flagged file's current content as the new integrity
+        baseline (the candidate hash plus the mtime recorded when that hash
+        was computed), clearing the bitrot_suspected flag and stability
+        counter. The detection record (bitrot_detected_date, bitrot_details)
+        is preserved permanently. Files that are not flagged are skipped and
+        reported back.
+
+        **Example:**
+        ```bash
+        curl -X POST http://your-server/api/bitrot/accept \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"file_ids": [123, 456]}'
+        ```
+      tags: [Maintenance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_ids]
+              properties:
+                file_ids:
+                  type: array
+                  items:
+                    type: integer
+      responses:
+        '200':
+          description: Accepted; response lists accepted count and skipped ids
+
   /schedules:
     get:
       summary: List scheduled scans
@@ -1580,6 +1627,14 @@ paths:
                 force_rescan:
                   type: boolean
                   default: false
+                time_budget_minutes:
+                  type: integer
+                  nullable: true
+                  minimum: 1
+                  description: |
+                    file_changes schedules only. Soft per-run deadline in
+                    minutes; dispatch stops when it expires and the rolling
+                    integrity queue resumes at the next run. Null = unlimited.
       responses:
         '201':
           description: Schedule created successfully
@@ -2423,9 +2478,19 @@ paths:
                   type: array
                   items:
                     type: string
+                time_budget_minutes:
+                  type: integer
+                  minimum: 1
+                  description: |
+                    Optional soft deadline in minutes. Dispatch stops when it
+                    expires; in-flight hashes drain and the rolling queue
+                    resumes at the next run. Omitted = unlimited (scheduled
+                    runs inherit their schedule's budget).
       responses:
         '200':
           description: File changes check started
+        '400':
+          description: Invalid time_budget_minutes
         '409':
           description: Check already in progress
 

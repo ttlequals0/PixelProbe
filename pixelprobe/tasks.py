@@ -16,6 +16,7 @@ from pixelprobe.constants import SCAN_PHASES
 from pixelprobe.services.scan_service import ScanService
 from pixelprobe.models import db, ScanState, ScanResult, ScanReport
 from pixelprobe.utils.celery_utils import is_db_connection_corruption
+from pixelprobe.utils.integrity import classify_file_change
 from pixelprobe.utils.log_context import current_scan_id, current_celery_task_id
 
 
@@ -372,21 +373,35 @@ def check_file_exists_task(self, file_id, file_path):
 @celery_app.task(bind=True, max_retries=2,
                  soft_time_limit=None, time_limit=None,  # No timeout - must complete hash regardless of file size
                  priority=7)  # Low priority - maintenance runs in background
-def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modified):
+def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modified,
+                             stored_size=None, mtime_trusted=False,
+                             bitrot_suspected=False, bitrot_candidate_hash=None):
     """
-    Calculate hash for a single file and compare to stored hash
+    Calculate hash for a single file and classify any change.
 
     IMPORTANT: No timeouts on this task - we must always calculate hash regardless of how
     large the file is. File integrity checking requires accurate hashes.
+
+    Classification: a hash mismatch with a changed mtime is a legitimate
+    modification; a mismatch with an UNCHANGED mtime is suspected bitrot (no
+    legitimate write path alters content without touching mtime). Files
+    already flagged are measured against the candidate hash for the
+    auto-expire state machine (stable / self-healed / active rot).
 
     Args:
         file_id (int): Database ID of the file
         file_path (str): Path to the file
         stored_hash (str): Expected hash from database
         stored_modified (str): Last modified timestamp from database (ISO format)
+        stored_size (int): File size from database (for the detection record)
+        mtime_trusted (bool): ScanResult.mtime_baseline_utc - pre-upgrade
+            naive-local baselines cannot be classified and fall back to
+            'modified', which re-baselines in UTC
+        bitrot_suspected (bool): File is already flagged
+        bitrot_candidate_hash (str): Stability reference for flagged files
 
     Returns:
-        dict: Hash comparison result with change information
+        dict: Hash comparison result with change classification
     """
     # ContextTask wrapper in celery_config.py automatically provides Flask app context
     # NOTE: Do NOT call db.session.remove() here - it corrupts the connection pool
@@ -450,26 +465,14 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
         # Get current modification time
         stat = os.stat(file_path)
         current_modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+        current_size = stat.st_size
 
-        # Parse stored modified time
-        if stored_modified:
-            try:
-                stored_mod_dt = datetime.fromisoformat(stored_modified.replace('Z', '+00:00'))
-            except:
-                stored_mod_dt = None
-        else:
-            stored_mod_dt = None
-
-        # Determine if file changed
-        if not stored_hash:
-            change_type = 'no_hash'
-            changed = True
-        elif current_hash != stored_hash:
-            change_type = 'modified'
-            changed = True
-        else:
-            change_type = 'unchanged'
-            changed = False
+        change_type, changed = classify_file_change(
+            stored_hash, current_hash, stored_modified, current_modified,
+            mtime_trusted=mtime_trusted,
+            bitrot_suspected=bitrot_suspected,
+            bitrot_candidate_hash=bitrot_candidate_hash
+        )
 
         return {
             'file_id': file_id,
@@ -479,7 +482,9 @@ def calculate_file_hash_task(self, file_id, file_path, stored_hash, stored_modif
             'stored_hash': stored_hash,
             'current_hash': current_hash,
             'stored_modified': stored_modified,
-            'current_modified': current_modified.isoformat() if current_modified else None
+            'current_modified': current_modified.isoformat() if current_modified else None,
+            'stored_size': stored_size,
+            'current_size': current_size
         }
 
     except Exception as exc:

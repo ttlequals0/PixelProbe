@@ -51,6 +51,21 @@ def validate_cron_expression(cron_expr):
     # More detailed validation could be added here
     return True, None
 
+def validate_time_budget(value, scan_type):
+    """Validate a time_budget_minutes payload value.
+
+    Positive integer minutes; only meaningful for file_changes runs and
+    schedules. None means unlimited. Returns (value, error_message).
+    """
+    if value is None:
+        return None, None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None, 'time_budget_minutes must be a positive integer (minutes) or null'
+    if scan_type != 'file_changes':
+        return None, 'time_budget_minutes is only valid for file_changes schedules'
+    return value, None
+
+
 def validate_export_format(format_type):
     """Validate export format"""
     valid_formats = ['csv', 'json', 'xml']

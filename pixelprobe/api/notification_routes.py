@@ -21,7 +21,7 @@ notification_bp = Blueprint('notifications', __name__, url_prefix='/api/notifica
 VALID_PROVIDER_TYPES = ['pushover', 'ntfy', 'webhook']
 VALID_EVENT_TYPES = [
     'scan_start', 'scan_complete', 'scan_failed', 'scan_missed',
-    'corruption_found', 'user_added', 'user_deleted',
+    'corruption_found', 'bitrot_suspected', 'user_added', 'user_deleted',
     'api_key_added', 'api_key_deleted', 'auth_failed'
 ]
 VALID_PRIORITIES = ['low', 'normal', 'high']

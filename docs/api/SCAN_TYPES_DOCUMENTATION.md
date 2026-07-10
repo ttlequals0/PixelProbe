@@ -95,27 +95,27 @@ POST /api/force-scan-pending
 
 ### 4. File Changes Scan (`file_changes`)
 **Endpoint**: `GET/POST /api/file-changes`
-**Purpose**: Detect and scan modified files
+**Purpose**: Verify stored content hashes and classify what changed (rolling integrity queue)
 **When to use**:
-- Regular maintenance scans
-- After media file edits
-- To catch file corruption over time
+- Scheduled integrity sweeps (pair with a per-schedule time budget)
+- After bulk media edits
+- To catch silent corruption (bitrot) over time
 
 **How it works**:
-1. **Phase 1 - Integrity Check**: Compares file modification times with database
-2. **Phase 2 - Scan Changed**: Re-scans files that have been modified
-3. Updates database with new scan results
+1. Pulls files from a rolling queue ordered stalest-first by `last_integrity_check_date`; files flagged as suspected bitrot jump the queue
+2. Re-hashes each file and classifies the result: hash match = unchanged; hash and mtime both changed = modified (queued for rescan); hash changed while mtime did not = suspected bitrot (flagged and notified, stored baseline preserved)
+3. Stamps every processed file, so interrupted or budget-limited runs resume where they left off
 
 **Features**:
-- Detects file modifications via timestamps
-- Optionally detects file size changes
-- Re-scans only changed files
-- Reports list of changed files
-- Efficient for regular checks
+- Optional `time_budget_minutes` (request body, or the schedule's field): dispatch stops at the deadline, in-flight hashes drain, and the queue resumes at the next run
+- Bitrot flags auto-expire after consecutive stable checks plus a clean rescan; accept manually via `POST /api/bitrot/accept`
+- Cumulative coverage exposed in `/api/stats` (`integrity` block) and the dashboard's Integrity Checked card
+- Reports the changed-file list with hash, mtime, and size detail
 
 **Example**:
 ```json
 POST /api/file-changes
+{"time_budget_minutes": 10}
 ```
 
 ### 5. Cleanup (`cleanup`)
