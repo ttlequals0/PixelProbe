@@ -1266,7 +1266,12 @@ paths:
     get:
       summary: Get statistics summary
       description: |
-        Retrieve comprehensive statistics about scanned files and corruption.
+        Retrieve statistics about scanned files and corruption. The response
+        includes an `integrity` block with rolling-coverage numbers: files
+        integrity-checked ever and within the last 30 days, coverage percent,
+        never-checked count, the oldest check date (every checked file has
+        been verified at least once since then), and the current
+        bitrot-suspected count.
 
         **Example:**
         ```bash
