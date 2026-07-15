@@ -263,6 +263,8 @@ PixelProbe uses environment variables for all configuration. Copy `.env.example`
 - `EXCLUDED_PATHS` - Paths to ignore during scanning
 - `EXCLUDED_EXTENSIONS` - File extensions to ignore
 - `FREEZE_DETECTION_ENABLED` - Enable video freeze detection (default: `true`). Set to `false` to skip freeze detection and reduce scan time for large video libraries
+- `SCHEDULER_ENABLED` - Whether this container may run the scan scheduler (default: `true`). In multi-container deployments set `false` on the web container so only the Celery worker competes for the scheduler lock
+- `GUNICORN_BIND` - Gunicorn listen address, accepts a comma-separated list (default: `0.0.0.0:5000`). For IPv6/dual-stack (e.g. rootless podman) set `[::]:5000`
 
 See `.env.example` for complete configuration options with examples.
 

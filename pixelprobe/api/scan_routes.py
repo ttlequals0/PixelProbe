@@ -24,7 +24,7 @@ from pixelprobe.api.scan_launch import launch_directory_scan
 logger = logging.getLogger(__name__)
 
 
-from pixelprobe.utils.celery_utils import check_celery_available
+from pixelprobe.utils.celery_utils import check_celery_available, safe_check_task_state
 
 
 _SCAN_ALREADY_RUNNING_RESPONSE = {
@@ -51,48 +51,6 @@ def _scan_conflict_response(error):
     return _SCAN_CONFLICT_FALLBACK_RESPONSE, 409
 
 
-def safe_check_task_state(celery_task_id, app, max_retries=3, base_delay=0.5):
-    """
-    Safely check Celery task state with retry logic for Redis connection errors.
-
-    v2.5.54: Added to protect AsyncResult.state access from Redis connection crashes.
-
-    Args:
-        celery_task_id: Celery task ID
-        app: Celery application instance
-        max_retries: Number of retry attempts
-        base_delay: Base delay between retries in seconds
-
-    Returns:
-        Task state string or None if unable to determine state
-    """
-    import redis
-    import time
-    from celery.result import AsyncResult
-    from pixelprobe.progress_utils import reset_redis_pool
-
-    for attempt in range(max_retries):
-        try:
-            result = AsyncResult(celery_task_id, app=app)
-            return result.state
-        except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
-            # Reset connection pool on first failure
-            if attempt == 0:
-                reset_redis_pool()
-
-            if attempt < max_retries - 1:
-                delay = base_delay * (attempt + 1)
-                logger.warning(f"Redis error checking task state (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {type(e).__name__}: {e}")
-                time.sleep(delay)
-            else:
-                logger.error(f"Failed to check task state after {max_retries} attempts: {type(e).__name__}: {e}")
-                return None
-        except Exception as e:
-            logger.error(f"Unexpected error checking task state: {type(e).__name__}: {e}")
-            return None
-    return None
-
-
 # Timezone handling via utility module
 
 scan_bp = Blueprint('scan', __name__, url_prefix='/api')
@@ -104,11 +62,25 @@ def is_scan_running():
     # Check thread-based scans
     if current_app.scan_service.is_scan_running():
         return True
-    
+
     # Check database for active Celery-based scans
     try:
         active_scan = ScanState.query.filter_by(is_active=True).first()
         if active_scan and active_scan.phase not in TERMINAL_SCAN_PHASES:
+            # Live chunk tasks mean the scan is running no matter what the
+            # orchestrator task's Celery state says (see ScanChunk.has_active)
+            # -- unless nothing has updated for 30+ minutes (the scheduler
+            # sweep's hard threshold). The stale case falls through to the
+            # crash-marking below, so a dead worker's orphaned chunk rows
+            # cannot block scan launches forever.
+            if ScanChunk.has_active(active_scan.scan_id):
+                last_activity = active_scan.last_update or active_scan.start_time
+                if last_activity:
+                    if last_activity.tzinfo is None:
+                        last_activity = last_activity.replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) - last_activity <= timedelta(minutes=30):
+                        return True
+
             # Check if scan is stale (no progress update)
             from datetime import datetime, timezone, timedelta
             
@@ -149,7 +121,7 @@ def is_scan_running():
                             return True  # Task is still running, just slow
                         elif task_state is not None:
                             logger.warning(f"Celery task {active_scan.celery_task_id} is not active (state: {task_state})")
-                    
+
                     # Mark as crashed and allow new scan
                     active_scan.is_active = False
                     active_scan.phase = 'crashed'

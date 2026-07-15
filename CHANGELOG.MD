@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.6.65] - 2026-07-15
+
+### Fixed
+
+- **Active scans no longer get falsely marked crashed (#65).** Two defects compounded. First, the app writes timezone-aware UTC datetimes into naive TIMESTAMP columns and reads them back assuming UTC, but PostgreSQL converts aware values to the session timezone before dropping the offset - on a server with a non-UTC default timezone every scan timestamp was stored as local wall time, making a running scan look hours stale and tripping the stuck-scan checks within seconds of starting. The database session timezone is now pinned to UTC at connect time. Second, the stuck-scan checks treated the orchestrator task's SUCCESS state as "task lost" - but the orchestrator finishes as soon as chunk tasks are queued, so a chunked scan was declared dead while its chunks were actively scanning. Both the scheduler sweep's task-gone branch and the scan-launch check now consider a scan alive while any of its chunks are pending or processing and the scan has updated within the last 30 minutes; the 30-minute no-progress hard timeout stays as the backstop so a worker that died mid-chunk cannot block scans forever. The same fix also revived the sweep's Celery task check, which had been silently disabled since it was added: it imported `safe_check_task_state` from a module that never contained it and swallowed the ImportError. Symptom: progress bar disappears and the scan button resets mid-scan while file counts keep climbing, with `/api/scan-status` reporting `phase=crashed`.
+- **Scheduler lock contention between web and Celery containers (#64).** Every process importing the app raced for the Redis scheduler lock, and lock identity was hostname:pid - unsafe in podman pods, where containers share a hostname while pids collide across pid namespaces. A collision let one container force-steal a live lock ("self-lock"), and the heartbeat then overwrote the key unconditionally, so two schedulers could run at once. The lock value now carries a per-process uuid, acquisition is strictly SET NX (dead holders recover via the 60s TTL, never by force-steal), and the heartbeat refreshes the TTL with an atomic compare-and-expire that cannot clobber another holder. The standby retry loop also retries indefinitely instead of giving up after 5 minutes, so failover keeps working long after boot.
+
+### Added
+
+- **`SCHEDULER_ENABLED` environment variable (#64).** Set `false` on a container to keep it out of scheduler lock arbitration entirely (default `true`). docker-compose.yml now sets it to `false` on the web service so only the Celery worker runs the scheduler, matching the documented intent.
+- **`GUNICORN_BIND` environment variable for IPv6 / dual-stack deployments (#63).** Gunicorn settings moved from the hardcoded Dockerfile CMD into `gunicorn.conf.py`. `GUNICORN_BIND` accepts a comma-separated list of listen addresses (default unchanged: `0.0.0.0:5000`); rootless podman users wanting dual-stack can set `GUNICORN_BIND=[::]:5000`. `GUNICORN_WORKERS`, `GUNICORN_TIMEOUT`, and `GUNICORN_LOG_LEVEL` are also overridable now.
+
 ## [2.6.64] - 2026-07-09
 
 ### Added

@@ -1,182 +1,117 @@
+import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+import pixelprobe.progress_utils as pu
+import pixelprobe.scheduler_lock as sl
 from pixelprobe.scheduler import MediaScheduler
 from pixelprobe.models import db, ScanSchedule
 
 
-class TestSchedulerLockHelpers:
-    """Test scheduler lock helper functions for multi-worker coordination."""
+class TestSchedulerLock:
+    """A live scheduler lock must never be stolen. hostname:pid is not a safe
+    identity (podman pod containers share a hostname while pids collide across
+    pid namespaces), so ownership is a unique per-process value and acquisition
+    is strictly SET NX."""
 
-    def test_parse_scheduler_lock_new_format(self):
-        """Test parsing new lock format: hostname:pid:timestamp"""
-        # Import the functions from app module
-        import sys
+    def test_lock_value_unique_for_same_hostname_and_pid(self):
+
+        # Same process, same hostname, same pid -- values still differ.
+        assert sl.make_lock_value() != sl.make_lock_value()
+
+    def test_does_not_steal_live_lock_even_with_colliding_identity(self, monkeypatch):
+        """The podman-pod scenario: holder has our hostname AND our pid."""
         import os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import socket
 
-        # Test parsing logic directly (mirrors app.py implementation)
-        lock_value = "pixelprobe-app:12345:2026-01-01T00:00:00+00:00"
-        parts = lock_value.split(':')
-        if len(parts) >= 3 and not parts[0].isdigit():
-            hostname = parts[0]
-            pid = parts[1]
-            timestamp_str = ':'.join(parts[2:])
-        else:
-            hostname = None
-            pid = parts[0]
-            timestamp_str = ':'.join(parts[1:])
+        redis_client = MagicMock()
+        redis_client.set.return_value = None  # SET NX failed: lock is held
+        redis_client.get.return_value = f"{socket.gethostname()}:{os.getpid()}:deadbeef".encode()
+        monkeypatch.setattr(pu, 'get_redis_client', lambda: redis_client)
+        retry_spy = MagicMock()
+        monkeypatch.setattr(sl, '_start_retry_thread', retry_spy)
 
-        assert hostname == "pixelprobe-app"
-        assert pid == "12345"
-        assert timestamp_str == "2026-01-01T00:00:00+00:00"
+        scheduler = MagicMock()
+        result = sl.initialize_scheduler_with_lock(MagicMock(), scheduler)
 
-    def test_parse_scheduler_lock_old_format(self):
-        """Test parsing old lock format: pid:timestamp (no hostname)"""
-        lock_value = "12345:2026-01-01T00:00:00+00:00"
-        parts = lock_value.split(':')
-        if len(parts) >= 3 and not parts[0].isdigit():
-            hostname = parts[0]
-            pid = parts[1]
-            timestamp_str = ':'.join(parts[2:])
-        else:
-            hostname = None
-            pid = parts[0]
-            timestamp_str = ':'.join(parts[1:])
+        assert result is False
+        scheduler.init_app.assert_not_called()
+        retry_spy.assert_called_once()
+        # Every acquisition attempt was SET NX -- no unconditional overwrite.
+        for call in redis_client.set.call_args_list:
+            assert call.kwargs.get('nx') is True
 
-        assert hostname is None
-        assert pid == "12345"
-        assert timestamp_str == "2026-01-01T00:00:00+00:00"
+    def test_acquires_free_lock_and_starts_heartbeat(self, monkeypatch):
 
-    def test_should_acquire_self_lock(self):
-        """Test that same hostname AND same PID allows acquisition (self-lock refresh)."""
-        lock_hostname = "pixelprobe-app"
-        lock_pid = "12345"
-        lock_age = 10  # Recent lock
-        my_hostname = "pixelprobe-app"
-        my_pid = "12345"
+        redis_client = MagicMock()
+        redis_client.set.return_value = True
+        monkeypatch.setattr(pu, 'get_redis_client', lambda: redis_client)
+        heartbeat_spy = MagicMock()
+        monkeypatch.setattr(sl, '_start_heartbeat', heartbeat_spy)
 
-        # Same hostname AND same PID = self-lock, always acquire
-        if lock_hostname == my_hostname and lock_pid == my_pid:
-            should_acquire = True
-            reason = "self-lock"
-        elif lock_hostname == my_hostname:
-            should_acquire = lock_age > 65
-            reason = "stale-sibling" if should_acquire else "active-sibling"
-        else:
-            should_acquire = lock_age > 65
-            reason = "stale-remote" if should_acquire else "active-remote"
+        scheduler = MagicMock()
+        app = MagicMock()
+        result = sl.initialize_scheduler_with_lock(app, scheduler)
 
-        assert should_acquire is True
-        assert reason == "self-lock"
+        assert result is True
+        scheduler.init_app.assert_called_once_with(app)
+        heartbeat_spy.assert_called_once()
+        assert redis_client.set.call_args.kwargs.get('nx') is True
 
-    def test_should_not_acquire_active_sibling(self):
-        """Test that same hostname but different PID with fresh lock is NOT acquired."""
-        lock_hostname = "pixelprobe-app"
-        lock_pid = "12345"
-        lock_age = 10  # Recent lock (within 65s threshold)
-        my_hostname = "pixelprobe-app"
-        my_pid = "67890"  # Different PID - sibling worker
+    def test_retry_thread_acquires_after_lock_expiry(self, monkeypatch):
 
-        if lock_hostname == my_hostname and lock_pid == my_pid:
-            should_acquire = True
-            reason = "self-lock"
-        elif lock_hostname == my_hostname:
-            should_acquire = lock_age > 65
-            reason = "stale-sibling" if should_acquire else "active-sibling"
-        else:
-            should_acquire = lock_age > 65
-            reason = "stale-remote" if should_acquire else "active-remote"
+        monkeypatch.setattr(sl.time, 'sleep', lambda _s: None)
+        monkeypatch.setattr(sl, '_start_heartbeat', MagicMock())
 
-        assert should_acquire is False
-        assert reason == "active-sibling"
+        # Lock held for 14 rounds (past the old max_retries=10), then expires.
+        # Proves the standby retries indefinitely and only wins via SET NX.
+        results = [None] * 14 + [True]
+        redis_client = MagicMock()
+        redis_client.set.side_effect = results
 
-    def test_should_acquire_stale_sibling(self):
-        """Test that same hostname but different PID with stale lock IS acquired."""
-        lock_hostname = "pixelprobe-app"
-        lock_pid = "12345"
-        lock_age = 70  # Stale lock (>65s threshold)
-        my_hostname = "pixelprobe-app"
-        my_pid = "67890"  # Different PID - sibling worker
+        scheduler = MagicMock()
+        initialized = [False]
+        sl._start_retry_thread(redis_client, 'k', 'me', scheduler, MagicMock(), initialized)
 
-        if lock_hostname == my_hostname and lock_pid == my_pid:
-            should_acquire = True
-            reason = "self-lock"
-        elif lock_hostname == my_hostname:
-            should_acquire = lock_age > 65
-            reason = "stale-sibling" if should_acquire else "active-sibling"
-        else:
-            should_acquire = lock_age > 65
-            reason = "stale-remote" if should_acquire else "active-remote"
+        deadline = time.time() + 5
+        while not initialized[0] and time.time() < deadline:
+            time.sleep(0.01)
 
-        assert should_acquire is True
-        assert reason == "stale-sibling"
+        assert initialized[0] is True
+        scheduler.init_app.assert_called_once()
+        assert redis_client.set.call_count == len(results)
+        for call in redis_client.set.call_args_list:
+            assert call.kwargs.get('nx') is True
 
-    def test_should_not_acquire_active_remote(self):
-        """Test that different hostname with fresh lock is NOT acquired."""
-        lock_hostname = "other-container"
-        lock_pid = "12345"
-        lock_age = 10  # Recent lock
-        my_hostname = "pixelprobe-app"
-        my_pid = "67890"
 
-        if lock_hostname == my_hostname and lock_pid == my_pid:
-            should_acquire = True
-            reason = "self-lock"
-        elif lock_hostname == my_hostname:
-            should_acquire = lock_age > 65
-            reason = "stale-sibling" if should_acquire else "active-sibling"
-        else:
-            should_acquire = lock_age > 65
-            reason = "stale-remote" if should_acquire else "active-remote"
+class TestSchedulerEnabled:
+    """SCHEDULER_ENABLED gates whether a process competes for the lock at all."""
 
-        assert should_acquire is False
-        assert reason == "active-remote"
+    def test_default_is_enabled(self, monkeypatch):
+        monkeypatch.delenv('SCHEDULER_ENABLED', raising=False)
+        assert sl.scheduler_enabled() is True
 
-    def test_should_acquire_stale_remote(self):
-        """Test that different hostname with stale lock IS acquired."""
-        lock_hostname = "other-container"
-        lock_pid = "12345"
-        lock_age = 70  # Stale lock (>65s threshold)
-        my_hostname = "pixelprobe-app"
-        my_pid = "67890"
+    @pytest.mark.parametrize('value', ['false', 'FALSE', ' False ', '0', 'no'])
+    def test_disabled_values(self, monkeypatch, value):
+        monkeypatch.setenv('SCHEDULER_ENABLED', value)
+        assert sl.scheduler_enabled() is False
 
-        if lock_hostname == my_hostname and lock_pid == my_pid:
-            should_acquire = True
-            reason = "self-lock"
-        elif lock_hostname == my_hostname:
-            should_acquire = lock_age > 65
-            reason = "stale-sibling" if should_acquire else "active-sibling"
-        else:
-            should_acquire = lock_age > 65
-            reason = "stale-remote" if should_acquire else "active-remote"
+    @pytest.mark.parametrize('value', ['true', '1', 'yes', 'anything'])
+    def test_enabled_values(self, monkeypatch, value):
+        monkeypatch.setenv('SCHEDULER_ENABLED', value)
+        assert sl.scheduler_enabled() is True
 
-        assert should_acquire is True
-        assert reason == "stale-remote"
+    def test_disabled_skips_lock_arbitration(self, monkeypatch):
+        monkeypatch.setenv('SCHEDULER_ENABLED', 'false')
+        redis_client = MagicMock()
+        monkeypatch.setattr(pu, 'get_redis_client', lambda: redis_client)
 
-    def test_old_format_lock_treated_as_remote(self):
-        """Test that old format locks (no hostname) are treated as remote."""
-        lock_hostname = None  # Old format has no hostname
-        lock_pid = "12345"
-        lock_age = 10  # Recent lock
-        my_hostname = "pixelprobe-app"
-        my_pid = "67890"
-
-        # When hostname is None, it can't match my_hostname, so it's treated as remote
-        if lock_hostname == my_hostname and lock_pid == my_pid:
-            should_acquire = True
-            reason = "self-lock"
-        elif lock_hostname == my_hostname:
-            should_acquire = lock_age > 65
-            reason = "stale-sibling" if should_acquire else "active-sibling"
-        else:
-            should_acquire = lock_age > 65
-            reason = "stale-remote" if should_acquire else "active-remote"
-
-        assert should_acquire is False
-        assert reason == "active-remote"
+        scheduler = MagicMock()
+        assert sl.initialize_scheduler_with_lock(MagicMock(), scheduler) is False
+        scheduler.init_app.assert_not_called()
+        redis_client.set.assert_not_called()
 
 
 class TestMediaScheduler:
@@ -356,30 +291,28 @@ class TestQueueConflictRetry:
 
 class TestHeartbeatRecovery:
     """The lock heartbeat must keep retrying through Redis failures rather than
-    breaking out forever (which silently abandoned the lock). It must never
-    relinquish the lock on a transient error, and it stops only when the loop's
-    initialized flag is cleared (process teardown)."""
+    breaking out forever (which silently abandoned the lock). It refreshes the
+    TTL only while it still owns the lock (atomic compare-and-expire) and never
+    overwrites another holder."""
 
     def test_keeps_retrying_through_failures_and_recovers(self, monkeypatch):
-        from unittest.mock import MagicMock
-        import pixelprobe.scheduler_lock as sl
 
         monkeypatch.setattr(sl.time, 'sleep', lambda _s: None)
         initialized = [True]
         calls = {'n': 0}
 
-        def set_side_effect(*_a, **_k):
+        def eval_side_effect(*_a, **_k):
             calls['n'] += 1
             if calls['n'] <= 2:
                 raise Exception('transient blip')
             # Recovered after 2 failures: stop the loop deterministically.
             initialized[0] = False
-            return True
+            return 1
 
         redis_client = MagicMock()
-        redis_client.set.side_effect = set_side_effect
+        redis_client.eval.side_effect = eval_side_effect
 
-        t = sl._start_heartbeat('k', redis_client, 'host', initialized)
+        t = sl._start_heartbeat('k', redis_client, 'me', initialized)
         t.join(timeout=5)
 
         assert not t.is_alive()
@@ -387,14 +320,12 @@ class TestHeartbeatRecovery:
         assert calls['n'] >= 3
 
     def test_sustained_failure_does_not_abandon_loop(self, monkeypatch):
-        from unittest.mock import MagicMock
-        import pixelprobe.scheduler_lock as sl
 
         monkeypatch.setattr(sl.time, 'sleep', lambda _s: None)
         initialized = [True]
         calls = {'n': 0}
 
-        def set_side_effect(*_a, **_k):
+        def eval_side_effect(*_a, **_k):
             calls['n'] += 1
             if calls['n'] >= 5:
                 # Stop the test loop; in production it would keep retrying.
@@ -402,14 +333,84 @@ class TestHeartbeatRecovery:
             raise Exception('redis down')
 
         redis_client = MagicMock()
-        redis_client.set.side_effect = set_side_effect
+        redis_client.eval.side_effect = eval_side_effect
 
-        t = sl._start_heartbeat('k', redis_client, 'host', initialized)
+        t = sl._start_heartbeat('k', redis_client, 'me', initialized)
         t.join(timeout=5)
 
         assert not t.is_alive()
         # The loop retried every interval instead of bailing on the first error.
         assert calls['n'] >= 5
+
+    def test_refresh_while_owner_never_writes(self, monkeypatch):
+        """While we still hold the lock, the heartbeat only extends the TTL."""
+
+        monkeypatch.setattr(sl.time, 'sleep', lambda _s: None)
+        initialized = [True]
+        calls = {'n': 0}
+
+        def eval_side_effect(*args, **_k):
+            calls['n'] += 1
+            assert args[3] == 'me'  # compare-and-expire against OUR value
+            if calls['n'] >= 3:
+                initialized[0] = False
+            return 1
+
+        redis_client = MagicMock()
+        redis_client.eval.side_effect = eval_side_effect
+
+        t = sl._start_heartbeat('k', redis_client, 'me', initialized)
+        t.join(timeout=5)
+
+        assert not t.is_alive()
+        redis_client.set.assert_not_called()
+
+    def test_reclaims_expired_key_with_set_nx(self, monkeypatch):
+        """Redis outage expired the key: heartbeat reclaims it, but only NX."""
+
+        monkeypatch.setattr(sl.time, 'sleep', lambda _s: None)
+        initialized = [True]
+
+        def eval_side_effect(*_a, **_k):
+            return 0  # no longer owner (key gone)
+
+        def set_side_effect(*_a, **kwargs):
+            initialized[0] = False
+            assert kwargs.get('nx') is True
+            return True
+
+        redis_client = MagicMock()
+        redis_client.eval.side_effect = eval_side_effect
+        redis_client.set.side_effect = set_side_effect
+
+        t = sl._start_heartbeat('k', redis_client, 'me', initialized)
+        t.join(timeout=5)
+
+        assert not t.is_alive()
+        redis_client.set.assert_called_once()
+
+    def test_never_overwrites_another_holder(self, monkeypatch):
+        """Another process holds the lock now: warn, do not clobber it."""
+
+        monkeypatch.setattr(sl.time, 'sleep', lambda _s: None)
+        initialized = [True]
+
+        def set_side_effect(*_a, **kwargs):
+            initialized[0] = False
+            assert kwargs.get('nx') is True
+            return None  # someone else got there first
+
+        redis_client = MagicMock()
+        redis_client.eval.return_value = 0
+        redis_client.set.side_effect = set_side_effect
+        redis_client.get.return_value = b'other-host:1:cafef00d'
+
+        t = sl._start_heartbeat('k', redis_client, 'me', initialized)
+        t.join(timeout=5)
+
+        assert not t.is_alive()
+        # The only write attempted was the NX reclaim, which lost cleanly.
+        redis_client.set.assert_called_once()
 
 
 class TestScanningReclaim:
@@ -453,6 +454,103 @@ class TestScanningReclaim:
             assert r.scan_status == 'scanning'
 
 
+class TestStuckScanChunkAwareness:
+    """A finished orchestrator task must not get a scan marked crashed while
+    chunk tasks are still active (issue #65): the orchestrator returns as soon
+    as chunks are queued, so its SUCCESS state says nothing about the scan."""
+
+    @pytest.fixture
+    def scheduler(self, app):
+        scheduler = MediaScheduler()
+        scheduler.init_app(app)
+        yield scheduler
+        scheduler.shutdown()
+
+    def _make_stale_scan(self, db, scan_id, with_active_chunk):
+        from pixelprobe.models import ScanState, ScanChunk
+        # 10 min stale: past the 5-min task-gone threshold, under the 30-min
+        # hard threshold, so only the task-gone branch is in play.
+        scan = ScanState(
+            scan_id=scan_id, is_active=True, phase='scanning',
+            celery_task_id='orchestrator-task',
+            last_update=datetime.now(timezone.utc) - timedelta(minutes=10),
+        )
+        db.session.add(scan)
+        if with_active_chunk:
+            db.session.add(ScanChunk(
+                scan_id=scan_id, chunk_id='chunk-1',
+                directory_path='/media', status='processing',
+            ))
+        db.session.commit()
+        return scan
+
+    def _run_check(self, scheduler, app, monkeypatch):
+        import pixelprobe.utils.celery_utils as cu
+        monkeypatch.setattr(cu, 'check_celery_available', lambda: True)
+        monkeypatch.setattr(cu, 'safe_check_task_state', lambda *_a, **_k: 'SUCCESS')
+        app.celery = MagicMock()
+        scheduler._check_stuck_scans()
+
+    def test_active_chunks_prevent_false_crash(self, scheduler, app, db, monkeypatch):
+        from pixelprobe.models import ScanState
+        self._make_stale_scan(db, 'chunked-live', with_active_chunk=True)
+        self._run_check(scheduler, app, monkeypatch)
+
+        db.session.expire_all()
+        scan = ScanState.query.filter_by(scan_id='chunked-live').first()
+        assert scan.phase == 'scanning'
+        assert scan.is_active is True
+
+    def test_scan_without_chunks_is_marked_crashed(self, scheduler, app, db, monkeypatch):
+        """Positive control: with no live chunks the task-gone branch still
+        fires, proving the previous test is not passing vacuously."""
+        from pixelprobe.models import ScanState
+        self._make_stale_scan(db, 'chunked-dead', with_active_chunk=False)
+        self._run_check(scheduler, app, monkeypatch)
+
+        db.session.expire_all()
+        scan = ScanState.query.filter_by(scan_id='chunked-dead').first()
+        assert scan.phase == 'crashed'
+        assert scan.is_active is False
+
+    def test_has_active_chunks_helper(self, app, db):
+        from pixelprobe.models import ScanChunk
+        db.session.add(ScanChunk(scan_id='s-live', chunk_id='c1',
+                                 directory_path='/media', status='processing'))
+        db.session.add(ScanChunk(scan_id='s-done', chunk_id='c1',
+                                 directory_path='/media', status='completed'))
+        db.session.commit()
+
+        assert ScanChunk.has_active('s-live')
+        assert not ScanChunk.has_active('s-done')
+        assert not ScanChunk.has_active('s-none')
+
+
+class TestUTCSessionTimezone:
+    """The DB session timezone must be pinned to UTC: the app stores aware-UTC
+    datetimes in naive TIMESTAMP columns and reads them back assuming UTC, so
+    a non-UTC PostgreSQL session timezone stores local wall time and makes
+    every scan look hours stale to the stuck-scan checks (issue #65)."""
+
+    def test_all_configs_pin_session_timezone_to_utc(self):
+        from pixelprobe.config import Config, TestingConfig
+        for cfg in (Config, TestingConfig):
+            assert cfg.SQLALCHEMY_ENGINE_OPTIONS['connect_args']['options'] == '-c timezone=UTC'
+
+    @pytest.mark.parametrize('config_name', ['Config', 'TestingConfig'])
+    def test_init_app_keeps_timezone_option(self, monkeypatch, config_name):
+        """Both init_app overrides rebuild connect_args from scratch -- each
+        must re-include the timezone pin."""
+        from flask import Flask
+        import pixelprobe.config as config_module
+        cfg = getattr(config_module, config_name)
+        monkeypatch.setattr(cfg, 'POSTGRES_PASSWORD', 'pw')
+        flask_app = Flask(__name__)
+        cfg.init_app(flask_app)
+        connect_args = flask_app.config['SQLALCHEMY_ENGINE_OPTIONS']['connect_args']
+        assert connect_args['options'] == '-c timezone=UTC'
+
+
 class TestSchedulerRetryGaps:
     """Phase 2: a scheduled fire must never be silently dropped on lock
     contention or an API 409, and last_run advances only on a confirmed start."""
@@ -482,14 +580,12 @@ class TestSchedulerRetryGaps:
         assert scheduler.pending_retries.get('periodic') == 1
 
     def test_handle_response_200_clears_and_returns_true(self, scheduler):
-        from unittest.mock import MagicMock
         scheduler.pending_retries['schedule_5'] = 2
         resp = MagicMock(status_code=200)
         assert scheduler._handle_scan_response('schedule_5', lambda _i: None, (5,), resp) is True
         assert 'schedule_5' not in scheduler.pending_retries
 
     def test_handle_response_409_queues_retry(self, scheduler):
-        from unittest.mock import MagicMock
         resp = MagicMock(status_code=409)
         assert scheduler._handle_scan_response('schedule_6', lambda _i: None, (6,), resp) is False
         assert scheduler.pending_retries.get('schedule_6') == 1

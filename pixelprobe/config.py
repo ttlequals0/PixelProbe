@@ -7,6 +7,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Pin the PostgreSQL session timezone to UTC. The app stores aware-UTC
+# datetimes in TIMESTAMP WITHOUT TIME ZONE columns and reads them back
+# assuming UTC; PostgreSQL converts aware values to the SESSION timezone
+# before dropping the offset, so a non-UTC server default (e.g. TZ set on the
+# postgres container) silently stores local wall time and makes every scan
+# look hours stale to the stuck-scan checks (issue #65). The class-level
+# connect_args carry this option; init_app overrides merge into them rather
+# than rebuild, so the pin is never dropped. The worker engine in
+# media_checker.py carries it too.
+PG_SESSION_TZ_UTC = '-c timezone=UTC'
+
 
 class Config:
     """Base configuration - PostgreSQL only"""
@@ -41,7 +52,7 @@ class Config:
         'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '10')),
         'pool_timeout': 30,
         'echo': os.getenv('DATABASE_ECHO', 'false').lower() == 'true',
-        'connect_args': {}  # Will be populated in init_app if needed
+        'connect_args': {'options': PG_SESSION_TZ_UTC}
     }
     
     # Build basic PostgreSQL connection string (will be refined in init_app)
@@ -133,11 +144,13 @@ class Config:
             # Use the complete URI for both Flask and PixelProbe compatibility
             app.config['SQLALCHEMY_DATABASE_URI'] = complete_uri
             
-            # Update engine options for Flask app optimizations
+            # Update engine options for Flask app optimizations. Merge into the
+            # class-level connect_args so the UTC timezone pin is never dropped.
             engine_options = app.config['SQLALCHEMY_ENGINE_OPTIONS'].copy()
             engine_options['connect_args'] = {
+                **engine_options.get('connect_args', {}),
                 'connect_timeout': 10,
-                'application_name': 'pixelprobe'
+                'application_name': 'pixelprobe',
             }
             app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
             logger.debug(f"Complete database URI configured for {cls.POSTGRES_USER}@{cls.POSTGRES_HOST}:{cls.POSTGRES_PORT}/{cls.POSTGRES_DB}")
@@ -201,7 +214,7 @@ class TestingConfig(Config):
         'pool_size': 5,
         'max_overflow': 0,
         'pool_timeout': 10,
-        'connect_args': {}  # Will be populated in init_app
+        'connect_args': {'options': PG_SESSION_TZ_UTC}
     }
     
     # Disable output rotation in tests
@@ -221,13 +234,14 @@ class TestingConfig(Config):
         if cls.POSTGRES_PASSWORD:
             engine_options = app.config['SQLALCHEMY_ENGINE_OPTIONS'].copy()
             engine_options['connect_args'] = {
+                **engine_options.get('connect_args', {}),
                 'user': cls.POSTGRES_USER,
                 'password': cls.POSTGRES_PASSWORD,
                 'host': cls.POSTGRES_HOST,
                 'port': int(cls.POSTGRES_PORT),
                 'dbname': cls.POSTGRES_DB,  # Use test database
                 'connect_timeout': 5,
-                'application_name': 'pixelprobe_test'
+                'application_name': 'pixelprobe_test',
             }
             app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 

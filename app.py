@@ -125,6 +125,12 @@ if os.environ.get('DATABASE_URL'):
     logger.warning("DATABASE_URL is deprecated since v2.2.0. Use POSTGRES_HOST, POSTGRES_USER, etc. instead.")
     logger.warning("DATABASE_URL support will be removed in v2.3.0.")
     app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+    if not app.config['SQLALCHEMY_DATABASE_URI'].startswith('postgresql'):
+        # PostgreSQL-specific connect_args (timezone pin, connect_timeout)
+        # are invalid keyword arguments for other drivers' connect()
+        engine_options = app.config['SQLALCHEMY_ENGINE_OPTIONS'].copy()
+        engine_options['connect_args'] = {}
+        app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 
 # Initialize extensions
 db.init_app(app)
@@ -611,6 +617,7 @@ with app.app_context():
 
     try:
         # Initialize scheduler with distributed lock coordination
+        # (honors SCHEDULER_ENABLED -- see scheduler_lock.scheduler_enabled)
         from pixelprobe.scheduler_lock import initialize_scheduler_with_lock
         initialize_scheduler_with_lock(app, scheduler)
     except Exception as e:

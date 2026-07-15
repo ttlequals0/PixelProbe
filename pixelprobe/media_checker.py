@@ -166,6 +166,7 @@ class PixelProbe:
                 from sqlalchemy import create_engine
                 from sqlalchemy.orm import sessionmaker
                 from sqlalchemy.pool import StaticPool
+                from pixelprobe.config import PG_SESSION_TZ_UTC
                 # Thread-local instances use StaticPool with single persistent connection
                 # This avoids both connection pool exhaustion AND NullPool's concurrent operation errors
                 if self.database_path.startswith('postgresql://'):
@@ -178,7 +179,10 @@ class PixelProbe:
                         poolclass=StaticPool,  # Single persistent connection per engine
                         connect_args={
                             'connect_timeout': 10,
-                            'application_name': 'pixelprobe_worker'
+                            'application_name': 'pixelprobe_worker',
+                            # Same UTC session pin as the Flask engine (issue #65):
+                            # this engine writes scan_date/creation_date/last_modified
+                            'options': PG_SESSION_TZ_UTC
                         }
                     )
                 else:

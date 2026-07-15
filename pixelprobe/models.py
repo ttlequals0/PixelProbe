@@ -709,6 +709,23 @@ class ScanChunk(db.Model):
     # Add composite unique constraint
     __table_args__ = (db.UniqueConstraint('scan_id', 'chunk_id', name='uq_scan_chunks_scan_chunk'),)
 
+    ACTIVE_STATUSES = ('pending', 'processing')
+
+    @classmethod
+    def has_active(cls, scan_id):
+        """Whether any chunk tasks of a scan are still pending or processing.
+
+        Chunked scans outlive their orchestrator task: the orchestrator returns
+        as soon as chunk tasks are queued, so its Celery state (SUCCESS) says
+        nothing about whether the scan is still running (issue #65).
+        """
+        return db.session.query(
+            cls.query.filter(
+                cls.scan_id == scan_id,
+                cls.status.in_(cls.ACTIVE_STATUSES)
+            ).exists()
+        ).scalar()
+
     @staticmethod
     def fcp_directory_path(first_path, last_path):
         """Encode an FCP path-range for directory_path (the UI parses this format)."""

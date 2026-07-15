@@ -1,6 +1,10 @@
 """Celery utility functions for PixelProbe"""
 
 import logging
+import time
+
+import redis
+from celery.result import AsyncResult
 from flask import current_app
 
 logger = logging.getLogger(__name__)
@@ -23,6 +27,48 @@ def check_celery_available():
             celery_enabled = False
 
     return celery_enabled
+
+
+def safe_check_task_state(celery_task_id, app, max_retries=3, base_delay=0.5):
+    """
+    Safely check Celery task state with retry logic for Redis connection errors.
+
+    v2.5.54: Added to protect AsyncResult.state access from Redis connection crashes.
+    v2.6.65: Moved here from scan_routes so the scheduler can import it -- its
+    previous import from this module raised ImportError, which was silently
+    swallowed and left the stuck-scan sweep's task check permanently disabled.
+
+    Args:
+        celery_task_id: Celery task ID
+        app: Celery application instance
+        max_retries: Number of retry attempts
+        base_delay: Base delay between retries in seconds
+
+    Returns:
+        Task state string or None if unable to determine state
+    """
+    from pixelprobe.progress_utils import reset_redis_pool
+
+    for attempt in range(max_retries):
+        try:
+            result = AsyncResult(celery_task_id, app=app)
+            return result.state
+        except (redis.ConnectionError, redis.TimeoutError, ConnectionResetError, AttributeError) as e:
+            # Reset connection pool on first failure
+            if attempt == 0:
+                reset_redis_pool()
+
+            if attempt < max_retries - 1:
+                delay = base_delay * (attempt + 1)
+                logger.warning(f"Redis error checking task state (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {type(e).__name__}: {e}")
+                time.sleep(delay)
+            else:
+                logger.error(f"Failed to check task state after {max_retries} attempts: {type(e).__name__}: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"Unexpected error checking task state: {type(e).__name__}: {e}")
+            return None
+    return None
 
 
 def _noop_on_task_call(producer, task_id):
