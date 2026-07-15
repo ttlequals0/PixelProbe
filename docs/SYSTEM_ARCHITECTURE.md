@@ -75,7 +75,7 @@ PixelProbe is a distributed media corruption detection system built on a microse
   - Python PIL for additional image processing
 
 #### 3. Redis Container
-- **Image**: `redis:7-alpine`
+- **Image**: `valkey/valkey:9-alpine`
 - **Purpose**: Message broker and result backend
 - **Responsibilities**:
   - Queue task messages
@@ -85,7 +85,7 @@ PixelProbe is a distributed media corruption detection system built on a microse
 - **Persistence**: Optional volume mount for data persistence
 
 #### 4. PostgreSQL Container
-- **Image**: `postgres:15-alpine`
+- **Image**: `postgres:18-alpine`
 - **Purpose**: Primary data storage
 - **Responsibilities**:
   - Store scan results
@@ -393,13 +393,13 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: pixelprobe
       POSTGRES_USER: pixelprobe
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
       interval: 10s
@@ -407,10 +407,10 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    image: valkey/valkey:9-alpine
+    command: valkey-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5

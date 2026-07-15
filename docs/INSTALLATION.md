@@ -42,14 +42,18 @@ sudo apt-get update
 sudo apt-get install -y \
     python3 python3-dev python3-venv python3-pip \
     ffmpeg imagemagick \
-    postgresql-15 redis-server \
+    postgresql redis-server \
     git curl wget
 ```
 
+PixelProbe supports PostgreSQL 15 through 18; the distro default is fine. For
+PostgreSQL 18 on releases that ship an older version, use the
+[PGDG apt repository](https://www.postgresql.org/download/linux/ubuntu/).
+
 **macOS:**
 ```bash
-brew install python@3.11 ffmpeg imagemagick postgresql@15 redis git
-brew services start postgresql@15
+brew install python@3.12 ffmpeg imagemagick postgresql@18 redis git
+brew services start postgresql@18
 brew services start redis
 ```
 

@@ -22,15 +22,22 @@
 
 services:
   # PostgreSQL database
+  # BREAKING (v2.7.0): default moved from postgres:15 to postgres:18. An
+  # existing postgres_data volume created by 15 will NOT start on 18 -- follow
+  # the migration guide in docs/DOCKER_SETUP.md (dump on 15, restore into 18)
+  # BEFORE pulling this compose file, or pin the image back to postgres:15-alpine.
   postgres:
-    image: postgres:15-alpine
+    image: postgres:18-alpine
     container_name: pixelprobe-postgres
     environment:
       POSTGRES_DB: pixelprobe
       POSTGRES_USER: pixelprobe
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # postgres:18+ images require the mount at /var/lib/postgresql (NOT
+      # .../data); data lives in a major-version subdirectory so future
+      # upgrades can use pg_upgrade --link
+      - postgres_data:/var/lib/postgresql
     # Not published to the host: app and worker reach it on the compose
     # network. For local debugging use: - "127.0.0.1:5432:5432"
     healthcheck:
@@ -41,20 +48,21 @@ services:
     networks:
       - pixelprobe-network
 
-  # Redis for Celery task broker
+  # Valkey (Redis-compatible) for Celery task broker. Drop-in replacement:
+  # the service name stays "redis" so all redis:// URLs are unchanged.
   # Performance settings for large task queues (file changes check with 1M+ files):
   # - REDIS_MAX_MEMORY: Total memory for task queue (default: 2gb, recommended: 1-4gb)
   redis:
-    image: redis:7-alpine
+    image: valkey/valkey:9-alpine
     container_name: pixelprobe-redis
     command: >
-      redis-server
+      valkey-server
       --maxmemory ${REDIS_MAX_MEMORY:-2gb}
       --maxmemory-policy noeviction
-    # Not published to the host: Redis has no auth and holds the broker plus
-    # the internal API secret. For local debugging use: - "127.0.0.1:6379:6379"
+    # Not published to the host: the broker has no auth and holds the
+    # internal API secret. For local debugging use: - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -63,7 +71,7 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.6.65}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.7.0}
     container_name: pixelprobe-app
     environment:
       # Security
@@ -135,7 +143,7 @@ services:
 
   # P1 Celery Worker for distributed task processing
   celery-worker:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.6.65}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.7.0}
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:

@@ -27,7 +27,7 @@ def generate_fix_sql():
     AND scan_tool = 'imagemagick'
     AND (
         corruption_details LIKE '%CorruptImageProfile%' 
-        OR scan_output LIKE '%CorruptImageProfile%@warning/profile.c%'
+        OR scan_output LIKE '%CorruptImageProfile%warning/profile.c%'
     );
     """
     
@@ -82,7 +82,7 @@ def generate_fix_sql():
     WHERE is_corrupted = 1 
     AND (
         corruption_details LIKE '%ImageMagick warnings: %CorruptImageProfile%' 
-        OR scan_output LIKE '%CorruptImageProfile%@warning/profile.c%'
+        OR scan_output LIKE '%CorruptImageProfile%warning/profile.c%'
     )
     AND corruption_details LIKE '%;%';
     """

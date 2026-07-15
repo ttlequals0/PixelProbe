@@ -194,7 +194,7 @@ docker network inspect pixelprobe-network
 docker-compose logs postgres
 
 # Manual
-sudo tail -f /var/log/postgresql/postgresql-15-main.log
+sudo tail -f /var/log/postgresql/postgresql-18-main.log
 ```
 
 ### Database Table Missing
@@ -875,7 +875,7 @@ journalctl -u pixelprobe -f
 
 **PostgreSQL logs:**
 ```bash
-sudo tail -f /var/log/postgresql/postgresql-15-main.log
+sudo tail -f /var/log/postgresql/postgresql-18-main.log
 ```
 
 **Redis logs:**

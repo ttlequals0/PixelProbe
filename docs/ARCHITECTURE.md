@@ -321,8 +321,8 @@ Request → Rate Limiter → CSRF Check → Input Validation
 Docker Compose
     ├── pixelprobe-app (Gunicorn + Flask)
     ├── pixelprobe-celery-worker (Celery)
-    ├── pixelprobe-postgres (PostgreSQL 15)
-    └── pixelprobe-redis (Redis 7)
+    ├── pixelprobe-postgres (PostgreSQL 18)
+    └── pixelprobe-redis (Valkey 9)
 ```
 
 ### Production (with reverse proxy)

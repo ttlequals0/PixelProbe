@@ -145,14 +145,14 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:18-alpine
     container_name: pixelprobe-postgres
     environment:
       POSTGRES_DB: pixelprobe
       POSTGRES_USER: pixelprobe
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
       interval: 10s
@@ -160,11 +160,11 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: valkey/valkey:9-alpine
     container_name: pixelprobe-redis
-    command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-2gb} --maxmemory-policy noeviction
+    command: valkey-server --maxmemory ${REDIS_MAX_MEMORY:-2gb} --maxmemory-policy noeviction
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -373,7 +373,7 @@ For best performance:
 ```yaml
 pixelprobe:
   volumes:
-    - /mnt/ssd/postgres_data:/var/lib/postgresql/data  # SSD for database
+    - /mnt/ssd/postgres_data:/var/lib/postgresql  # SSD for database
     - /mnt/hdd/media:/media:ro                          # HDD OK for media
   tmpfs:
     - /tmp:size=1G                                      # tmpfs for temp files

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.7.0] - 2026-07-15
+
+### Breaking
+
+- **docker-compose.yml now defaults to PostgreSQL 18 (#67).** PostgreSQL data directories are not portable across major versions: an existing `postgres_data` volume created by PostgreSQL 15 will not start on the 18 image. Follow the new migration guide in docs/DOCKER_SETUP.md (dump on 15, restore into 18, refresh collation) BEFORE pulling the new compose file, or pin `postgres:15-alpine` to stay. The application itself works with PostgreSQL 15 through 18, so only the compose default is breaking - existing deployments that manage their own database are unaffected until they choose to migrate.
+
+### Changed
+
+- **Base image upgraded to Ubuntu 26.04 (#67).** FFmpeg 6.1.1 becomes 8.0.1 (faster demuxing/probing) and ImageMagick 6.9 becomes 7.1.2. The app pins Python 3.12 via deadsnakes and runs from a dedicated virtualenv (Ubuntu 26.04 ships 3.14, which psycopg2-binary has no wheels for yet). The image checker now invokes `magick` when available, falling back to `convert` on ImageMagick 6 systems, and the temporal-outlier probe uses `pts_time` (its `pkt_pts_time` field was removed in newer FFmpeg, which silently disabled that signal). Kernel header packages are purged from the final image, clearing the long tail of unfixable linux-libc-dev CVEs from scans.
+- **Task broker image switched from Redis 7 to Valkey 9 (#67).** Drop-in replacement: the compose service name, all redis:// URLs, and the wire protocol are unchanged, and the Valkey image ships redis-* compatibility symlinks. Valkey stays open source (BSD) while Redis moved away from it after 7.2.
+
+### Fixed
+
+- **Benign ImageMagick warning classification never matched.** The gates that classify PNG chunk and profile warnings as non-corruption checked for `@warning/png.c`, but ImageMagick (6 and 7 alike) emits `@ warning/png.c` with a space - so the benign-warning paths were unreachable and such files fell through to the generic error-keyword check. Verified against real ImageMagick output on both versions.
+
+### Added
+
+- **CI now builds the Docker image and runs the real-media parser tests inside it.** The FFmpeg/ImageMagick stderr parsers fail soft (a format change yields zero detections rather than an error), so unit tests on the runner's own tool versions cannot catch a base-image regression. The new job exercises corruption detection against the exact ffmpeg 8 / ImageMagick 7 binaries that ship in the image.
+- **PostgreSQL 15 to 18 migration guide** in docs/DOCKER_SETUP.md, including volume backup, restore verification, and collation refresh.
+
 ## [2.6.65] - 2026-07-15
 
 ### Fixed

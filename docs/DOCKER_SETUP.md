@@ -23,14 +23,14 @@ version: '3.8'
 services:
   # PostgreSQL Database - Stores all scan results and metadata
   postgres:
-    image: postgres:15-alpine
+    image: postgres:18-alpine
     container_name: pixelprobe-postgres
     environment:
       POSTGRES_DB: pixelprobe
       POSTGRES_USER: pixelprobe
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     ports:
       - "5432:5432"  # Optional: expose for external tools
     healthcheck:
@@ -42,13 +42,13 @@ services:
 
   # Redis - Message broker for Celery task queue
   redis:
-    image: redis:7-alpine
+    image: valkey/valkey:9-alpine
     container_name: pixelprobe-redis
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: valkey-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     ports:
       - "6379:6379"  # Optional: expose for monitoring
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -410,3 +410,62 @@ tar -czf pixelprobe_config_$(date +%Y%m%d).tar.gz docker-compose.yml .env
 4. Pull new image: `docker-compose pull`
 5. Start containers: `docker-compose up -d`
 6. Check logs: `docker-compose logs -f`
+
+## PostgreSQL 15 to 18 Migration (required for v2.7.0+)
+
+Starting with v2.7.0 the compose file defaults to `postgres:18-alpine`.
+PostgreSQL data directories are NOT portable across major versions: an
+existing `postgres_data` volume created by PostgreSQL 15 will refuse to start
+on the 18 image (the container crash-loops with a version mismatch error).
+Migrate BEFORE switching to the new compose file. If you are not ready to
+migrate, pin `image: postgres:15-alpine` in your compose file - the app works
+with both versions.
+
+Also note: the postgres:18+ Docker images changed the expected volume mount
+point from `/var/lib/postgresql/data` to `/var/lib/postgresql` (data now lives
+in a major-version subdirectory so future upgrades can use `pg_upgrade
+--link`). The 18 image refuses to start with a volume mounted at the old
+`/data` path. The bundled docker-compose.yml already uses the new mount; if
+you maintain your own compose file, update the postgres volume line to
+`- postgres_data:/var/lib/postgresql`.
+
+Downtime for the migration is roughly the dump plus restore time (a few
+minutes for typical libraries).
+
+```bash
+# 1. Dump while the OLD stack is still running
+DUMP=pixelprobe_pg15_$(date +%Y%m%d).sql.gz
+docker exec pixelprobe-postgres pg_dump -U pixelprobe pixelprobe | gzip > "$DUMP"
+
+# 2. Stop the stack
+docker-compose down
+
+# 3. Keep the old volume as a fallback (rename instead of delete)
+docker volume create pixelprobe_postgres_data_pg15_backup
+docker run --rm -v pixelprobe_postgres_data:/from -v pixelprobe_postgres_data_pg15_backup:/to alpine sh -c "cp -a /from/. /to/"
+docker volume rm pixelprobe_postgres_data
+
+# 4. NOW switch to the v2.7.0 compose file (postgres:18 image and the new
+#    /var/lib/postgresql volume mount) - e.g. git pull or edit your copy
+
+# 5. Start ONLY postgres on the new compose file (creates a fresh v18 volume)
+docker-compose up -d postgres
+# wait for: docker exec pixelprobe-postgres pg_isready -U pixelprobe
+
+# 6. Restore the dump
+gunzip < "$DUMP" | docker exec -i pixelprobe-postgres psql -U pixelprobe pixelprobe
+
+# 7. Refresh collation metadata (avoids "collation version mismatch" warnings)
+docker exec pixelprobe-postgres psql -U pixelprobe -d pixelprobe -c "ALTER DATABASE pixelprobe REFRESH COLLATION VERSION;"
+docker exec pixelprobe-postgres psql -U pixelprobe -d pixelprobe -c "REINDEX DATABASE pixelprobe;"
+
+# 8. Start the rest of the stack and verify
+docker-compose up -d
+# sanity check: row counts should match your pre-migration numbers
+docker exec pixelprobe-postgres psql -U pixelprobe -d pixelprobe -c "SELECT COUNT(*) FROM scan_results;"
+```
+
+Note: your compose project name may prefix the volume (e.g.
+`pixelprobe_postgres_data`); check with `docker volume ls`. Once you have
+verified the app against PostgreSQL 18, the `_pg15_backup` volume and the
+dump file can be deleted.

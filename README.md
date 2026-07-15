@@ -46,7 +46,7 @@ PixelProbe detects corrupted video, image, and audio files across your media lib
 
 ### System Features
 - **PostgreSQL database**: Reliable ACID-compliant data storage
-- **Redis-backed task queue**: Background processing with Celery workers
+- **Redis-compatible task queue (Valkey)**: Background processing with Celery workers
 - **Docker deployment**: Multi-container architecture (web, workers, database, queue)
 - **REST API**: Full OpenAPI/Swagger documentation
 - **Monitoring & Reports**: Real-time statistics, trend analytics, storage projections, PDF/JSON exports, complete audit trail
@@ -234,6 +234,13 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 ## Requirements
 
 **Important**: PixelProbe requires PostgreSQL.
+
+**Upgrading to v2.7.0**: the bundled docker-compose.yml now defaults to
+PostgreSQL 18 and Valkey 9. The app works with PostgreSQL 15-18 and any
+Redis-compatible broker, but an existing PostgreSQL 15 data volume will not
+start on the 18 image - follow the migration guide in
+[docs/DOCKER_SETUP.md](docs/DOCKER_SETUP.md#postgresql-15-to-18-migration-required-for-v270)
+before switching, or pin `postgres:15-alpine` in your compose file.
 
 ## Configuration
 
