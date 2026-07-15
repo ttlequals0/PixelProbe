@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from pixelprobe.models import db, ScanSchedule, ScanResult, ScanState, HealthcheckConfig, ScanReport
+from pixelprobe.models import db, ScanSchedule, ScanResult, ScanState, ScanChunk, HealthcheckConfig, ScanReport
 from pixelprobe.constants import SCAN_PHASES, TERMINAL_SCAN_PHASES
 from pixelprobe.services.scan_engine import maybe_finalize_scan
 from pixelprobe.utils.paths import is_path_under
@@ -800,6 +800,28 @@ class MediaScheduler:
         except Exception as e:
             logger.error(f"Schedule database sync failed: {e}")
             
+    def _celery_task_gone(self, scan):
+        """Whether the scan's Celery work is definitively gone.
+
+        A lost/crashed Celery task with a stale last_update is a definitive
+        crash indicator -- but the orchestrator task alone is not authoritative:
+        it returns (SUCCESS) as soon as chunk tasks are queued, so the scan
+        counts as alive while any chunks remain active (issue #65).
+        """
+        if not scan.celery_task_id:
+            return False
+        try:
+            from pixelprobe.utils.celery_utils import check_celery_available, safe_check_task_state
+            from flask import current_app
+            if ScanChunk.has_active(scan.scan_id):
+                return False
+            if not check_celery_available():
+                return False
+            task_state = safe_check_task_state(scan.celery_task_id, current_app.celery)
+            return task_state is None or task_state in ('SUCCESS', 'FAILURE', 'REVOKED')
+        except Exception:
+            return False  # Celery check failed, rely on time-based detection
+
     def _check_stuck_scans(self):
         """Check for stuck scans and mark them as crashed"""
         try:
@@ -846,20 +868,6 @@ class MediaScheduler:
                     if start_time and start_time.tzinfo is None:
                         start_time = start_time.replace(tzinfo=timezone.utc)
 
-                    # Secondary check: if scan has a Celery task, verify task is still alive.
-                    # A lost/crashed Celery task with a stale last_update is a definitive indicator.
-                    celery_task_gone = False
-                    if scan.celery_task_id:
-                        try:
-                            from pixelprobe.utils.celery_utils import check_celery_available, safe_check_task_state
-                            from flask import current_app
-                            if check_celery_available():
-                                task_state = safe_check_task_state(scan.celery_task_id, current_app.celery)
-                                if task_state in ['SUCCESS', 'FAILURE', 'REVOKED'] or task_state is None:
-                                    celery_task_gone = True
-                        except Exception:
-                            pass  # Celery check failed, rely on time-based detection
-
                     # Check if scan has been running for more than 30 minutes without update
                     if last_update and last_update < stuck_threshold:
                         logger.warning(f"Marking stuck scan {scan.scan_id} as crashed - no update since {last_update}")
@@ -867,7 +875,8 @@ class MediaScheduler:
                         scan.phase = 'crashed'
                         scan.error_message = f"Scan appears stuck - no activity for over 30 minutes (last update: {last_update})"
                         scans_to_mark.append(scan)
-                    elif celery_task_gone and last_update and last_update < (current_time - timedelta(minutes=5)):
+                    elif (last_update and last_update < (current_time - timedelta(minutes=5))
+                          and self._celery_task_gone(scan)):
                         # Celery task is gone AND no update for 5+ minutes -- crashed
                         logger.warning(f"Marking scan {scan.scan_id} as crashed - Celery task gone and no update since {last_update}")
                         scan.is_active = False

@@ -45,6 +45,11 @@ All configuration is done via environment variables, either in `.env` file or di
 | `SCAN_PATHS` | `/media` | Comma-separated paths to scan inside container |
 | `TZ` | `UTC` | Timezone for timestamps (e.g., `America/New_York`) |
 | `PORT` | `5000` | Web interface port |
+| `GUNICORN_BIND` | `0.0.0.0:5000` | Gunicorn listen address; accepts a comma-separated list for multiple sockets. For dual-stack IPv4+IPv6 (e.g. rootless podman) set `[::]:5000` -- one IPv6 wildcard also accepts IPv4 when the kernel keeps `net.ipv6.bindv6only=0` (the Linux default). Do not list both `0.0.0.0:5000` and `[::]:5000` on such kernels; the second bind fails with `EADDRINUSE`. |
+| `GUNICORN_WORKERS` | `4` | Gunicorn worker process count |
+| `GUNICORN_TIMEOUT` | `300` | Gunicorn per-request timeout in seconds |
+| `GUNICORN_LOG_LEVEL` | `info` | Gunicorn log level |
+| `SCHEDULER_ENABLED` | `true` | Whether this process may run the scan scheduler. In multi-container deployments set `false` on the web container so only the Celery worker competes for the scheduler lock. Leave `true` in single-container setups. |
 
 ### Performance Variables
 

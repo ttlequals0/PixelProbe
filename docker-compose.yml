@@ -63,11 +63,15 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.6.57}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.6.65}
     container_name: pixelprobe-app
     environment:
       # Security
       SECRET_KEY: ${SECRET_KEY}
+
+      # Scheduler runs in celery-worker; keep the web container out of the
+      # scheduler lock entirely (set to "true" only in single-container setups)
+      SCHEDULER_ENABLED: "false"
       
       # PostgreSQL database configuration
       POSTGRES_HOST: postgres
@@ -131,7 +135,7 @@ services:
 
   # P1 Celery Worker for distributed task processing
   celery-worker:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.6.57}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.6.65}
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:

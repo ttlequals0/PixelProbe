@@ -7,6 +7,10 @@ import tempfile
 import os
 import shutil
 from pathlib import Path
+
+# Required before any pixelprobe.config import; set here (not only inside the
+# app fixture) so tests that import config directly also work in isolation
+os.environ.setdefault('SECRET_KEY', 'test-secret-key')
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 

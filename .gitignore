@@ -181,3 +181,5 @@ CLAUDE.md
 CLAUDE.MD
 audit_reports/
 .playwright-mcp/
+# Claude superpowers plugin artifacts
+superpowers/
