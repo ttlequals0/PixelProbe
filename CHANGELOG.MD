@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.7.1] - 2026-07-16
+
+### Fixed
+
+- **A single unreadable file no longer hangs an entire scan (#70).** External tools (ffprobe, ffmpeg, ImageMagick) already run under hard timeouts, but the pure-Python reads that precede them - os.stat, libmagic type detection, and the SHA-256 hash read - had none. A file on stalled storage (dead NFS/SMB/fuse mount, failing disk sector) blocked the chunk worker in the kernel forever with no ffmpeg or ImageMagick process visible, the progress counter and ETA froze, and because the file was still `pending`, restarting the containers resumed the scan straight back into the same hang. These reads now run under a watchdog deadline (`FILE_READ_TIMEOUT_SECS`, default 60s; the hash deadline additionally scales with file size at an assumed 5MB/s floor). On timeout the file is marked corrupted with a "stalled read" detail, the result is persisted so no scan path re-selects the file, and the scan moves on. A stalled read that times out abandons one watchdog thread until the kernel releases it; at 32 concurrently stalled reads new reads fail fast instead of piling up, so a fully dead mount degrades to fast per-file errors rather than fd exhaustion.
+
 ## [2.7.0] - 2026-07-16
 
 ### Breaking

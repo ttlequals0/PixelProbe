@@ -62,6 +62,8 @@ All configuration is done via environment variables, either in `.env` file or di
 | `MAX_OUTPUT_SIZE` | `10000` | Max output characters before rotation | 10000-50000 |
 | `OUTPUT_ROTATION_ENABLED` | `true` | Enable output truncation | `true` for large scans |
 | `FREEZE_DETECTION_ENABLED` | `true` | Enable video freeze detection (freezedetect + blackdetect) | `false` to skip and reduce scan time |
+| `FILE_READ_TIMEOUT_SECS` | `60` | Deadline in seconds for raw file reads (stat, type detection, hash). A file whose reads stall past it (dead network mount, failing sector) is marked corrupted and skipped instead of hanging the scan. The hash deadline scales up with file size assuming at least 5MB/s storage throughput | Raise the base on storage slower than 5MB/s sustained |
+| `FFPROBE_TIMEOUT_SECS` | `120` | Hard ceiling in seconds for ffprobe metadata reads | Raise on very slow storage |
 
 **Performance Notes:**
 - `MAX_WORKERS` controls parallelism within each scan task

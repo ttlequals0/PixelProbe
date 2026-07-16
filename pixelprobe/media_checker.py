@@ -5,6 +5,7 @@ import magic
 import logging
 import hashlib
 import json
+import mmap
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from pixelprobe.utils.security import safe_subprocess_run, validate_file_path, ensure_cli_safe_path
+from pixelprobe.utils.helpers import env_int
 from pixelprobe.utils.integrity import apply_scan_baseline
 from pixelprobe.utils.paths import is_path_under
 
@@ -54,6 +56,64 @@ def _ffprobe_with_timeout(file_path, timeout=None):
     if result.returncode != 0:
         raise ffmpeg.Error('ffprobe', result.stdout, result.stderr)
     return json.loads(result.stdout.decode('utf-8'))
+
+# Deadline for pure-Python file reads (stat, magic, hash). Unlike the external
+# tools these have no subprocess timeout, so a file on stalled storage (dead
+# NFS/SMB mount, failing sector) blocks the scan worker in the kernel forever
+# with no ffmpeg/ImageMagick process visible (issue #70). Env-overridable.
+FILE_READ_TIMEOUT_SECS = env_int('FILE_READ_TIMEOUT_SECS', 60, floor=10)
+
+# Each timed-out read abandons one stuck thread (and its fd) until the kernel
+# read returns. Cap how many may be live at once so a fully dead mount fails
+# fast instead of exhausting the fd table one file at a time.
+_MAX_ABANDONED_READ_THREADS = 32
+_abandoned_read_threads = []
+_abandoned_read_threads_lock = threading.Lock()
+
+
+class FileReadTimeoutError(Exception):
+    """A raw file read stalled past its deadline (dead mount / bad sector)."""
+
+
+def _read_with_timeout(func, timeout, file_path, operation):
+    """Run a blocking read in a watchdog thread with a hard deadline.
+
+    A read stuck in uninterruptible kernel sleep cannot be interrupted or
+    killed; on timeout the daemon thread is abandoned (it holds one fd until
+    the read returns or the process exits) and FileReadTimeoutError is raised
+    so the scan marks the file unreadable and moves on instead of hanging the
+    whole chunk. Once _MAX_ABANDONED_READ_THREADS reads are stuck, new reads
+    fail immediately without spawning more threads.
+    """
+    with _abandoned_read_threads_lock:
+        _abandoned_read_threads[:] = [t for t in _abandoned_read_threads if t.is_alive()]
+        if len(_abandoned_read_threads) >= _MAX_ABANDONED_READ_THREADS:
+            raise FileReadTimeoutError(
+                f'{operation} of {file_path} skipped - '
+                f'{len(_abandoned_read_threads)} reads already stalled, '
+                f'storage appears unreachable')
+
+    result = {}
+
+    def target():
+        try:
+            result['value'] = func()
+        except Exception as e:
+            result['error'] = e
+
+    thread = threading.Thread(target=target, daemon=True,
+                              name=f'read-watchdog:{operation}')
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        with _abandoned_read_threads_lock:
+            _abandoned_read_threads.append(thread)
+        raise FileReadTimeoutError(
+            f'{operation} of {file_path} stalled for {timeout}s - '
+            f'skipping unreadable file')
+    if 'error' in result:
+        raise result['error']
+    return result.get('value')
 
 # Pre-compiled patterns for parsing FFmpeg freezedetect filter output
 _RE_FREEZE_START = re.compile(r'freeze_start:\s*([\d.]+)')
@@ -511,18 +571,28 @@ class PixelProbe:
                 
         return extension in self.supported_formats
     
-    def get_file_info(self, file_path):
-        """Get basic file information without scanning for corruption"""
+    def get_file_info(self, file_path, timeout=None):
+        """Get basic file information without scanning for corruption
+
+        Raises FileReadTimeoutError if stat/magic stall (issue #70); other
+        errors keep returning the fallback dict.
+        """
+        if timeout is None:
+            timeout = FILE_READ_TIMEOUT_SECS
         try:
-            file_stats = os.stat(file_path)
+            def read_info():
+                stats = os.stat(file_path)
+                return stats, magic.from_file(file_path, mime=True)
+
+            file_stats, file_type = _read_with_timeout(
+                read_info, timeout, file_path, 'stat/magic')
             file_size = file_stats.st_size
             # UTC-aware: bitrot classification compares this stored baseline
             # against a UTC mtime, and naive local values poison it (the old
             # naive form is why mtime_baseline_utc exists).
             creation_date = datetime.fromtimestamp(file_stats.st_ctime, timezone.utc)
             last_modified = datetime.fromtimestamp(file_stats.st_mtime, timezone.utc)
-            file_type = magic.from_file(file_path, mime=True)
-            
+
             return {
                 'file_path': file_path,
                 'file_size': file_size,
@@ -530,6 +600,8 @@ class PixelProbe:
                 'creation_date': creation_date,
                 'last_modified': last_modified
             }
+        except FileReadTimeoutError:
+            raise
         except Exception as e:
             logger.error(f"Error getting file info for {file_path}: {str(e)}")
             return {
@@ -540,74 +612,90 @@ class PixelProbe:
                 'last_modified': datetime.now(timezone.utc)
             }
     
-    def calculate_file_hash(self, file_path):
-        """Calculate SHA-256 hash of a file with optimized chunk size"""
+    def calculate_file_hash(self, file_path, timeout=None, file_size=None):
+        """Calculate SHA-256 hash of a file with optimized chunk size
+
+        Raises FileReadTimeoutError if the read stalls past the deadline
+        (issue #70); all other errors keep returning None. Pass file_size
+        when already known to skip a redundant guarded stat.
+        """
         try:
-            logger.info(f"Calculating hash for: {file_path}")
-            hash_sha256 = hashlib.sha256()
-            start_time = time.time()
-            bytes_processed = 0
-            
-            # Get file size to determine optimal chunk size
-            file_size = os.path.getsize(file_path)
-            
-            # NEVER skip hash - integrity checking is critical for all files
-            # Use mmap for files > 100MB (5-10x faster), adaptive buffering for smaller files
-            import mmap
+            if file_size is None:
+                file_size = _read_with_timeout(
+                    lambda: os.path.getsize(file_path),
+                    timeout if timeout is not None else FILE_READ_TIMEOUT_SECS,
+                    file_path, 'stat')
+            if timeout is None:
+                # Deadline assumes storage sustains at least ~5MB/s
+                timeout = FILE_READ_TIMEOUT_SECS + int(file_size / (5 * 1024 * 1024))
+            return _read_with_timeout(
+                lambda: self._hash_file_contents(file_path, file_size),
+                timeout, file_path, 'hash read')
+        except FileReadTimeoutError:
+            raise
+        except Exception as e:
+            logger.error(f"Error calculating hash for {file_path}: {str(e)}")
+            return None
 
-            if file_size > 100 * 1024 * 1024:  # 100MB threshold
-                # Use memory-mapped I/O for large files (5-10x faster)
-                logger.info(f"Hashing large file ({file_size/1024/1024/1024:.1f}GB) with mmap: {file_path}")
-                try:
-                    with open(file_path, "rb") as f:
-                        # Map entire file into memory (OS handles paging)
-                        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                            hash_sha256.update(mm)
-                            bytes_processed = file_size
-                except (OSError, ValueError) as e:
-                    # Fallback to buffered read if mmap fails
-                    logger.warning(f"mmap failed for {file_path}, falling back to buffered read: {e}")
-                    with open(file_path, "rb") as f:
-                        chunk_size = 16 * 1024 * 1024  # 16MB chunks
-                        while True:
-                            chunk = f.read(chunk_size)
-                            if not chunk:
-                                break
-                            hash_sha256.update(chunk)
-                            bytes_processed += len(chunk)
-            else:
-                # Use adaptive chunk sizes for smaller files
-                chunk_size = 1024 * 1024  # 1MB chunks for files up to 1GB
+    def _hash_file_contents(self, file_path, file_size):
+        """Blocking hash read; callers bound it via _read_with_timeout."""
+        logger.info(f"Calculating hash for: {file_path}")
+        hash_sha256 = hashlib.sha256()
+        start_time = time.time()
+        bytes_processed = 0
 
-                # For files 1-10GB, use larger chunks
-                if file_size > 1024 * 1024 * 1024:
-                    chunk_size = 4 * 1024 * 1024  # 4MB chunks
-
+        # NEVER skip hash - integrity checking is critical for all files
+        # Use mmap for files > 100MB (5-10x faster), adaptive buffering for smaller files
+        if file_size > 100 * 1024 * 1024:  # 100MB threshold
+            # Use memory-mapped I/O for large files (5-10x faster)
+            logger.info(f"Hashing large file ({file_size/1024/1024/1024:.1f}GB) with mmap: {file_path}")
+            try:
                 with open(file_path, "rb") as f:
+                    # Map entire file into memory (OS handles paging)
+                    with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                        hash_sha256.update(mm)
+                        bytes_processed = file_size
+            except (OSError, ValueError) as e:
+                # Fallback to buffered read if mmap fails
+                logger.warning(f"mmap failed for {file_path}, falling back to buffered read: {e}")
+                with open(file_path, "rb") as f:
+                    chunk_size = 16 * 1024 * 1024  # 16MB chunks
                     while True:
                         chunk = f.read(chunk_size)
                         if not chunk:
                             break
                         hash_sha256.update(chunk)
                         bytes_processed += len(chunk)
+        else:
+            # Use adaptive chunk sizes for smaller files
+            chunk_size = 1024 * 1024  # 1MB chunks for files up to 1GB
 
-                        # Log progress for large files every 100MB
-                        elapsed = time.time() - start_time
-                        if bytes_processed % (100 * 1024 * 1024) == 0:
-                            mb_processed = bytes_processed / (1024 * 1024)
-                            mb_per_sec = mb_processed / elapsed if elapsed > 0 else 0
-                            logger.info(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s ({mb_per_sec:.1f}MB/s)")
-            
-            total_time = time.time() - start_time
-            if total_time > 10:  # Log completion time for files that take more than 10 seconds
-                mb_size = bytes_processed / (1024 * 1024)
-                mb_per_sec = mb_size / total_time if total_time > 0 else 0
-                logger.info(f"Hash complete for {file_path}: {mb_size:.1f}MB in {total_time:.1f}s ({mb_per_sec:.1f}MB/s)")
-            
-            return hash_sha256.hexdigest()
-        except Exception as e:
-            logger.error(f"Error calculating hash for {file_path}: {str(e)}")
-            return None
+            # For files 1-10GB, use larger chunks
+            if file_size > 1024 * 1024 * 1024:
+                chunk_size = 4 * 1024 * 1024  # 4MB chunks
+
+            with open(file_path, "rb") as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    hash_sha256.update(chunk)
+                    bytes_processed += len(chunk)
+
+                    # Log progress for large files every 100MB
+                    elapsed = time.time() - start_time
+                    if bytes_processed % (100 * 1024 * 1024) == 0:
+                        mb_processed = bytes_processed / (1024 * 1024)
+                        mb_per_sec = mb_processed / elapsed if elapsed > 0 else 0
+                        logger.info(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s ({mb_per_sec:.1f}MB/s)")
+
+        total_time = time.time() - start_time
+        if total_time > 10:  # Log completion time for files that take more than 10 seconds
+            mb_size = bytes_processed / (1024 * 1024)
+            mb_per_sec = mb_size / total_time if total_time > 0 else 0
+            logger.info(f"Hash complete for {file_path}: {mb_size:.1f}MB in {total_time:.1f}s ({mb_per_sec:.1f}MB/s)")
+
+        return hash_sha256.hexdigest()
     
     def scan_files_parallel(self, file_paths, progress_callback=None, scan_paths=None, force_rescan=False):
         """Scan multiple files in parallel using ThreadPoolExecutor with path-based optimization"""
@@ -799,9 +887,11 @@ class PixelProbe:
             
             # Get basic file info first
             file_info = self.get_file_info(file_path)
-            
-            # Calculate file hash
-            file_hash = self.calculate_file_hash(file_path)
+
+            # Calculate file hash (reuse the stat from file_info; its fallback
+            # dict reports size 0, in which case hash re-stats under its guard)
+            file_hash = self.calculate_file_hash(
+                file_path, file_size=file_info['file_size'] or None)
             
             # Check cache if not forcing rescan
             if not force_rescan and self.database_path:
@@ -871,7 +961,7 @@ class PixelProbe:
         except Exception as e:
             scan_duration = time.time() - scan_start_time
             logger.error(f"Error scanning file {file_path}: {str(e)}")
-            return {
+            result = {
                 'file_path': file_path,
                 'file_size': 0,
                 'file_type': 'unknown',
@@ -886,6 +976,11 @@ class PixelProbe:
                 'has_warnings': False,
                 'warning_details': None
             }
+            # Persist the failure: without this the row stays 'pending' in the
+            # non-chunked paths and an unreadable file is re-selected forever
+            # (the re-stick loop of issue #70). No-op when database_path unset.
+            self._save_to_cache(file_path, result)
+            return result
         finally:
             # Clear current scan tracking
             with self.scan_lock:
