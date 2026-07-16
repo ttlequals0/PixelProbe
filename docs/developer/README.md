@@ -126,7 +126,7 @@ docker-compose up -d
    - Query optimization
    - Transaction management
 
-5. **Core Scanner** (`media_checker.py`)
+5. **Core Scanner** (`pixelprobe/media_checker.py`)
    - File discovery
    - Corruption detection
    - Multi-tool validation
@@ -136,16 +136,16 @@ docker-compose up -d
 ```
 PixelProbe/
 ├── app.py                    # Application entry point
-├── media_checker.py          # Core scanning engine
-├── models.py                 # SQLAlchemy models
-├── scheduler.py              # Scheduled scan management
-├── version.py                # Version information
 ├── requirements.txt          # Python dependencies
 ├── Dockerfile               # Docker configuration
 ├── docker-compose.yml       # Docker Compose setup
 │
 ├── pixelprobe/              # Main application package
 │   ├── __init__.py
+│   ├── media_checker.py     # Core scanning engine
+│   ├── models.py            # SQLAlchemy models
+│   ├── scheduler.py         # Scheduled scan management
+│   ├── version.py           # Version information
 │   ├── api/                 # API endpoints
 │   │   ├── scan_routes.py   # Scanning endpoints
 │   │   ├── stats_routes.py  # Statistics endpoints
@@ -276,7 +276,7 @@ When adding new database fields:
 
 1. **Update the model:**
 ```python
-# models.py
+# pixelprobe/models.py
 class YourModel(db.Model):
     new_field = db.Column(db.String(100))
 ```
@@ -293,6 +293,14 @@ def migrate_database():
 ## Testing
 
 ### Running Tests
+
+Install the test dependencies first, and build the frontend assets (some tests
+and the app itself expect the built static files):
+
+```bash
+pip install -r requirements-test.txt
+npm install && npm run build
+```
 
 ```bash
 # Run all tests
@@ -376,13 +384,12 @@ result = safe_subprocess_run(['ffmpeg', '-i', file_path])
 result = subprocess.run(f'ffmpeg -i {file_path}', shell=True)  # DANGEROUS!
 ```
 
-### Authentication (Future)
+### Authentication
 
-When implementing authentication:
-- Use JWT tokens
-- Implement refresh tokens
-- Add role-based access control
-- Secure sensitive endpoints
+Authentication is implemented in `pixelprobe/auth.py`:
+- Session-based login for the web UI (24-hour lifetime, 30-minute inactivity timeout)
+- Bearer API tokens for programmatic access (managed via `/api/tokens`)
+- Protect new endpoints with the `@auth_required` decorator
 
 ## Contributing
 
@@ -425,7 +432,7 @@ TZ=UTC
 
 2. **Gunicorn Configuration:**
 ```python
-# gunicorn_config.py
+# gunicorn.conf.py
 bind = "0.0.0.0:5000"
 workers = 4
 worker_class = "sync"
@@ -437,7 +444,7 @@ timeout = 120
 
 3. **Run with Gunicorn:**
 ```bash
-gunicorn -c gunicorn_config.py app:app
+gunicorn -c gunicorn.conf.py app:app
 ```
 
 ### Docker Deployment
@@ -478,7 +485,7 @@ docker run -d \
 ### Backup
 
 Regular backups of:
-- SQLite database
+- PostgreSQL database
 - Configuration files
 - Scan results
 - Error logs

@@ -123,21 +123,6 @@ These tools fix common false positives in media file corruption detection:
 ./scripts/setup_and_run_local.sh
 ```
 
-#### `scripts/run_modern_ui.sh`
-**Purpose:** Run the modern UI in development mode  
-
-#### `scripts/run_test_ui.sh`
-**Purpose:** Run UI with test fixtures  
-
-### Docker Development
-
-#### `scripts/docker-run-modern.sh`
-**Purpose:** Run modern UI in Docker container  
-**Usage:**
-```bash
-./scripts/docker-run-modern.sh
-```
-
 ---
 
 ## Testing Tools
@@ -200,15 +185,6 @@ python3 tests/fixtures/media_samples/download_missing_samples.py
 
 ---
 
-## Runtime Patches
-
-#### `patches/v2_2_47_fixes.py`
-**Purpose:** Runtime patches for v2.2.47 connection issues  
-**Applied:** Automatically on startup  
-**Fixes:** Connection pooling, transaction recovery  
-
----
-
 ## Quick Reference
 
 ### Most Common Operations
@@ -253,7 +229,6 @@ Most scripts respect these environment variables:
 
 **Development Only:**
 - Test database creators
-- UI development scripts
 - Local setup scripts
 
 **Use with Caution:**
@@ -267,5 +242,5 @@ Most scripts respect these environment variables:
 For issues with any script:
 1. Check the script's docstring for usage
 2. Run with `--help` flag if available
-3. Check logs in `/app/instance/logs/`
+3. Check application logs via the web UI or `GET /api/logs` (logs are stored in the LogEntry database table)
 4. Report issues at https://github.com/ttlequals0/PixelProbe/issues

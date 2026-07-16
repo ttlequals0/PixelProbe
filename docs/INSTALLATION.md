@@ -248,16 +248,7 @@ source venv/bin/activate
 python celery_worker.py
 ```
 
-### 9. Start Celery Beat (Optional - for scheduled scans)
-
-In a new terminal (with venv activated):
-
-```bash
-source venv/bin/activate
-celery -A celery_config beat --loglevel=info
-```
-
-### 10. Start Web Application
+### 9. Start Web Application
 
 In a new terminal (with venv activated):
 
@@ -310,13 +301,16 @@ You should see the login page. Log in with:
 ### 2. Check API Health
 
 ```bash
-curl http://localhost:5000/health
+curl http://localhost:5000/healthz
 ```
 
 Should return:
 ```json
-{"status": "healthy", "database": "connected", "redis": "connected"}
+{"status": "ok", "version": "2.7.0"}
 ```
+
+Note: `/health` also exists but requires authentication; `/healthz` is the
+unauthenticated liveness probe used by the container healthcheck.
 
 ### 3. Check Celery Worker
 
@@ -330,10 +324,16 @@ docker logs pixelprobe-celery-worker
 You should see:
 ```
 [tasks]
-  . pixelprobe.tasks.cleanup_database_task
-  . pixelprobe.tasks.file_changes_scan_task
-  . pixelprobe.tasks.integrity_check_task
-  . pixelprobe.tasks.scan_directory_task
+  . pixelprobe.tasks.calculate_file_hash_task
+  . pixelprobe.tasks.check_file_exists_task
+  . pixelprobe.tasks.health_check_task
+  . pixelprobe.tasks.reload_schedules_task
+  . pixelprobe.tasks.run_retention_cleanup
+  . pixelprobe.tasks.scan_files_task
+  . pixelprobe.tasks.scan_media_task
+  . pixelprobe.tasks_parallel.discover_directory_task
+  . pixelprobe.tasks_parallel.parallel_scan_orchestrator
+  . pixelprobe.tasks_parallel.process_chunk_task
 ```
 
 ### 4. Test a Simple Scan
@@ -352,7 +352,7 @@ After successful installation:
 2. **Performance Tuning**: Adjust MAX_WORKERS and other settings based on your system
 3. **Schedule Automated Scans**: Set up periodic scans in the web interface under Tools > Schedules
 4. **Configure Exclusions**: Add paths and extensions to exclude under Tools > Exclusions
-5. **Review API Documentation**: Access Swagger docs at /api/v1/docs (after login)
+5. **Review API Documentation**: Access the API docs at /api-docs (after login)
 
 ## Upgrade Process
 
@@ -385,7 +385,7 @@ git pull origin main
 pip install -r requirements.txt --upgrade
 
 # Restart all services
-# (Stop and restart app.py, celery_worker.py, celery beat)
+# (Stop and restart app.py and celery_worker.py)
 ```
 
 ## Troubleshooting

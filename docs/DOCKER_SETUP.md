@@ -18,8 +18,6 @@ PixelProbe uses 4 main containers:
 ## Complete Docker Compose File
 
 ```yaml
-version: '3.8'
-
 services:
   # PostgreSQL Database - Stores all scan results and metadata
   postgres:
@@ -28,11 +26,11 @@ services:
     environment:
       POSTGRES_DB: pixelprobe
       POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - postgres_data:/var/lib/postgresql
-    ports:
-      - "5432:5432"  # Optional: expose for external tools
+    # Not published to the host: app and worker reach it on the compose
+    # network. For local debugging use: - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
       interval: 10s
@@ -40,13 +38,18 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Redis - Message broker for Celery task queue
+  # Valkey (Redis-compatible) - Message broker for Celery task queue.
+  # noeviction is required: an eviction policy like allkeys-lru could
+  # silently drop queued task messages under memory pressure.
   redis:
     image: valkey/valkey:9-alpine
     container_name: pixelprobe-redis
-    command: valkey-server --maxmemory 256mb --maxmemory-policy allkeys-lru
-    ports:
-      - "6379:6379"  # Optional: expose for monitoring
+    command: >
+      valkey-server
+      --maxmemory ${REDIS_MAX_MEMORY:-2gb}
+      --maxmemory-policy noeviction
+    # Not published to the host: the broker has no auth. For local
+    # debugging use: - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
@@ -56,26 +59,33 @@ services:
 
   # Main Web Application - Serves UI and API
   pixelprobe:
-    image: ttlequals0/pixelprobe:latest
-    container_name: pixelprobe-web
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.7.0}
+    container_name: pixelprobe-app
     ports:
       - "5000:5000"  # Required: web interface access
     environment:
+      # Security
+      SECRET_KEY: ${SECRET_KEY}
+
+      # Scheduler runs in celery-worker; keep the web container out of the
+      # scheduler lock entirely (set to "true" only in single-container setups)
+      SCHEDULER_ENABLED: "false"
+
       # Database Configuration
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: pixelprobe
       POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       
-      # Redis Configuration
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      # Celery Configuration
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       
       # Application Settings
-      SECRET_KEY: ${SECRET_KEY}
+      SCAN_PATHS: /media,/photos,/videos
+      EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
+      EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
       MAX_WORKERS: 10
       BATCH_SIZE: 100
       OUTPUT_ROTATION_ENABLED: true
@@ -93,35 +103,42 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 120s  # migrations run before workers serve requests
     restart: unless-stopped
 
   # Celery Worker - Processes scan tasks in parallel
   celery-worker:
-    image: ttlequals0/pixelprobe:latest
-    container_name: pixelprobe-celery
-    command: celery -A celery_app worker --loglevel=info --concurrency=8
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.7.0}
+    container_name: pixelprobe-celery-worker
+    command: python celery_worker.py
     environment:
+      # Security (config.py refuses to start without SECRET_KEY)
+      SECRET_KEY: ${SECRET_KEY}
+
       # Database Configuration
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: pixelprobe
       POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       
-      # Redis Configuration
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      # Celery Configuration
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_LOG_LEVEL: ${CELERY_LOG_LEVEL:-INFO}
+      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}  # Concurrent Celery tasks
       
       # Worker Settings
-      CELERY_WORKERS: 8  # Number of parallel workers
       MAX_WORKERS: 10
-      BATCH_SIZE: 100
+      
+      # Scan configuration (required for the scheduler, which runs here)
+      SCAN_PATHS: /media,/photos,/videos
+      EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
+      EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
       
       # Timezone (optional)
       TZ: America/New_York
@@ -167,9 +184,10 @@ SECRET_KEY=your-secret-key-for-sessions-here
 
 # Optional settings
 TZ=America/New_York
-CELERY_WORKERS=8
+CELERY_CONCURRENCY=4
 MAX_WORKERS=10
 BATCH_SIZE=100
+REDIS_MAX_MEMORY=2gb
 ```
 
 ## Container Responsibilities
@@ -233,7 +251,7 @@ Or increase concurrency in a single container:
 
 ```yaml
 environment:
-  CELERY_WORKERS: 16  # Increase from 8 to 16 workers
+  CELERY_CONCURRENCY: 8  # Increase from the default 4 concurrent tasks
 ```
 
 ### Performance Tuning
@@ -242,11 +260,11 @@ Adjust these settings based on your system:
 
 | Setting | Default | Description | Recommendation |
 |---------|---------|-------------|----------------|
-| CELERY_WORKERS | 8 | Parallel workers per container | Set to CPU cores |
+| CELERY_CONCURRENCY | 4 | Concurrent Celery tasks per container | 8-12 (tasks are mostly ffmpeg/imagemagick subprocess-bound) |
 | MAX_WORKERS | 10 | Max concurrent operations | 1.5x CPU cores |
 | BATCH_SIZE | 100 | Files per processing chunk | 50-200 based on file sizes |
 | postgres memory | - | Database cache | 25% of system RAM |
-| redis maxmemory | 256mb | Cache size | 512mb-1gb for large libraries |
+| REDIS_MAX_MEMORY | 2gb | Task queue memory | 1-4gb for large libraries |
 
 ## Volume Mounts
 
@@ -346,12 +364,12 @@ docker-compose down
 
 ### Check Worker Status
 ```bash
-docker exec pixelprobe-celery celery -A celery_app inspect active
+docker exec pixelprobe-celery-worker celery -A pixelprobe.celery_config inspect active
 ```
 
 ### View Queue Length
 ```bash
-docker exec pixelprobe-redis redis-cli LLEN celery
+docker exec pixelprobe-redis valkey-cli LLEN pixelprobe
 ```
 
 ### Database Connections
@@ -364,7 +382,7 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c "SELECT count(*) FROM pg_s
 ### Workers Not Processing
 1. Check Redis is running: `docker-compose ps redis`
 2. Check worker logs: `docker-compose logs celery-worker`
-3. Verify queue: `docker exec pixelprobe-redis redis-cli LLEN celery`
+3. Verify queue: `docker exec pixelprobe-redis valkey-cli LLEN pixelprobe`
 
 ### Database Connection Issues
 1. Check PostgreSQL is healthy: `docker-compose ps postgres`
@@ -372,10 +390,10 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c "SELECT count(*) FROM pg_s
 3. Check password in `.env` file
 
 ### High Memory Usage
-1. Reduce CELERY_WORKERS
+1. Reduce CELERY_CONCURRENCY
 2. Lower BATCH_SIZE
 3. Enable OUTPUT_ROTATION_ENABLED
-4. Increase redis maxmemory limit
+4. Increase REDIS_MAX_MEMORY limit
 
 ## Security Considerations
 

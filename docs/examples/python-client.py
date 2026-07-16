@@ -8,11 +8,16 @@ Requirements:
 
 Usage:
     from pixelprobe_client import PixelProbeClient
-    
-    client = PixelProbeClient("http://localhost:5000")
+
+    client = PixelProbeClient("http://localhost:5000", api_token="<your-token>")
     client.scan_directory(["/media/photos"])
+
+Authentication:
+    All API endpoints require a Bearer token. Create one via POST /api/tokens
+    or the web UI, then pass it as api_token or set PIXELPROBE_API_TOKEN.
 """
 
+import os
 import requests
 import time
 import json
@@ -37,20 +42,27 @@ class PixelProbeClient:
         corrupted = client.get_corrupted_files()
     """
     
-    def __init__(self, base_url: str = "http://localhost:5000", timeout: int = 30):
+    def __init__(self, base_url: str = "http://localhost:5000", timeout: int = 30,
+                 api_token: Optional[str] = None):
         """
         Initialize the PixelProbe client
-        
+
         Args:
             base_url: Base URL of the PixelProbe API
             timeout: Request timeout in seconds
+            api_token: API token (defaults to PIXELPROBE_API_TOKEN env var)
         """
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
+        self.api_token = api_token or os.environ.get('PIXELPROBE_API_TOKEN', '')
+        if not self.api_token:
+            raise PixelProbeException(
+                "API token required: pass api_token or set PIXELPROBE_API_TOKEN")
         self.session = requests.Session()
         self.session.headers.update({
             'Content-Type': 'application/json',
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {self.api_token}'
         })
     
     def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
@@ -103,28 +115,25 @@ class PixelProbeClient:
         Returns:
             Response with scan status
         """
-        response = self._request('POST', '/api/scan-all', json={
+        response = self._request('POST', '/api/scan', json={
             'directories': directories,
             'force_rescan': force_rescan
         })
         return response.json()
-    
-    def scan_parallel(self, directories: List[str], num_workers: int = 4, 
-                     force_rescan: bool = False) -> Dict:
+
+    def scan_parallel(self, directories: List[str], force_rescan: bool = False) -> Dict:
         """
-        Start a parallel scan with multiple workers
-        
+        Deprecated alias of scan_directory (POST /api/scan-parallel)
+
         Args:
             directories: List of directory paths to scan
-            num_workers: Number of parallel workers (1-16)
             force_rescan: Force rescan of already scanned files
-            
+
         Returns:
             Response with scan status
         """
         response = self._request('POST', '/api/scan-parallel', json={
             'directories': directories,
-            'num_workers': num_workers,
             'force_rescan': force_rescan
         })
         return response.json()
@@ -211,19 +220,22 @@ class PixelProbeClient:
         return all_files
     
     def get_statistics(self) -> Dict:
-        """Get overall statistics summary"""
-        response = self._request('GET', '/api/stats/summary')
+        """Get overall statistics (file counts by state plus integrity coverage)"""
+        response = self._request('GET', '/api/stats')
         return response.json()
-    
-    def get_corruption_by_type(self) -> List[Dict]:
-        """Get corruption statistics by file type"""
-        response = self._request('GET', '/api/stats/corruption-by-type')
-        return response.json()
-    
-    def get_scan_history(self, days: int = 30) -> List[Dict]:
-        """Get scan history for the specified number of days"""
-        response = self._request('GET', '/api/stats/scan-history', params={
+
+    def get_scan_trends(self, days: int = 30) -> Dict:
+        """Get scan counter metrics over the specified number of days (max 365)"""
+        response = self._request('GET', '/api/stats/trends', params={
             'days': days
+        })
+        return response.json()
+
+    def get_duration_histogram(self, days: int = 30, buckets: int = 10) -> Dict:
+        """Get scan duration histogram for the specified number of days"""
+        response = self._request('GET', '/api/stats/duration-histogram', params={
+            'days': days,
+            'buckets': buckets
         })
         return response.json()
     
@@ -268,46 +280,60 @@ class PixelProbeClient:
     
     # Export Operations
     
-    def export_csv(self, filters: Optional[Dict] = None, output_file: str = None) -> bytes:
+    def export_results(self, format: str = 'csv', filter: str = 'all',
+                       search: str = '', file_ids: Optional[List[int]] = None,
+                       output_file: str = None) -> bytes:
         """
-        Export scan results to CSV
-        
+        Export scan results to CSV, JSON, or PDF
+
         Args:
-            filters: Optional filters (scan_status, is_corrupted, start_date, end_date)
-            output_file: Optional file path to save CSV
-            
+            format: Output format ('csv', 'json', 'pdf')
+            filter: Filter type ('all', 'corrupted', 'healthy', 'warning')
+            search: Search term to filter file paths
+            file_ids: Optional list of specific file IDs to export
+            output_file: Optional file path to save the export
+
         Returns:
-            CSV data as bytes
+            Export data as bytes
         """
-        response = self._request('POST', '/api/export/csv', 
-                               json={'filters': filters or {}})
-        
-        csv_data = response.content
-        
+        response = self._request('POST', '/api/export', json={
+            'format': format,
+            'filter': filter,
+            'search': search,
+            'file_ids': file_ids or []
+        })
+
+        export_data = response.content
+
         if output_file:
             with open(output_file, 'wb') as f:
-                f.write(csv_data)
-        
-        return csv_data
+                f.write(export_data)
+
+        return export_data
     
     # Maintenance Operations
     
-    def cleanup_missing_files(self, dry_run: bool = True, 
-                            directories: Optional[List[str]] = None) -> Dict:
+    def cleanup_orphaned(self, file_paths: Optional[List[str]] = None) -> Dict:
         """
-        Clean up database entries for missing files
-        
+        Start cleanup of orphaned database entries (runs in the background)
+
+        Returns 409 (PixelProbeException) if a cleanup is already in progress.
+        Monitor progress with get_cleanup_status().
+
         Args:
-            dry_run: If True, only report what would be cleaned
-            directories: Optional list of directories to check
-            
+            file_paths: Optional list of specific file paths to clean up
+
         Returns:
-            Cleanup results
+            Response with status, message, and cleanup_id
         """
-        response = self._request('POST', '/api/cleanup', json={
-            'dry_run': dry_run,
-            'directories': directories or []
+        response = self._request('POST', '/api/cleanup-orphaned', json={
+            'file_paths': file_paths or []
         })
+        return response.json()
+
+    def get_cleanup_status(self) -> Dict:
+        """Get current cleanup operation status and progress"""
+        response = self._request('GET', '/api/cleanup-status')
         return response.json()
     
     def vacuum_database(self) -> Dict:
@@ -321,8 +347,10 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='PixelProbe Client')
-    parser.add_argument('--url', default='http://localhost:5000', 
+    parser.add_argument('--url', default='http://localhost:5000',
                        help='PixelProbe API URL')
+    parser.add_argument('--token', default=None,
+                       help='API token (default: PIXELPROBE_API_TOKEN env var)')
     parser.add_argument('--scan', nargs='+', help='Directories to scan')
     parser.add_argument('--status', action='store_true', 
                        help='Show current scan status')
@@ -335,7 +363,7 @@ def main():
     args = parser.parse_args()
     
     # Initialize client
-    client = PixelProbeClient(args.url)
+    client = PixelProbeClient(args.url, api_token=args.token)
     
     try:
         # Check health
@@ -369,9 +397,10 @@ def main():
             stats = client.get_statistics()
             print("\n📈 Statistics:")
             print(f"   Total files: {stats['total_files']:,}")
-            print(f"   Scanned: {stats['scanned_files']:,}")
+            print(f"   Completed: {stats['completed_files']:,}")
             print(f"   Corrupted: {stats['corrupted_files']:,}")
-            print(f"   Corruption rate: {stats['corruption_rate']:.2f}%")
+            print(f"   Healthy: {stats['healthy_files']:,}")
+            print(f"   Warnings: {stats['warning_files']:,}")
         
         if args.corrupted:
             # List corrupted files
@@ -385,7 +414,7 @@ def main():
         if args.export:
             # Export to CSV
             print(f"\n💾 Exporting results to {args.export}")
-            client.export_csv(output_file=args.export)
+            client.export_results(format='csv', output_file=args.export)
             print("✅ Export complete")
     
     except PixelProbeException as e:

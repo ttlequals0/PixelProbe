@@ -10,22 +10,22 @@ PixelProbe uses pytest with unit, integration, and performance tests.
 tests/
 ├── conftest.py              # Shared fixtures and test configuration
 ├── test_media_checker.py    # Core media checking functionality tests
+├── test_app.py              # Application-level tests
+├── test_authentication.py   # Auth and API token tests
+├── test_performance.py      # Performance and benchmark tests
+├── ...                      # Other top-level feature tests
 ├── unit/                    # Unit tests for individual components
 │   ├── test_scan_service.py
-│   ├── test_stats_service.py  
-│   ├── test_export_service.py
+│   ├── test_stats_service.py
 │   ├── test_maintenance_service.py
 │   └── test_repositories.py
 ├── integration/             # API endpoint integration tests
-│   ├── test_scan_routes.py
-│   ├── test_stats_routes.py
-│   ├── test_admin_routes.py
-│   └── test_maintenance_routes.py
-├── performance/             # Performance and benchmark tests
-│   └── test_scan_performance.py
-└── fixtures/                # Test data and media samples
-    ├── corrupted/          # Known corrupted media files
-    └── valid/              # Valid media files for testing
+│   ├── test_api_endpoints.py
+│   ├── test_admin_endpoints.py
+│   ├── test_maintenance_endpoints.py
+│   └── test_scan_launch.py
+└── fixtures/                # Test data
+    └── media_samples/       # Media files for testing
 ```
 
 ## Running Tests
@@ -33,6 +33,9 @@ tests/
 ### Basic Test Commands
 
 ```bash
+# Install test dependencies first
+pip install -r requirements-test.txt
+
 # Run all tests
 pytest
 
@@ -113,10 +116,10 @@ Integration tests validate API endpoints and full request/response cycles.
 ```python
 def test_scan_endpoint(client, db):
     """Test full scan workflow via API"""
-    response = client.post('/api/scan-all', 
+    response = client.post('/api/scan',
                           json={'directories': ['/media']})
     assert response.status_code == 200
-    assert response.json['status'] == 'started'
+    assert response.json['status'] == 'queued'
     
     # Verify database state
     scan = ScanState.query.first()
@@ -183,12 +186,12 @@ def mock_scan_result():
 @pytest.fixture
 def corrupted_video():
     """Provide path to corrupted video file"""
-    return 'tests/fixtures/corrupted/broken_video.mp4'
+    return 'tests/fixtures/media_samples/broken_video.mp4'
 
 @pytest.fixture
 def valid_image():
     """Provide path to valid image file"""
-    return 'tests/fixtures/valid/good_image.jpg'
+    return 'tests/fixtures/media_samples/good_image.jpg'
 ```
 
 ## Testing Best Practices
@@ -246,20 +249,21 @@ def test_ffmpeg_error_handling(mock_run):
 
 ```bash
 # Create corrupted video for testing
-dd if=/dev/urandom of=tests/fixtures/corrupted/broken.mp4 bs=1024 count=100
+dd if=/dev/urandom of=tests/fixtures/media_samples/broken.mp4 bs=1024 count=100
 
 # Create valid but small video
 ffmpeg -f lavfi -i testsrc=duration=1:size=320x240:rate=30 \
        -f lavfi -i sine=frequency=1000:duration=1 \
-       -pix_fmt yuv420p tests/fixtures/valid/small.mp4
+       -pix_fmt yuv420p tests/fixtures/media_samples/small.mp4
 ```
 
 ### Test Database
 
-Tests use a PostgreSQL test database that's created fresh for each test run:
+Tests use an in-memory SQLite database (`sqlite:///:memory:`) created fresh
+by the app fixture in `tests/conftest.py`:
 - No persistence between tests
-- Identical schema to production
-- Configure via `TEST_DATABASE_URL` environment variable
+- Same SQLAlchemy models as production
+- No external database or environment variable required
 
 ## Continuous Integration
 

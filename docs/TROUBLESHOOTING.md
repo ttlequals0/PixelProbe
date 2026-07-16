@@ -30,13 +30,16 @@ docker-compose ps
 docker-compose logs --tail=50
 
 # Check specific service
-docker-compose logs pixelprobe-app --tail=100
-docker-compose logs pixelprobe-celery-worker --tail=100
-docker-compose logs pixelprobe-postgres --tail=50
-docker-compose logs pixelprobe-redis --tail=50
+docker-compose logs pixelprobe --tail=100
+docker-compose logs celery-worker --tail=100
+docker-compose logs postgres --tail=50
+docker-compose logs redis --tail=50
 
-# Check health status
-curl http://localhost:5000/health
+# Check health status (unauthenticated liveness probe)
+curl http://localhost:5000/healthz
+
+# Authenticated health check
+curl http://localhost:5000/health -H "Authorization: Bearer your-token-here"
 ```
 
 ### Manual Installation
@@ -426,7 +429,7 @@ curl http://localhost:5000/api/scan-status
 
 2. **Check database connection:**
 ```bash
-docker-compose logs pixelprobe-app | grep -i database
+docker-compose logs pixelprobe | grep -i database
 ```
 
 3. **Verify write permissions:**
@@ -550,7 +553,7 @@ LIMIT 10;
 
 1. **Create indexes** (should be automatic):
 ```bash
-docker exec pixelprobe-app python tools/create_indexes.py
+docker exec pixelprobe-app python scripts/create_indexes.py
 ```
 
 2. **Vacuum and analyze:**
@@ -578,14 +581,23 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c \
   "SELECT username, is_admin FROM users WHERE is_admin = true;"
 ```
 
-2. **Reset admin account** (if locked out):
+2. **Reset admin password** (if locked out):
+
+First-run setup only works before any user exists. If a user already exists,
+generate a bcrypt hash and update the users table directly:
 ```bash
-docker exec pixelprobe-app python tools/reset_admin.py
+# Generate a bcrypt hash for the new password
+docker exec pixelprobe-app python -c \
+  "import bcrypt; print(bcrypt.hashpw(b'new-password', bcrypt.gensalt()).decode())"
+
+# Set it on the locked-out account
+docker exec pixelprobe-postgres psql -U pixelprobe -d pixelprobe -c \
+  "UPDATE users SET password_hash = 'paste-hash-here' WHERE username = 'admin';"
 ```
 
 3. **Check SECRET_KEY is set:**
 ```bash
-docker-compose logs pixelprobe-app | grep SECRET_KEY
+docker-compose logs pixelprobe | grep SECRET_KEY
 ```
 
 ### API Token Not Working
@@ -614,7 +626,7 @@ curl http://localhost:5000/api/stats \
 
 **Solution:**
 
-Session timeout is 30 days by default. If experiencing issues:
+Sessions last 24 hours, with an additional 30-minute inactivity timeout. Being logged out after 30 minutes of inactivity is expected behavior. If sessions expire faster than that:
 
 1. **Check browser cookies enabled**
 2. **Check SECRET_KEY hasn't changed** (invalidates sessions)
@@ -841,7 +853,7 @@ DATABASE_ECHO=true
 
 View queries:
 ```bash
-docker-compose logs pixelprobe-app | grep SELECT
+docker-compose logs pixelprobe | grep SELECT
 ```
 
 ## Log Locations
@@ -913,7 +925,9 @@ docker --version
 docker-compose --version
 
 # PixelProbe version
-docker exec pixelprobe-app cat version.py
+curl http://localhost:5000/healthz
+# or
+docker exec pixelprobe-app cat pixelprobe/version.py
 
 # Container status
 docker-compose ps
@@ -921,8 +935,8 @@ docker-compose ps
 # Recent logs (last 100 lines)
 docker-compose logs --tail=100 > logs.txt
 
-# Health check
-curl http://localhost:5000/health
+# Health check (unauthenticated liveness probe)
+curl http://localhost:5000/healthz
 
 # Database status
 docker exec pixelprobe-postgres psql -U pixelprobe -c \

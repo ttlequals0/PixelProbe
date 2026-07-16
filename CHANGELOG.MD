@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Closing the media viewer now actually stops playback.** The viewer modal was only hidden on close, so a playing video or audio file kept playing (and buffering) in the background. Closing now pauses the player and detaches its sources.
+- **Documentation accuracy audit.** All docs were checked against the codebase and corrected: removed endpoints that never existed (`/api/scan-all`, `/api/stats/summary`, `/api/scan/parallel-v2*`, `/api/export/csv`, `/api/cleanup`), fixed the example compose file (broken celery command, wrong healthcheck path, missing SECRET_KEY, fictional CELERY_WORKERS/REDIS_HOST vars), replaced the nonexistent Celery beat with the real APScheduler jobs, corrected pool sizes, session lifetime, task lists, chunking behavior, and rewrote PERFORMANCE_TUNING.md around env vars that actually exist. Example API clients now authenticate and call real endpoints. openapi.yaml: removed a duplicate path key and a nonexistent DELETE route, completed the schedule scan_type enum.
 - **Benign ImageMagick warning classification never matched.** The gates that classify PNG chunk and profile warnings as non-corruption checked for `@warning/png.c`, but ImageMagick (6 and 7 alike) emits `@ warning/png.c` with a space - so the benign-warning paths were unreachable and such files fell through to the generic error-keyword check. Verified against real ImageMagick output on both versions.
 
 ### Added

@@ -2235,16 +2235,16 @@ class PixelProbeApp {
         // Setup close handlers
         const closeBtn = modal.querySelector('.modal-close');
         if (closeBtn) {
-            closeBtn.onclick = () => modal.style.display = 'none';
+            closeBtn.onclick = () => this.closeModal('media-viewer-modal');
         }
-        
+
         // Close on outside click
         modal.onclick = (e) => {
             if (e.target === modal) {
-                modal.style.display = 'none';
+                this.closeModal('media-viewer-modal');
             }
         };
-        
+
     }
 
     async rescanFile(fileId) {
@@ -4666,8 +4666,20 @@ class PixelProbeApp {
     closeModal(modalId) {
         const modal = document.querySelector(`#${modalId}`);
         if (modal) {
+            this.stopModalMedia(modal);
             modal.style.display = 'none';
         }
+    }
+
+    stopModalMedia(modal) {
+        // A hidden <video>/<audio> keeps playing audio in the background;
+        // pause and detach sources so playback and buffering actually stop
+        modal.querySelectorAll('video, audio').forEach((media) => {
+            media.pause();
+            media.removeAttribute('src');
+            media.querySelectorAll('source').forEach((s) => s.removeAttribute('src'));
+            media.load();
+        });
     }
 
 }

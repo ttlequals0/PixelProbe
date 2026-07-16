@@ -14,7 +14,7 @@ Due to the chunk query bug in versions before v2.2.59, some files were marked as
 ### Option 1: Use the API Endpoint
 ```bash
 # Reset all incomplete scans
-curl -X POST https://pixelprobe.ttlequals0.com/api/reset-incomplete-scans \
+curl -X POST http://your-server/api/reset-incomplete-scans \
   -H "Authorization: Bearer $TOKEN"
 ```
 

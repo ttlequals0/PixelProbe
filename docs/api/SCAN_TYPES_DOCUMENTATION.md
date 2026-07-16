@@ -64,7 +64,7 @@ POST /api/scan
 POST /api/scan-parallel
 {
   "directories": ["/media"],
-  "num_workers": 8
+  "force_rescan": false
 }
 ```
 
