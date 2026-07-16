@@ -141,7 +141,7 @@ Skip specific directories or file extensions. Changes take effect on the next sc
 ## Documentation
 
 ### Installation & Setup
-- [Docker Setup Guide](docs/DOCKER_SETUP.md) - Complete Docker Compose setup with container explanations
+- [Docker Setup Guide](docs/DOCKER_SETUP.md) - Complete Docker Compose setup with container explanations, including the PostgreSQL 15 to 18 migration guide
 - [Installation Guide](docs/INSTALLATION.md) - Detailed installation instructions
 - [Configuration Guide](docs/CONFIGURATION.md) - Environment variables and configuration options
 
