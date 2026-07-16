@@ -172,14 +172,12 @@
                 </div>
                 
                 <!-- Stats Grid -->
+                <!-- Card order mirrors the filter buttons below: total/all,
+                     corrupted, warnings, bitrot, healthy, pending -->
                 <div class="stats-grid" role="region" aria-label="File statistics summary">
                     <div class="stat-card" role="group" aria-label="Total files">
                         <div class="stat-value" id="total-files" aria-live="polite">0</div>
                         <div class="stat-label">Total Files</div>
-                    </div>
-                    <div class="stat-card" role="group" aria-label="Healthy files">
-                        <div class="stat-value" id="healthy-files" aria-live="polite">0</div>
-                        <div class="stat-label">Healthy Files</div>
                     </div>
                     <div class="stat-card" role="group" aria-label="Corrupted files">
                         <div class="stat-value" id="corrupted-files" aria-live="polite">0</div>
@@ -188,6 +186,14 @@
                     <div class="stat-card">
                         <div class="stat-value" id="warning-files">0</div>
                         <div class="stat-label">Warning Files</div>
+                    </div>
+                    <div class="stat-card" role="group" aria-label="Bitrot suspected files">
+                        <div class="stat-value" id="bitrot-files" aria-live="polite">0</div>
+                        <div class="stat-label">Bitrot Suspected</div>
+                    </div>
+                    <div class="stat-card" role="group" aria-label="Healthy files">
+                        <div class="stat-value" id="healthy-files" aria-live="polite">0</div>
+                        <div class="stat-label">Healthy Files</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-value" id="pending-files">0</div>
@@ -219,6 +225,9 @@
                                     </button>
                                     <button class="btn btn-secondary" data-filter="healthy">
                                         Healthy Only
+                                    </button>
+                                    <button class="btn btn-secondary" data-filter="pending">
+                                        Pending Only
                                     </button>
                                 </div>
                             </div>

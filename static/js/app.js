@@ -358,6 +358,7 @@ class StatsDashboard {
         this.updateStatCard('healthy-files', stats.healthy_files);
         this.updateStatCard('corrupted-files', stats.corrupted_files);
         this.updateStatCard('warning-files', stats.warning_files || 0);
+        this.updateStatCard('bitrot-files', (stats.integrity && stats.integrity.bitrot_suspected) || 0);
         this.updateStatCard('pending-files', stats.pending_files);
         this.updateStatCard('scanning-files', stats.scanning_files);
         this.renderIntegrityCoverage(stats.integrity);
@@ -1208,6 +1209,9 @@ class TableManager {
                         break;
                     case 'bitrot':
                         params.bitrot_suspected = 'true';
+                        break;
+                    case 'pending':
+                        params.scan_status = 'pending';
                         break;
                     case 'all':
                     default:
