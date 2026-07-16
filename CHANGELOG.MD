@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.7.2] - 2026-07-16
+
+### Added
+
+- **Pending Only filter button (#72).** The dashboard showed a pending-files count but offered no way to list them; the results API already accepted `scan_status=pending`, so the button just exposes it. Useful for seeing exactly which files a scan has not gotten to - or, after an incident like #70, which files never completed.
+- **Bitrot Suspected stat card (#72).** The count was already in the stats payload (and buried in the integrity card's tooltip) but had no card of its own despite having a filter button.
+
+### Changed
+
+- **Dashboard stat cards reordered to mirror the filter buttons (#72):** total, corrupted, warnings, bitrot, healthy, pending, with integrity coverage last. The cards remain read-only stats; they are deliberately not clickable filters.
+
 ## [2.7.1] - 2026-07-16
 
 ### Fixed
