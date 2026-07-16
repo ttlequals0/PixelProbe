@@ -178,7 +178,7 @@ python3 tests/fixtures/media_samples/download_missing_samples.py
 ```bash
 ./tools/delete_files_from_csv.sh corrupted_files.csv
 ```
-** Warning:** This permanently deletes files!
+**Warning:** This permanently deletes files!
 
 #### `tools/reset_nal_files_direct.sh`
 **Purpose:** Direct database reset of NAL-flagged files  
@@ -195,17 +195,17 @@ python3 tests/fixtures/media_samples/download_missing_samples.py
    python3 tools/fix_gif_header_false_positives.py
    ```
 
-3. **Check database health:**
+2. **Check database health:**
    ```bash
    python3 scripts/check_db_integrity.py
    ```
 
-4. **Create test database:**
+3. **Create test database:**
    ```bash
    python3 scripts/create_test_database.py
    ```
 
-5. **Run tests:**
+4. **Run tests:**
    ```bash
    pytest tests/
    ```

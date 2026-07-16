@@ -1,6 +1,6 @@
 # PixelProbe Configuration Guide
 
-Complete reference for all PixelProbe configuration options, environment variables, and performance tuning.
+Reference for PixelProbe environment variables and performance tuning.
 
 ## Table of Contents
 
@@ -580,13 +580,7 @@ Tokens support optional expiration dates.
 
 ## Configuration Best Practices
 
-1. **Start Conservative**: Begin with default settings and increase gradually
-2. **Monitor Resources**: Use `docker stats` to monitor CPU/memory usage
-3. **Test Changes**: Test configuration changes on a subset of files first
-4. **Document Settings**: Keep notes on what works for your environment
-5. **Regular Backups**: Backup database and configuration regularly
-6. **Security First**: Use strong passwords and keep SECRET_KEY secure
-7. **Update Regularly**: Pull latest images for bug fixes and improvements
+Start with the defaults and raise `MAX_WORKERS` and `CELERY_CONCURRENCY` gradually, watching `docker stats` for CPU and memory pressure. Back up the database and `.env` before upgrades, use strong passwords, and keep `SECRET_KEY` secret.
 
 ## Examples
 

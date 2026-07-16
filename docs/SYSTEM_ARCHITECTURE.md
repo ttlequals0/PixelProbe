@@ -10,7 +10,7 @@
 
 ## Overview
 
-PixelProbe is a distributed media corruption detection system built on a microservices architecture using Docker containers. The system uses Celery for distributed task processing, Redis for message queuing, and PostgreSQL for persistent storage.
+PixelProbe is a distributed media corruption detection system that runs as a set of Docker containers. It uses Celery for distributed task processing, Redis for message queuing, and PostgreSQL for persistent storage.
 
 ## Container Architecture
 

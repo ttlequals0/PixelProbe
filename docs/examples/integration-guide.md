@@ -784,9 +784,6 @@ def handle_webhook():
 
 ## Best Practices
 
-1. **Error Handling**: Always implement proper error handling and retries
-2. **Rate Limiting**: Respect API rate limits in your integrations
-3. **Async Operations**: Use async/await for better performance
-4. **Logging**: Log all operations for debugging
-5. **Monitoring**: Set up alerts for corruption detection
-6. **Security**: Use HTTPS in production and implement authentication
+- Respect the API rate limits; back off and retry on 429 responses.
+- Alert on corruption findings (webhook or Prometheus, both shown above) instead of checking manually.
+- Use HTTPS in production.

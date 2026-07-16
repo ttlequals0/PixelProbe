@@ -1,7 +1,5 @@
 # PixelProbe Troubleshooting Guide
 
-This guide helps you diagnose and fix common issues with PixelProbe.
-
 ## Table of Contents
 
 - [Quick Diagnostics](#quick-diagnostics)

@@ -1,6 +1,6 @@
 # PixelProbe Installation Guide
 
-This guide provides complete installation instructions for PixelProbe, covering both Docker (recommended) and manual installation methods.
+How to install PixelProbe, either with Docker (recommended) or manually.
 
 ## Table of Contents
 
@@ -161,7 +161,7 @@ docker-compose logs -f pixelprobe-celery-worker
 
 ## Manual Installation
 
-For advanced users who prefer manual installation without Docker.
+For running PixelProbe without Docker.
 
 ### 1. Clone the Repository
 

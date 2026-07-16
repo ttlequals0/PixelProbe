@@ -48,6 +48,3 @@ AND (scan_date IS NULL OR scan_output IS NULL OR scan_output = '' OR scan_output
 Once files are reset to 'pending':
 1. Run a normal scan - it will pick up all pending files
 2. Or run a "Force Scan Pending" to specifically target these files
-
-## Prevention
-This issue is fixed in v2.2.59 and later versions.

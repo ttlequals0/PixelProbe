@@ -15,8 +15,6 @@
 
 ### Development
 - **[Developer Guide](developer/README.md)** - Setup and contribution guidelines
-- **[API Consolidation Plan](development/API_CONSOLIDATION_PLAN.md)** - API improvement roadmap
-- **[P0/P1 Implementation Status](development/P0_P1_IMPLEMENTATION_STATUS.md)** - Audit task completion status (v2.2.50)
 
 ### API Documentation
 - **[API Reference](api/README.md)** - Complete API endpoint documentation
@@ -49,17 +47,4 @@
 
 ## Documentation Standards
 
-When contributing documentation:
-- Use clear, concise language
-- Include practical examples
-- Keep technical accuracy
-- Update the relevant index files
-- Test all code examples
-- Maintain consistent formatting
-
-## Finding Information
-
-- **Installation**: See [Docker Setup](DOCKER_SETUP.md)
-- **API Usage**: Check [API Reference](api/README.md)
-- **Contributing**: Read [Developer Guide](developer/README.md)
-- **Architecture**: Study [System Architecture](SYSTEM_ARCHITECTURE.md)
+When contributing documentation, test all code examples and update this index if you add or move files.

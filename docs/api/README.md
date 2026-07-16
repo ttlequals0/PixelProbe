@@ -2,7 +2,7 @@
 
 ## Overview
 
-PixelProbe provides a RESTful API for managing media file corruption detection. The API is built with Flask and follows REST conventions.
+PixelProbe exposes its media corruption detection through a REST API built with Flask.
 
 ## Base URL
 
@@ -464,7 +464,7 @@ Also includes per-scan-type duration statistics.
 GET /api/system-info
 ```
 
-Get comprehensive system information including database statistics (total/completed/pending/corrupted/healthy/warning file counts) and per-path file counts for the monitored paths.
+Get system information including database statistics (total/completed/pending/corrupted/healthy/warning file counts) and per-path file counts for the monitored paths.
 
 ### Admin Endpoints
 
@@ -816,12 +816,10 @@ Future versions will include WebSocket support for real-time updates:
 
 ## Best Practices
 
-1. **Check scan status** before starting a new scan to avoid conflicts
-2. **Use pagination** when retrieving large result sets
-3. **Implement exponential backoff** when rate limited
-4. **Validate file paths** before submitting scan requests
-5. **Monitor cleanup progress** via `/api/cleanup-status` after starting a cleanup
-6. **Monitor rate limit headers** to avoid hitting limits
+- Check `/api/scan-status` before starting a new scan; the API returns 409 if one is already running.
+- Use pagination for large result sets rather than `per_page=-1`.
+- Watch the rate limit headers and back off with exponential delay on 429 responses.
+- After starting a cleanup, poll `GET /api/cleanup-status` for progress.
 
 ## Security Considerations
 
@@ -835,17 +833,10 @@ Future versions will include WebSocket support for real-time updates:
 
 ### Common Errors
 
-**409 Conflict - "Another scan is already in progress"**
-- Solution: Wait for current scan to complete or cancel it
-
-**400 Bad Request - "Invalid file path"**
-- Solution: Ensure file path is within allowed directories
-
-**429 Too Many Requests**
-- Solution: Implement rate limiting in your client
-
-**500 Internal Server Error**
-- Solution: Check server logs for details
+- **409 "Another scan is already in progress"**: wait for the current scan or cancel it via `/api/cancel-scan`
+- **400 "Invalid file path"**: the path must be inside a configured scan directory
+- **429 Too Many Requests**: back off and retry; see the rate limit headers
+- **500 Internal Server Error**: check the server logs
 
 ### Debug Headers
 

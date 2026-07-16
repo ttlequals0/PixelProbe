@@ -32,20 +32,20 @@ PixelProbe detects corrupted video, image, and audio files across your media lib
 - **Rolling integrity queue**: Integrity checks sweep the library stalest-first in batches and resume where they left off; schedules can carry a per-run time budget so no single run monopolizes IO
 - **Scheduled automated scans**: Cron expressions or simple intervals for hands-free monitoring
 - **Smart exclusions**: Configure paths and file extensions to skip
-- **Phase-based scanning**: Discovery → Database → Validation workflow
+- **Phase-based scanning**: Discovery -> Database -> Validation workflow
 - **Bulk operations**: Rescan multiple files, deep analysis, batch actions
 
 ### Web Interface
-- Modern responsive design with dark/light theme support
+- Responsive design with dark/light theme support
 - Real-time scan progress with live polling updates
-- Advanced filtering and search capabilities
+- Filtering and search
 - Bulk file selection and management with shift-click range selection
 - Mobile-optimized touch interface
 - In-browser media file viewing and streaming
 - Detailed file corruption reports
 
 ### System Features
-- **PostgreSQL database**: Reliable ACID-compliant data storage
+- **PostgreSQL database**: Stores scan results, users, schedules, and history
 - **Redis-compatible task queue (Valkey)**: Background processing with Celery workers
 - **Docker deployment**: Multi-container architecture (web, workers, database, queue)
 - **REST API**: Full OpenAPI/Swagger documentation
@@ -60,7 +60,7 @@ PixelProbe detects corrupted video, image, and audio files across your media lib
 - **API token authentication**: Generate and manage tokens for programmatic access
 - **Session management**: Cookie-based sessions with CSRF protection, configurable timeout
 - **First-run setup wizard**: Secure admin account creation on initial deployment
-- **Audit logging**: Complete security event tracking
+- **Audit logging**: Security event tracking
 
 ## Screenshots
 
@@ -105,11 +105,7 @@ Full feature parity with a high-contrast dark theme. Preference persists across 
   <img src="docs/screenshots/mobile-dark-dashboard.png" alt="Mobile Dark Dashboard" width="300" style="margin: 10px">
 </div>
 
-The mobile interface is fully responsive and touch-optimized:
-- Adaptive layout that works on all screen sizes
-- Touch-friendly buttons and controls
-- Collapsible sidebar navigation
-- Card-based design for scan results on mobile
+The mobile layout has a collapsible sidebar and shows scan results as cards instead of a table.
 
 ### Advanced Features
 
@@ -321,12 +317,7 @@ export MEDIA_PATH=/mnt/all-media  # Contains subdirs: movies/, tv/, backup/
 
 ### API Documentation
 
-PixelProbe provides a REST API with OpenAPI/Swagger documentation.
-
-#### Interactive API Documentation
-- **Swagger UI**: Available at `/api-docs` when logged in
-- **OpenAPI Spec**: Full API specification with request/response schemas
-- **Try it out**: Test endpoints directly from the documentation
+Swagger UI is available at `/api-docs` when logged in. It includes the full OpenAPI spec with request/response schemas, and you can test endpoints directly from the page.
 
 #### Authentication Endpoints
 - `GET /api/auth/status` - Check authentication status

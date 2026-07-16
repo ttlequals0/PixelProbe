@@ -1,8 +1,6 @@
 # Docker Setup Guide
 
-## Quick Start
-
-This guide explains the Docker Compose setup for PixelProbe and what each container does.
+The Docker Compose setup for PixelProbe and what each container does.
 
 ## Container Overview
 
@@ -193,46 +191,20 @@ REDIS_MAX_MEMORY=2gb
 ## Container Responsibilities
 
 ### PostgreSQL Container
-- **What it does**: Stores all persistent data
-- **Stores**:
-  - Scan results and metadata
-  - File corruption status
-  - User configurations
-  - Scan history
-  - Scheduled scan settings
-- **Why needed**: Provides reliable, ACID-compliant data storage
+
+Stores all persistent data: scan results and metadata, file corruption status, user configurations, scan history, and schedule settings.
 
 ### Redis Container
-- **What it does**: Manages task queue and caching
-- **Handles**:
-  - Celery task messages
-  - Worker coordination
-  - Result caching
-  - Progress updates
-- **Why needed**: Enables parallel processing and real-time updates
+
+Carries the Celery task queue: task messages, worker coordination, result caching, and progress updates.
 
 ### Web Application Container
-- **What it does**: Serves the user interface and API
-- **Provides**:
-  - Web dashboard at port 5000
-  - REST API endpoints
-  - User authentication
-  - Real-time scan progress
-  - Scheduled scan management
-- **Why needed**: Primary interface for users to interact with the system
+
+Serves the dashboard and REST API on port 5000, handles user authentication, reports real-time scan progress, and manages scheduled scans.
 
 ### Celery Worker Container
-- **What it does**: Performs the actual file scanning
-- **Executes**:
-  - Media file corruption detection
-  - Parallel file discovery
-  - Batch processing
-  - Cleanup operations
-- **Tools used**:
-  - FFmpeg for video/audio
-  - ImageMagick for images
-  - Python PIL for additional image processing
-- **Why needed**: Handles CPU-intensive scanning tasks in parallel
+
+Does the actual scanning: corruption detection, parallel file discovery, batch processing, and cleanup. It runs FFmpeg for video/audio, and ImageMagick plus Python PIL for images.
 
 ## Scaling Options
 
