@@ -1,21 +1,23 @@
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Python and latest media tools
-# Ubuntu 24.04 includes:
-# - FFmpeg 6.1.1 (much newer than 22.04's 4.4.2)
-# - ImageMagick 6.9.13 (newer than 22.04's 6.9.11)
-# - Python 3.12 by default
+# Ubuntu 26.04 includes:
+# - FFmpeg 8.0.1 (vs 6.1.1 on 24.04)
+# - ImageMagick 7.1.2 (Q16; 'magick' CLI, 'convert' kept via alternatives)
+# - Python 3.14 by default; the app runs on 3.12 from deadsnakes (matches the
+#   tested CI matrix and available psycopg2-binary wheels)
 RUN apt-get update && \
+    apt-get install -y software-properties-common && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y \
-    # Python and pip
-    python3 \
-    python3-dev \
-    python3-venv \
-    python3-pip \
+    # Python 3.12 (deadsnakes)
+    python3.12 \
+    python3.12-dev \
+    python3.12-venv \
     # Node.js for frontend build \
     nodejs \
     npm \
@@ -24,11 +26,12 @@ RUN apt-get update && \
     libmagic1 \
     curl \
     wget \
-    # ImageMagick and dependencies (24.04 uses ImageMagick 7) \
+    # ImageMagick 7 (Q16, non-HDRI) and extra codecs \
     imagemagick \
-    libmagickcore-6.q16hdri-7-extra \
-    libmagickwand-6.q16hdri-7 \
-    # Image format libraries (updated versions in 24.04) \
+    imagemagick-7.q16 \
+    libmagickcore-7.q16-10-extra \
+    libmagickwand-7.q16-10 \
+    # Image format libraries \
     libjpeg-turbo8 \
     libjpeg-dev \
     libpng16-16t64 \
@@ -60,28 +63,31 @@ RUN apt-get update && \
     libfreetype6-dev \
     libfontconfig1 \
     libfontconfig1-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    # pebble ships in the ubuntu:26.04 OCI rootfs (not dpkg-owned); unused
+    # here and its embedded Go deps carry unfixed HIGH CVEs, so drop it
+    && rm -rf /usr/bin/pebble /var/lib/pebble
 
-# Python 3.12 is already default in Ubuntu 24.04
-# Just create python symlink for compatibility
-RUN ln -s /usr/bin/python3 /usr/bin/python
+# All app Python runs from this venv (python/pip/gunicorn/celery resolve here).
+# A venv avoids pip 26+ conflicts with the system 3.14 dist-packages.
+RUN python3.12 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Configure ImageMagick to allow all file formats and increase resource limits
-# Ubuntu 22.04 uses ImageMagick 6
-RUN sed -i 's/<policy domain="coder" rights="none" pattern="PDF" \/>/<policy domain="coder" rights="read|write" pattern="PDF" \/>/g' /etc/ImageMagick-6/policy.xml && \
-    sed -i 's/<policy domain="coder" rights="none" pattern="HEIC" \/>/<policy domain="coder" rights="read|write" pattern="HEIC" \/>/g' /etc/ImageMagick-6/policy.xml && \
-    sed -i 's/<policy domain="coder" rights="none" pattern="HEIF" \/>/<policy domain="coder" rights="read|write" pattern="HEIF" \/>/g' /etc/ImageMagick-6/policy.xml && \
-    sed -i 's/<policy domain="resource" name="memory" value=".*"\/>/<policy domain="resource" name="memory" value="2GiB"\/>/g' /etc/ImageMagick-6/policy.xml && \
-    sed -i 's/<policy domain="resource" name="map" value=".*"\/>/<policy domain="resource" name="map" value="4GiB"\/>/g' /etc/ImageMagick-6/policy.xml && \
-    sed -i 's/<policy domain="resource" name="disk" value=".*"\/>/<policy domain="resource" name="disk" value="8GiB"\/>/g' /etc/ImageMagick-6/policy.xml
+# Configure ImageMagick 7: raise resource limits for large media. The 26.04
+# default policy only sets disk=2GiB (no PDF/HEIC coder blocks to lift).
+RUN sed -i 's|<policy domain="resource" name="disk" value=".*"/>|<policy domain="resource" name="disk" value="8GiB"/>|' /etc/ImageMagick-7/policy.xml && \
+    sed -i 's|</policymap>|  <policy domain="resource" name="memory" value="2GiB"/>\n  <policy domain="resource" name="map" value="4GiB"/>\n</policymap>|' /etc/ImageMagick-7/policy.xml && \
+    # Fail the build if the seds silently matched nothing (policy format drift)
+    grep -q '"disk" value="8GiB"' /etc/ImageMagick-7/policy.xml && \
+    grep -q '"memory" value="2GiB"' /etc/ImageMagick-7/policy.xml && \
+    grep -q '"map" value="4GiB"' /etc/ImageMagick-7/policy.xml
 
 # Configure libpng and ImageMagick to handle benign PNG errors better
 # These environment variables tell libpng to be less strict
 ENV PNG_SKIP_SETJMP_CHECK=1
 ENV PNG_IGNORE_ADLER32=1
 
-# Set ImageMagick to be less verbose about warnings
-ENV MAGICK_CONFIGURE_PATH=/etc/ImageMagick-6
+ENV MAGICK_CONFIGURE_PATH=/etc/ImageMagick-7
 
 # Configure FFmpeg for optimal performance and compatibility
 # Set thread count for better performance
@@ -106,31 +112,36 @@ RUN ffmpeg -version && \
     ffmpeg -decoders 2>/dev/null | grep -E "(hevc|h264|h265|av1|vp9)" && \
     ffmpeg -encoders 2>/dev/null | grep -E "(libx264|libx265|libvpx)" && \
     echo "=== ImageMagick Version and Delegates ===" && \
-    convert -version && \
+    magick -version && \
     echo "=== ImageMagick Delegate Libraries ===" && \
-    convert -list delegate | head -30 && \
+    magick -list delegate | head -30 && \
     echo "=== ImageMagick Supported Formats ===" && \
-    identify -list format | grep -E "(JPEG|JPG|PNG|WEBP|GIF|TIFF|HEIC)" && \
+    magick identify -list format | grep -E "(JPEG|JPG|PNG|WEBP|GIF|TIFF|HEIC)" && \
     echo "=== Testing ImageMagick with sample images ===" && \
     # Test JPEG support \
-    convert -size 100x100 xc:white /tmp/test.jpg && \
-    identify -verbose /tmp/test.jpg | head -5 && \
+    magick -size 100x100 xc:white /tmp/test.jpg && \
+    magick identify -verbose /tmp/test.jpg | head -5 && \
     # Test PNG support \
-    convert -size 100x100 xc:white /tmp/test.png && \
-    identify -verbose /tmp/test.png | head -5 && \
+    magick -size 100x100 xc:white /tmp/test.png && \
+    magick identify -verbose /tmp/test.png | head -5 && \
     # Test WebP support \
-    convert -size 100x100 xc:white /tmp/test.webp && \
-    identify -verbose /tmp/test.webp | head -5 && \
+    magick -size 100x100 xc:white /tmp/test.webp && \
+    magick identify -verbose /tmp/test.webp | head -5 && \
     # Clean up test files \
     rm -f /tmp/test.jpg /tmp/test.png /tmp/test.webp && \
     echo "=== All image format tests passed ==="
 
 COPY requirements.txt .
-# Ubuntu 24.04 requires --break-system-packages for pip install in Docker
 # After install, remove chardet (pulled in by reportlab) -- its 7.x version fails
 # requests' version check (requires <6.0.0). Our app uses charset_normalizer instead.
-RUN pip install --no-cache-dir --break-system-packages --ignore-installed -r requirements.txt \
-    && pip uninstall -y chardet --break-system-packages 2>/dev/null; true
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y chardet 2>/dev/null; true
+
+# Build headers were only needed for pip C-extension builds above; linux-libc-dev
+# otherwise ships a stream of unfixed kernel-header CVEs the runtime never touches.
+RUN apt-get purge -y linux-libc-dev python3.12-dev 2>/dev/null; \
+    apt-get autoremove -y 2>/dev/null; \
+    rm -rf /var/lib/apt/lists/* /root/.cache
 
 COPY package.json webpack.config.js ./
 RUN npm install

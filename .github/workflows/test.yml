@@ -57,3 +57,28 @@ jobs:
         flags: unittests
         name: codecov-umbrella
         fail_ci_if_error: false
+
+  # The ffmpeg/ImageMagick stderr parsers fail soft (zero events, no
+  # exceptions), so only running them against the image's actual tool
+  # versions catches regressions from a base-image bump.
+  image-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build Docker image
+      run: docker build -t pixelprobe-ci .
+
+    # -p no:timeout disables the per-test timeout marks (they assume fast
+    # local hardware); the job-level timeout-minutes is the hang backstop.
+    - name: Run real-media parser tests inside the image
+      run: |
+        docker run --rm -e SECRET_KEY=ci-test-secret pixelprobe-ci \
+          bash -c "pip install --no-cache-dir -r requirements-test.txt && \
+                   pip uninstall -y chardet 2>/dev/null; \
+                   pytest tests/test_real_media_samples.py -v -p no:cacheprovider -p no:timeout -o addopts=''"
+
+    - name: Verify tool versions in image
+      run: |
+        docker run --rm pixelprobe-ci bash -c "ffmpeg -version | head -1 && magick -version | head -1 && python --version"

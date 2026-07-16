@@ -123,21 +123,6 @@ These tools fix common false positives in media file corruption detection:
 ./scripts/setup_and_run_local.sh
 ```
 
-#### `scripts/run_modern_ui.sh`
-**Purpose:** Run the modern UI in development mode  
-
-#### `scripts/run_test_ui.sh`
-**Purpose:** Run UI with test fixtures  
-
-### Docker Development
-
-#### `scripts/docker-run-modern.sh`
-**Purpose:** Run modern UI in Docker container  
-**Usage:**
-```bash
-./scripts/docker-run-modern.sh
-```
-
 ---
 
 ## Testing Tools
@@ -193,19 +178,10 @@ python3 tests/fixtures/media_samples/download_missing_samples.py
 ```bash
 ./tools/delete_files_from_csv.sh corrupted_files.csv
 ```
-** Warning:** This permanently deletes files!
+**Warning:** This permanently deletes files!
 
 #### `tools/reset_nal_files_direct.sh`
 **Purpose:** Direct database reset of NAL-flagged files  
-
----
-
-## Runtime Patches
-
-#### `patches/v2_2_47_fixes.py`
-**Purpose:** Runtime patches for v2.2.47 connection issues  
-**Applied:** Automatically on startup  
-**Fixes:** Connection pooling, transaction recovery  
 
 ---
 
@@ -219,17 +195,17 @@ python3 tests/fixtures/media_samples/download_missing_samples.py
    python3 tools/fix_gif_header_false_positives.py
    ```
 
-3. **Check database health:**
+2. **Check database health:**
    ```bash
    python3 scripts/check_db_integrity.py
    ```
 
-4. **Create test database:**
+3. **Create test database:**
    ```bash
    python3 scripts/create_test_database.py
    ```
 
-5. **Run tests:**
+4. **Run tests:**
    ```bash
    pytest tests/
    ```
@@ -253,7 +229,6 @@ Most scripts respect these environment variables:
 
 **Development Only:**
 - Test database creators
-- UI development scripts
 - Local setup scripts
 
 **Use with Caution:**
@@ -267,5 +242,5 @@ Most scripts respect these environment variables:
 For issues with any script:
 1. Check the script's docstring for usage
 2. Run with `--help` flag if available
-3. Check logs in `/app/instance/logs/`
+3. Check application logs via the web UI or `GET /api/logs` (logs are stored in the LogEntry database table)
 4. Report issues at https://github.com/ttlequals0/PixelProbe/issues

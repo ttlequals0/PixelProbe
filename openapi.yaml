@@ -1622,7 +1622,7 @@ paths:
                     type: string
                 scan_type:
                   type: string
-                  enum: [full, parallel]
+                  enum: [full, parallel, file_changes, orphan]
                   default: full
                 force_rescan:
                   type: boolean
@@ -2044,73 +2044,6 @@ paths:
         '404':
           description: Pattern not found
 
-  /configurations:
-    get:
-      summary: Get all configurations
-      description: |
-        Get all scan configurations.
-
-        **Example:**
-        ```bash
-        curl -X GET http://your-server/api/configurations \
-          -H "Authorization: Bearer YOUR_TOKEN"
-        ```
-      tags: [Configuration]
-      responses:
-        '200':
-          description: Configurations retrieved successfully
-
-    post:
-      summary: Add configuration
-      description: |
-        Add a new configuration.
-
-        **Example:**
-        ```bash
-        curl -X POST http://your-server/api/configurations \
-          -H "Authorization: Bearer YOUR_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d '{"path": "/media/music"}'
-        ```
-      tags: [Configuration]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [path]
-              properties:
-                path:
-                  type: string
-      responses:
-        '200':
-          description: Configuration added successfully
-
-  /configurations/{config_id}:
-    delete:
-      summary: Delete configuration
-      description: |
-        Delete a configuration entry by ID.
-
-        **Example:**
-        ```bash
-        curl -X DELETE http://your-server/api/configurations/3 \
-          -H "Authorization: Bearer YOUR_TOKEN"
-        ```
-      tags: [Configuration]
-      parameters:
-        - name: config_id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: Configuration deleted successfully
-        '404':
-          description: Configuration not found
-
   /exclusions:
     get:
       summary: Get exclusion settings
@@ -2344,7 +2277,7 @@ paths:
               properties:
                 format:
                   type: string
-                  enum: [csv, json, excel, pdf]
+                  enum: [csv, json, pdf]
                 filter:
                   type: string
                   enum: [all, corrupted, healthy, pending, warning]

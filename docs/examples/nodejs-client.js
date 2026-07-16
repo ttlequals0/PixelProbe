@@ -8,7 +8,11 @@
  * 
  * Usage:
  *   const PixelProbeClient = require('./pixelprobe-client');
- *   const client = new PixelProbeClient('http://localhost:5000');
+ *   const client = new PixelProbeClient('http://localhost:5000', 30000, '<your-token>');
+ *
+ * Authentication:
+ *   All API endpoints require a Bearer token. Create one via POST /api/tokens
+ *   or the web UI, then pass it as apiToken or set PIXELPROBE_API_TOKEN.
  */
 
 const axios = require('axios');
@@ -28,17 +32,25 @@ class PixelProbeClient {
      * Initialize the PixelProbe client
      * @param {string} baseUrl - Base URL of the PixelProbe API
      * @param {number} timeout - Request timeout in milliseconds
+     * @param {string} apiToken - API token (defaults to PIXELPROBE_API_TOKEN env var)
      */
-    constructor(baseUrl = 'http://localhost:5000', timeout = 30000) {
+    constructor(baseUrl = 'http://localhost:5000', timeout = 30000, apiToken = null) {
         this.baseUrl = baseUrl.replace(/\/$/, '');
         this.timeout = timeout;
-        
+        this.apiToken = apiToken || process.env.PIXELPROBE_API_TOKEN || '';
+
+        if (!this.apiToken) {
+            throw new PixelProbeError(
+                'API token required: pass apiToken or set PIXELPROBE_API_TOKEN');
+        }
+
         this.client = axios.create({
             baseURL: this.baseUrl,
             timeout: this.timeout,
             headers: {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'Authorization': `Bearer ${this.apiToken}`
             }
         });
         
@@ -74,17 +86,17 @@ class PixelProbeClient {
     }
     
     async scanDirectory(directories, forceRescan = false) {
-        const response = await this.client.post('/api/scan-all', {
+        const response = await this.client.post('/api/scan', {
             directories: directories,
             force_rescan: forceRescan
         });
         return response.data;
     }
-    
-    async scanParallel(directories, numWorkers = 4, forceRescan = false) {
+
+    // Deprecated alias of scanDirectory (POST /api/scan-parallel)
+    async scanParallel(directories, forceRescan = false) {
         const response = await this.client.post('/api/scan-parallel', {
             directories: directories,
-            num_workers: numWorkers,
             force_rescan: forceRescan
         });
         return response.data;
@@ -178,18 +190,21 @@ class PixelProbeClient {
     }
     
     async getStatistics() {
-        const response = await this.client.get('/api/stats/summary');
+        // File counts by state plus integrity coverage
+        const response = await this.client.get('/api/stats');
         return response.data;
     }
-    
-    async getCorruptionByType() {
-        const response = await this.client.get('/api/stats/corruption-by-type');
-        return response.data;
-    }
-    
-    async getScanHistory(days = 30) {
-        const response = await this.client.get('/api/stats/scan-history', {
+
+    async getScanTrends(days = 30) {
+        const response = await this.client.get('/api/stats/trends', {
             params: { days }
+        });
+        return response.data;
+    }
+
+    async getDurationHistogram(days = 30, buckets = 10) {
+        const response = await this.client.get('/api/stats/duration-histogram', {
+            params: { days, buckets }
         });
         return response.data;
     }
@@ -235,29 +250,46 @@ class PixelProbeClient {
     
     // Export operations
     
-    async exportCSV(filters = {}, outputFile = null) {
-        const response = await this.client.post('/api/export/csv', {
-            filters: filters
+    async exportResults(options = {}, outputFile = null) {
+        const {
+            format = 'csv',      // 'csv', 'json', or 'pdf'
+            filter = 'all',      // 'all', 'corrupted', 'healthy', 'warning'
+            search = '',
+            fileIds = []
+        } = options;
+
+        const response = await this.client.post('/api/export', {
+            format: format,
+            filter: filter,
+            search: search,
+            file_ids: fileIds
         }, {
             responseType: 'arraybuffer'
         });
-        
-        const csvData = Buffer.from(response.data);
-        
+
+        const exportData = Buffer.from(response.data);
+
         if (outputFile) {
-            await fs.writeFile(outputFile, csvData);
+            await fs.writeFile(outputFile, exportData);
         }
-        
-        return csvData;
+
+        return exportData;
     }
-    
+
     // Maintenance operations
-    
-    async cleanupMissingFiles(dryRun = true, directories = []) {
-        const response = await this.client.post('/api/cleanup', {
-            dry_run: dryRun,
-            directories: directories
+
+    // Starts a background cleanup of orphaned database entries.
+    // Returns 409 (PixelProbeError) if a cleanup is already in progress;
+    // monitor progress with getCleanupStatus().
+    async cleanupOrphaned(filePaths = []) {
+        const response = await this.client.post('/api/cleanup-orphaned', {
+            file_paths: filePaths
         });
+        return response.data;
+    }
+
+    async getCleanupStatus() {
+        const response = await this.client.get('/api/cleanup-status');
         return response.data;
     }
     
@@ -316,9 +348,10 @@ async function main() {
             const stats = await client.getStatistics();
             console.log('\n📈 Statistics:');
             console.log(`   Total files: ${stats.total_files.toLocaleString()}`);
-            console.log(`   Scanned: ${stats.scanned_files.toLocaleString()}`);
+            console.log(`   Completed: ${stats.completed_files.toLocaleString()}`);
             console.log(`   Corrupted: ${stats.corrupted_files.toLocaleString()}`);
-            console.log(`   Corruption rate: ${stats.corruption_rate.toFixed(2)}%`);
+            console.log(`   Healthy: ${stats.healthy_files.toLocaleString()}`);
+            console.log(`   Warnings: ${stats.warning_files.toLocaleString()}`);
         }
         
         if (args.includes('--corrupted')) {
@@ -345,7 +378,7 @@ async function main() {
             }
             
             console.log(`\n💾 Exporting results to ${outputFile}`);
-            await client.exportCSV({}, outputFile);
+            await client.exportResults({ format: 'csv' }, outputFile);
             console.log('✅ Export complete');
         }
         
@@ -362,7 +395,8 @@ Options:
   --help             Show this help message
 
 Environment:
-  PIXELPROBE_URL     PixelProbe API URL (default: http://localhost:5000)
+  PIXELPROBE_URL        PixelProbe API URL (default: http://localhost:5000)
+  PIXELPROBE_API_TOKEN  API token (required; create via POST /api/tokens or the web UI)
 `);
         }
         

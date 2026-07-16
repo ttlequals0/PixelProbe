@@ -1,6 +1,6 @@
 # PixelProbe Configuration Guide
 
-Complete reference for all PixelProbe configuration options, environment variables, and performance tuning.
+Reference for PixelProbe environment variables and performance tuning.
 
 ## Table of Contents
 
@@ -35,6 +35,8 @@ All configuration is done via environment variables, either in `.env` file or di
 | `POSTGRES_DB` | `pixelprobe` | Database name |
 | `POSTGRES_USER` | `pixelprobe` | Database username |
 | `POSTGRES_PASSWORD` | (required) | Database password |
+| `DB_POOL_SIZE` | `5` | SQLAlchemy base connection pool size per process |
+| `DB_MAX_OVERFLOW` | `10` | Extra SQLAlchemy connections when the pool is exhausted |
 | `DATABASE_ECHO` | `false` | Enable SQL query logging (debug) |
 
 ### Application Variables
@@ -119,13 +121,12 @@ CLEANUP_SCHEDULE=interval:days:7             # Every 7 days
 | `SCAN_OUTPUT_RETENTION_DAYS` | `30` | Days before archiving scan outputs (currently disabled) |
 | `REPORT_RETENTION_DAYS` | `90` | Days before deleting old reports |
 | `SCAN_STATE_RETENTION_DAYS` | `7` | Days before deleting completed scan states |
-| `LOG_RETENTION_DAYS` | `30` | Days before deleting old log entries (configurable via UI) |
 
 **Data Retention Notes:**
-- Automated cleanup runs daily via Celery Beat
+- Automated cleanup runs daily via the built-in MediaScheduler (APScheduler): data retention at 04:00, log retention at 03:00
 - `SCAN_OUTPUT_RETENTION_DAYS` is currently not used (scan results kept forever)
 - Configurable via environment variables for future flexibility
-- `LOG_RETENTION_DAYS` default is stored in the `app_configs` database table and can be changed via the UI (System > View Logs) or API (`PUT /api/logs/retention`)
+- Log retention days is not an environment variable: it is stored in the `app_configs` database table (default 30) and changed via the UI (System > View Logs) or API (`PUT /api/logs/retention`)
 
 ### Monitoring Variables (Future)
 
@@ -145,14 +146,14 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:18-alpine
     container_name: pixelprobe-postgres
     environment:
       POSTGRES_DB: pixelprobe
       POSTGRES_USER: pixelprobe
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
       interval: 10s
@@ -160,11 +161,11 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: valkey/valkey:9-alpine
     container_name: pixelprobe-redis
-    command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-2gb} --maxmemory-policy noeviction
+    command: valkey-server --maxmemory ${REDIS_MAX_MEMORY:-2gb} --maxmemory-policy noeviction
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -277,15 +278,15 @@ Configured in `config.py`:
 
 ```python
 SQLALCHEMY_ENGINE_OPTIONS = {
-    'pool_size': 20,           # Base connection pool size
+    'pool_size': 5,            # Base pool size per process (DB_POOL_SIZE)
     'pool_pre_ping': True,     # Test connections before use
     'pool_recycle': 3600,      # Recycle connections after 1 hour
-    'max_overflow': 40,        # Additional connections when pool exhausted
+    'max_overflow': 10,        # Extra connections when pool exhausted (DB_MAX_OVERFLOW)
     'pool_timeout': 30,        # Timeout waiting for connection
 }
 ```
 
-**Total Connections:** 20 (base) + 40 (overflow) + MAX_WORKERS = 60 + MAX_WORKERS
+**Total Connections:** 4 gunicorn workers x (5 base + 10 overflow) = 60 max for the web app, plus Celery prefork children and ~MAX_WORKERS checker connections
 
 **PostgreSQL max_connections:**
 - Default: 100 connections
@@ -373,7 +374,7 @@ For best performance:
 ```yaml
 pixelprobe:
   volumes:
-    - /mnt/ssd/postgres_data:/var/lib/postgresql/data  # SSD for database
+    - /mnt/ssd/postgres_data:/var/lib/postgresql  # SSD for database
     - /mnt/hdd/media:/media:ro                          # HDD OK for media
   tmpfs:
     - /tmp:size=1G                                      # tmpfs for temp files
@@ -434,25 +435,18 @@ CELERY_CONCURRENCY=8
 
 ### Task Prioritization
 
-Celery queues and priorities are automatically configured:
+All tasks run on a single queue named `pixelprobe`. Priorities (0 = highest, 9 = lowest) are set per task:
 
-- **Default Queue**: Normal scans (priority 5)
-- **Integrity Queue**: Integrity checks (priority 7)
-- **Cleanup Queue**: Database cleanup (priority 6)
-- **Retention Queue**: Data retention (priority 9)
+- **Default**: Tasks without an explicit priority (priority 5)
+- **Scan tasks**: High priority (priority 3)
+- **Maintenance tasks**: File changes checks, cleanup (priority 7, background)
 
-### Beat Schedule (Automated Tasks)
+### Scheduled Maintenance (Automated Tasks)
 
-Celery Beat runs scheduled tasks daily:
+There is no Celery Beat process. Scheduled maintenance runs in the built-in MediaScheduler (APScheduler, inside the Celery worker container by default):
 
-```python
-# Runs at 2 AM daily
-'data-retention-cleanup': {
-    'task': 'pixelprobe.tasks.run_retention_cleanup',
-    'schedule': crontab(hour=2, minute=0),
-    'options': {'queue': 'retention', 'priority': 9}
-}
-```
+- Log retention cleanup: daily at 03:00
+- Data retention cleanup: daily at 04:00
 
 ## Data Retention Configuration
 
@@ -533,11 +527,12 @@ Copy the output to `SECRET_KEY` in `.env`.
 Session settings are configured in Flask:
 
 ```python
-# Session timeout (default: 30 days)
-PERMANENT_SESSION_LIFETIME = timedelta(days=30)
+# Session timeout (24 hours)
+PERMANENT_SESSION_LIFETIME = 86400
 
 # Session cookie settings
-SESSION_COOKIE_SECURE = True   # HTTPS only (production)
+SESSION_COOKIE_SECURE = True   # HTTPS only; default true. Plain-HTTP LAN
+                               # deployments must set SESSION_COOKIE_SECURE=false
 SESSION_COOKIE_HTTPONLY = True # Prevent JavaScript access
 SESSION_COOKIE_SAMESITE = 'Lax' # CSRF protection
 ```
@@ -585,13 +580,7 @@ Tokens support optional expiration dates.
 
 ## Configuration Best Practices
 
-1. **Start Conservative**: Begin with default settings and increase gradually
-2. **Monitor Resources**: Use `docker stats` to monitor CPU/memory usage
-3. **Test Changes**: Test configuration changes on a subset of files first
-4. **Document Settings**: Keep notes on what works for your environment
-5. **Regular Backups**: Backup database and configuration regularly
-6. **Security First**: Use strong passwords and keep SECRET_KEY secure
-7. **Update Regularly**: Pull latest images for bug fixes and improvements
+Start with the defaults and raise `MAX_WORKERS` and `CELERY_CONCURRENCY` gradually, watching `docker stats` for CPU and memory pressure. Back up the database and `.env` before upgrades, use strong passwords, and keep `SECRET_KEY` secret.
 
 ## Examples
 

@@ -1,7 +1,7 @@
 # PixelProbe Scan Types Documentation
 
 ## Overview
-PixelProbe offers multiple scan types to handle different use cases for media file corruption detection. Each scan type is optimized for specific scenarios and workflows.
+PixelProbe has several scan types for different corruption-detection workflows.
 
 ## Scan Types
 
@@ -64,7 +64,7 @@ POST /api/scan
 POST /api/scan-parallel
 {
   "directories": ["/media"],
-  "num_workers": 8
+  "force_rescan": false
 }
 ```
 
@@ -235,11 +235,9 @@ All multi-file scan types follow a three-phase approach:
 - **Pending scan**: Depends on pending count
 
 ### Optimization Tips
-1. Use parallel scans for initial setup
-2. Schedule file_changes scans regularly
-3. Run orphan cleanup weekly
-4. Use force_rescan sparingly
-5. Increase workers for parallel scans on powerful systems
+- Use force_rescan sparingly; it re-checks files that already have results.
+- On powerful systems, increase the worker count for parallel scans.
+- For scheduling cadence, see Best Practices below.
 
 ## Scan Status Values
 
@@ -314,27 +312,8 @@ Files can have the following scan statuses:
 
 ## Best Practices
 
-1. **Initial Setup**
-   - Run full scan on all media directories
-   - Use parallel scan for large libraries
-   - Review corrupted files immediately
-
-2. **Regular Maintenance**
-   - Schedule daily file_changes scans
-   - Weekly orphan cleanup
-   - Monthly full scan for critical data
-
-3. **Performance**
-   - Use parallel scans during off-hours
-   - Limit worker count during business hours
-   - Monitor system resources during scans
-
-4. **Error Handling**
-   - Check scan logs for errors
-   - Re-scan error files individually
-   - Mark false positives as good
-
-5. **Database Maintenance**
-   - Regular orphan cleanup
-   - Backup database before major scans
-   - Monitor database size growth
+- Initial setup: run a full scan on all media directories (parallel for large libraries).
+- Ongoing: schedule daily file_changes scans, weekly orphan cleanup, and a monthly full scan for critical data.
+- Run heavy scans during off-hours; limit worker count during business hours.
+- Re-scan error files individually and mark false positives as good.
+- Back up the database before major scans.

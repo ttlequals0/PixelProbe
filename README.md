@@ -32,21 +32,21 @@ PixelProbe detects corrupted video, image, and audio files across your media lib
 - **Rolling integrity queue**: Integrity checks sweep the library stalest-first in batches and resume where they left off; schedules can carry a per-run time budget so no single run monopolizes IO
 - **Scheduled automated scans**: Cron expressions or simple intervals for hands-free monitoring
 - **Smart exclusions**: Configure paths and file extensions to skip
-- **Phase-based scanning**: Discovery → Database → Validation workflow
+- **Phase-based scanning**: Discovery -> Database -> Validation workflow
 - **Bulk operations**: Rescan multiple files, deep analysis, batch actions
 
 ### Web Interface
-- Modern responsive design with dark/light theme support
+- Responsive design with dark/light theme support
 - Real-time scan progress with live polling updates
-- Advanced filtering and search capabilities
+- Filtering and search
 - Bulk file selection and management with shift-click range selection
 - Mobile-optimized touch interface
 - In-browser media file viewing and streaming
 - Detailed file corruption reports
 
 ### System Features
-- **PostgreSQL database**: Reliable ACID-compliant data storage
-- **Redis-backed task queue**: Background processing with Celery workers
+- **PostgreSQL database**: Stores scan results, users, schedules, and history
+- **Redis-compatible task queue (Valkey)**: Background processing with Celery workers
 - **Docker deployment**: Multi-container architecture (web, workers, database, queue)
 - **REST API**: Full OpenAPI/Swagger documentation
 - **Monitoring & Reports**: Real-time statistics, trend analytics, storage projections, PDF/JSON exports, complete audit trail
@@ -60,7 +60,7 @@ PixelProbe detects corrupted video, image, and audio files across your media lib
 - **API token authentication**: Generate and manage tokens for programmatic access
 - **Session management**: Cookie-based sessions with CSRF protection, configurable timeout
 - **First-run setup wizard**: Secure admin account creation on initial deployment
-- **Audit logging**: Complete security event tracking
+- **Audit logging**: Security event tracking
 
 ## Screenshots
 
@@ -105,11 +105,7 @@ Full feature parity with a high-contrast dark theme. Preference persists across 
   <img src="docs/screenshots/mobile-dark-dashboard.png" alt="Mobile Dark Dashboard" width="300" style="margin: 10px">
 </div>
 
-The mobile interface is fully responsive and touch-optimized:
-- Adaptive layout that works on all screen sizes
-- Touch-friendly buttons and controls
-- Collapsible sidebar navigation
-- Card-based design for scan results on mobile
+The mobile layout has a collapsible sidebar and shows scan results as cards instead of a table.
 
 ### Advanced Features
 
@@ -141,7 +137,7 @@ Skip specific directories or file extensions. Changes take effect on the next sc
 ## Documentation
 
 ### Installation & Setup
-- [Docker Setup Guide](docs/DOCKER_SETUP.md) - Complete Docker Compose setup with container explanations
+- [Docker Setup Guide](docs/DOCKER_SETUP.md) - Complete Docker Compose setup with container explanations, including the PostgreSQL 15 to 18 migration guide
 - [Installation Guide](docs/INSTALLATION.md) - Detailed installation instructions
 - [Configuration Guide](docs/CONFIGURATION.md) - Environment variables and configuration options
 
@@ -194,6 +190,7 @@ Skip specific directories or file extensions. Changes take effect on the next sc
    
    # Edit .env file with your values
    SECRET_KEY=your-generated-secret-key-here
+   POSTGRES_PASSWORD=your-secure-database-password
    MEDIA_PATH=/path/to/your/actual/media/directory
    SCAN_PATHS=/media
    ```
@@ -235,6 +232,13 @@ PixelProbe is available on Docker Hub as `ttlequals0/pixelprobe`:
 
 **Important**: PixelProbe requires PostgreSQL.
 
+**Upgrading to v2.7.0**: the bundled docker-compose.yml now defaults to
+PostgreSQL 18 and Valkey 9. The app works with PostgreSQL 15-18 and any
+Redis-compatible broker, but an existing PostgreSQL 15 data volume will not
+start on the 18 image - follow the migration guide in
+[docs/DOCKER_SETUP.md](docs/DOCKER_SETUP.md#postgresql-15-to-18-migration-required-for-v270)
+before switching, or pin `postgres:15-alpine` in your compose file.
+
 ## Configuration
 
 ### Environment Variables
@@ -243,6 +247,7 @@ PixelProbe uses environment variables for all configuration. Copy `.env.example`
 
 **Required Variables:**
 - `SECRET_KEY` - Secure secret key for Flask sessions
+- `POSTGRES_PASSWORD` - PostgreSQL password (compose refuses to start without it)
 - `MEDIA_PATH` - Host path to your media files (for Docker volume mounting)
 
 **Optional Variables:**
@@ -312,12 +317,7 @@ export MEDIA_PATH=/mnt/all-media  # Contains subdirs: movies/, tv/, backup/
 
 ### API Documentation
 
-PixelProbe provides a REST API with OpenAPI/Swagger documentation.
-
-#### Interactive API Documentation
-- **Swagger UI**: Available at `/api/v1/docs` when logged in
-- **OpenAPI Spec**: Full API specification with request/response schemas
-- **Try it out**: Test endpoints directly from the documentation
+Swagger UI is available at `/api-docs` when logged in. It includes the full OpenAPI spec with request/response schemas, and you can test endpoints directly from the page.
 
 #### Authentication Endpoints
 - `GET /api/auth/status` - Check authentication status
@@ -482,9 +482,14 @@ for result in results:
    cd PixelProbe
    ```
 
-2. **Use development compose file**:
+2. **Run locally** (see [docs/INSTALLATION.md](docs/INSTALLATION.md) for the full manual setup):
    ```bash
-   docker-compose -f docker-compose.dev.yml up -d
+   python3 -m venv venv && source venv/bin/activate
+   pip install -r requirements.txt
+   # Terminal 1: web app
+   python app.py
+   # Terminal 2: Celery worker
+   python celery_worker.py
    ```
 
 ### Testing
@@ -520,7 +525,7 @@ If you encounter **"no such table: scan_results"** errors after upgrading:
 
 ```bash
 # Quick fix
-docker exec pixelprobe python tools/fix_database_schema.py
+docker exec pixelprobe-app python tools/fix_database_schema.py
 ```
 
 ### Common Issues
@@ -542,7 +547,7 @@ docker exec pixelprobe python tools/fix_database_schema.py
 
 ### Getting Help
 
-1. **Check logs first**: `docker logs pixelprobe` 
+1. **Check logs first**: `docker logs pixelprobe-app` 
 2. **Search existing issues**: [GitHub Issues](https://github.com/ttlequals0/PixelProbe/issues)
 3. **Create new issue**: Include logs and system info
 

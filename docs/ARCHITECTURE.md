@@ -4,7 +4,7 @@
 
 ## Overview
 
-PixelProbe is a distributed media file corruption detection system built with a modular, layered architecture. The system uses Celery for distributed processing, Redis for message queuing, and PostgreSQL for persistent storage.
+PixelProbe is a distributed media file corruption detection system with a layered architecture. It uses Celery for distributed processing, Redis for message queuing, and PostgreSQL for persistent storage.
 
 ## System Components
 
@@ -107,11 +107,19 @@ PixelProbe is a distributed media file corruption detection system built with a 
 **Key Modules**:
 ```
 api/
-├── scan_routes.py      # Scanning operations
-├── stats_routes.py     # Statistics and reports
-├── admin_routes.py     # Administrative functions
-├── export_routes.py    # Data export
-└── maintenance_routes.py # Cleanup operations
+├── scan_routes.py          # Scanning operations
+├── scan_routes_parallel.py # Parallel scan endpoints
+├── scan_launch.py          # Shared scan-launch helper
+├── stats_routes.py         # Statistics and reports
+├── admin_routes.py         # Administrative functions
+├── auth_routes.py          # Login, users, API tokens
+├── auth_decorator.py       # Authentication decorator
+├── export_routes.py        # Data export
+├── healthcheck_routes.py   # Healthcheck integration
+├── log_routes.py           # Log viewing and download
+├── notification_routes.py  # Notification providers/rules
+├── reports_routes.py       # Scan reports
+└── maintenance_routes.py   # Cleanup operations
 ```
 
 ### Service Layer
@@ -158,8 +166,10 @@ api/
 - Data model mapping
 
 **Key Repositories**:
-- `ScanRepository`: Scan result operations
-- `ConfigRepository`: Configuration management
+- `ScanRepository` / `ScanStateRepository`: Scan result and scan state operations
+- `ConfigurationRepository`: Configuration management
+- `IgnoredPatternRepository`: Ignored error patterns
+- `ScheduleRepository`: Scan schedules
 
 ### Data Layer
 
@@ -169,8 +179,15 @@ api/
 - `ScanResult`: File scan results
 - `ScanConfiguration`: Directory configurations
 - `IgnoredErrorPattern`: False positive patterns
+- `Exclusion`: Excluded paths and extensions
 - `ScanSchedule`: Scheduled scan configurations
 - `ScanState`: Current scan status
+- `ScanChunk`: Per-chunk progress for parallel scans
+- `ScanReport`: Completed scan reports
+- `CleanupState` / `FileChangesState`: Maintenance operation state
+- `HealthcheckConfig`: Healthcheck ping configuration
+- `User` / `APIToken`: Authentication
+- `NotificationProvider` / `NotificationRule`: Notifications
 - `LogEntry`: Persistent log storage with scan tagging
 - `AppConfig`: Application-level key-value configuration
 
@@ -178,7 +195,7 @@ api/
 
 ### Media Scanner (`media_checker.py`)
 
-The heart of the corruption detection system:
+The core corruption detection logic:
 
 ```python
 class PixelProbe:
@@ -208,12 +225,22 @@ Manages scheduled scans using APScheduler:
 
 ```python
 class MediaScheduler:
-    def schedule_scan(self, cron_expression, scan_config):
-        # Create scheduled job
-        
-    def run_scheduled_scan(self, job_id):
-        # Execute scan with configuration
+    def create_schedule(self, name, cron_expression, scan_paths=None, scan_type='normal'):
+        # Create scheduled scan
+
+    def update_schedule(self, schedule_id, **kwargs):
+        # Update an existing schedule
+
+    def delete_schedule(self, schedule_id):
+        # Remove a schedule
+
+    def _run_scheduled_scan(self, schedule_id):
+        # Execute scan with the schedule's configuration
 ```
+
+A `db_schedule_sync` job (added v2.6.63) re-syncs saved schedules from the database
+every 60 seconds via a fingerprint comparison, so create/update/delete in gunicorn
+workers takes effect in the scheduler process without a restart.
 
 ## Data Flow
 
@@ -243,14 +270,15 @@ Worker1  Worker2  Worker3  Worker4  Worker5         Worker1  Worker2  Worker3  W
 ### Real-time Updates
 
 ```
-Celery Worker → Redis (scan_progress:{id}) → API Status Endpoint → Client
-                       ↓ (on completion)
-                  PostgreSQL (final sync)
+Chunk task → PostgreSQL (scan_state + scan_chunks, every 100 files or 60s)
+        ↓ (mirrored on each write)
+   Redis (scan_progress:{id}) → API Status Endpoint → Client
 ```
 
-Progress counters are written to Redis on every file processed. The scan-status API
-reads from Redis for active scans (fresh data) and falls back to PostgreSQL for
-completed/inactive scans. A final Redis-to-DB sync occurs at scan completion.
+PostgreSQL is the source of truth for progress. Chunk tasks commit progress at batch
+boundaries (every 100 files) or at least every 60 seconds, and mirror each write to
+Redis for low-latency UI polling. The scan-status API reads Redis first with a
+database fallback.
 
 ## Security Architecture
 
@@ -321,8 +349,8 @@ Request → Rate Limiter → CSRF Check → Input Validation
 Docker Compose
     ├── pixelprobe-app (Gunicorn + Flask)
     ├── pixelprobe-celery-worker (Celery)
-    ├── pixelprobe-postgres (PostgreSQL 15)
-    └── pixelprobe-redis (Redis 7)
+    ├── pixelprobe-postgres (PostgreSQL 18)
+    └── pixelprobe-redis (Valkey 9)
 ```
 
 ### Production (with reverse proxy)
@@ -384,9 +412,9 @@ Load Balancer / Nginx
 ## Technology Stack
 
 ### Backend
-- **Framework**: Flask 2.3.3
-- **Database**: SQLAlchemy 2.0.21
-- **Scheduler**: APScheduler 3.10.4
+- **Framework**: Flask 3.1.3
+- **Database**: SQLAlchemy 2.0.41
+- **Scheduler**: APScheduler 3.11.0
 - **Security**: Flask-Limiter, Flask-WTF
 
 ### Scanner Tools

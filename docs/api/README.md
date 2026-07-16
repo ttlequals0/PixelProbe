@@ -2,7 +2,7 @@
 
 ## Overview
 
-PixelProbe provides a RESTful API for managing media file corruption detection. The API is built with Flask and follows REST conventions.
+PixelProbe exposes its media corruption detection through a REST API built with Flask.
 
 ## Base URL
 
@@ -58,11 +58,12 @@ response = requests.get('http://localhost:5000/api/scan-status', headers=headers
 
 ## Rate Limiting
 
-The API implements rate limiting to prevent abuse:
-- **Default limits**: 200 requests per day, 50 per hour
+The API implements rate limiting on specific endpoints to prevent abuse:
+- **No default/global limits**: only individually decorated endpoints are rate limited
 - **Scan operations**: 2-5 requests per minute
 - **Admin operations**: 10 requests per minute
 - **Maintenance operations**: 5 requests per minute
+- **Exemptions**: requests from localhost and private/Docker networks (127.0.0.1, 10.x, 172.x, 192.168.x) are exempt from rate limiting
 
 Rate limit headers are included in responses:
 - `X-RateLimit-Limit`: Maximum requests allowed
@@ -100,12 +101,27 @@ Common status codes:
 
 ### System Endpoints
 
-#### Health Check
+#### Liveness Probe (Unauthenticated)
+```http
+GET /healthz
+```
+
+Unauthenticated liveness probe intended for container healthchecks and load balancers.
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "version": "<current_version>"
+}
+```
+
+#### Health Check (Authenticated)
 ```http
 GET /health
 ```
 
-Check if the service is running.
+Check if the service is running. Requires authentication.
 
 **Response:**
 ```json
@@ -143,9 +159,11 @@ Get paginated scan results with optional filters.
 
 **Query Parameters:**
 - `page` (integer): Page number (default: 1)
-- `per_page` (integer): Results per page (default: 100, max: 500)
+- `per_page` (integer): Results per page (default: 100, use -1 for all)
 - `scan_status` (string): Filter by status: `all`, `pending`, `scanning`, `completed`, `error`
 - `is_corrupted` (string): Filter by corruption: `all`, `true`, `false`
+- `search` (string): Case-insensitive substring match on file path
+- `path` (string): Restrict results to one configured scan path (must exactly match a configured path)
 
 **Response:**
 ```json
@@ -210,12 +228,12 @@ Scan a single file for corruption. Rate limited to 5 requests per minute.
 }
 ```
 
-#### Scan All Files
+#### Start Scan
 ```http
-POST /api/scan-all
+POST /api/scan
 ```
 
-Start scanning all configured directories. Rate limited to 2 requests per minute.
+Start scanning all configured directories (or a supplied list). Distributes work across all available Celery workers in chunks. Rate limited to 2 requests per minute.
 
 **Request Body:**
 ```json
@@ -225,102 +243,78 @@ Start scanning all configured directories. Rate limited to 2 requests per minute
 }
 ```
 
+Both fields are optional; if `directories` is omitted, the configured scan paths are used.
+
 **Response:**
 ```json
 {
-  "message": "Scan started",
-  "directories": ["/media/photos", "/media/videos"],
-  "force_rescan": false
+  "status": "queued",
+  "scan_id": "uuid-string",
+  "task_id": "celery-task-id",
+  "message": "Scan queued successfully using Celery task queue",
+  "celery_enabled": true
 }
 ```
 
-#### Parallel Scan
+#### Parallel Scan (Deprecated)
 ```http
 POST /api/scan-parallel
 ```
 
-Start a parallel scan with multiple workers. Rate limited to 2 requests per minute.
+Deprecated alias of `/api/scan`; both run the same chunk-distributed engine. Kept for API compatibility and will be removed in a future major release. Rate limited to 2 requests per minute.
 
 **Request Body:**
 ```json
 {
-  "force_rescan": false,
-  "num_workers": 4,
-  "directories": ["/media/photos"]
+  "directories": ["/media/photos"],
+  "force_rescan": false
 }
 ```
 
-#### Enhanced Parallel Scan V2
+`directories` is required; `force_rescan` is optional. The response matches `/api/scan` plus legacy fields (`status: "launched"`, `scan_type`, `force_rescan`, `directories`).
+
+#### Get Parallel Scan Status
 ```http
-POST /api/scan/parallel-v2
+GET /api/scan-parallel/status/<scan_id>
 ```
 
-Start an enhanced parallel scan that distributes work across all available Celery workers.
-
-**Request Body:**
-```json
-{
-  "directories": ["/media/photos", "/media/videos"],
-  "force_rescan": false,
-  "chunk_size": 100
-}
-```
+Get detailed status of a scan including chunk progress.
 
 **Response:**
 ```json
 {
   "scan_id": "uuid-string",
-  "message": "Enhanced parallel scan started",
-  "total_workers": 8,
-  "chunks_created": 42
-}
-```
-
-#### Get Parallel Scan V2 Status
-```http
-GET /api/scan/parallel-v2/status/<scan_id>
-```
-
-Get detailed status of an enhanced parallel scan including chunk progress.
-
-**Response:**
-```json
-{
-  "scan_id": "uuid-string",
-  "status": "running",
-  "total_chunks": 42,
-  "completed_chunks": 15,
-  "progress_percentage": 35.7,
-  "estimated_time_remaining": "5 minutes",
-  "worker_status": {
-    "active": 8,
-    "idle": 0
-  }
+  "phase": "scanning",
+  "is_active": true,
+  "progress_percent": 35.71,
+  "chunks": {
+    "total": 42,
+    "complete": 15,
+    "remaining": 27
+  },
+  "active_workers": 8,
+  "active_tasks": [
+    {
+      "worker": "celery@worker-1",
+      "task_id": "task-uuid",
+      "name": "pixelprobe.tasks_parallel.scan_chunk",
+      "args": [],
+      "kwargs": {"scan_id": "uuid-string"}
+    }
+  ],
+  "files_processed": 1500,
+  "estimated_total": 4200,
+  "start_time": "2025-01-20T12:00:00Z",
+  "message": "Processing 15/42 chunks"
 }
 ```
 
 #### Get Worker Status
 ```http
-GET /api/scan/parallel-v2/workers
+GET /api/scan-parallel/workers
 ```
 
-Get current status and utilization of all Celery workers.
-
-**Response:**
-```json
-{
-  "total_workers": 8,
-  "active_workers": 6,
-  "idle_workers": 2,
-  "worker_details": [
-    {
-      "worker_id": "worker-1",
-      "status": "busy",
-      "current_task": "processing chunk 5"
-    }
-  ]
-}
-```
+Get current status and utilization of all Celery workers. Returns `{"status": "offline", "message": "No Celery workers available"}` when no workers are up; otherwise per-worker details including pool size and active tasks.
 
 #### Get Scan Status
 ```http
@@ -363,9 +357,9 @@ Cancel the currently running scan.
 
 ### Statistics Endpoints
 
-#### Summary Statistics
+#### Statistics
 ```http
-GET /api/stats/summary
+GET /api/stats
 ```
 
 Get overall statistics about scanned files.
@@ -374,65 +368,103 @@ Get overall statistics about scanned files.
 ```json
 {
   "total_files": 1000,
-  "scanned_files": 950,
+  "completed_files": 950,
+  "pending_files": 50,
+  "scanning_files": 0,
+  "error_files": 5,
   "corrupted_files": 10,
   "healthy_files": 940,
-  "pending_files": 50,
-  "error_files": 5,
-  "total_size": 10737418240,
-  "corrupted_size": 52428800,
-  "last_scan_date": "2025-01-20T12:00:00Z",
-  "corruption_rate": 1.05
+  "marked_as_good": 3,
+  "warning_files": 7,
+  "integrity": {
+    "total_files": 1000,
+    "checked_files": 800,
+    "checked_percent": 80.0,
+    "checked_last_30_days": 500,
+    "never_checked": 200,
+    "oldest_check_date": "2025-01-01T00:00:00Z",
+    "bitrot_suspected": 2
+  }
 }
 ```
 
-#### Corruption by File Type
+#### Scan Trends
 ```http
-GET /api/stats/corruption-by-type
+GET /api/stats/trends?days=30
 ```
 
-Get corruption statistics grouped by file type.
+Get scan counter metrics over time.
+
+**Query Parameters:**
+- `days` (integer): Number of days to look back (default: 30, max: 365)
 
 **Response:**
 ```json
-[
-  {
-    "file_type": "image/jpeg",
-    "total_files": 500,
-    "corrupted_files": 5,
-    "corruption_rate": 1.0
+{
+  "period_days": 30,
+  "start_date": "2024-12-21T12:00:00Z",
+  "summary": {
+    "total_scans": 12,
+    "total_files_scanned": 5000,
+    "total_corrupted": 8,
+    "total_warnings": 15
   },
-  {
-    "file_type": "video/mp4",
-    "total_files": 200,
-    "corrupted_files": 3,
-    "corruption_rate": 1.5
-  }
-]
+  "daily_trends": [
+    {
+      "date": "2025-01-20",
+      "scan_count": 2,
+      "scan_types_count": 1,
+      "files_scanned": 100,
+      "files_corrupted": 2,
+      "files_with_warnings": 1,
+      "avg_duration_seconds": 120.5
+    }
+  ]
+}
 ```
 
-#### Scan History
+#### Scan Duration Histogram
 ```http
-GET /api/stats/scan-history?days=30
+GET /api/stats/duration-histogram?days=30&buckets=10
 ```
 
-Get scan history for the specified number of days.
+Get a histogram of scan durations.
+
+**Query Parameters:**
+- `days` (integer): Number of days to look back (default: 30, max: 365)
+- `buckets` (integer): Number of histogram buckets (default: 10, min: 2, max: 50)
 
 **Response:**
 ```json
-[
-  {
-    "date": "2025-01-20",
-    "files_scanned": 100,
-    "corrupted_found": 2
-  },
-  {
-    "date": "2025-01-19",
-    "files_scanned": 150,
-    "corrupted_found": 1
+{
+  "period_days": 30,
+  "start_date": "2024-12-21T12:00:00Z",
+  "histogram": [
+    {
+      "range_start": 0.0,
+      "range_end": 60.0,
+      "count": 5,
+      "percentage": 41.67
+    }
+  ],
+  "summary": {
+    "total_scans": 12,
+    "min_duration": 10.2,
+    "max_duration": 600.0,
+    "avg_duration": 180.4,
+    "median_duration": 150.0
   }
-]
+}
 ```
+
+Also includes per-scan-type duration statistics.
+
+#### System Information
+```http
+GET /api/system-info
+```
+
+Get system information including database statistics (total/completed/pending/corrupted/healthy/warning file counts) and per-path file counts for the monitored paths.
 
 ### Admin Endpoints
 
@@ -589,7 +621,7 @@ After fixing underlying issues (e.g., database problems), use the `/api/reset-fi
 
 ### Export Endpoints
 
-#### Export Scan Results (Enhanced)
+#### Export Scan Results
 ```http
 GET /api/export?format=csv
 POST /api/export
@@ -599,70 +631,48 @@ Export scan results in multiple formats (CSV, JSON, or PDF).
 
 **Query Parameters (GET):**
 - `format` (string): Output format - `csv`, `json`, or `pdf` (default: csv)
-- `scan_status` (string): Filter by status - `all`, `pending`, `completed`, `error`
-- `is_corrupted` (string): Filter by corruption - `all`, `true`, `false`
-- `start_date` (string): Start date in ISO format
-- `end_date` (string): End date in ISO format
+- `filter` (string): Filter type - `all`, `corrupted`, `healthy`, `warning` (default: all)
+- `search` (string): Search term to filter by file path
 
 **Request Body (POST):**
 ```json
 {
   "format": "pdf",
-  "filters": {
-    "scan_status": "completed",
-    "is_corrupted": "true",
-    "start_date": "2025-01-01",
-    "end_date": "2025-01-31"
-  }
+  "filter": "corrupted",
+  "search": "vacation",
+  "file_ids": [1, 2, 3]
 }
 ```
+
+If `file_ids` is provided, only those specific results are exported and `filter`/`search` are ignored.
 
 **Response:** File download in requested format
 
-#### Export to CSV (Legacy)
-```http
-POST /api/export/csv
-```
-
-Export scan results to CSV format (legacy endpoint, use `/api/export` instead).
-
-**Request Body:**
-```json
-{
-  "filters": {
-    "scan_status": "completed",
-    "is_corrupted": "true",
-    "start_date": "2025-01-01",
-    "end_date": "2025-01-31"
-  }
-}
-```
-
-**Response:** CSV file download
-
 ### Maintenance Endpoints
 
-#### Cleanup Missing Files
+#### Cleanup Orphaned Entries
 ```http
-POST /api/cleanup
+POST /api/cleanup-orphaned
 ```
 
-Remove database entries for files that no longer exist. Rate limited to 10 requests per minute.
+Start a background cleanup of database entries for files that no longer exist on disk. Returns `409 Conflict` if a cleanup is already in progress. Progress can be monitored via `GET /api/cleanup-status`.
 
-**Request Body:**
+**Request Body (optional):**
 ```json
 {
-  "dry_run": true,
-  "directories": ["/media/photos"]
+  "file_paths": ["/media/photos/missing.jpg"]
 }
 ```
+
+If `file_paths` is omitted, all files are checked.
 
 **Response:**
 ```json
 {
-  "missing_files": 10,
-  "cleaned_files": 0,
-  "dry_run": true
+  "status": "started",
+  "message": "Cleanup operation started for all files",
+  "cleanup_id": 12,
+  "file_count": null
 }
 ```
 
@@ -744,7 +754,7 @@ response = requests.get(f"{BASE_URL}/api/scan-results", params={
 results = response.json()
 
 # Start a scan
-response = requests.post(f"{BASE_URL}/api/scan-all", json={
+response = requests.post(f"{BASE_URL}/api/scan", json={
     "force_rescan": False,
     "directories": ["/media/photos"]
 })
@@ -775,7 +785,7 @@ async function getScanResults() {
 
 // Start a scan
 async function startScan() {
-  const response = await axios.post(`${BASE_URL}/api/scan-all`, {
+  const response = await axios.post(`${BASE_URL}/api/scan`, {
     force_rescan: false,
     directories: ['/media/photos']
   });
@@ -789,7 +799,7 @@ async function startScan() {
 curl -X GET "http://localhost:5000/api/scan-results?is_corrupted=true"
 
 # Start a scan
-curl -X POST "http://localhost:5000/api/scan-all" \
+curl -X POST "http://localhost:5000/api/scan" \
   -H "Content-Type: application/json" \
   -d '{"force_rescan": false, "directories": ["/media/photos"]}'
 
@@ -806,12 +816,10 @@ Future versions will include WebSocket support for real-time updates:
 
 ## Best Practices
 
-1. **Check scan status** before starting a new scan to avoid conflicts
-2. **Use pagination** when retrieving large result sets
-3. **Implement exponential backoff** when rate limited
-4. **Validate file paths** before submitting scan requests
-5. **Use dry_run** for cleanup operations to preview changes
-6. **Monitor rate limit headers** to avoid hitting limits
+- Check `/api/scan-status` before starting a new scan; the API returns 409 if one is already running.
+- Use pagination for large result sets rather than `per_page=-1`.
+- Watch the rate limit headers and back off with exponential delay on 429 responses.
+- After starting a cleanup, poll `GET /api/cleanup-status` for progress.
 
 ## Security Considerations
 
@@ -825,17 +833,10 @@ Future versions will include WebSocket support for real-time updates:
 
 ### Common Errors
 
-**409 Conflict - "Another scan is already in progress"**
-- Solution: Wait for current scan to complete or cancel it
-
-**400 Bad Request - "Invalid file path"**
-- Solution: Ensure file path is within allowed directories
-
-**429 Too Many Requests**
-- Solution: Implement rate limiting in your client
-
-**500 Internal Server Error**
-- Solution: Check server logs for details
+- **409 "Another scan is already in progress"**: wait for the current scan or cancel it via `/api/cancel-scan`
+- **400 "Invalid file path"**: the path must be inside a configured scan directory
+- **429 Too Many Requests**: back off and retry; see the rate limit headers
+- **500 Internal Server Error**: check the server logs
 
 ### Debug Headers
 

@@ -2,6 +2,7 @@
 """Download missing media samples from FFmpeg samples."""
 
 import os
+import shutil
 import subprocess
 import urllib.request
 
@@ -96,7 +97,8 @@ def main():
         for ext in ['heic', 'heif']:
             if not os.path.exists(f'valid.{ext}'):
                 try:
-                    subprocess.run(['convert', 'valid.jpg', f'valid.{ext}'], check=True)
+                    im_binary = 'magick' if shutil.which('magick') else 'convert'
+                    subprocess.run([im_binary, 'valid.jpg', f'valid.{ext}'], check=True)
                     print(f"✓ Created valid.{ext}")
                 except Exception as e:
                     print(f"✗ Failed to create valid.{ext}: {e}")

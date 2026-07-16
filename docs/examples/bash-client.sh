@@ -12,6 +12,7 @@
 
 # Configuration
 PIXELPROBE_URL="${PIXELPROBE_URL:-http://localhost:5000}"
+PIXELPROBE_API_TOKEN="${PIXELPROBE_API_TOKEN:-}"
 TIMEOUT=30
 
 # Colors for output
@@ -32,12 +33,14 @@ api_request() {
         curl -s -X "$method" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json" \
+            -H "Authorization: Bearer $PIXELPROBE_API_TOKEN" \
             --connect-timeout $TIMEOUT \
             "${PIXELPROBE_URL}${endpoint}"
     else
         curl -s -X "$method" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json" \
+            -H "Authorization: Bearer $PIXELPROBE_API_TOKEN" \
             --connect-timeout $TIMEOUT \
             -d "$data" \
             "${PIXELPROBE_URL}${endpoint}"
@@ -53,6 +56,13 @@ check_dependencies() {
     if ! command -v jq &> /dev/null; then
         echo -e "${RED}❌ Error: jq is not installed${NC}"
         echo "Install with: apt-get install jq (Debian/Ubuntu) or brew install jq (macOS)"
+        exit 1
+    fi
+
+    if [ -z "$PIXELPROBE_API_TOKEN" ]; then
+        echo -e "${RED}Error: PIXELPROBE_API_TOKEN is not set${NC}"
+        echo "Create an API token via POST /api/tokens or the web UI, then:"
+        echo "  export PIXELPROBE_API_TOKEN=<your-token>"
         exit 1
     fi
 }
@@ -89,7 +99,7 @@ cmd_scan() {
     json_dirs=$(printf '%s\n' "${directories[@]}" | jq -R . | jq -s .)
     data=$(jq -n --argjson dirs "$json_dirs" '{directories: $dirs, force_rescan: false}')
     
-    response=$(api_request POST /api/scan-all "$data")
+    response=$(api_request POST /api/scan "$data")
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ Failed to start scan${NC}"
         exit 1
@@ -159,18 +169,20 @@ cmd_status() {
 cmd_stats() {
     echo -e "${BLUE}📈 Getting statistics...${NC}"
     
-    response=$(api_request GET /api/stats/summary)
-    
+    response=$(api_request GET /api/stats)
+
     total=$(echo "$response" | jq -r '.total_files')
-    scanned=$(echo "$response" | jq -r '.scanned_files')
+    completed=$(echo "$response" | jq -r '.completed_files')
     corrupted=$(echo "$response" | jq -r '.corrupted_files')
-    rate=$(echo "$response" | jq -r '.corruption_rate')
-    
+    healthy=$(echo "$response" | jq -r '.healthy_files')
+    warnings=$(echo "$response" | jq -r '.warning_files')
+
     echo -e "${GREEN}Statistics:${NC}"
     echo "  Total files: $(printf "%'d" $total)"
-    echo "  Scanned: $(printf "%'d" $scanned)"
+    echo "  Completed: $(printf "%'d" $completed)"
     echo "  Corrupted: $(printf "%'d" $corrupted)"
-    echo "  Corruption rate: ${rate}%"
+    echo "  Healthy: $(printf "%'d" $healthy)"
+    echo "  Warnings: $(printf "%'d" $warnings)"
 }
 
 cmd_corrupted() {
@@ -224,8 +236,9 @@ cmd_export() {
     curl -s -X POST \
         -H "Content-Type: application/json" \
         -H "Accept: text/csv" \
-        -d '{"filters": {}}' \
-        "${PIXELPROBE_URL}/api/export/csv" \
+        -H "Authorization: Bearer $PIXELPROBE_API_TOKEN" \
+        -d '{"format": "csv", "filter": "all"}' \
+        "${PIXELPROBE_URL}/api/export" \
         -o "$output_file"
     
     if [ $? -eq 0 ]; then
@@ -238,23 +251,37 @@ cmd_export() {
 }
 
 cmd_cleanup() {
-    local dry_run=${1:-true}
-    
-    echo -e "${BLUE}🧹 Running cleanup (dry_run: $dry_run)...${NC}"
-    
-    data=$(jq -n --arg dr "$dry_run" '{dry_run: ($dr == "true")}')
-    response=$(api_request POST /api/cleanup "$data")
-    
-    missing=$(echo "$response" | jq -r '.missing_files')
-    cleaned=$(echo "$response" | jq -r '.cleaned_files')
-    
-    echo -e "${GREEN}Results:${NC}"
-    echo "  Missing files: $missing"
-    echo "  Cleaned files: $cleaned"
-    
-    if [ "$dry_run" == "true" ] && [ "$missing" -gt 0 ]; then
-        echo -e "${YELLOW}ℹ️  Run with 'false' to actually clean these files${NC}"
+    echo -e "${BLUE}Starting orphaned-entry cleanup...${NC}"
+
+    response=$(api_request POST /api/cleanup-orphaned '{}')
+    error=$(echo "$response" | jq -r '.error // empty')
+
+    if [ -n "$error" ]; then
+        # A 409 is returned when a cleanup is already in progress
+        echo -e "${RED}$error${NC}"
+        exit 1
     fi
+
+    echo -e "${GREEN}$(echo "$response" | jq -r '.message')${NC}"
+
+    # Monitor progress until the cleanup finishes
+    while true; do
+        status_response=$(api_request GET /api/cleanup-status)
+        is_running=$(echo "$status_response" | jq -r '.is_running')
+        phase=$(echo "$status_response" | jq -r '.phase')
+        orphaned=$(echo "$status_response" | jq -r '.orphaned_found')
+        percent=$(echo "$status_response" | jq -r '.progress_percentage // 0')
+
+        if [ "$is_running" != "true" ]; then
+            break
+        fi
+
+        printf "\rPhase: %s (%s%%) - orphaned found: %s" "$phase" "$percent" "$orphaned"
+        sleep 5
+    done
+
+    echo -e "\n${GREEN}Results:${NC}"
+    echo "  Orphaned entries found: $orphaned"
 }
 
 cmd_cancel() {
@@ -276,22 +303,23 @@ Usage: $0 [command] [options]
 
 Commands:
   scan <dirs...>     Scan specified directories
-  status            Show current scan status  
+  status            Show current scan status
   stats             Show overall statistics
   corrupted         List corrupted files
   export <file>     Export results to CSV
-  cleanup [false]   Clean missing files (dry run by default)
+  cleanup           Clean up orphaned database entries
   cancel            Cancel current scan
   help              Show this help message
 
 Environment:
-  PIXELPROBE_URL    PixelProbe API URL (default: http://localhost:5000)
+  PIXELPROBE_URL        PixelProbe API URL (default: http://localhost:5000)
+  PIXELPROBE_API_TOKEN  API token (required; create via POST /api/tokens or the web UI)
 
 Examples:
   $0 scan /media/photos /media/videos
   $0 stats
   $0 export results.csv
-  $0 cleanup false
+  $0 cleanup
 
 EOF
 }
@@ -327,7 +355,7 @@ case "$1" in
         cmd_export "$2"
         ;;
     cleanup)
-        cmd_cleanup "${2:-true}"
+        cmd_cleanup
         ;;
     cancel)
         cmd_cancel

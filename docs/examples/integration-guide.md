@@ -3,12 +3,26 @@
 This guide provides examples for integrating PixelProbe into your applications and workflows.
 
 ## Table of Contents
-1. [Basic Integration](#basic-integration)
-2. [Automated Scanning](#automated-scanning)
-3. [Monitoring Integration](#monitoring-integration)
-4. [CI/CD Integration](#cicd-integration)
-5. [Backup System Integration](#backup-system-integration)
-6. [Media Server Integration](#media-server-integration)
+1. [Authentication](#authentication)
+2. [Basic Integration](#basic-integration)
+3. [Automated Scanning](#automated-scanning)
+4. [Monitoring Integration](#monitoring-integration)
+5. [CI/CD Integration](#cicd-integration)
+6. [Backup System Integration](#backup-system-integration)
+7. [Media Server Integration](#media-server-integration)
+
+## Authentication
+
+All API endpoints require authentication. For programmatic access, create an API token
+(via the web UI under Account -> API Tokens, or `POST /api/tokens` with an authenticated
+session) and send it as a Bearer token on every request:
+
+```
+Authorization: Bearer your-api-token
+```
+
+All examples below assume a valid API token. The only endpoint that does not require
+authentication is the liveness probe `GET /healthz`.
 
 ## Basic Integration
 
@@ -22,9 +36,10 @@ from typing import Dict, List, Optional
 class PixelProbeClient:
     """Client for interacting with PixelProbe API"""
     
-    def __init__(self, base_url: str = "http://localhost:5000"):
+    def __init__(self, base_url: str = "http://localhost:5000", api_token: str = ""):
         self.base_url = base_url
         self.session = requests.Session()
+        self.session.headers.update({"Authorization": f"Bearer {api_token}"})
     
     def scan_file(self, file_path: str) -> Dict:
         """Scan a single file"""
@@ -38,7 +53,7 @@ class PixelProbeClient:
     def scan_directory(self, directories: List[str], force_rescan: bool = False) -> Dict:
         """Scan multiple directories"""
         response = self.session.post(
-            f"{self.base_url}/api/scan-all",
+            f"{self.base_url}/api/scan",
             json={
                 "directories": directories,
                 "force_rescan": force_rescan
@@ -78,13 +93,13 @@ class PixelProbeClient:
     
     def get_statistics(self) -> Dict:
         """Get overall statistics"""
-        response = self.session.get(f"{self.base_url}/api/stats/summary")
+        response = self.session.get(f"{self.base_url}/api/stats")
         response.raise_for_status()
         return response.json()
 
 # Example usage
 if __name__ == "__main__":
-    client = PixelProbeClient()
+    client = PixelProbeClient(api_token="your-api-token")
     
     # Start a scan
     print("Starting scan...")
@@ -108,12 +123,13 @@ if __name__ == "__main__":
 const axios = require('axios');
 
 class PixelProbeClient {
-    constructor(baseUrl = 'http://localhost:5000') {
+    constructor(baseUrl = 'http://localhost:5000', apiToken = '') {
         this.baseUrl = baseUrl;
         this.client = axios.create({
             baseURL: baseUrl,
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiToken}`
             }
         });
     }
@@ -126,7 +142,7 @@ class PixelProbeClient {
     }
     
     async scanDirectory(directories, forceRescan = false) {
-        const response = await this.client.post('/api/scan-all', {
+        const response = await this.client.post('/api/scan', {
             directories: directories,
             force_rescan: forceRescan
         });
@@ -170,7 +186,7 @@ class PixelProbeClient {
 
 // Example usage
 (async () => {
-    const client = new PixelProbeClient();
+    const client = new PixelProbeClient('http://localhost:5000', 'your-api-token');
     
     try {
         // Start scan
@@ -203,18 +219,21 @@ class PixelProbeClient {
 # daily-scan.sh - Run daily media scan and email results
 
 PIXELPROBE_URL="http://localhost:5000"
+API_TOKEN="your-api-token"
+AUTH_HEADER="Authorization: Bearer $API_TOKEN"
 EMAIL="admin@example.com"
 LOG_FILE="/var/log/pixelprobe-daily.log"
 
 # Start scan
 echo "$(date): Starting daily scan" >> "$LOG_FILE"
-SCAN_RESPONSE=$(curl -s -X POST "$PIXELPROBE_URL/api/scan-all" \
+SCAN_RESPONSE=$(curl -s -X POST "$PIXELPROBE_URL/api/scan" \
+    -H "$AUTH_HEADER" \
     -H "Content-Type: application/json" \
     -d '{"force_rescan": false}')
 
 # Wait for completion
 while true; do
-    STATUS=$(curl -s "$PIXELPROBE_URL/api/scan-status")
+    STATUS=$(curl -s -H "$AUTH_HEADER" "$PIXELPROBE_URL/api/scan-status")
     CURRENT_STATUS=$(echo "$STATUS" | jq -r '.status')
     
     if [[ "$CURRENT_STATUS" == "completed" ]] || [[ "$CURRENT_STATUS" == "error" ]]; then
@@ -225,15 +244,16 @@ while true; do
 done
 
 # Get statistics
-STATS=$(curl -s "$PIXELPROBE_URL/api/stats/summary")
+STATS=$(curl -s -H "$AUTH_HEADER" "$PIXELPROBE_URL/api/stats")
 CORRUPTED_COUNT=$(echo "$STATS" | jq -r '.corrupted_files')
 
 # Send email if corrupted files found
 if [[ "$CORRUPTED_COUNT" -gt 0 ]]; then
     # Export corrupted files to CSV
-    curl -X POST "$PIXELPROBE_URL/api/export/csv" \
+    curl -X POST "$PIXELPROBE_URL/api/export" \
+        -H "$AUTH_HEADER" \
         -H "Content-Type: application/json" \
-        -d '{"filters": {"is_corrupted": "true"}}' \
+        -d '{"format": "csv", "filter": "corrupted"}' \
         -o /tmp/corrupted_files.csv
     
     # Send email
@@ -255,8 +275,8 @@ echo "$(date): Scan completed. Corrupted files: $CORRUPTED_COUNT" >> "$LOG_FILE"
 # Run weekly deep scan on Sunday at 3 AM
 0 3 * * 0 /usr/local/bin/weekly-deep-scan.sh
 
-# Clean up missing files monthly
-0 4 1 * * curl -X POST http://localhost:5000/api/cleanup -H "Content-Type: application/json" -d '{"dry_run": false}'
+# Clean up orphaned database entries monthly
+0 4 1 * * curl -X POST http://localhost:5000/api/cleanup-orphaned -H "Authorization: Bearer your-api-token"
 ```
 
 ## Monitoring Integration
@@ -279,14 +299,18 @@ def update_metrics():
     """Update Prometheus metrics from PixelProbe API"""
     try:
         # Get statistics
-        response = requests.get('http://localhost:5000/api/stats/summary')
+        response = requests.get(
+            'http://localhost:5000/api/stats',
+            headers={'Authorization': 'Bearer your-api-token'}
+        )
         stats = response.json()
         
         # Update metrics
         files_total.set(stats['total_files'])
-        files_scanned.set(stats['scanned_files'])
+        files_scanned.set(stats['completed_files'])
         files_corrupted.set(stats['corrupted_files'])
-        corruption_rate.set(stats['corruption_rate'])
+        if stats['completed_files']:
+            corruption_rate.set(stats['corrupted_files'] / stats['completed_files'] * 100)
         
     except Exception as e:
         print(f"Error updating metrics: {e}")
@@ -368,21 +392,26 @@ jobs:
     
     - name: Wait for service
       run: |
-        until curl -s http://localhost:5000/health; do
+        until curl -s http://localhost:5000/healthz; do
           echo "Waiting for PixelProbe..."
           sleep 5
         done
     
     - name: Scan media files
+      env:
+        API_TOKEN: ${{ secrets.PIXELPROBE_API_TOKEN }}
       run: |
-        curl -X POST http://localhost:5000/api/scan-all \
+        curl -X POST http://localhost:5000/api/scan \
+          -H "Authorization: Bearer $API_TOKEN" \
           -H "Content-Type: application/json" \
           -d '{"directories": ["/media"]}'
     
     - name: Wait for scan completion
+      env:
+        API_TOKEN: ${{ secrets.PIXELPROBE_API_TOKEN }}
       run: |
         while true; do
-          STATUS=$(curl -s http://localhost:5000/api/scan-status | jq -r '.status')
+          STATUS=$(curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:5000/api/scan-status | jq -r '.status')
           if [[ "$STATUS" == "completed" ]]; then
             break
           fi
@@ -390,11 +419,13 @@ jobs:
         done
     
     - name: Check for corrupted files
+      env:
+        API_TOKEN: ${{ secrets.PIXELPROBE_API_TOKEN }}
       run: |
-        CORRUPTED=$(curl -s http://localhost:5000/api/stats/summary | jq -r '.corrupted_files')
+        CORRUPTED=$(curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:5000/api/stats | jq -r '.corrupted_files')
         if [[ "$CORRUPTED" -gt 0 ]]; then
           echo "[ERROR] Found $CORRUPTED corrupted files!"
-          curl -s http://localhost:5000/api/scan-results?is_corrupted=true | jq -r '.results[].file_path'
+          curl -s -H "Authorization: Bearer $API_TOKEN" "http://localhost:5000/api/scan-results?is_corrupted=true" | jq -r '.results[].file_path'
           exit 1
         else
           echo " No corrupted files found!"
@@ -417,15 +448,16 @@ media-integrity:
     - docker run -d --name pixelprobe -p 5000:5000 -v $CI_PROJECT_DIR/media:/media:ro pixelprobe:latest
     - sleep 10
     - |
-      curl -X POST http://localhost:5000/api/scan-all \
+      curl -X POST http://localhost:5000/api/scan \
+        -H "Authorization: Bearer $PIXELPROBE_API_TOKEN" \
         -H "Content-Type: application/json" \
         -d '{"directories": ["/media"]}'
     - |
-      while [ "$(curl -s http://localhost:5000/api/scan-status | jq -r '.status')" != "completed" ]; do
+      while [ "$(curl -s -H "Authorization: Bearer $PIXELPROBE_API_TOKEN" http://localhost:5000/api/scan-status | jq -r '.status')" != "completed" ]; do
         sleep 10
       done
     - |
-      CORRUPTED=$(curl -s http://localhost:5000/api/stats/summary | jq -r '.corrupted_files')
+      CORRUPTED=$(curl -s -H "Authorization: Bearer $PIXELPROBE_API_TOKEN" http://localhost:5000/api/stats | jq -r '.corrupted_files')
       if [ "$CORRUPTED" -gt 0 ]; then
         echo "Found $CORRUPTED corrupted files"
         exit 1
@@ -453,7 +485,7 @@ from pixelprobe_client import PixelProbeClient
 
 def validate_before_backup(directories):
     """Scan directories and abort backup if corruption found"""
-    client = PixelProbeClient()
+    client = PixelProbeClient(api_token="your-api-token")
     
     print("Starting pre-backup media validation...")
     
@@ -483,7 +515,7 @@ def validate_before_backup(directories):
         print("Please review and fix corrupted files before backup.")
         return False
     
-    print(f" All {stats['scanned_files']} files validated successfully!")
+    print(f" All {stats['completed_files']} files validated successfully!")
     return True
 
 if __name__ == "__main__":
@@ -531,7 +563,7 @@ from pixelprobe_client import PixelProbeClient
 
 def scan_new_media(file_path):
     """Scan newly added media file"""
-    client = PixelProbeClient()
+    client = PixelProbeClient(api_token="your-api-token")
     
     print(f"Scanning new media: {file_path}")
     
@@ -546,7 +578,7 @@ def scan_new_media(file_path):
         # Check if file is corrupted
         scan_results = client.session.get(
             f"{client.base_url}/api/scan-results",
-            params={"file_path": file_path}
+            params={"search": file_path}
         ).json()
         
         if scan_results['results']:
@@ -603,6 +635,7 @@ use OCP\Files\IRootFolder;
 
 class MediaValidator {
     private $pixelprobeUrl = 'http://localhost:5000';
+    private $apiToken = 'your-api-token';
     
     public function validateFile(Node $file) {
         $filePath = $file->getInternalPath();
@@ -615,7 +648,8 @@ class MediaValidator {
             'file_path' => $filePath
         ]));
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'Content-Type: application/json'
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $this->apiToken
         ]);
         
         $response = curl_exec($ch);
@@ -630,8 +664,11 @@ class MediaValidator {
         sleep(2);
         
         // Check result
-        $ch = curl_init($this->pixelprobeUrl . '/api/scan-results?file_path=' . urlencode($filePath));
+        $ch = curl_init($this->pixelprobeUrl . '/api/scan-results?search=' . urlencode($filePath));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: Bearer ' . $this->apiToken
+        ]);
         $response = curl_exec($ch);
         curl_close($ch);
         
@@ -674,7 +711,7 @@ services:
       - TZ=${TZ:-UTC}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -747,9 +784,6 @@ def handle_webhook():
 
 ## Best Practices
 
-1. **Error Handling**: Always implement proper error handling and retries
-2. **Rate Limiting**: Respect API rate limits in your integrations
-3. **Async Operations**: Use async/await for better performance
-4. **Logging**: Log all operations for debugging
-5. **Monitoring**: Set up alerts for corruption detection
-6. **Security**: Use HTTPS in production and implement authentication
+- Respect the API rate limits; back off and retry on 429 responses.
+- Alert on corruption findings (webhook or Prometheus, both shown above) instead of checking manually.
+- Use HTTPS in production.

@@ -10,7 +10,7 @@
 
 ## Overview
 
-PixelProbe is a distributed media corruption detection system built on a microservices architecture using Docker containers. The system uses Celery for distributed task processing, Redis for message queuing, and PostgreSQL for persistent storage.
+PixelProbe is a distributed media corruption detection system that runs as a set of Docker containers. It uses Celery for distributed task processing, Redis for message queuing, and PostgreSQL for persistent storage.
 
 ## Container Architecture
 
@@ -22,7 +22,7 @@ PixelProbe is a distributed media corruption detection system built on a microse
 │  │                 │       │                 │      │                 │   │
 │  │   Web App       │◄─────►│     Redis       │◄────►│  Celery Worker  │   │
 │  │   (Flask)       │       │   (Message      │      │     Pool        │   │
-│  │   Port: 5000    │       │    Broker)      │      │   (8 workers)   │   │
+│  │   Port: 5000    │       │    Broker)      │      │   (4 workers)   │   │
 │  │                 │       │   Port: 6379    │      │                 │   │
 │  └────────┬────────┘       └─────────────────┘      └────────┬────────┘   │
 │           │                                                   │             │
@@ -56,7 +56,7 @@ PixelProbe is a distributed media corruption detection system built on a microse
 - **Key Processes**:
   - Gunicorn WSGI server
   - Flask application
-  - APScheduler for scheduled tasks
+  - (Scheduler disabled: `SCHEDULER_ENABLED=false` keeps the web container out of the scheduler lock)
 
 #### 2. Celery Worker Container (`celery-worker`)
 - **Image**: `ttlequals0/pixelprobe:latest` (same image, different entry point)
@@ -66,16 +66,18 @@ PixelProbe is a distributed media corruption detection system built on a microse
   - Process file discovery operations
   - Handle cleanup operations
   - Report progress to Redis
+  - Run APScheduler for scheduled tasks (leader election via a Redis lock: `SET NX` with a per-process uuid value, 60s TTL, refreshed by a heartbeat that atomically compares the value before extending the expiry)
 - **Configuration**:
-  - Default: 8 concurrent workers
-  - Configurable via `CELERY_WORKERS` environment variable
+  - Started via `python celery_worker.py`, which consumes the `pixelprobe` queue with `--max-tasks-per-child 1000`, a 2GB `--max-memory-per-child` limit, and `--without-gossip/--without-mingle/--without-heartbeat`
+  - Default: 4 concurrent workers
+  - Configurable via `CELERY_CONCURRENCY` environment variable
 - **Tools Available**:
   - FFmpeg for video/audio analysis
   - ImageMagick for image analysis
   - Python PIL for additional image processing
 
 #### 3. Redis Container
-- **Image**: `redis:7-alpine`
+- **Image**: `valkey/valkey:9-alpine`
 - **Purpose**: Message broker and result backend
 - **Responsibilities**:
   - Queue task messages
@@ -85,7 +87,7 @@ PixelProbe is a distributed media corruption detection system built on a microse
 - **Persistence**: Optional volume mount for data persistence
 
 #### 4. PostgreSQL Container
-- **Image**: `postgres:15-alpine`
+- **Image**: `postgres:18-alpine`
 - **Purpose**: Primary data storage
 - **Responsibilities**:
   - Store scan results
@@ -94,7 +96,7 @@ PixelProbe is a distributed media corruption detection system built on a microse
   - Store user configurations
   - Manage scan state
 - **Features**:
-  - Connection pooling (20 base, 40 max)
+  - Connection pooling (5 base, 10 overflow, 15 max per process)
   - Automatic reconnection
   - Transaction support
 
@@ -121,6 +123,10 @@ All tasks use a single queue for simplicity and load balancing.
 - `process_chunk_task`: Process FCP path-range chunks (last chunk finalizes the scan)
 - `scan_media_task`: Single-file scans + compatibility shim for queued directory scans
 - `scan_files_task`: Selected-file batch rescans
+- `check_file_exists_task`: File existence checks for cleanup
+- `calculate_file_hash_task`: Hash recalculation for file-changes / integrity checks
+- `run_retention_cleanup`: Data retention cleanup
+- `reload_schedules_task`: Signal schedule reload after create/update/delete
 - `health_check_task`: System health monitoring
 
 ### Parallel Scanning Workflow
@@ -160,15 +166,14 @@ All tasks use a single queue for simplicity and load balancing.
 ### Task Distribution Strategy
 
 1. **Chunk-Based Distribution**:
-   - Files are divided into chunks of configurable size (default: 100 files)
+   - Files are divided into path-range chunks; chunk size adapts to scan size (<=100 files: single chunk, <=1,000: 100/chunk, <=10,000: 500/chunk, larger: 1,000/chunk)
    - Each chunk becomes an independent task
    - Workers pull chunks from queue as they become available
 
 2. **Worker Pool Management**:
    - Workers are stateless and interchangeable
-   - Automatic retry on failure (3 attempts)
-   - Exponential backoff: 30s, 60s, 120s
-   - Dead letter queue for failed tasks
+   - Automatic retry on failure (3 attempts, fixed 60s delay)
+   - `task_acks_late` + `task_reject_on_worker_lost` redeliver tasks lost to a worker crash
 
 3. **Load Balancing**:
    - Redis automatically distributes tasks to available workers
@@ -217,9 +222,9 @@ Media File → FFmpeg/ImageMagick → Analysis Result → PostgreSQL
 - **Protocol**: PostgreSQL wire protocol
 - **Purpose**: CRUD operations on data
 - **Connection Pool**:
-  - Base: 20 connections
-  - Max overflow: 20 connections
-  - Total max: 40 connections
+  - Base: 5 connections (`DB_POOL_SIZE`)
+  - Max overflow: 10 connections (`DB_MAX_OVERFLOW`)
+  - Total max: 15 connections per process
   - Recycle time: 3600 seconds
 
 ### 3. Celery Workers ↔ Redis
@@ -262,7 +267,7 @@ REDIS_PORT: 6379
 # Celery
 CELERY_BROKER_URL: redis://redis:6379/0
 CELERY_RESULT_BACKEND: redis://redis:6379/0
-CELERY_WORKERS: 8
+CELERY_CONCURRENCY: 4
 
 # Application
 SECRET_KEY: <secure-key>
@@ -278,14 +283,14 @@ BATCH_SIZE: 100
 ```yaml
 celery-worker-2:
   image: ttlequals0/pixelprobe:latest
-  command: celery -A celery_app worker
+  command: python celery_worker.py
   scale: 4  # Creates 4 instances
 ```
 
 2. **Increase Worker Concurrency**:
 ```yaml
 environment:
-  CELERY_WORKERS: 16  # Double the workers
+  CELERY_CONCURRENCY: 8  # Double the workers
 ```
 
 ### Vertical Scaling
@@ -306,9 +311,8 @@ deploy:
 
 ### Performance Tuning
 
-1. **Chunk Size Optimization**:
-   - Smaller chunks (50): Better for many small files
-   - Larger chunks (200): Better for fewer large files
+1. **Chunk Sizing**:
+   - Chunk size is chosen automatically based on scan size (see Task Distribution Strategy); it is not configurable
 
 2. **Worker Specialization**:
    - Dedicate workers for specific file types
@@ -324,7 +328,7 @@ deploy:
 ### Health Check Endpoints
 - `/health`: Web application health
 - `/api/scan-status`: Current scan status
-- `/api/scan/parallel-v2/workers`: Worker status
+- `/api/scan-parallel/workers`: Worker status
 
 ### Metrics to Monitor
 1. **Queue Depth**: Tasks waiting in Redis
@@ -347,14 +351,13 @@ healthcheck:
 ### Automatic Recovery Mechanisms
 
 1. **Stuck Scan Detection**:
-   - Timeout: 5 minutes for adding phase
-   - Timeout: 10 minutes for discovery phase
-   - Automatic cleanup and restart
+   - Sweep runs every 5 minutes
+   - Scans with no update for 30 minutes are marked crashed
+   - Backstop also finalizes scans whose last chunk died before finalization
 
 2. **Worker Crash Recovery**:
-   - Supervisor monitors worker processes
-   - Automatic restart on crash
-   - Task reassignment to healthy workers
+   - Worker exits non-zero on unrecoverable errors; the container restart policy brings it back
+   - `task_acks_late` redelivers in-flight tasks to healthy workers
 
 3. **Database Connection Recovery**:
    - Automatic reconnection
@@ -374,10 +377,9 @@ healthcheck:
    - API authentication required
 
 2. **Resource Limits**:
-   - Memory limits per container
+   - Memory limits per container (plus a 2GB `--max-memory-per-child` cap on worker children)
    - CPU limits to prevent DoS
-   - File size limits (5GB max)
-   - Scan timeout (5 minutes per file)
+   - Per-tool timeouts sized dynamically from file size and duration (files over 5GB additionally get stage-3 multi-point sampling)
 
 3. **Input Validation**:
    - Path traversal prevention
@@ -393,13 +395,13 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: pixelprobe
       POSTGRES_USER: pixelprobe
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
       interval: 10s
@@ -407,10 +409,10 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    image: valkey/valkey:9-alpine
+    command: valkey-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -435,13 +437,13 @@ services:
 
   celery-worker:
     image: ttlequals0/pixelprobe:latest
-    command: celery -A celery_app worker --loglevel=info --concurrency=8
+    command: python celery_worker.py
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_HOST: redis
       CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_WORKERS: 8
+      CELERY_CONCURRENCY: 4
     volumes:
       - /media:/media:ro
     depends_on:

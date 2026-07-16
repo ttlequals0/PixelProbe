@@ -65,6 +65,10 @@ _RE_BLACK_START = re.compile(r'black_start:\s*([\d.]+)')
 _RE_BLACK_END = re.compile(r'black_end:\s*([\d.]+)')
 _RE_BLACK_DURATION = re.compile(r'black_duration:\s*([\d.]+)')
 
+# ImageMagick 7 renamed the CLI to 'magick' ('convert' survives only as a
+# compatibility alias); prefer it, fall back for ImageMagick 6 systems.
+IMAGEMAGICK_BINARY = 'magick' if shutil.which('magick') else 'convert'
+
 def get_default_filename_patterns():
     """Get default filename patterns to exclude"""
     return [
@@ -1002,8 +1006,8 @@ class PixelProbe:
             # Using 'convert' instead of 'identify' to validate PIXEL DATA, not just headers
             # This forces ImageMagick to decode the entire image, detecting deeper corruption
             result = safe_subprocess_run(
-                ['convert',
-                 ensure_cli_safe_path(file_path),  # convert has no '--' separator; './'-prefix relative paths
+                [IMAGEMAGICK_BINARY,
+                 ensure_cli_safe_path(file_path),  # no '--' separator support; './'-prefix relative paths
                  '-regard-warnings',      # Treat warnings as errors for strict validation
                  'null:'],                # Null output (discard result, we only check for errors)
                 capture_output=True,
@@ -1052,7 +1056,8 @@ class PixelProbe:
             elif result.stderr:
                 # Check if this is just a metadata/profile warning (not actual corruption)
                 stderr_lower = result.stderr.lower()
-                is_profile_warning = 'corruptimageprofile' in stderr_lower and '@warning/profile.c' in stderr_lower
+                # Note: ImageMagick emits "@ warning/profile.c" (space after @)
+                is_profile_warning = 'corruptimageprofile' in stderr_lower and 'warning/profile.c' in stderr_lower
                 
                 # Check for PNG chunk warnings that aren't actual corruption
                 png_chunk_warnings = [
@@ -1064,7 +1069,7 @@ class PixelProbe:
                     'time chunk',
                     'bkgd chunk'
                 ]
-                is_png_warning = any(warning in stderr_lower for warning in png_chunk_warnings) and '@warning/png.c' in stderr_lower
+                is_png_warning = any(warning in stderr_lower for warning in png_chunk_warnings) and 'warning/png.c' in stderr_lower
                 
                 if is_profile_warning:
                     # Profile warnings (like XMP) don't indicate actual image corruption
@@ -2157,7 +2162,9 @@ class PixelProbe:
                 'ffprobe',
                 '-f', 'lavfi',
                 '-i', f'movie={file_path},signalstats=stat=tout+vrep',
-                '-show_entries', 'frame=pkt_pts_time:frame_tags=lavfi.signalstats.TOUT,lavfi.signalstats.VREP',
+                # pts_time (pkt_pts_time was removed in newer ffmpeg; pts_time
+                # exists on 6.x and 8.x alike)
+                '-show_entries', 'frame=pts_time:frame_tags=lavfi.signalstats.TOUT,lavfi.signalstats.VREP',
                 '-of', 'csv=p=0',
                 '-v', 'quiet'
             ], capture_output=True, text=True, timeout=60)
