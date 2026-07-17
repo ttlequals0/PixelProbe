@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.7.3] - 2026-07-17
+
+### Fixed
+
+- **Scans busy on long movies are no longer falsely marked crashed (#75).** The stuck-scan check crashes any scan with no progress update for 30 minutes, but progress was only written when a file finished - and a single large movie can legitimately spend 30-60+ minutes inside ffmpeg validation, so a run of big files tripped the rule while the workers were healthy. Each chunk task now runs a heartbeat thread that bumps the scan's liveness timestamp every `CHUNK_HEARTBEAT_INTERVAL_SECS` (default 120s), so `last_update` staleness now genuinely means the workers are dead. Note the semantics change: `last_update` is a liveness heartbeat now, not a last-file-completed timestamp.
+- **Scans interrupted by container restarts now resume instead of dying (#75).** Restarting the stack mid-scan could lose the queued chunk tasks; startup kept the scan alive ("within grace") but nothing ever re-queued its chunks, so it sat idle until the 30-minute rule crashed it. The stuck-scan sweeper now detects this state - stale heartbeat with chunk rows still active - reclaims the dead workers' claimed files, and re-dispatches the chunks (up to 3 revival attempts, staleness threshold `CHUNK_REVIVE_STALENESS_SECS`, default 600s). Duplicate-delivery guards make revival safe against ghost redeliveries: a task whose chunk is already finished or owned by a newer task id exits without touching anything, which also fixes a latent bug where a redelivered message could reset a completed chunk and zero its file count. Chunk task ids are now assigned before dispatch (previously written after, from the group result), and the discovery walk heartbeats too, so a slow sparse-tree walk cannot be falsely crashed either.
+- **Worker crash mid-chunk no longer silently drops files.** With late acks, a chunk whose worker died mid-scan is redelivered under the same task id - but its files were already claimed, so the redelivery found nothing pending and marked the chunk complete with zero files, dropping the in-flight files from the scan. The redelivery now reclaims the dead attempt's files and scans them.
+- **Cancel button invisible in light mode (#74).** The button referenced a CSS variable that was never defined, so its background resolved to transparent - white text on a white page. Same fix applied to the pagination hover background, which had the identical defect.
+- **"Files by type" chart unreadable in light mode (#74).** Axis labels, title, and grid lines were hardcoded to dark-theme colors. They now read the active theme's CSS variables at render time, and the file-type labels got a bump from 10px to 11px in both themes.
+- **Integrity check started during a running scan no longer strands the UI (#74).** The progress panel can only track one operation at a time; when an integrity check finished, it stopped all polling and left the scan buttons disabled with no way back. On completion the UI now checks whether a scan is still running and returns to its progress view, or re-enables the scan buttons if not. Switching operations also no longer leaks a duplicate poll loop.
+
 ## [2.7.2] - 2026-07-16
 
 ### Added

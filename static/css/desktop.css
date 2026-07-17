@@ -502,7 +502,7 @@ body {
 }
 
 .cancel-button {
-    background-color: var(--danger);
+    background-color: var(--danger-color);
     color: white;
     border: none;
     padding: 0.5rem 1rem;
@@ -1025,7 +1025,7 @@ input:checked + .toggle-slider:before {
 }
 
 .page-link:hover {
-    background-color: var(--bg-hover);
+    background-color: var(--bg-secondary);
     color: var(--primary-green);
     border-color: var(--primary-green);
 }

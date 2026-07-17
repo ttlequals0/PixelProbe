@@ -148,6 +148,22 @@ def client(app):
     """Create a test client"""
     return app.test_client()
 
+@pytest.fixture
+def tasks_parallel_mod(app):
+    """pixelprobe.tasks_parallel with the celery/app circular import satisfied.
+
+    celery_config does `from app import app` at import time; stub that module
+    with the test app so the real app.py (and its Postgres startup) never runs.
+    """
+    import sys
+    import types
+    if 'app' not in sys.modules:
+        fake = types.ModuleType('app')
+        fake.app = app
+        sys.modules['app'] = fake
+    import pixelprobe.tasks_parallel as tasks_parallel
+    return tasks_parallel
+
 @pytest.fixture(scope='function')
 def authenticated_client(app, client):
     """Create an authenticated test client with a test user"""

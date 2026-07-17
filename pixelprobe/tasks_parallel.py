@@ -7,11 +7,21 @@ every chunk exit marks the chunk terminal and the last one finalizes the scan
 under a row lock (exactly-once). The scheduler's stuck-scan sweeper is the
 backstop if the winner dies between chunk-complete and finalize.
 Celery-free engine logic lives in pixelprobe.services.scan_engine.
+
+Liveness and recovery (issue #75): each chunk task runs a heartbeat thread
+bumping ScanState.last_update, so the sweeper's 30-minute staleness rule only
+fires on true crashes. When the heartbeat goes stale with chunk rows still
+active (dead workers, lost queue), the sweeper calls
+redispatch_orphaned_chunks to re-queue them. process_chunk_task returns
+ALREADY_TERMINAL for duplicate deliveries against a finished chunk and
+SUPERSEDED when its task id no longer matches the chunk's recorded owner.
 """
 
 import logging
 import os
+import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import List
 
@@ -45,6 +55,61 @@ DISCOVERY_TASK_TIMEOUT_SECS = env_int('DISCOVERY_TASK_TIMEOUT_SECS', 3600, floor
 _DISCOVERY_INSERT_BATCH = 500
 _CHUNK_COMMIT_BATCH = 100
 _PROGRESS_WRITE_INTERVAL_SECS = 60  # also write progress at least this often (stuck-sweeper safety)
+
+# Liveness heartbeat: a chunk task can sit inside checker.scan_file() for
+# 30-60+ minutes on one large movie, during which no progress write happens.
+# The heartbeat keeps ScanState.last_update moving while the task is alive so
+# the stuck-scan sweeper's 30-minute staleness rule only fires on true crashes
+# (issue #75). Daemon thread: dies with the worker, which is the point.
+_CHUNK_HEARTBEAT_INTERVAL_SECS = env_int('CHUNK_HEARTBEAT_INTERVAL_SECS', 120, floor=15)
+
+
+def _heartbeat_once(app, scan_id: str) -> bool:
+    """One liveness write on a fresh app-context session. True if a row updated.
+
+    Runs on the heartbeat thread, never on the task's session. The is_active
+    guard means a heartbeat can never resurrect a cancelled/crashed scan.
+    """
+    try:
+        with app.app_context():
+            result = db.session.execute(
+                update(ScanState)
+                .where(ScanState.scan_id == scan_id,
+                       ScanState.is_active == True)
+                .values(last_update=datetime.now(timezone.utc))
+            )
+            db.session.commit()
+            return result.rowcount > 0
+    except Exception as e:
+        logger.warning(f"Chunk heartbeat write failed for scan {scan_id}: {e}")
+        return False
+
+
+def _start_chunk_heartbeat(app, scan_id: str, chunk_db_id: int,
+                           interval: float = None) -> threading.Event:
+    """Start a daemon thread bumping ScanState.last_update; returns stop event."""
+    if interval is None:
+        interval = _CHUNK_HEARTBEAT_INTERVAL_SECS
+    stop = threading.Event()
+
+    def beat():
+        failures = 0
+        while not stop.wait(interval):
+            if _heartbeat_once(app, scan_id):
+                failures = 0
+            else:
+                failures += 1
+                if failures == 3:
+                    # Also hit when the scan was cancelled (is_active False)
+                    # and this thread has not been stopped yet - benign there
+                    logger.warning(
+                        f"Chunk {chunk_db_id} heartbeat has not updated scan "
+                        f"{scan_id} for 3 consecutive intervals")
+
+    thread = threading.Thread(target=beat, daemon=True,
+                              name=f'chunk-heartbeat:{chunk_db_id}')
+    thread.start()
+    return stop
 
 
 def _mark_chunk_terminal(chunk, status: str, files_scanned: int = None, error: str = None):
@@ -104,6 +169,7 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
     and runs the finalization check."""
     logger.info(f"Worker processing chunk {chunk_db_id} for scan {scan_id}")
     first_path = last_path = None
+    hb_stop = None
 
     try:
         from flask import current_app
@@ -112,6 +178,18 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
         if not chunk:
             logger.error(f"Chunk {chunk_db_id} not found")
             return {'status': 'ERROR', 'chunk_id': chunk_db_id, 'error': 'Chunk not found'}
+
+        # Duplicate-delivery guards: a ghost redelivery (broker visibility
+        # timeout) or a task superseded by chunk revival must not touch chunk
+        # state. Without the terminal guard a ghost resets a completed chunk
+        # to processing and zeroes files_scanned via the empty-claim path.
+        if chunk.is_complete:
+            logger.info(f"Chunk {chunk_db_id} already terminal, ignoring duplicate delivery")
+            return {'status': 'ALREADY_TERMINAL', 'chunk_id': chunk_db_id}
+        if chunk.celery_task_id and self.request.id and chunk.celery_task_id != self.request.id:
+            logger.info(f"Chunk {chunk_db_id} owned by task {chunk.celery_task_id}, "
+                        f"this delivery ({self.request.id}) is superseded")
+            return {'status': 'SUPERSEDED', 'chunk_id': chunk_db_id}
 
         fcp = chunk.fcp_range()
         if not fcp:
@@ -125,17 +203,32 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
         chunk.start_time = datetime.now(timezone.utc)
         db.session.commit()
 
+        hb_stop = _start_chunk_heartbeat(current_app._get_current_object(),
+                                         scan_id, chunk_db_id)
+
         # Bulk claim: one statement, race-free (ranges are disjoint by construction)
-        claimed = db.session.execute(
-            update(ScanResult)
-            .where(ScanResult.file_path >= first_path,
-                   ScanResult.file_path <= last_path,
-                   ScanResult.scan_status == 'pending')
-            .values(scan_status='scanning')
-            .returning(ScanResult.id)
-        ).fetchall()
-        db.session.commit()
-        claimed_ids = [row[0] for row in claimed]
+        def claim_pending():
+            rows = db.session.execute(
+                update(ScanResult)
+                .where(ScanResult.file_path >= first_path,
+                       ScanResult.file_path <= last_path,
+                       ScanResult.scan_status == 'pending')
+                .values(scan_status='scanning')
+                .returning(ScanResult.id)
+            ).fetchall()
+            db.session.commit()
+            return [row[0] for row in rows]
+
+        claimed_ids = claim_pending()
+
+        if not claimed_ids:
+            # A worker-lost redelivery arrives with the SAME task id (acks_late
+            # + reject_on_worker_lost) while the dead attempt's rows are still
+            # claimed as 'scanning'; without this reclaim-and-retry the chunk
+            # would be marked completed with files_scanned=0 and those files
+            # silently dropped from the scan
+            _reclaim_chunk_range(first_path, last_path)
+            claimed_ids = claim_pending()
 
         if not claimed_ids:
             # Empty chunk: terminal, but never touch shared progress fields
@@ -247,12 +340,26 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
             _write_chunk_progress(chunk, files_processed, scan_id, current_file)
             last_progress_write = time.time()
 
-            current_task.update_state(state='PROGRESS', meta={
-                'chunk_id': chunk_db_id,
-                'current': files_processed,
-                'total': len(claimed_ids),
-                'scan_id': scan_id,
-            })
+            # Cosmetic task metadata: a result-backend blip must not abort a
+            # chunk (real progress is already committed to the DB above)
+            try:
+                current_task.update_state(state='PROGRESS', meta={
+                    'chunk_id': chunk_db_id,
+                    'current': files_processed,
+                    'total': len(claimed_ids),
+                    'scan_id': scan_id,
+                })
+            except Exception as e:
+                logger.debug(f"Chunk {chunk_db_id} progress state update failed (non-fatal): {e}")
+
+        # Ownership re-check: if revival re-assigned this chunk while we ran
+        # (only possible after 600s of failed heartbeats), the newer task owns
+        # the terminal write and the finalize - exit without touching either
+        db.session.expire(chunk)
+        if chunk.celery_task_id and self.request.id and chunk.celery_task_id != self.request.id:
+            logger.warning(f"Chunk {chunk_db_id} was re-assigned to task "
+                           f"{chunk.celery_task_id} while this task ran; yielding")
+            return {'status': 'SUPERSEDED', 'chunk_id': chunk_db_id}
 
         _mark_chunk_terminal(chunk, 'completed', files_scanned=files_processed)
         logger.info(f"Chunk {chunk_db_id} completed: {files_processed} files, {files_corrupted} corrupted")
@@ -293,6 +400,61 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
             logger.error(f"Chunk {chunk_db_id} terminal-error cleanup failed: {cleanup_error}")
             db.session.rollback()
         raise exc
+
+    finally:
+        # Stop heartbeating on every exit, including the retry path (the 60s
+        # retry countdown must not keep the old attempt's heartbeat alive)
+        if hb_stop:
+            hb_stop.set()
+
+
+def redispatch_orphaned_chunks(scan_id: str, force_rescan: bool = False) -> int:
+    """Reclaim and re-dispatch all non-terminal chunks of a scan whose workers
+    are provably gone (caller has verified last_update staleness against the
+    chunk heartbeat). Returns the number of chunks re-dispatched.
+
+    The new celery_task_id is committed BEFORE dispatch so any ghost delivery
+    of the old task returns SUPERSEDED instead of racing the revival.
+    """
+    chunks = ScanChunk.query.filter(
+        ScanChunk.scan_id == scan_id,
+        ScanChunk.status.in_(ScanChunk.ACTIVE_STATUSES)
+    ).all()
+
+    dispatched = 0
+    for chunk in chunks:
+        fcp = chunk.fcp_range()
+        if not fcp:
+            # Legacy directory-path chunks are not this engine's to re-dispatch
+            continue
+        try:
+            if chunk.status == 'processing':
+                _reclaim_chunk_range(*fcp)
+            new_id = str(uuid.uuid4())
+            chunk.status = 'pending'
+            chunk.celery_task_id = new_id
+            chunk.start_time = None
+            db.session.commit()
+            process_chunk_task.apply_async(
+                args=(chunk.id, scan_id, force_rescan), task_id=new_id)
+            dispatched += 1
+        except Exception as e:
+            # Chunk already committed as pending: the next sweep retries it;
+            # keep going so one broker hiccup does not strand the other chunks
+            logger.error(f"Failed to re-dispatch chunk {chunk.id} of scan {scan_id}: {e}")
+            db.session.rollback()
+            continue
+
+    if dispatched:
+        scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
+        if scan_state:
+            scan_state.last_update = datetime.now(timezone.utc)
+            scan_state.progress_message = (
+                f'Recovered after interruption: re-dispatched {dispatched} chunks')
+            db.session.commit()
+        logger.warning(f"Revived scan {scan_id}: re-dispatched {dispatched} orphaned chunks")
+
+    return dispatched
 
 
 @celery_app.task(bind=True, soft_time_limit=DISCOVERY_TASK_TIMEOUT_SECS,
@@ -343,6 +505,12 @@ def discover_directory_task(self, directory: str, scan_id: str,
             )
             db.session.commit()
 
+    # Heartbeat: a sparse tree can walk for many minutes between flush()es
+    # (only supported files fill the batch), which would trip the 30-minute
+    # staleness rule while discovery is alive and inside its own time limit
+    from flask import current_app
+    hb_stop = _start_chunk_heartbeat(current_app._get_current_object(),
+                                     scan_id, f'discovery:{directory}')
     try:
         for root, dirs, files in os.walk(directory):
             dirs[:] = [d for d in dirs if not any(
@@ -374,6 +542,8 @@ def discover_directory_task(self, directory: str, scan_id: str,
         db.session.rollback()
         complete = False
         error = str(e)
+    finally:
+        hb_stop.set()
 
     elapsed = time.time() - start_time
     logger.info(f"Discovery of {directory}: checked {files_checked}, inserted {files_inserted} "
@@ -526,25 +696,22 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
             finalize_scan(scan_state)
             return {'status': 'COMPLETED', 'scan_id': scan_id, 'total_files': 0}
 
-        job = group(
-            process_chunk_task.s(chunk['id'], scan_id, force_rescan)
-            for chunk in chunks
-        )
-        result = job.apply_async()
+        # Pre-assign task ids and commit BEFORE dispatch (cancellation support
+        # and the ownership guard in process_chunk_task): a fast worker must
+        # never observe a not-yet-written owner id, and post-dispatch writes
+        # depended on result.children order matching the signatures
+        signatures = []
+        id_mappings = []
+        for chunk in chunks:
+            task_id = str(uuid.uuid4())
+            id_mappings.append({'id': chunk['id'], 'celery_task_id': task_id})
+            signatures.append(
+                process_chunk_task.s(chunk['id'], scan_id, force_rescan)
+                .set(task_id=task_id))
+        db.session.bulk_update_mappings(ScanChunk, id_mappings)
+        db.session.commit()
 
-        # Save child task IDs for cancellation support
-        if getattr(result, 'children', None):
-            try:
-                mappings = [
-                    {'id': chunk['id'], 'celery_task_id': child.id}
-                    for chunk, child in zip(chunks, result.children)
-                    if hasattr(child, 'id')
-                ]
-                db.session.bulk_update_mappings(ScanChunk, mappings)
-                db.session.commit()
-            except Exception as e:
-                logger.error(f"Error saving chunk task IDs: {e}")
-                db.session.rollback()
+        group(signatures).apply_async()
 
         logger.info(f"Scan {scan_id}: launched {len(chunks)} chunk tasks for {total_to_scan} files")
         return {

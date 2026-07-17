@@ -675,6 +675,9 @@ class ProgressManager {
     }
 
     async startMonitoring(operationType = 'scan') {
+        // Clear any existing monitor first: switching operations (e.g. an
+        // integrity check started mid-scan) must not leak a second poll loop
+        this.stopMonitoring();
         this.operationType = operationType;
         this.show();
         
@@ -700,9 +703,12 @@ class ProgressManager {
         this.pollDelay = 1000;
         this.lastProgressValue = null;
 
+        const gen = this._monitorGen || 0;
         const pollWithBackoff = async () => {
+            if (gen !== (this._monitorGen || 0)) return; // monitor was replaced
             const previousProgress = this.lastProgressValue;
             await this.checkProgress();
+            if (gen !== (this._monitorGen || 0)) return;
 
             // If progress changed, reset to fast polling
             // Otherwise, increase delay with exponential backoff
@@ -758,6 +764,10 @@ class ProgressManager {
     }
 
     stopMonitoring() {
+        // Invalidate any in-flight poll iteration: an awaited checkProgress
+        // would otherwise reschedule itself after this clear, resurrecting a
+        // loop that no stopMonitoring() could ever reach again
+        this._monitorGen = (this._monitorGen || 0) + 1;
         if (this.checkInterval) {
             clearInterval(this.checkInterval);
             this.checkInterval = null;
@@ -1017,7 +1027,28 @@ class ProgressManager {
                 }
             }
             
-            setTimeout(() => this.hide(), 5000);
+            setTimeout(async () => {
+                // If another operation started monitoring during the 5s
+                // message window, it owns the progress view now - do not
+                // hijack it
+                if (this.checkInterval) return;
+                this.hide();
+                // A media scan may still be running (concurrent operations
+                // are allowed); resume its monitor so the UI returns to the
+                // scan progress view instead of stranding the user
+                try {
+                    const scanStatus = await this.api.getScanStatus();
+                    if (scanStatus.is_scanning) {
+                        this.startMonitoring('scan');
+                        return;
+                    }
+                } catch (error) {
+                    // Fall through and re-enable the buttons: a wrongly
+                    // enabled Start Scan is rejected server-side while a
+                    // wrongly disabled one strands the UI
+                }
+                this.updateScanButtons(false);
+            }, 5000);
         }
     }
     
@@ -2971,6 +3002,12 @@ class PixelProbeApp {
         }
         this.fileTypeCharts = {};
 
+        // Axis/grid colors come from the active theme's CSS variables so the
+        // chart stays readable in both light and dark mode
+        const styles = getComputedStyle(document.body);
+        const tickColor = styles.getPropertyValue('--text-primary').trim();
+        const gridColor = styles.getPropertyValue('--border-color').trim();
+
         // Color palette for charts - cycle through these colors for all file types
         const baseColors = [
             '#00ff88',  // Primary green
@@ -3044,23 +3081,23 @@ class PixelProbeApp {
                             type: 'logarithmic',  // Logarithmic scale for better visualization
                             beginAtZero: false,
                             ticks: {
-                                color: '#b0b0b0',
+                                color: tickColor,
                                 callback: (value) => this.formatStorage(value)
                             },
                             grid: {
-                                color: '#333'
+                                color: gridColor
                             },
                             title: {
                                 display: true,
                                 text: 'Storage (Log Scale)',
-                                color: '#b0b0b0'
+                                color: tickColor
                             }
                         },
                         y: {
                             ticks: {
-                                color: '#b0b0b0',
+                                color: tickColor,
                                 font: {
-                                    size: 10
+                                    size: 11
                                 }
                             },
                             grid: {
