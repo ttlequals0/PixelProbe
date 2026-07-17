@@ -16,6 +16,12 @@ def engine(app):
     return engine_module
 
 
+@pytest.fixture
+def tp(tasks_parallel_mod):
+    """Shorthand for the shared tasks_parallel fixture (see conftest.py)"""
+    return tasks_parallel_mod
+
+
 def _add_pending(db, paths):
     for p in paths:
         db.session.add(ScanResult(file_path=p, scan_status='pending'))
@@ -196,3 +202,152 @@ class TestFinalization:
             assert engine.maybe_finalize_scan('scan-f6') is True
             state = ScanState.query.filter_by(scan_id='scan-f6').first()
             assert state.files_processed == 100
+
+
+class TestChunkTaskGuards:
+    """Duplicate-delivery guards: a ghost or superseded task must not touch
+    chunk state (issue #75)"""
+
+    def test_terminal_chunk_returns_already_terminal(self, tp, app, db):
+        with app.app_context():
+            _make_scan_state(db, 'scan-g1')
+            chunk = _make_chunk(db, 'scan-g1', '/a', '/b', is_complete=True,
+                                status='completed', files_scanned=42)
+            result = tp.process_chunk_task.apply(args=(chunk.id, 'scan-g1')).get()
+            assert result['status'] == 'ALREADY_TERMINAL'
+            chunk = db.session.get(ScanChunk, chunk.id)
+            assert chunk.status == 'completed'
+            assert chunk.files_scanned == 42
+
+    def test_superseded_task_id_claims_nothing(self, tp, app, db):
+        with app.app_context():
+            _add_pending(db, ['/a/f1.mkv'])
+            _make_scan_state(db, 'scan-g2')
+            chunk = _make_chunk(db, 'scan-g2', '/a', '/b', status='pending')
+            chunk.celery_task_id = 'the-current-owner'
+            db.session.commit()
+            # apply() runs with a generated eager task id != the-current-owner
+            result = tp.process_chunk_task.apply(args=(chunk.id, 'scan-g2')).get()
+            assert result['status'] == 'SUPERSEDED'
+            assert ScanResult.query.filter_by(scan_status='scanning').count() == 0
+            chunk = db.session.get(ScanChunk, chunk.id)
+            assert chunk.status == 'pending'
+
+
+class TestChunkHeartbeat:
+    """Heartbeat makes ScanState.last_update a liveness signal (issue #75)"""
+
+    def test_heartbeat_once_bumps_active_scan(self, tp, app, db):
+        with app.app_context():
+            state = _make_scan_state(db, 'scan-h1')
+            old = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            state.last_update = old
+            db.session.commit()
+        assert tp._heartbeat_once(app, 'scan-h1') is True
+        with app.app_context():
+            state = ScanState.query.filter_by(scan_id='scan-h1').first()
+            assert state.last_update is not None
+            lu = state.last_update
+            if lu.tzinfo is None:
+                lu = lu.replace(tzinfo=timezone.utc)
+            assert lu > old
+
+    def test_heartbeat_skips_inactive_scan(self, tp, app, db):
+        with app.app_context():
+            state = _make_scan_state(db, 'scan-h2', is_active=False)
+            state.last_update = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            db.session.commit()
+        assert tp._heartbeat_once(app, 'scan-h2') is False
+
+    def test_heartbeat_swallows_db_errors(self, tp, app):
+        with patch.object(tp.db, 'session') as mock_session:
+            mock_session.execute.side_effect = RuntimeError('pool exhausted')
+            assert tp._heartbeat_once(app, 'scan-h3') is False
+
+    def test_heartbeat_thread_lifecycle(self, tp, app):
+        import time as _time
+        with patch.object(tp, '_heartbeat_once') as mock_beat:
+            stop = tp._start_chunk_heartbeat(app, 'scan-h4', 1, interval=0.02)
+            deadline = _time.time() + 2
+            while mock_beat.call_count < 2 and _time.time() < deadline:
+                _time.sleep(0.01)
+            stop.set()
+            assert mock_beat.call_count >= 2
+
+
+class TestRedispatchOrphanedChunks:
+    """Revival of chunks whose workers are provably gone (issue #75)"""
+
+    def _setup_orphaned_scan(self, db):
+        _add_pending(db, ['/a/f1.mkv', '/a/f2.mkv'])
+        state = _make_scan_state(db, 'scan-r1')
+        state.force_rescan = False
+        processing = _make_chunk(db, 'scan-r1', '/a/f1.mkv', '/a/f1.mkv',
+                                 status='processing')
+        # simulate the dead worker's claimed row
+        row = ScanResult.query.filter_by(file_path='/a/f1.mkv').first()
+        row.scan_status = 'scanning'
+        pending = _make_chunk(db, 'scan-r1', '/a/f2.mkv', '/a/f2.mkv',
+                              status='pending')
+        done = _make_chunk(db, 'scan-r1', '/z', '/z2', is_complete=True,
+                           status='completed', files_scanned=7)
+        db.session.commit()
+        return processing, pending, done
+
+    def test_reclaims_and_redispatches_nonterminal_chunks(self, tp, app, db):
+        with app.app_context():
+            processing, pending, done = self._setup_orphaned_scan(db)
+            with patch.object(tp.process_chunk_task, 'apply_async') as mock_async:
+                count = tp.redispatch_orphaned_chunks('scan-r1')
+            assert count == 2
+            assert mock_async.call_count == 2
+            row = ScanResult.query.filter_by(file_path='/a/f1.mkv').first()
+            assert row.scan_status == 'pending'
+            for chunk in (db.session.get(ScanChunk, processing.id),
+                          db.session.get(ScanChunk, pending.id)):
+                assert chunk.status == 'pending'
+                assert chunk.celery_task_id
+                assert chunk.start_time is None
+            # dispatched task_id matches the stored ownership id
+            dispatched_ids = {c.kwargs['task_id'] for c in mock_async.call_args_list}
+            stored_ids = {db.session.get(ScanChunk, processing.id).celery_task_id,
+                          db.session.get(ScanChunk, pending.id).celery_task_id}
+            assert dispatched_ids == stored_ids
+            done_chunk = db.session.get(ScanChunk, done.id)
+            assert done_chunk.status == 'completed'
+            assert done_chunk.files_scanned == 7
+            state = ScanState.query.filter_by(scan_id='scan-r1').first()
+            assert 'Recovered' in (state.progress_message or '')
+
+    def test_dispatch_error_attempts_every_chunk(self, tp, app, db):
+        with app.app_context():
+            self._setup_orphaned_scan(db)
+            with patch.object(tp.process_chunk_task, 'apply_async',
+                              side_effect=RuntimeError('broker down')) as mock_async:
+                count = tp.redispatch_orphaned_chunks('scan-r1')
+            # One broker hiccup must not strand the remaining chunks
+            assert count == 0
+            assert mock_async.call_count == 2
+
+
+class TestWorkerLostRedelivery:
+    """acks_late + reject_on_worker_lost redelivers the SAME task id after a
+    worker dies mid-chunk; the leftover 'scanning' rows must be reclaimed and
+    re-scanned, not dropped via the empty-claim completed-with-0 path"""
+
+    def test_redelivery_reclaims_scanning_rows(self, tp, app, db):
+        with app.app_context():
+            _add_pending(db, ['/nonexistent/f1.mkv'])
+            row = ScanResult.query.filter_by(file_path='/nonexistent/f1.mkv').first()
+            row.scan_status = 'scanning'  # claimed by the dead attempt
+            _make_scan_state(db, 'scan-wl1')
+            chunk = _make_chunk(db, 'scan-wl1', '/nonexistent/f1.mkv',
+                                '/nonexistent/f1.mkv', status='processing')
+            db.session.commit()
+
+            result = tp.process_chunk_task.apply(args=(chunk.id, 'scan-wl1')).get()
+
+            assert result['status'] == 'SUCCESS'
+            assert result['files_processed'] == 1
+            row = ScanResult.query.filter_by(file_path='/nonexistent/f1.mkv').first()
+            assert row.scan_status != 'scanning'

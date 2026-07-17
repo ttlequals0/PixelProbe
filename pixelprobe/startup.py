@@ -51,6 +51,12 @@ def cleanup_stuck_scans(db):
     window (default 30 min, matching the periodic stuck-scan check) is treated as
     genuinely dead and crashed; anything still progressing is left alone and the
     periodic checker handles it if it later goes stale.
+
+    Deliberately does NOT re-dispatch chunk tasks here: at boot there is no way
+    to tell whether the broker retained the late-acked chunk messages (a live
+    worker may already be re-processing them). The stuck-scan sweeper revives
+    orphaned chunks instead, once heartbeat staleness proves the workers are
+    gone (see redispatch_orphaned_chunks in tasks_parallel, issue #75).
     """
     try:
         from pixelprobe.models import ScanState
@@ -68,7 +74,8 @@ def cleanup_stuck_scans(db):
                 last_activity = last_activity.replace(tzinfo=timezone.utc)
             if last_activity and last_activity > cutoff:
                 logger.info(f"Active scan {scan.id} last updated {last_activity} (within grace); "
-                            f"leaving it running across this restart")
+                            f"leaving it running across this restart - the stuck-scan "
+                            f"sweeper re-dispatches its chunks if the queue was lost")
                 continue
             logger.warning(f"Marking abandoned scan {scan.id} (last activity {last_activity}) as crashed")
             scan.is_active = False

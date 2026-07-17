@@ -608,3 +608,82 @@ class TestRetentionJob:
 
     def test_data_retention_job_registered(self, scheduler):
         assert scheduler.scheduler.get_job('data_retention_cleanup') is not None
+
+
+class TestStuckScanRevival:
+    """A scan whose chunk workers are provably gone (stale heartbeat, active
+    chunk rows) gets its chunks re-dispatched instead of being crashed;
+    after _MAX_CHUNK_REVIVALS failed revivals the crash branch fires (issue #75)."""
+
+    @pytest.fixture
+    def scheduler(self, app):
+        scheduler = MediaScheduler()
+        scheduler.init_app(app)
+        yield scheduler
+        scheduler.shutdown()
+
+    # tasks_parallel_mod fixture comes from conftest.py
+
+    def _make_scan(self, db, scan_id, minutes_stale, with_active_chunk=True):
+        from pixelprobe.models import ScanState, ScanChunk
+        scan = ScanState(
+            scan_id=scan_id, is_active=True, phase='scanning',
+            last_update=datetime.now(timezone.utc) - timedelta(minutes=minutes_stale),
+        )
+        db.session.add(scan)
+        if with_active_chunk:
+            db.session.add(ScanChunk(
+                scan_id=scan_id, chunk_id='chunk-1',
+                directory_path='/media', status='processing',
+            ))
+        db.session.commit()
+        return scan
+
+    def test_fresh_heartbeat_left_alone(self, scheduler, app, db, tasks_parallel_mod, monkeypatch):
+        from pixelprobe.models import ScanState
+        self._make_scan(db, 'rev-fresh', minutes_stale=2)
+        revive = MagicMock(return_value=2)
+        monkeypatch.setattr(tasks_parallel_mod, 'redispatch_orphaned_chunks', revive)
+        scheduler._check_stuck_scans()
+        db.session.expire_all()
+        scan = ScanState.query.filter_by(scan_id='rev-fresh').first()
+        assert scan.phase == 'scanning' and scan.is_active is True
+        revive.assert_not_called()
+
+    def test_stale_with_active_chunks_revived_not_crashed(self, scheduler, app, db,
+                                                          tasks_parallel_mod, monkeypatch):
+        from pixelprobe.models import ScanState
+        self._make_scan(db, 'rev-orphan', minutes_stale=31)
+        revive = MagicMock(return_value=2)
+        monkeypatch.setattr(tasks_parallel_mod, 'redispatch_orphaned_chunks', revive)
+        scheduler._check_stuck_scans()
+        db.session.expire_all()
+        scan = ScanState.query.filter_by(scan_id='rev-orphan').first()
+        assert scan.phase == 'scanning' and scan.is_active is True
+        revive.assert_called_once()
+        assert scheduler._revive_attempts['rev-orphan'] == 1
+
+    def test_revival_cap_exhausted_crashes(self, scheduler, app, db,
+                                           tasks_parallel_mod, monkeypatch):
+        from pixelprobe.models import ScanState
+        self._make_scan(db, 'rev-capped', minutes_stale=31)
+        revive = MagicMock(return_value=2)
+        monkeypatch.setattr(tasks_parallel_mod, 'redispatch_orphaned_chunks', revive)
+        scheduler._revive_attempts['rev-capped'] = 3
+        scheduler._check_stuck_scans()
+        db.session.expire_all()
+        scan = ScanState.query.filter_by(scan_id='rev-capped').first()
+        assert scan.phase == 'crashed' and scan.is_active is False
+        revive.assert_not_called()
+
+    def test_stale_without_chunks_crashes_unchanged(self, scheduler, app, db,
+                                                    tasks_parallel_mod, monkeypatch):
+        from pixelprobe.models import ScanState
+        self._make_scan(db, 'rev-nochunks', minutes_stale=31, with_active_chunk=False)
+        revive = MagicMock(return_value=0)
+        monkeypatch.setattr(tasks_parallel_mod, 'redispatch_orphaned_chunks', revive)
+        scheduler._check_stuck_scans()
+        db.session.expire_all()
+        scan = ScanState.query.filter_by(scan_id='rev-nochunks').first()
+        assert scan.phase == 'crashed' and scan.is_active is False
+        revive.assert_not_called()

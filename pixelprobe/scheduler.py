@@ -14,8 +14,16 @@ from sqlalchemy import text
 import threading
 import requests
 from pixelprobe.services.healthcheck_service import HealthcheckService
+from pixelprobe.utils.helpers import env_int
 
 logger = logging.getLogger(__name__)
+
+# Chunk revival: how stale a scan's heartbeat must be before its chunk workers
+# are considered provably gone (chunk tasks heartbeat every
+# CHUNK_HEARTBEAT_INTERVAL_SECS, default 120s, so 600s = 5 missed beats), and
+# how many revivals to attempt before letting the 30-minute crash branch win.
+CHUNK_REVIVE_STALENESS_SECS = env_int('CHUNK_REVIVE_STALENESS_SECS', 600, floor=120)
+_MAX_CHUNK_REVIVALS = 3
 
 
 def compute_next_interval_run(last_run, stored_next_run, unit, value, now=None):
@@ -62,6 +70,10 @@ class MediaScheduler:
 
         self.pending_retries: Dict[str, int] = {}
         self._retry_lock = threading.Lock()
+        # Per-scan count of chunk revival attempts (issue #75). In-memory is
+        # fine: a scheduler restart resets the cap, which only exists to stop
+        # an infinite revive loop from masking a permanently dead worker fleet.
+        self._revive_attempts: Dict[str, int] = {}
         # Snapshot of saved-schedule definitions; the db-sync job reloads jobs
         # only when this changes (see _sync_schedules_from_db)
         self._schedules_fp = None
@@ -857,6 +869,7 @@ class MediaScheduler:
                 ).all()
 
                 scans_to_mark = []
+                revive_threshold = current_time - timedelta(seconds=CHUNK_REVIVE_STALENESS_SECS)
                 for scan in stuck_scans:
                     # Ensure we have timezone-aware datetimes for comparison
                     # If the database stores naive datetimes, assume they're in UTC
@@ -867,6 +880,33 @@ class MediaScheduler:
                     start_time = scan.start_time
                     if start_time and start_time.tzinfo is None:
                         start_time = start_time.replace(tzinfo=timezone.utc)
+
+                    # Chunk revival (issue #75): live chunk tasks heartbeat
+                    # last_update, so a stale heartbeat with chunk rows still
+                    # active means the workers died (container restart, queue
+                    # loss) - re-dispatch the chunks instead of crashing the
+                    # scan. Discovery-phase scans are not revivable (the
+                    # orchestrator's harvest loop cannot be resumed) and fall
+                    # through to the crash branches.
+                    if (last_update and last_update < revive_threshold
+                            and scan.phase == SCAN_PHASES['SCANNING']
+                            and self._revive_attempts.get(scan.scan_id, 0) < _MAX_CHUNK_REVIVALS
+                            and ScanChunk.has_active(scan.scan_id)):
+                        try:
+                            from pixelprobe.tasks_parallel import redispatch_orphaned_chunks
+                            revived = redispatch_orphaned_chunks(
+                                scan.scan_id, force_rescan=bool(scan.force_rescan))
+                        except Exception as e:
+                            logger.error(f"Chunk revival failed for scan {scan.scan_id}: {e}")
+                            revived = 0
+                        if revived:
+                            self._revive_attempts[scan.scan_id] = \
+                                self._revive_attempts.get(scan.scan_id, 0) + 1
+                            logger.warning(
+                                f"Revived scan {scan.scan_id} "
+                                f"(attempt {self._revive_attempts[scan.scan_id]}/"
+                                f"{_MAX_CHUNK_REVIVALS}): {revived} chunks re-dispatched")
+                            continue
 
                     # Check if scan has been running for more than 30 minutes without update
                     if last_update and last_update < stuck_threshold:
@@ -894,6 +934,11 @@ class MediaScheduler:
                 if scans_to_mark:
                     db.session.commit()
                     logger.info(f"Marked {len(scans_to_mark)} stuck scans as crashed")
+
+                # Drop revival counters for scans that went terminal
+                active_ids = {s.scan_id for s in stuck_scans if s.is_active}
+                self._revive_attempts = {
+                    k: v for k, v in self._revive_attempts.items() if k in active_ids}
 
                 # Sweeper: reclaim files left in 'scanning' by a dead worker. A
                 # chunk claims files as 'scanning' before processing; if its
