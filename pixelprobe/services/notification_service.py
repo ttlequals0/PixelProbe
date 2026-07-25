@@ -5,16 +5,45 @@ Supports multiple notification providers:
 - Pushover API
 - ntfy.sh API
 - Generic webhooks
+- Email (SMTP)
 """
 
 import logging
+import smtplib
+import ssl
 import requests
+from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
+from urllib.parse import urlparse
 from typing import Dict, Optional, List
 from datetime import datetime, timezone
 from pixelprobe.models import db, NotificationRule
-from pixelprobe.utils.security import validate_safe_url, create_safe_session
+from pixelprobe.utils.security import validate_safe_url, create_safe_session, validate_outbound_host
 
 logger = logging.getLogger(__name__)
+
+VALID_EMAIL_SECURITY = ('starttls', 'ssl', 'none')
+
+
+def parse_recipients(raw) -> List[str]:
+    """Normalize recipients from a list or a comma-separated string."""
+    if isinstance(raw, (list, tuple)):
+        values = raw
+    else:
+        values = (raw or '').split(',')
+    return [str(v).strip() for v in values if str(v).strip()]
+
+
+def resolve_smtp_port(config: Dict, security: str) -> int:
+    """Configured SMTP port, or the conventional default for the security mode.
+
+    Shared so the API validator and the sender cannot disagree about which port
+    a provider will actually use. Raises ValueError on a non-numeric port.
+    """
+    port = config.get('smtp_port')
+    if port in (None, ''):
+        return 465 if security == 'ssl' else 587
+    return int(port)
 
 
 def dispatch_event(event_type, title, message, priority='normal', additional_data=None):
@@ -94,7 +123,7 @@ class NotificationService:
         Send a notification via the specified provider
 
         Args:
-            provider_type: Type of provider ('pushover', 'ntfy', 'webhook')
+            provider_type: Type of provider ('pushover', 'ntfy', 'webhook', 'email')
             provider_config: Provider-specific configuration
             title: Notification title
             message: Notification message
@@ -111,6 +140,8 @@ class NotificationService:
                 return self._send_ntfy(provider_config, title, message, priority, additional_data)
             elif provider_type == 'webhook':
                 return self._send_webhook(provider_config, title, message, priority, additional_data)
+            elif provider_type == 'email':
+                return self._send_email(provider_config, title, message, priority, additional_data)
             else:
                 return False, f"Unknown provider type: {provider_type}"
 
@@ -377,7 +408,12 @@ class NotificationService:
 
             # Accept 2xx status codes as success
             if 200 <= response.status_code < 300:
-                logger.info(f"Webhook notification sent successfully to {webhook_url}")
+                # Host only: Slack and Discord webhook URLs are bearer secrets in
+                # the path, so the full URL must not reach the logs.
+                logger.info(
+                    f"Webhook notification sent successfully to "
+                    f"{urlparse(webhook_url).netloc or 'configured endpoint'}"
+                )
                 return True, None
             else:
                 logger.warning(f"Webhook returned status {response.status_code}")
@@ -386,6 +422,111 @@ class NotificationService:
         except requests.RequestException as e:
             logger.error(f"Webhook request failed: {e}")
             return False, str(e)
+
+    def _send_email(
+        self,
+        config: Dict,
+        title: str,
+        message: str,
+        priority: str,
+        additional_data: Optional[Dict]
+    ) -> tuple[bool, Optional[str]]:
+        """
+        Send notification via SMTP
+
+        Config should contain:
+            - smtp_host: SMTP server hostname (required)
+            - smtp_port: SMTP port (default: 465 when security is 'ssl', else 587)
+            - security: 'starttls' (default), 'ssl', or 'none'
+            - username: Optional SMTP username
+            - password: Optional SMTP password
+            - from_address: Envelope/From address (required)
+            - recipients: List of addresses, or a comma-separated string (required)
+
+        One connection per send, under a hard timeout, so a hung mail server
+        cannot stall the caller (dispatch_event runs inside scan paths).
+        """
+        smtp_host = (config.get('smtp_host') or '').strip()
+        from_address = (config.get('from_address') or '').strip()
+        recipients = parse_recipients(config.get('recipients'))
+
+        if not smtp_host:
+            return False, "Missing required smtp_host"
+        if not from_address:
+            return False, "Missing required from_address"
+        if not recipients:
+            return False, "At least one recipient is required"
+
+        security = (config.get('security') or 'starttls').lower()
+        if security not in VALID_EMAIL_SECURITY:
+            return False, f"Invalid security mode '{security}'. Must be one of: {list(VALID_EMAIL_SECURITY)}"
+
+        try:
+            smtp_port = resolve_smtp_port(config, security)
+        except (TypeError, ValueError):
+            return False, "smtp_port must be a number"
+
+        # Re-validated here rather than only on save, so a DNS rebind cannot
+        # repoint a stored hostname at a blocked target between the two.
+        is_safe, error = validate_outbound_host(smtp_host, smtp_port)
+        if not is_safe:
+            return False, f"SMTP host blocked by security policy: {error}"
+
+        msg = EmailMessage()
+        msg['Subject'] = f"[PixelProbe] {title}"
+        msg['From'] = from_address
+        msg['To'] = ', '.join(recipients)
+        # Date is mandatory per RFC 5322 and smtplib does not add one; without it
+        # spam filters penalise the message and strict MTAs may reject it.
+        # Message-ID is derived from the sender domain rather than make_msgid's
+        # default, which would otherwise leak the container hostname.
+        msg['Date'] = formatdate(localtime=True)
+        sender_domain = from_address.rpartition('@')[2].strip('>') or None
+        msg['Message-ID'] = make_msgid(domain=sender_domain)
+        msg.set_content(self._render_email_body(message, priority, additional_data))
+
+        try:
+            context = ssl.create_default_context()
+            if security == 'ssl':
+                smtp = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=self.timeout, context=context)
+            else:
+                smtp = smtplib.SMTP(smtp_host, smtp_port, timeout=self.timeout)
+
+            with smtp:
+                if security == 'starttls':
+                    smtp.starttls(context=context)
+                    smtp.ehlo()
+                username = config.get('username')
+                password = config.get('password')
+                if username and password:
+                    smtp.login(username, password)
+                elif username:
+                    logger.warning("SMTP username set without a password; connecting without login")
+                smtp.send_message(msg)
+
+            logger.info(f"Email notification sent to {len(recipients)} recipient(s) via {smtp_host}")
+            return True, None
+
+        except (smtplib.SMTPException, ssl.SSLError, OSError) as e:
+            logger.error(f"Email send failed via {smtp_host}: {e}")
+            return False, str(e)
+
+    def _render_email_body(
+        self,
+        message: str,
+        priority: str,
+        additional_data: Optional[Dict]
+    ) -> str:
+        """Build the plain-text email body in a 'Label: value' style."""
+        lines = [message, '']
+        lines.append(f"Priority: {priority}")
+        if additional_data:
+            for key, value in additional_data.items():
+                label = key.replace('_', ' ').capitalize()
+                lines.append(f"{label}: {'-' if value is None or value == '' else value}")
+        lines.append('')
+        lines.append('Sent by PixelProbe.')
+        return '\n'.join(lines)
 
     def test_provider(
         self,

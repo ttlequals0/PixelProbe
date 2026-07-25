@@ -11,6 +11,7 @@ Reference for PixelProbe environment variables and performance tuning.
 - [Scanning Configuration](#scanning-configuration)
 - [Celery Configuration](#celery-configuration)
 - [Data Retention Configuration](#data-retention-configuration)
+- [Notification Providers](#notification-providers)
 - [Security Configuration](#security-configuration)
 - [Resource Recommendations](#resource-recommendations)
 
@@ -66,6 +67,9 @@ All configuration is done via environment variables, either in `.env` file or di
 | `CHUNK_HEARTBEAT_INTERVAL_SECS` | `120` | How often a running chunk task bumps the scan's liveness timestamp. Keeps a scan busy on one long movie from being falsely marked crashed by the 30-minute stuck-scan rule | Leave at default unless debugging |
 | `CHUNK_REVIVE_STALENESS_SECS` | `600` | How stale the scan liveness timestamp must be before the stuck-scan sweeper treats the chunk workers as gone and re-queues their chunks (recovers scans interrupted by container restarts) | Must exceed several heartbeat intervals |
 | `FFPROBE_TIMEOUT_SECS` | `120` | Hard ceiling in seconds for ffprobe metadata reads | Raise on very slow storage |
+| `TEMPORAL_SAMPLE_SECS` | `10` | Length in seconds of each signalstats sample window. Three windows are taken at 25/50/75% of duration, skipping the intro and credits where near-static frames make the statistics meaningless | Raise for a larger sample at the cost of scan time |
+| `TEMPORAL_SAMPLE_TIMEOUT_SECS` | `30` | Per-window deadline for the signalstats decode. Two timed-out windows abandon the remaining ones | Raise on storage slower than realtime decode |
+| `TEMPORAL_MIN_FRAMES` | `100` | Minimum sampled frames before the temporal check will issue any verdict. Below it the percentages are noise and the check reports a warning instead | Leave at default |
 
 **Performance Notes:**
 - `MAX_WORKERS` controls parallelism within each scan task
@@ -487,11 +491,79 @@ Preview what would be cleaned:
 python tools/data_retention.py --dry-run
 ```
 
+## Notification Providers
+
+Notifications are configured through the API, not environment variables. A
+*provider* is where messages go; a *rule* maps an event to a provider. Provider
+types are `pushover`, `ntfy`, `webhook`, and `email`.
+
+Event types available to rules: `scan_start`, `scan_complete`, `scan_failed`,
+`scan_missed`, `corruption_found`, `bitrot_suspected`, `user_added`,
+`user_deleted`, `api_key_added`, `api_key_deleted`, `auth_failed`.
+
+### Email (SMTP)
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `smtp_host` | (required) | SMTP server hostname |
+| `smtp_port` | `587`, or `465` when `security` is `ssl` | SMTP port |
+| `security` | `starttls` | `starttls`, `ssl` (implicit TLS), or `none` |
+| `username` | (optional) | SMTP username; login is skipped when unset |
+| `password` | (optional) | SMTP password; returned masked as `***` |
+| `from_address` | (required) | From address |
+| `recipients` | (required) | List of addresses, or a comma-separated string |
+
+Create an email provider:
+
+```bash
+curl -X POST http://localhost:5000/api/notifications/providers \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Ops mail",
+    "provider_type": "email",
+    "configuration": {
+      "smtp_host": "smtp.example.com",
+      "smtp_port": 587,
+      "security": "starttls",
+      "username": "pixelprobe@example.com",
+      "password": "app-password",
+      "from_address": "pixelprobe@example.com",
+      "recipients": "ops@example.com, admin@example.com"
+    }
+  }'
+```
+
+Send a test message, then route an event to it:
+
+```bash
+curl -X POST http://localhost:5000/api/notifications/providers/1/test \
+  -H "Authorization: Bearer $API_KEY"
+
+curl -X POST http://localhost:5000/api/notifications/rules \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider_id": 1, "event_type": "corruption_found", "priority": "high"}'
+```
+
+**Notes:**
+- STARTTLS and implicit SSL both verify certificates against the system trust
+  store. `none` sends unencrypted and should only be used for a relay on
+  localhost.
+- Private, LAN and loopback SMTP hosts are allowed without a
+  `TRUSTED_INTERNAL_HOSTS` entry; see [SSRF Trusted Hosts](#ssrf-trusted-hosts).
+- A send failure is logged and recorded on the provider, never raised, so a
+  broken mail server cannot fail a scan.
+- Because secrets come back masked, submitting `***` for a field keeps the
+  stored value rather than overwriting it.
+
 ## Security Configuration
 
 ### SSRF Trusted Hosts
 
 PixelProbe includes SSRF protection that blocks outbound requests to private/reserved IP ranges. If you use internal services for healthchecks, notifications (ntfy, webhooks), or similar integrations that resolve to private IPs, you can allowlist them:
+
+Email (SMTP) notification providers are the one exception and need no allowlist entry: a self-hosted relay is normally on localhost, a Docker network or the LAN, so private, LAN and loopback SMTP hosts are permitted by default. Cloud-metadata and link-local addresses are still refused for SMTP.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

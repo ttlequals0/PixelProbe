@@ -443,8 +443,11 @@ def scan():
         try:
             validated_dirs.append(validate_directory_path(dir_path))
         except Exception as e:
+            # The rejected path is logged, never echoed: reflecting caller input
+            # back in the response body is the taint flow CodeQL rejects.
             AuditLogger.log_security_event('invalid_scan_directory', str(e), 'warning')
-            return {'error': f'Invalid directory path: {dir_path}'}, 400
+            logger.warning(f"Rejected scan directory {dir_path!r}: {e}")
+            return {'error': 'Invalid directory path'}, 400
 
     AuditLogger.log_action('scan_all', {'directories': validated_dirs, 'force_rescan': force_rescan})
 
@@ -977,8 +980,10 @@ def scan_files_parallel():
             validated_path = validate_directory_path(dir_path)
             validated_dirs.append(validated_path)
         except Exception as e:
+            # See above: log the rejected path, don't reflect it.
             AuditLogger.log_security_event('invalid_scan_directory', str(e), 'warning')
-            return {'error': f'Invalid directory path: {dir_path}'}, 400
+            logger.warning(f"Rejected scan directory {dir_path!r}: {e}")
+            return {'error': 'Invalid directory path'}, 400
     
     AuditLogger.log_action('scan_parallel', {'directories': validated_dirs, 'force_rescan': force_rescan, 'num_workers': num_workers})
 

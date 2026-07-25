@@ -10,15 +10,17 @@ from typing import Optional
 
 from pixelprobe.models import db, NotificationProvider, NotificationRule
 from pixelprobe.auth import auth_required
-from pixelprobe.services.notification_service import NotificationService
-from pixelprobe.utils.security import validate_safe_url
+from pixelprobe.services.notification_service import (
+    NotificationService, VALID_EMAIL_SECURITY, parse_recipients, resolve_smtp_port
+)
+from pixelprobe.utils.security import validate_safe_url, validate_outbound_host
 
 logger = logging.getLogger(__name__)
 
 notification_bp = Blueprint('notifications', __name__, url_prefix='/api/notifications')
 
 # Valid provider types and event types
-VALID_PROVIDER_TYPES = ['pushover', 'ntfy', 'webhook']
+VALID_PROVIDER_TYPES = ['pushover', 'ntfy', 'webhook', 'email']
 VALID_EVENT_TYPES = [
     'scan_start', 'scan_complete', 'scan_failed', 'scan_missed',
     'corruption_found', 'bitrot_suspected', 'user_added', 'user_deleted',
@@ -76,7 +78,7 @@ def create_provider():
 
     Request body:
         - name: Provider name (required)
-        - provider_type: Type of provider - 'pushover', 'ntfy', 'webhook' (required)
+        - provider_type: Type of provider - 'pushover', 'ntfy', 'webhook', 'email' (required)
         - configuration: Provider-specific config (required)
         - is_active: Whether provider is active (optional, default: true)
 
@@ -156,10 +158,11 @@ def update_provider(provider_id):
             provider.name = data['name']
 
         if 'configuration' in data:
-            validation_error = _validate_provider_config(provider.provider_type, data['configuration'])
+            configuration = _preserve_masked_secrets(provider.configuration, data['configuration'])
+            validation_error = _validate_provider_config(provider.provider_type, configuration)
             if validation_error:
                 return jsonify({'error': validation_error}), 400
-            provider.configuration = data['configuration']
+            provider.configuration = configuration
 
         if 'is_active' in data:
             provider.is_active = data['is_active']
@@ -221,12 +224,9 @@ def test_provider(provider_id):
             return jsonify({'error': 'Provider not found'}), 404
 
         service = NotificationService()
-        success, error = service.send_notification(
+        success, error = service.test_provider(
             provider_type=provider.provider_type,
-            provider_config=provider.configuration,
-            title='PixelProbe Test Notification',
-            message='This is a test notification from PixelProbe.',
-            priority='normal'
+            provider_config=provider.configuration
         )
 
         # Update provider status
@@ -428,6 +428,21 @@ def delete_rule(rule_id):
 
 # ==================== Helper Functions ====================
 
+def _preserve_masked_secrets(stored: dict, incoming: dict) -> dict:
+    """Keep the stored secret when the caller sends the mask back unchanged.
+
+    to_dict(include_config=True) returns secrets as '***', so a client that GETs
+    a provider, edits one field and PUTs the whole object back would otherwise
+    overwrite the real credential with the literal mask and silently break
+    delivery. Applies to every provider type, not just email.
+    """
+    merged = dict(incoming or {})
+    for key, value in merged.items():
+        if value == '***' and stored and key in stored:
+            merged[key] = stored[key]
+    return merged
+
+
 def _validate_provider_config(provider_type: str, config: dict) -> Optional[str]:
     """Validate provider-specific configuration
 
@@ -463,5 +478,31 @@ def _validate_provider_config(provider_type: str, config: dict) -> Optional[str]
         is_safe, error = validate_safe_url(config['webhook_url'])
         if not is_safe:
             return f'Webhook URL blocked by security policy: {error}'
+
+    elif provider_type == 'email':
+        smtp_host = (config.get('smtp_host') or '').strip()
+        if not smtp_host:
+            return 'SMTP host is required'
+        if not (config.get('from_address') or '').strip():
+            return 'From address is required'
+        if not parse_recipients(config.get('recipients')):
+            return 'At least one recipient is required'
+
+        security = (config.get('security') or 'starttls').lower()
+        if security not in VALID_EMAIL_SECURITY:
+            return f'Invalid security mode. Must be one of: {list(VALID_EMAIL_SECURITY)}'
+
+        try:
+            port = resolve_smtp_port(config, security)
+        except (TypeError, ValueError):
+            return 'SMTP port must be a number'
+        if not 1 <= port <= 65535:
+            return 'SMTP port must be between 1 and 65535'
+
+        # SSRF protection: unlike webhooks, private/LAN relays stay allowed --
+        # only cloud metadata and link-local targets are refused.
+        is_safe, error = validate_outbound_host(smtp_host, port)
+        if not is_safe:
+            return f'SMTP host blocked by security policy: {error}'
 
     return None

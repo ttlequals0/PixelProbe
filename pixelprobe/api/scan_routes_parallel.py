@@ -39,8 +39,11 @@ def scan_parallel():
             validated_dirs.append(validated_path)
             AuditLogger.log_action('scan_directory', {'directory': validated_path})
         except PathTraversalError as e:
+            # The rejected path is logged, never echoed: reflecting caller input
+            # back in the response body is the taint flow CodeQL rejects.
             AuditLogger.log_security_event('path_traversal_attempt', str(e), 'warning')
-            return {'error': f'Invalid directory path: {directory}'}, 400
+            logger.warning(f"Rejected scan directory {directory!r}: {e}")
+            return {'error': 'Invalid directory path'}, 400
 
     if not validated_dirs:
         return {'error': 'No valid directories to scan'}, 400
