@@ -13,6 +13,8 @@ import smtplib
 import ssl
 import requests
 from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
+from urllib.parse import urlparse
 from typing import Dict, Optional, List
 from datetime import datetime, timezone
 from pixelprobe.models import db, NotificationRule
@@ -406,7 +408,12 @@ class NotificationService:
 
             # Accept 2xx status codes as success
             if 200 <= response.status_code < 300:
-                logger.info(f"Webhook notification sent successfully to {webhook_url}")
+                # Host only: Slack and Discord webhook URLs are bearer secrets in
+                # the path, so the full URL must not reach the logs.
+                logger.info(
+                    f"Webhook notification sent successfully to "
+                    f"{urlparse(webhook_url).netloc or 'configured endpoint'}"
+                )
                 return True, None
             else:
                 logger.warning(f"Webhook returned status {response.status_code}")
@@ -469,6 +476,13 @@ class NotificationService:
         msg['Subject'] = f"[PixelProbe] {title}"
         msg['From'] = from_address
         msg['To'] = ', '.join(recipients)
+        # Date is mandatory per RFC 5322 and smtplib does not add one; without it
+        # spam filters penalise the message and strict MTAs may reject it.
+        # Message-ID is derived from the sender domain rather than make_msgid's
+        # default, which would otherwise leak the container hostname.
+        msg['Date'] = formatdate(localtime=True)
+        sender_domain = from_address.rpartition('@')[2].strip('>') or None
+        msg['Message-ID'] = make_msgid(domain=sender_domain)
         msg.set_content(self._render_email_body(message, priority, additional_data))
 
         try:

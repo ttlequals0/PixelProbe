@@ -591,16 +591,19 @@ def validate_safe_url(url: str) -> Tuple[bool, Optional[str]]:
 
         for network in _BLOCKED_NETWORKS:
             if ip in network:
-                # Check trusted allowlist before blocking
+                # Only the hostname and resolved IP are recorded, never the full
+                # URL: a webhook URL is itself a credential (Slack and Discord
+                # endpoints are bearer secrets in the path), and ntfy URLs carry
+                # the topic. That is enough to diagnose a blocked target.
                 if _is_trusted(hostname, ip_str):
                     logger.debug(
-                        f"Allowing trusted internal request: {url} "
-                        f"(resolved to {ip_str}, hostname={hostname})"
+                        f"Allowing trusted internal request to {hostname} "
+                        f"(resolved to {ip_str})"
                     )
                     break  # Trusted -- skip remaining blocked networks for this IP
                 AuditLogger.log_security_event(
                     'ssrf_blocked',
-                    f"Blocked outbound request to private IP: {url} resolved to {ip_str}",
+                    f"Blocked outbound request to private IP: {hostname} resolved to {ip_str}",
                     severity='warning'
                 )
                 return False, f"URL resolves to a private/reserved IP address ({ip_str})"

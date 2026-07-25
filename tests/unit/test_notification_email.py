@@ -113,6 +113,21 @@ class TestSendEmail:
 
     @patch('pixelprobe.services.notification_service.validate_outbound_host',
            return_value=(True, None))
+    @patch('smtplib.SMTP')
+    def test_required_rfc5322_headers_present(self, mock_smtp, _host):
+        """smtplib adds no Date; without one, filters penalise and MTAs may reject"""
+        smtp = mock_smtp.return_value
+        smtp.__enter__.return_value = smtp
+
+        self._service()._send_email(BASE_CONFIG, 'Test', 'body', 'normal', None)
+
+        sent = smtp.send_message.call_args[0][0]
+        assert sent['Date']
+        # Message-ID uses the sender domain, not the container hostname
+        assert sent['Message-ID'].endswith('@example.com>')
+
+    @patch('pixelprobe.services.notification_service.validate_outbound_host',
+           return_value=(True, None))
     @patch('smtplib.SMTP_SSL')
     def test_ssl_send_uses_smtp_ssl(self, mock_smtp_ssl, _host):
         mock_smtp_ssl.return_value.__enter__.return_value = mock_smtp_ssl.return_value
