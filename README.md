@@ -50,6 +50,7 @@ PixelProbe detects corrupted video, image, and audio files across your media lib
 - **Docker deployment**: Multi-container architecture (web, workers, database, queue)
 - **REST API**: Full OpenAPI/Swagger documentation
 - **Monitoring & Reports**: Real-time statistics, trend analytics, storage projections, PDF/JSON exports, complete audit trail
+- **Event notifications**: Route scan and corruption events to email (SMTP), Pushover, ntfy, or a webhook, one rule per event ([configuration](docs/CONFIGURATION.md#notification-providers))
 - **View Logs**: In-app log viewer with live polling, level/time/search filtering, traceback expansion, and log download
 - **Path filter**: Filter scan results by configured scan path
 - **Performance optimized**: Production-tested with millions of files
