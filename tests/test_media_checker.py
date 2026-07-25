@@ -669,3 +669,193 @@ class TestVideoFreezeDetection:
         assert any('Filtered 1 of 2' in line for line in scan_output)
 
 
+class TestTemporalOutlierDetection:
+    """Test Stage 2 signalstats sampling (TOUT corruption, VREP warning)"""
+
+    def _make_signalstats_stdout(self, frames):
+        """Build fake FFmpeg metadata=print stdout.
+
+        Args:
+            frames: list of (tout, vrep) tuples
+        """
+        lines = []
+        for i, (tout, vrep) in enumerate(frames):
+            lines.append(f"frame:{i}    pts:{i * 1000}    pts_time:{i * 0.04}")
+            lines.append(f"lavfi.signalstats.TOUT={tout}")
+            lines.append(f"lavfi.signalstats.VREP={vrep}")
+        return "\n".join(lines)
+
+    def _mock_result(self, frames):
+        result = Mock()
+        result.returncode = 0
+        result.stdout = self._make_signalstats_stdout(frames)
+        result.stderr = ''
+        return result
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_samples_file_body_not_intro(self, mock_run, mock_duration):
+        """Windows are drawn from the body, never through the movie= lavfi source"""
+        mock_duration.return_value = 1000.0
+        mock_run.return_value = self._mock_result([(0.0, 0.0)] * 200)
+
+        checker = PixelProbe()
+        checker._check_temporal_outliers('/fake/video.mkv')
+
+        assert mock_run.call_count == 3
+        offsets = []
+        for call in mock_run.call_args_list:
+            args = call[0][0]
+            assert not any('movie=' in str(a) for a in args), \
+                "movie= source truncates to the first seconds and must not be used"
+            offsets.append(float(args[args.index('-ss') + 1]))
+
+        # 25/50/75% of a 1000s file, i.e. never the intro and never the credits
+        assert offsets == [250.0, 500.0, 750.0]
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_high_vrep_warns_without_corruption(self, mock_run, mock_duration):
+        """Vertical line repetition is a warning, not a corruption verdict"""
+        mock_duration.return_value = 1000.0
+        # Every sampled frame far over the 0.5 per-frame VREP threshold
+        mock_run.return_value = self._mock_result([(0.0, 0.99)] * 200)
+
+        checker = PixelProbe()
+        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+
+        assert is_corrupted is False
+        assert details == []
+        assert len(warnings) == 1
+        assert 'vertical line repetition' in warnings[0].lower()
+        assert '100.0%' in warnings[0]
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_high_tout_marks_corrupted(self, mock_run, mock_duration):
+        """Temporal outliers still mark the file corrupted"""
+        mock_duration.return_value = 1000.0
+        mock_run.return_value = self._mock_result([(0.5, 0.0)] * 200)
+
+        checker = PixelProbe()
+        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+
+        assert is_corrupted is True
+        assert len(details) == 1
+        assert 'temporal outliers' in details[0].lower()
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_clean_body_produces_no_verdict(self, mock_run, mock_duration):
+        """Values under both thresholds yield neither corruption nor warnings"""
+        mock_duration.return_value = 1000.0
+        mock_run.return_value = self._mock_result([(0.001, 0.2)] * 200)
+
+        checker = PixelProbe()
+        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+
+        assert is_corrupted is False
+        assert details == []
+        assert warnings == []
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_tiny_sample_yields_no_verdict(self, mock_run, mock_duration):
+        """A handful of frames warns instead of computing a percentage.
+
+        This is the ffmpeg 8 regression: 19 frames of a 41,608-frame file all
+        scored high VREP because they were the fade-in, and that was reported as
+        47.4% corruption.
+        """
+        mock_duration.return_value = 1000.0
+        mock_run.return_value = self._mock_result([(0.9, 0.99)] * 6)
+
+        checker = PixelProbe()
+        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+
+        assert is_corrupted is False
+        assert details == []
+        assert len(warnings) == 1
+        assert 'below the' in warnings[0]
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_partial_timeout_keeps_readable_windows(self, mock_run, mock_duration):
+        """One timed-out window warns but does not discard the others"""
+        mock_duration.return_value = 1000.0
+        mock_run.side_effect = [
+            self._mock_result([(0.0, 0.0)] * 200),
+            subprocess.TimeoutExpired(cmd='ffmpeg', timeout=30),
+            self._mock_result([(0.0, 0.0)] * 200),
+        ]
+
+        checker = PixelProbe()
+        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+
+        assert is_corrupted is False
+        assert details == []
+        assert any('partially timed out' in w for w in warnings)
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_supplied_duration_avoids_reprobe(self, mock_run, mock_duration):
+        """A caller that already probed duration is not made to probe again"""
+        mock_run.return_value = self._mock_result([(0.0, 0.0)] * 200)
+
+        checker = PixelProbe()
+        checker._check_temporal_outliers('/fake/video.mkv', duration=800.0)
+
+        mock_duration.assert_not_called()
+        offsets = [float(c[0][0][c[0][0].index('-ss') + 1]) for c in mock_run.call_args_list]
+        assert offsets == [200.0, 400.0, 600.0]
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_second_timeout_abandons_remaining_windows(self, mock_run, mock_duration):
+        """Whatever stalled two windows will stall the third, so stop paying for it"""
+        mock_duration.return_value = 1000.0
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd='ffmpeg', timeout=30),
+            subprocess.TimeoutExpired(cmd='ffmpeg', timeout=30),
+            self._mock_result([(0.0, 0.0)] * 200),
+        ]
+
+        checker = PixelProbe()
+        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+
+        assert mock_run.call_count == 2
+        assert is_corrupted is False
+        assert any('below the' in w for w in warnings)
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_unknown_duration_skips_check(self, mock_run, mock_duration):
+        """Without a duration there is no body to sample, so nothing is decoded"""
+        mock_duration.return_value = None
+
+        checker = PixelProbe()
+        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+
+        assert (is_corrupted, details, warnings) == (False, [], [])
+        mock_run.assert_not_called()
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_stage2_warning_routed_to_warnings(self, mock_run, mock_duration):
+        """A Stage 2 VREP warning reaches the enhanced check as a warning"""
+        mock_duration.return_value = 1000.0
+        mock_run.return_value = self._mock_result([(0.0, 0.99)] * 200)
+
+        checker = PixelProbe()
+        with patch.object(checker, '_check_frame_integrity', return_value=(False, [])), \
+             patch.object(checker, '_check_strict_error_detection', return_value=(False, [])):
+            is_corrupted, details, output, warnings = checker._enhanced_corruption_check(
+                '/fake/video.mkv', file_size_gb=2.0
+            )
+
+        assert is_corrupted is False
+        assert details == []
+        assert any('Stage 2: Elevated vertical line repetition' in w for w in warnings)
+        assert any('Result: WARNING' in line for line in output)
+
+

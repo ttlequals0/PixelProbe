@@ -477,6 +477,76 @@ _BLOCKED_NETWORKS = [
 ]
 
 
+# Cloud metadata endpoints, blocked for every outbound target regardless of the
+# looser policy applied to operator-configured service hosts below.
+_CLOUD_METADATA_IPS = frozenset({
+    '169.254.169.254',    # AWS / Azure / GCP / DigitalOcean / OpenStack
+    '169.254.170.2',      # AWS ECS task metadata
+    'fd00:ec2::254',      # AWS IMDSv2 over IPv6
+    '100.100.100.200',    # Alibaba Cloud
+})
+
+
+def validate_outbound_host(host: str, port: int = 0) -> Tuple[bool, Optional[str]]:
+    """Validate a bare operator-configured service hostname (no URL scheme).
+
+    Looser than validate_safe_url on purpose: private, LAN and loopback targets
+    stay allowed because a self-hosted SMTP relay legitimately lives on
+    localhost, a Docker network, or the LAN, and requiring a trusted-hosts
+    allowlist entry before mail works would block the common setup. Cloud
+    metadata and link-local targets are still refused, so the loosening cannot
+    be turned into a credential-theft path.
+
+    Unresolvable hosts pass: the connection then fails at connect time without
+    ever reaching an internal address. Callers should re-validate immediately
+    before connecting (not only when the config is saved) so a DNS rebind cannot
+    repoint a stored hostname at a blocked target.
+
+    Args:
+        host: Hostname or IP, without scheme (brackets around IPv6 are stripped)
+        port: Optional port, used only to narrow address resolution
+
+    Returns:
+        Tuple of (is_safe, error_message).
+    """
+    if not host or not host.strip():
+        return False, "Host is empty"
+
+    host = host.strip().strip('[]')
+
+    if host in _CLOUD_METADATA_IPS:
+        return False, f"Host is a blocked cloud metadata address ({host})"
+
+    try:
+        addr_infos = socket.getaddrinfo(host, port or None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        # Not resolvable here; connecting will fail without reaching any host.
+        return True, None
+
+    for addr_info in addr_infos:
+        ip_str = addr_info[4][0]
+        if ip_str in _CLOUD_METADATA_IPS:
+            AuditLogger.log_security_event(
+                'ssrf_blocked',
+                f"Blocked outbound connection to cloud metadata IP: {host} resolved to {ip_str}",
+                severity='warning'
+            )
+            return False, f"Host resolves to a blocked cloud metadata address ({ip_str})"
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if ip.is_link_local:
+            AuditLogger.log_security_event(
+                'ssrf_blocked',
+                f"Blocked outbound connection to link-local IP: {host} resolved to {ip_str}",
+                severity='warning'
+            )
+            return False, f"Host resolves to a link-local address ({ip_str})"
+
+    return True, None
+
+
 def validate_safe_url(url: str) -> Tuple[bool, Optional[str]]:
     """Validate that a URL does not target private/internal IP ranges (SSRF protection).
 

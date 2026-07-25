@@ -57,6 +57,26 @@ def _ffprobe_with_timeout(file_path, timeout=None):
         raise ffmpeg.Error('ffprobe', result.stdout, result.stderr)
     return json.loads(result.stdout.decode('utf-8'))
 
+def _probe_video_duration(file_path):
+    """Video duration in seconds, or None if the container does not report one.
+
+    Prefers the video stream's own duration and falls back to the container's;
+    Matroska commonly omits the stream-level value. Propagates ffprobe failures
+    so callers can surface an incomplete check rather than assume a clean file.
+    """
+    probe = _ffprobe_with_timeout(file_path)
+    video_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
+
+    for source in (video_stream, probe.get('format')):
+        if source and 'duration' in source:
+            try:
+                duration = float(source['duration'])
+            except (ValueError, TypeError):
+                continue
+            if duration > 0:
+                return duration
+    return None
+
 # Deadline for pure-Python file reads (stat, magic, hash). Unlike the external
 # tools these have no subprocess timeout, so a file on stalled storage (dead
 # NFS/SMB mount, failing sector) blocks the scan worker in the kernel forever
@@ -124,6 +144,39 @@ _RE_FREEZE_DURATION = re.compile(r'freeze_duration:\s*([\d.]+)')
 _RE_BLACK_START = re.compile(r'black_start:\s*([\d.]+)')
 _RE_BLACK_END = re.compile(r'black_end:\s*([\d.]+)')
 _RE_BLACK_DURATION = re.compile(r'black_duration:\s*([\d.]+)')
+
+# Pre-compiled patterns for parsing FFmpeg signalstats metadata output
+_RE_SIGNALSTATS_TOUT = re.compile(r'lavfi\.signalstats\.TOUT=([\d.eE+-]+)')
+_RE_SIGNALSTATS_VREP = re.compile(r'lavfi\.signalstats\.VREP=([\d.eE+-]+)')
+
+# Stage 2 samples windows from the middle of the file instead of reading from the
+# start. Intros, fades and title cards are near-static, so vertical-line
+# repetition there legitimately approaches 1.0 and describes the titles rather
+# than the video; credits at the tail have the same problem. Env-overridable.
+TEMPORAL_SAMPLE_POSITIONS = (0.25, 0.50, 0.75)
+TEMPORAL_SAMPLE_SECS = env_int('TEMPORAL_SAMPLE_SECS', 10, floor=5)
+TEMPORAL_SAMPLE_TIMEOUT_SECS = env_int('TEMPORAL_SAMPLE_TIMEOUT_SECS', 30, floor=10)
+
+# Below this many sampled frames the percentages are noise, so no verdict is
+# issued. Judging a corruption verdict on a handful of opening frames is exactly
+# the defect this stage had (issue: ffmpeg 8 false positives).
+TEMPORAL_MIN_FRAMES = env_int('TEMPORAL_MIN_FRAMES', 100, floor=1)
+
+# Verdict thresholds for signalstats. Per-frame values above TOUT/VREP_FRAME
+# count toward the corresponding percentage, and the file is judged once that
+# percentage of sampled frames is exceeded.
+#
+# Measured on real media: body frames of healthy files score 0.0-0.2% over
+# VREP_FRAME with a per-frame max of 0.60, while a file with genuine byte
+# corruption and decoder concealment scored 32.9% and clean synthetic flat
+# content scored 45.5%. VREP therefore cannot separate damage from flat or
+# graphic content at any per-frame threshold (extreme 10x row duplication peaks
+# at 0.833), which is why exceeding VREP_PERCENT only warns while TOUT marks
+# corruption.
+TEMPORAL_TOUT_FRAME = 0.1
+TEMPORAL_TOUT_PERCENT = 5.0
+TEMPORAL_VREP_FRAME = 0.5
+TEMPORAL_VREP_PERCENT = 10.0
 
 # ImageMagick 7 renamed the CLI to 'magick' ('convert' survives only as a
 # compatibility alias); prefer it, fall back for ImageMagick 6 systems.
@@ -1682,7 +1735,7 @@ class PixelProbe:
         # Always run enhanced checks for comprehensive validation (merge deep scan into regular)
         # Since we're checking entire files anyway, might as well be thorough
         logger.info(f"Running comprehensive validation for {file_path}")
-        enhanced_corrupted, enhanced_details, enhanced_output, enhanced_warnings = self._enhanced_corruption_check(file_path, file_size_gb)
+        enhanced_corrupted, enhanced_details, enhanced_output, enhanced_warnings = self._enhanced_corruption_check(file_path, file_size_gb, duration)
         if enhanced_corrupted:
             is_corrupted = True
             corruption_details.extend(enhanced_details)
@@ -2121,8 +2174,13 @@ class PixelProbe:
         scan_output.append("=== Freeze Detection Complete ===")
         return has_warnings, warning_details, scan_output
 
-    def _enhanced_corruption_check(self, file_path, file_size_gb):
-        """Enhanced multi-stage corruption detection for files that fail basic checks"""
+    def _enhanced_corruption_check(self, file_path, file_size_gb, duration=None):
+        """Enhanced multi-stage corruption detection for files that fail basic checks
+
+        Args:
+            duration: video duration in seconds if the caller already probed it,
+                so the sampling stages don't re-probe the same container.
+        """
         corruption_details = []
         is_corrupted = False
         enhanced_output = []
@@ -2143,12 +2201,15 @@ class PixelProbe:
         
         # Stage 2: Temporal outlier detection (for files > 1GB)
         if file_size_gb > 1.0:
-            temporal_corrupted, temporal_details = self._check_temporal_outliers(file_path)
+            temporal_corrupted, temporal_details, temporal_warnings = self._check_temporal_outliers(file_path, duration)
             enhanced_output.append("Stage 2: Temporal outlier detection")
             if temporal_corrupted:
                 is_corrupted = True
                 corruption_details.extend(temporal_details)
                 enhanced_output.append(f"  Result: FAILED - {'; '.join(temporal_details)}")
+            elif temporal_warnings:
+                warning_details.extend([f"Stage 2: {detail}" for detail in temporal_warnings])
+                enhanced_output.append(f"  Result: WARNING - {'; '.join(temporal_warnings)}")
             else:
                 enhanced_output.append("  Result: PASSED")
         else:
@@ -2156,7 +2217,7 @@ class PixelProbe:
         
         # Stage 3: Multi-point sampling for large files
         if file_size_gb > 5.0:
-            sampling_corrupted, sampling_details, sampling_warnings = self._check_multipoint_sampling(file_path)
+            sampling_corrupted, sampling_details, sampling_warnings = self._check_multipoint_sampling(file_path, duration)
             enhanced_output.append("Stage 3: Multi-point sampling")
             if sampling_corrupted:
                 is_corrupted = True
@@ -2246,74 +2307,24 @@ class PixelProbe:
         
         return is_corrupted, corruption_details
     
-    def _check_temporal_outliers(self, file_path):
-        """Detect temporal outliers that indicate visual corruption using signalstats"""
-        corruption_details = []
-        is_corrupted = False
-        
-        try:
-            logger.info(f"Checking temporal outliers for {file_path}")
-            result = safe_subprocess_run([
-                'ffprobe',
-                '-f', 'lavfi',
-                '-i', f'movie={file_path},signalstats=stat=tout+vrep',
-                # pts_time (pkt_pts_time was removed in newer ffmpeg; pts_time
-                # exists on 6.x and 8.x alike)
-                '-show_entries', 'frame=pts_time:frame_tags=lavfi.signalstats.TOUT,lavfi.signalstats.VREP',
-                '-of', 'csv=p=0',
-                '-v', 'quiet'
-            ], capture_output=True, text=True, timeout=60)
-            
-            if result.returncode == 0 and result.stdout.strip():
-                lines = result.stdout.strip().split('\n')
-                high_tout_count = 0
-                high_vrep_count = 0
-                
-                for line in lines:
-                    parts = line.split(',')
-                    if len(parts) >= 3:
-                        try:
-                            tout_val = float(parts[1]) if parts[1] else 0
-                            vrep_val = float(parts[2]) if parts[2] else 0
-                            
-                            # High temporal outlier values indicate corruption
-                            if tout_val > 0.1:  # Threshold for temporal outliers
-                                high_tout_count += 1
-                            if vrep_val > 0.5:  # Threshold for vertical repetition
-                                high_vrep_count += 1
-                        except (ValueError, IndexError):
-                            continue
-                
-                total_frames = len(lines)
-                if total_frames > 0:
-                    tout_percent = (high_tout_count / total_frames) * 100
-                    vrep_percent = (high_vrep_count / total_frames) * 100
-                    
-                    logger.info(f"Temporal analysis: {tout_percent:.1f}% outliers, {vrep_percent:.1f}% vertical repetition")
-                    
-                    if tout_percent > 5.0:  # >5% of frames have temporal outliers
-                        corruption_details.append(f"High temporal outliers detected: {tout_percent:.1f}% of frames")
-                        is_corrupted = True
-                    if vrep_percent > 10.0:  # >10% of frames have vertical repetition
-                        corruption_details.append(f"Excessive vertical line repetition: {vrep_percent:.1f}% of frames")
-                        is_corrupted = True
-                        
-        except subprocess.TimeoutExpired:
-            corruption_details.append("Temporal outlier check timeout")
-        except OSError as e:
-            # OSError includes SIGBUS and other memory-related errors
-            logger.error(f"FFprobe process crashed with OS error during temporal outlier check for {file_path}: {str(e)}")
-            corruption_details.append(f"Temporal outlier check crashed (possible memory error)")
-            is_corrupted = True
-        except Exception as e:
-            # Don't hide an incomplete deep check at debug level: a swallowed
-            # error here means this corruption signal did not actually run.
-            logger.warning(f"Temporal outlier check did not complete for {file_path}: {str(e)}")
+    def _check_temporal_outliers(self, file_path, duration=None):
+        """Detect temporal outliers that indicate visual corruption using signalstats
 
-        return is_corrupted, corruption_details
-    
-    def _check_multipoint_sampling(self, file_path):
-        """Check beginning, middle, and end of large files for corruption
+        Samples TEMPORAL_SAMPLE_POSITIONS windows from the body of the file. The
+        `movie=` lavfi source this previously used silently stops after the first
+        few seconds and exits 0, so the statistics only ever described the intro
+        (fades and title cards), which is where vertical-line repetition is
+        legitimately highest.
+
+        TOUT (temporal outliers) marks corruption. VREP (vertical line
+        repetition) only warns: measured against real damage it does not
+        discriminate -- clean flat/graphic content scores higher than a file with
+        genuine decoder-concealed corruption, because signalstats is analog-tape
+        QC tooling and high VREP is expected in born-digital video.
+
+        Args:
+            duration: video duration in seconds if the caller already probed it;
+                probed here when omitted.
 
         Returns: (is_corrupted, corruption_details, warning_details)
         """
@@ -2322,30 +2333,113 @@ class PixelProbe:
         is_corrupted = False
 
         try:
-            # Get video duration first - try stream level, then container level
-            probe = _ffprobe_with_timeout(file_path)
-            video_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
-            
-            duration = None
-            # Try stream-level duration first
-            if video_stream and 'duration' in video_stream:
-                try:
-                    duration = float(video_stream['duration'])
-                except (ValueError, TypeError):
-                    pass
-            
-            # Fall back to container-level duration
-            if duration is None and 'format' in probe and 'duration' in probe['format']:
-                try:
-                    duration = float(probe['format']['duration'])
-                except (ValueError, TypeError):
-                    pass
-            
-            # If we still don't have duration, skip multipoint sampling
-            if duration is None or duration <= 0:
+            if duration is None:
+                duration = _probe_video_duration(file_path)
+            if duration is None:
+                logger.info(f"Temporal outlier check skipped for {file_path}: no usable duration")
                 return is_corrupted, corruption_details, warning_details
-            
-            duration = float(duration)
+
+            logger.info(f"Checking temporal outliers for {file_path} (duration: {duration:.1f}s)")
+
+            tout_values = []
+            vrep_values = []
+            timed_out = False
+
+            for position in TEMPORAL_SAMPLE_POSITIONS:
+                start_time = duration * position
+                try:
+                    result = safe_subprocess_run([
+                        'ffmpeg',
+                        '-nostats',
+                        '-v', 'error',
+                        '-ss', f'{start_time:.2f}',
+                        '-i', ensure_cli_safe_path(file_path),
+                        '-map', '0:v:0',
+                        '-t', str(TEMPORAL_SAMPLE_SECS),
+                        '-vf', 'signalstats=stat=tout+vrep,metadata=print:file=-',
+                        '-f', 'null',
+                        '-'
+                    ], capture_output=True, text=True, timeout=TEMPORAL_SAMPLE_TIMEOUT_SECS)
+                except subprocess.TimeoutExpired:
+                    # One slow window must not discard the windows that did read,
+                    # but whatever made this window slow (stalled mount, failing
+                    # sectors) applies to the rest, so don't pay the timeout again.
+                    logger.warning(f"Temporal sample at {start_time:.0f}s timed out for {file_path}")
+                    if timed_out:
+                        break
+                    timed_out = True
+                    continue
+
+                # stderr is deliberately ignored: seeking mid-stream emits
+                # version-dependent decoder noise that says nothing about the
+                # file's integrity (see _check_multipoint_sampling).
+                tout_values.extend(float(v) for v in _RE_SIGNALSTATS_TOUT.findall(result.stdout))
+                vrep_values.extend(float(v) for v in _RE_SIGNALSTATS_VREP.findall(result.stdout))
+
+            total_frames = max(len(tout_values), len(vrep_values))
+            if total_frames < TEMPORAL_MIN_FRAMES:
+                detail = (f"Temporal outlier check sampled only {total_frames} frame(s), "
+                          f"below the {TEMPORAL_MIN_FRAMES}-frame minimum")
+                logger.warning(f"{detail} for {file_path}")
+                warning_details.append(detail)
+                return is_corrupted, corruption_details, warning_details
+
+            # Guarded independently: truncated output can yield one metric without
+            # the other, and signalstats emits them as separate metadata lines.
+            tout_percent = (sum(1 for v in tout_values if v > TEMPORAL_TOUT_FRAME) / len(tout_values) * 100
+                            if tout_values else 0.0)
+            vrep_percent = (sum(1 for v in vrep_values if v > TEMPORAL_VREP_FRAME) / len(vrep_values) * 100
+                            if vrep_values else 0.0)
+
+            logger.info(f"Temporal analysis over {total_frames} sampled frames: "
+                        f"{tout_percent:.1f}% outliers, {vrep_percent:.1f}% vertical repetition")
+
+            if tout_percent > TEMPORAL_TOUT_PERCENT:
+                corruption_details.append(f"High temporal outliers detected: {tout_percent:.1f}% of frames")
+                is_corrupted = True
+            if vrep_percent > TEMPORAL_VREP_PERCENT:
+                warning_details.append(
+                    f"Elevated vertical line repetition: {vrep_percent:.1f}% of sampled frames")
+            if timed_out:
+                warning_details.append("Temporal outlier check partially timed out")
+
+        except subprocess.TimeoutExpired:
+            # Raised by the duration probe; the per-window timeout is handled above.
+            warning_details.append("Temporal outlier check timed out")
+        except OSError as e:
+            # OSError includes SIGBUS and other memory-related errors
+            logger.error(f"FFmpeg process crashed with OS error during temporal outlier check for {file_path}: {str(e)}")
+            corruption_details.append("Temporal outlier check crashed (possible memory error)")
+            is_corrupted = True
+        except Exception as e:
+            # Don't hide an incomplete deep check at debug level: a swallowed
+            # error here means this corruption signal did not actually run.
+            logger.warning(f"Temporal outlier check did not complete for {file_path}: {str(e)}")
+            warning_details.append("Temporal outlier check did not complete")
+
+        return is_corrupted, corruption_details, warning_details
+    
+    def _check_multipoint_sampling(self, file_path, duration=None):
+        """Check beginning, middle, and end of large files for corruption
+
+        Args:
+            duration: video duration in seconds if the caller already probed it;
+                probed here when omitted.
+
+        Returns: (is_corrupted, corruption_details, warning_details)
+        """
+        corruption_details = []
+        warning_details = []
+        is_corrupted = False
+
+        try:
+            if duration is None:
+                duration = _probe_video_duration(file_path)
+
+            # If we don't have duration, skip multipoint sampling
+            if duration is None:
+                return is_corrupted, corruption_details, warning_details
+
             sample_points = [
                 (0, 10, "beginning"),
                 (duration * 0.5, 10, "middle"), 

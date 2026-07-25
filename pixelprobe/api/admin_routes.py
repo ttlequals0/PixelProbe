@@ -221,7 +221,8 @@ def add_ignored_pattern():
         # Check for duplicate pattern
         existing = IgnoredErrorPattern.query.filter_by(pattern=pattern, is_active=True).first()
         if existing:
-            return {'error': f'Pattern "{pattern}" already exists'}, 400
+            # Same reason as create_schedule: don't reflect caller input.
+            return {'error': 'That pattern already exists'}, 400
         
         new_pattern = IgnoredErrorPattern(
             pattern=pattern,
@@ -365,7 +366,9 @@ def create_schedule():
         name = data.get('name', 'Unnamed Schedule')
         existing = ScanSchedule.query.filter_by(name=name, is_active=True).first()
         if existing:
-            return {'error': f'Schedule with name "{name}" already exists'}, 400
+            # Name is not echoed back: reflecting caller input into the response
+            # body is the taint flow CodeQL rejects. The caller supplied it.
+            return {'error': 'A schedule with that name already exists'}, 400
 
         scan_type = data.get('scan_type', 'full')
         time_budget, budget_error = _validate_time_budget(data, scan_type)
