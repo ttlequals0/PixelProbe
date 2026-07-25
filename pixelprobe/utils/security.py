@@ -596,10 +596,11 @@ def validate_safe_url(url: str) -> Tuple[bool, Optional[str]]:
                 # endpoints are bearer secrets in the path), and ntfy URLs carry
                 # the topic. That is enough to diagnose a blocked target.
                 if _is_trusted(hostname, ip_str):
-                    logger.debug(
-                        f"Allowing trusted internal request to {hostname} "
-                        f"(resolved to {ip_str})"
-                    )
+                    # Resolved IP only. The hostname comes from caller-supplied
+                    # provider config, so keeping it out of the application log
+                    # avoids writing attacker-influenced text there; the security
+                    # audit trail below is where target identity belongs.
+                    logger.debug(f"Allowing trusted internal request (resolved to {ip_str})")
                     break  # Trusted -- skip remaining blocked networks for this IP
                 AuditLogger.log_security_event(
                     'ssrf_blocked',
