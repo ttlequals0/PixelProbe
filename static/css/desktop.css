@@ -977,6 +977,63 @@ input:checked + .toggle-slider:before {
     margin-bottom: 0.5rem;
 }
 
+/* Verdict sections: severity accent bar + matching low-alpha tint, the same
+   idiom the status badges use, so color still reads in both themes */
+.detail-section {
+    border-left: 3px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+}
+
+.detail-section .detail-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+
+.detail-section .scan-output-text {
+    background: transparent;
+    border: none;
+    padding: 0;
+    max-height: 200px;
+}
+
+.detail-danger {
+    border-left-color: var(--danger-color);
+    background-color: rgba(220, 53, 69, 0.08);
+}
+
+.detail-warning {
+    border-left-color: var(--warning-color);
+    background-color: rgba(255, 193, 7, 0.08);
+}
+
+.detail-neutral {
+    background-color: var(--bg-primary);
+}
+
+/* Raw tool transcript stays available but never dominates the verdict */
+.detail-transcript summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    padding: 0.5rem 0;
+    user-select: none;
+}
+
+.detail-transcript summary:hover,
+.detail-transcript summary:focus-visible {
+    color: var(--text-primary);
+}
+
+.detail-transcript[open] summary {
+    margin-bottom: 0.5rem;
+}
+
 .scan-output-details p {
     margin-bottom: 0.5rem;
 }

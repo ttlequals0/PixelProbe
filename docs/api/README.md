@@ -271,7 +271,7 @@ Deprecated alias of `/api/scan`; both run the same chunk-distributed engine. Kep
 }
 ```
 
-`directories` is required; `force_rescan` is optional. The response matches `/api/scan` plus legacy fields (`status: "launched"`, `scan_type`, `force_rescan`, `directories`).
+`directories` is required; `force_rescan` is optional. The response matches `/api/scan` plus legacy fields (`status: "launched"`, `scan_type`, `force_rescan`). Since v2.8.1 the response no longer echoes the requested `directories` back.
 
 #### Get Parallel Scan Status
 ```http

@@ -18,6 +18,33 @@ function fileStatus(file) {
     return { cls: 'success', text: 'Healthy' };
 }
 
+// Single source of truth for a file's detail sections, most useful first:
+// the verdict summaries, then errors, then the raw tool transcript (used by
+// the desktop table, mobile cards, and the details modal - keep in lockstep)
+function fileDetailSections(file) {
+    const sections = [
+        { label: 'Corruption Details', content: file.corruption_details },
+        { label: 'Warning Details', content: file.warning_details },
+        { label: 'Error Message', content: file.error_message },
+        { label: 'Scan Output', content: file.scan_output },
+    ];
+    return sections.filter(s => s.content);
+}
+
+// First (highest-priority) detail line for compact table/card cells
+function fileDetails(file) {
+    const sections = fileDetailSections(file);
+    return sections.length > 0 ? sections[0].content : '';
+}
+
+// Severity accent for each detail section in the details modal
+const DETAIL_SEVERITY = {
+    'Corruption Details': 'danger',
+    'Warning Details': 'warning',
+    'Error Message': 'danger',
+    'Scan Output': 'neutral',
+};
+
 // Theme Management
 class ThemeManager {
     constructor() {
@@ -1307,6 +1334,7 @@ class TableManager {
         const status = fileStatus(file);
         const statusClass = status.cls;
         const statusText = status.text.toUpperCase();
+        const details = details;
         
         return `
             <div class="result-card">
@@ -1325,9 +1353,9 @@ class TableManager {
                         <span class="label">Last Integrity Check:</span>
                         <span class="value">${this.formatDate(file.last_integrity_check_date)}</span>
                     ` : ''}
-                    ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
+                    ${details ? `
                         <span class="label">Details:</span>
-                        <span class="value">${this.escapeHtml(file.corruption_details || file.scan_output || file.error_message || file.warning_details || '')}</span>
+                        <span class="value">${this.escapeHtml(details)}</span>
                     ` : ''}
                 </div>
                 <div class="action-buttons">
@@ -1357,7 +1385,7 @@ class TableManager {
                             ` : ''}
                         </ul>
                     </div>
-                    ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
+                    ${details ? `
                         <button class="btn btn-secondary" onclick="app.viewScanOutput(${file.id})" title="View Details">
                             <i class="fas fa-file-alt"></i><span class="btn-text"> Details</span>
                         </button>
@@ -1376,6 +1404,7 @@ class TableManager {
 
     renderRow(file) {
         const { cls: statusClass, text: statusText } = fileStatus(file);
+        const details = details;
         
         return `
             <tr>
@@ -1385,7 +1414,7 @@ class TableManager {
                 <td>${this.formatFileSize(file.file_size)}</td>
                 <td>${file.file_type || 'N/A'}</td>
                 <td>${file.scan_tool || 'N/A'}</td>
-                <td class="text-truncate" title="${this.escapeHtml(file.corruption_details || file.scan_output || file.error_message || file.warning_details || '')}">${this.escapeHtml(file.corruption_details || file.scan_output || file.error_message || file.warning_details || '')}</td>
+                <td class="text-truncate" title="${this.escapeHtml(details)}">${this.escapeHtml(details)}</td>
                 <td>${this.formatDate(file.scan_date)}</td>
                 <td class="action-buttons">
                     <button class="btn btn-sm btn-secondary" onclick="app.viewFile(${file.id})">
@@ -1414,7 +1443,7 @@ class TableManager {
                             ` : ''}
                         </ul>
                     </div>
-                    ${file.corruption_details || file.scan_output || file.error_message || file.warning_details ? `
+                    ${details ? `
                         <button class="btn btn-sm btn-secondary" onclick="app.viewScanOutput(${file.id})">
                             <i class="fas fa-file-alt"></i> Details
                         </button>
@@ -4090,7 +4119,7 @@ class PixelProbeApp {
             modal.innerHTML = `
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h3 class="modal-title">Scan Output Details</h3>
+                        <h3 class="modal-title">Scan Details</h3>
                         <button class="modal-close">&times;</button>
                     </div>
                     <div class="modal-body"></div>
@@ -4101,19 +4130,27 @@ class PixelProbeApp {
         
         const modalBody = modal.querySelector('.modal-body');
         
-        // Collect all available details
-        const details = [];
-        if (file.corruption_details) details.push({label: 'Corruption Details', content: file.corruption_details});
-        if (file.scan_output) details.push({label: 'Scan Output', content: file.scan_output});
-        if (file.error_message) details.push({label: 'Error Message', content: file.error_message});
-        if (file.warning_details) details.push({label: 'Warning Details', content: file.warning_details});
-        
-        const detailsHtml = details.length > 0 ? 
-            details.map(detail => `
-                <h4>${detail.label}:</h4>
+        // Verdict sections lead; the raw transcript is supporting evidence,
+        // collapsed unless it is the only content
+        const details = fileDetailSections(file);
+        const verdicts = details.filter(d => d.label !== 'Scan Output');
+        const transcript = details.find(d => d.label === 'Scan Output');
+
+        const verdictsHtml = verdicts.map(detail => `
+            <section class="detail-section detail-${DETAIL_SEVERITY[detail.label] || 'neutral'}">
+                <h4 class="detail-label">${detail.label}</h4>
                 <pre class="scan-output-text">${this.escapeHtml(detail.content)}</pre>
-            `).join('<hr>') :
-            '<p>No scan output available</p>';
+            </section>
+        `).join('');
+
+        const transcriptHtml = transcript ? `
+            <details class="detail-transcript" ${verdicts.length === 0 ? 'open' : ''}>
+                <summary>Full scan transcript</summary>
+                <pre class="scan-output-text">${this.escapeHtml(transcript.content)}</pre>
+            </details>
+        ` : '';
+
+        const detailsHtml = (verdictsHtml + transcriptHtml) || '<p>No scan output available</p>';
         
         modalBody.innerHTML = `
             <div class="scan-output-details">

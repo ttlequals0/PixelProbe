@@ -414,15 +414,17 @@ class TestVideoFreezeDetection:
             events: list of (start, end, duration) tuples
         """
         lines = []
+        # Real ffmpeg emission order per event: freeze_start, then at unfreeze
+        # freeze_duration followed by freeze_end (verified against ffmpeg 8).
         for start, end, duration in events:
             lines.append(
                 f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_start: {start}"
             )
             lines.append(
-                f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_end: {end}"
+                f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_duration: {duration}"
             )
             lines.append(
-                f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_duration: {duration}"
+                f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_end: {end}"
             )
         return "\n".join(lines)
 
@@ -461,8 +463,9 @@ class TestVideoFreezeDetection:
         assert '2 event(s)' in warning_details[0]
         assert '9.5s frozen' in warning_details[0]
         assert '7.9%' in warning_details[0]
-        assert any('Freeze #1' in line for line in scan_output)
-        assert any('Freeze #2' in line for line in scan_output)
+        # Each event must pair its own start and end, not a neighbor's
+        assert any('Freeze #1: 10.0s - 15.0s (duration: 5.0s)' in line for line in scan_output)
+        assert any('Freeze #2: 45.5s - 50.0s (duration: 4.5s)' in line for line in scan_output)
 
     @patch('subprocess.run')
     def test_video_no_freeze(self, mock_run):
@@ -722,7 +725,7 @@ class TestTemporalOutlierDetection:
         mock_run.return_value = self._mock_result([(0.0, 0.99)] * 200)
 
         checker = PixelProbe()
-        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+        is_corrupted, details, warnings, info = checker._check_temporal_outliers('/fake/video.mkv')
 
         assert is_corrupted is False
         assert details == []
@@ -732,17 +735,22 @@ class TestTemporalOutlierDetection:
 
     @patch('pixelprobe.media_checker._probe_video_duration')
     @patch('subprocess.run')
-    def test_high_tout_marks_corrupted(self, mock_run, mock_duration):
-        """Temporal outliers still mark the file corrupted"""
+    def test_high_tout_warns_without_corruption(self, mock_run, mock_duration):
+        """Temporal outliers warn instead of marking corrupted.
+
+        Verified against a pristine Bluray episode: film grain pushes TOUT past
+        its per-frame threshold on 46-100% of sampled frames, so like VREP the
+        metric cannot separate damage from clean grainy content.
+        """
         mock_duration.return_value = 1000.0
         mock_run.return_value = self._mock_result([(0.5, 0.0)] * 200)
 
         checker = PixelProbe()
-        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+        is_corrupted, details, warnings, info = checker._check_temporal_outliers('/fake/video.mkv')
 
-        assert is_corrupted is True
-        assert len(details) == 1
-        assert 'temporal outliers' in details[0].lower()
+        assert is_corrupted is False
+        assert details == []
+        assert any('temporal outliers' in w.lower() for w in warnings)
 
     @patch('pixelprobe.media_checker._probe_video_duration')
     @patch('subprocess.run')
@@ -752,11 +760,12 @@ class TestTemporalOutlierDetection:
         mock_run.return_value = self._mock_result([(0.001, 0.2)] * 200)
 
         checker = PixelProbe()
-        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+        is_corrupted, details, warnings, info = checker._check_temporal_outliers('/fake/video.mkv')
 
         assert is_corrupted is False
         assert details == []
         assert warnings == []
+        assert info == []
 
     @patch('pixelprobe.media_checker._probe_video_duration')
     @patch('subprocess.run')
@@ -771,12 +780,14 @@ class TestTemporalOutlierDetection:
         mock_run.return_value = self._mock_result([(0.9, 0.99)] * 6)
 
         checker = PixelProbe()
-        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+        is_corrupted, details, warnings, info = checker._check_temporal_outliers('/fake/video.mkv')
 
         assert is_corrupted is False
         assert details == []
-        assert len(warnings) == 1
-        assert 'below the' in warnings[0]
+        # An under-sampled check says nothing about the file, so it must not
+        # set warning status - it is recorded as an operational note instead.
+        assert warnings == []
+        assert any('below the' in n for n in info)
 
     @patch('pixelprobe.media_checker._probe_video_duration')
     @patch('subprocess.run')
@@ -790,11 +801,12 @@ class TestTemporalOutlierDetection:
         ]
 
         checker = PixelProbe()
-        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+        is_corrupted, details, warnings, info = checker._check_temporal_outliers('/fake/video.mkv')
 
         assert is_corrupted is False
         assert details == []
-        assert any('partially timed out' in w for w in warnings)
+        assert warnings == []
+        assert any('partially timed out' in n for n in info)
 
     @patch('pixelprobe.media_checker._probe_video_duration')
     @patch('subprocess.run')
@@ -821,11 +833,12 @@ class TestTemporalOutlierDetection:
         ]
 
         checker = PixelProbe()
-        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+        is_corrupted, details, warnings, info = checker._check_temporal_outliers('/fake/video.mkv')
 
         assert mock_run.call_count == 2
         assert is_corrupted is False
-        assert any('below the' in w for w in warnings)
+        assert warnings == []
+        assert any('below the' in n for n in info)
 
     @patch('pixelprobe.media_checker._probe_video_duration')
     @patch('subprocess.run')
@@ -834,9 +847,9 @@ class TestTemporalOutlierDetection:
         mock_duration.return_value = None
 
         checker = PixelProbe()
-        is_corrupted, details, warnings = checker._check_temporal_outliers('/fake/video.mkv')
+        is_corrupted, details, warnings, info = checker._check_temporal_outliers('/fake/video.mkv')
 
-        assert (is_corrupted, details, warnings) == (False, [], [])
+        assert (is_corrupted, details, warnings, info) == (False, [], [], [])
         mock_run.assert_not_called()
 
     @patch('pixelprobe.media_checker._probe_video_duration')
@@ -849,7 +862,7 @@ class TestTemporalOutlierDetection:
         checker = PixelProbe()
         with patch.object(checker, '_check_frame_integrity', return_value=(False, [])), \
              patch.object(checker, '_check_strict_error_detection', return_value=(False, [])):
-            is_corrupted, details, output, warnings = checker._enhanced_corruption_check(
+            is_corrupted, details, output, warnings, has_notes = checker._enhanced_corruption_check(
                 '/fake/video.mkv', file_size_gb=2.0
             )
 
@@ -858,4 +871,146 @@ class TestTemporalOutlierDetection:
         assert any('Stage 2: Elevated vertical line repetition' in w for w in warnings)
         assert any('Result: WARNING' in line for line in output)
 
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_stage2_timeout_notes_stay_out_of_warnings(self, mock_run, mock_duration):
+        """An aborted Stage 2 is an operational note in scan output, not a file warning"""
+        mock_duration.return_value = 1000.0
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd='ffmpeg', timeout=30),
+            subprocess.TimeoutExpired(cmd='ffmpeg', timeout=30),
+        ]
 
+        checker = PixelProbe()
+        with patch.object(checker, '_check_frame_integrity', return_value=(False, [])), \
+             patch.object(checker, '_check_strict_error_detection', return_value=(False, [])):
+            is_corrupted, details, output, warnings, has_notes = checker._enhanced_corruption_check(
+                '/fake/video.mkv', file_size_gb=2.0
+            )
+
+        assert is_corrupted is False
+        assert details == []
+        assert warnings == []
+        assert has_notes is True
+        assert any('Result: INCOMPLETE' in line and 'below the' in line for line in output)
+
+
+
+class TestStage2NotesReachScanOutput:
+    """A load-aborted Stage 2 must leave its trace in user-visible scan output
+    (it no longer sets warning status, so this is the only place it survives)"""
+
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    @patch('subprocess.run')
+    @patch('pixelprobe.media_checker._ffprobe_with_timeout')
+    def test_aborted_stage2_note_lands_in_scan_output(
+        self, mock_probe, mock_run, mock_exists, mock_getsize
+    ):
+        mock_exists.return_value = True
+        mock_getsize.return_value = 2 * 1024 * 1024 * 1024  # >1GB enables Stage 2
+
+        mock_probe.return_value = {
+            'streams': [{
+                'codec_type': 'video',
+                'codec_name': 'h264',
+                'profile': 'High',
+                'pix_fmt': 'yuv420p',
+                'duration': '600.0'
+            }],
+            'format': {'duration': '600.0'}
+        }
+
+        def subprocess_side_effect(cmd, *args, **kwargs):
+            if any('signalstats' in str(arg) for arg in cmd):
+                raise subprocess.TimeoutExpired(cmd='ffmpeg', timeout=30)
+            result = Mock()
+            result.returncode = 0
+            result.stdout = ''
+            result.stderr = ''
+            return result
+
+        mock_run.side_effect = subprocess_side_effect
+
+        checker = PixelProbe()
+        is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
+            checker._check_video_corruption('/fake/slow_storage.mkv')
+        )
+
+        assert is_corrupted is False
+        assert warning_details == []
+        assert any('below the' in line for line in scan_output)
+
+
+class TestOpusEofParseError:
+    """ffmpeg 8 emits a lone Opus packet-header parse error at EOF on files
+    ffmpeg 6 validates silently; with exit code 0 it is a tooling artifact,
+    not corruption (verified: full audio decode of flagged files is clean)."""
+
+    def _run_video_check(self, validation_returncode, opus_error_count=1):
+        """Run _check_video_corruption with the -c copy validation call
+        returning an Opus parse error and everything else clean."""
+        opus_line = '[opus @ 0x5a18558f1d80] Error parsing Opus packet header.'
+
+        def subprocess_side_effect(cmd, *args, **kwargs):
+            result = Mock()
+            result.stdout = ''
+            if 'copy' in cmd:
+                result.returncode = validation_returncode
+                result.stderr = '\n'.join([opus_line] * opus_error_count)
+            else:
+                result.returncode = 0
+                result.stderr = ''
+            return result
+
+        probe = {
+            'streams': [{
+                'codec_type': 'audio',
+                'codec_name': 'opus',
+            }, {
+                'codec_type': 'video',
+                'codec_name': 'hevc',
+                'profile': 'Main 10',
+                'pix_fmt': 'yuv420p10le',
+                'duration': '60.0'
+            }],
+            'format': {'duration': '60.0'}
+        }
+
+        with patch('os.path.exists', return_value=True), \
+             patch('os.path.getsize', return_value=1024 * 1024), \
+             patch('pixelprobe.media_checker._ffprobe_with_timeout', return_value=probe), \
+             patch('subprocess.run', side_effect=subprocess_side_effect):
+            checker = PixelProbe()
+            return checker._check_video_corruption('/fake/opus_video.mkv')
+
+    def test_opus_parse_error_with_clean_exit_stays_healthy(self):
+        is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
+            self._run_video_check(validation_returncode=0)
+        )
+
+        assert is_corrupted is False
+        assert not any('Opus' in d for d in corruption_details)
+        # Benign decoder noise must not surface as a warning either
+        assert not any('Opus' in w for w in warning_details)
+
+    def test_opus_parse_error_with_failed_exit_stays_corrupted(self):
+        is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
+            self._run_video_check(validation_returncode=1)
+        )
+
+        assert is_corrupted is True
+        assert any('FFmpeg validation failed' in d for d in corruption_details)
+
+    def test_opus_parse_error_flood_stays_corrupted(self):
+        """Dozens of parse errors mean mid-stream damage, not the EOF artifact.
+
+        -c copy never decodes audio, so ffmpeg can exit 0 on a genuinely
+        damaged Opus stream; the benign path must stay bounded to the small
+        per-stream EOF counts seen on verified-clean files (1-3 lines)."""
+        is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
+            self._run_video_check(validation_returncode=0, opus_error_count=40)
+        )
+
+        assert is_corrupted is True
+        assert any('Opus' in d for d in corruption_details)

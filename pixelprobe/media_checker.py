@@ -162,6 +162,12 @@ TEMPORAL_SAMPLE_TIMEOUT_SECS = env_int('TEMPORAL_SAMPLE_TIMEOUT_SECS', 30, floor
 # the defect this stage had (issue: ffmpeg 8 false positives).
 TEMPORAL_MIN_FRAMES = env_int('TEMPORAL_MIN_FRAMES', 100, floor=1)
 
+# Max "Error parsing Opus packet header" lines still treated as the benign
+# ffmpeg 8 EOF artifact (one per Opus stream; verified-clean files show 1-3).
+# More means mid-stream damage that a -c copy validation cannot surface
+# through the exit code because audio is never decoded.
+OPUS_EOF_NOTICE_MAX = env_int('OPUS_EOF_NOTICE_MAX', 4, floor=1)
+
 # Verdict thresholds for signalstats. Per-frame values above TOUT/VREP_FRAME
 # count toward the corresponding percentage, and the file is judged once that
 # percentage of sampled frames is exceeded.
@@ -1640,64 +1646,65 @@ class PixelProbe:
                 # Filter for actual corruption indicators, not metadata issues or NAL unit warnings
                 # NAL unit errors alone are often false positives (container/muxing issues)
                 significant_errors = []
-                has_nal_errors = False
-                has_reference_frame_warnings = False
-                has_dts_pts_warnings = False
-                has_other_errors = False
+                # Ordered labels of benign patterns seen; each pattern is one
+                # edit site here instead of a boolean + condition + label trio
+                benign_labels = []
+                opus_notice_count = 0
+
+                def note_benign(label):
+                    if label not in benign_labels:
+                        benign_labels.append(label)
 
                 for line in error_lines:
                     line_lower = line.lower()
                     if 'invalid nal unit' in line_lower:
-                        has_nal_errors = True
-                        # Don't add NAL errors to significant_errors yet
+                        # Held back from significant_errors; promoted below
+                        # only when other errors exist or FFmpeg failed
+                        note_benign("NAL unit errors")
                     elif 'number of reference frames' in line_lower and 'exceeds max' in line_lower:
-                        has_reference_frame_warnings = True
-                        # This is a common encoding issue that doesn't affect playback
+                        # Common encoding issue that doesn't affect playback
+                        note_benign("reference frame warnings")
                     elif any(pattern in line_lower for pattern in ['non monotonically increasing dts', 'application provided invalid', 'dts to muxer', 'pts to muxer']):
-                        has_dts_pts_warnings = True
                         # DTS/PTS warnings are null muxer artifacts, not actual corruption
+                        note_benign("DTS/PTS timestamp warnings")
+                    elif 'error parsing opus packet header' in line_lower:
+                        # ffmpeg 8 emits this once per Opus stream for the final
+                        # packet at EOF on files ffmpeg 6 validates silently; a
+                        # full audio decode of the flagged files is clean, so
+                        # with exit code 0 it is a tooling artifact. Verified
+                        # clean files show 1-3 lines (one per stream); a flood
+                        # means mid-stream damage that -c copy cannot surface
+                        # through the exit code, so it is promoted below.
+                        opus_notice_count += 1
+                        note_benign("Opus packet header parse notices (ffmpeg 8 EOF artifact)")
                     elif 'invalid data found when processing input' in line_lower or 'error while decoding stream' in line_lower:
                         # These are common FFmpeg decoder issues that don't always mean corruption
                         # Only mark as error if FFmpeg actually fails (returncode != 0)
                         if result.returncode != 0:
                             significant_errors.append(line)
-                            has_other_errors = True
                         else:
-                            # FFmpeg succeeded despite the warning - treat as minor issue
-                            has_reference_frame_warnings = True
+                            note_benign("decoder warnings (FFmpeg succeeded)")
                     elif (('error' in line_lower and 'duration' not in line_lower) or
                           'corrupt' in line_lower or
                           'broken' in line_lower or
                           'no frame' in line_lower):
                         significant_errors.append(line)
-                        has_other_errors = True
                 
+                if opus_notice_count > OPUS_EOF_NOTICE_MAX:
+                    significant_errors.append(
+                        f"{opus_notice_count} Opus packet header parse errors (mid-stream damage)")
                 # Only include NAL errors if there are other errors OR if FFmpeg failed
-                if has_nal_errors and (has_other_errors or result.returncode != 0):
+                if 'NAL unit errors' in benign_labels and (significant_errors or result.returncode != 0):
                     # Add representative NAL error
                     significant_errors.append("Invalid NAL unit errors detected")
                 
                 if significant_errors:
                     corruption_details.append(f"FFmpeg errors: {'; '.join(significant_errors[:3])}")
                     is_corrupted = True
-                elif (has_nal_errors or has_reference_frame_warnings or has_dts_pts_warnings) and result.returncode == 0:
-                    # NAL errors, reference frame warnings, or DTS/PTS warnings only - mark as warning instead of corrupted
-                    # For DTS warnings, only log once with count to avoid log flooding
-                    warning_count = len(error_lines)
-
-                    # Determine warning type for concise logging
-                    if has_dts_pts_warnings:
-                        warning_type = "DTS/PTS timestamp warnings"
-                    elif has_nal_errors:
-                        warning_type = "NAL unit errors"
-                    elif has_reference_frame_warnings:
-                        warning_type = "reference frame warnings"
-                    else:
-                        warning_type = "warnings"
-
-                    # Log once with count only - files with only DTS/PTS/NAL/reference warnings stay HEALTHY
-                    logger.info(f"BENIGN (healthy) in {file_path}: {warning_count} {warning_type} detected (common in H.264/HEVC files)")
-                    # DON'T add to warning_details - file stays HEALTHY
+                elif benign_labels and result.returncode == 0:
+                    # Benign-pattern noise only - log once with count, file stays HEALTHY
+                    logger.info(f"BENIGN (healthy) in {file_path}: {len(error_lines)} lines of "
+                                f"{', '.join(benign_labels)} (common in H.264/HEVC files)")
                 else:
                     logger.info(f"FFmpeg completed with non-critical warnings for {file_path}")
         
@@ -1735,13 +1742,17 @@ class PixelProbe:
         # Always run enhanced checks for comprehensive validation (merge deep scan into regular)
         # Since we're checking entire files anyway, might as well be thorough
         logger.info(f"Running comprehensive validation for {file_path}")
-        enhanced_corrupted, enhanced_details, enhanced_output, enhanced_warnings = self._enhanced_corruption_check(file_path, file_size_gb, duration)
+        enhanced_corrupted, enhanced_details, enhanced_output, enhanced_warnings, enhanced_notes = \
+            self._enhanced_corruption_check(file_path, file_size_gb, duration)
         if enhanced_corrupted:
             is_corrupted = True
             corruption_details.extend(enhanced_details)
-            scan_output.extend(enhanced_output)
         if enhanced_warnings:
             warning_details.extend(enhanced_warnings)
+        # The stage transcript is the only user-visible trace of warnings and
+        # of operational outcomes (aborted Stage 2) that no longer set status
+        if enhanced_corrupted or enhanced_warnings or enhanced_notes:
+            scan_output.extend(enhanced_output)
         
         # Additional HEVC Main 10 specific checks
         if not is_corrupted and codec_name == 'hevc' and codec_profile and 'Main 10' in codec_profile:
@@ -2071,6 +2082,11 @@ class PixelProbe:
                 if 'freezedetect' in line_lower:
                     start_match = _RE_FREEZE_START.search(line)
                     if start_match:
+                        # A new event over a partial dict means a field line
+                        # went unparsed; resync so one glitch cannot phase-shift
+                        # every later event into impossible ranges
+                        if current_freeze:
+                            current_freeze = {}
                         current_freeze['start'] = float(start_match.group(1))
 
                     end_match = _RE_FREEZE_END.search(line)
@@ -2080,9 +2096,12 @@ class PixelProbe:
                     dur_match = _RE_FREEZE_DURATION.search(line)
                     if dur_match:
                         current_freeze['duration'] = float(dur_match.group(1))
-                        # freeze_duration is the last field emitted per event
-                        if 'start' in current_freeze:
-                            freeze_events.append(current_freeze)
+
+                    # ffmpeg emits freeze_start, then freeze_duration, then
+                    # freeze_end - close the event only once all three are in,
+                    # so an end line cannot leak into the next event's dict
+                    if len(current_freeze) == 3:
+                        freeze_events.append(current_freeze)
                         current_freeze = {}
 
                 # Parse blackdetect events
@@ -2201,7 +2220,9 @@ class PixelProbe:
         
         # Stage 2: Temporal outlier detection (for files > 1GB)
         if file_size_gb > 1.0:
-            temporal_corrupted, temporal_details, temporal_warnings = self._check_temporal_outliers(file_path, duration)
+            temporal_corrupted, temporal_details, temporal_warnings, temporal_notes = \
+                self._check_temporal_outliers(file_path, duration)
+            has_notes = bool(temporal_notes)
             enhanced_output.append("Stage 2: Temporal outlier detection")
             if temporal_corrupted:
                 is_corrupted = True
@@ -2210,9 +2231,17 @@ class PixelProbe:
             elif temporal_warnings:
                 warning_details.extend([f"Stage 2: {detail}" for detail in temporal_warnings])
                 enhanced_output.append(f"  Result: WARNING - {'; '.join(temporal_warnings)}")
+            elif temporal_notes:
+                # No verdict was reached (timeouts / under-sampling) - never
+                # claim PASSED for a check that did not measure the file
+                enhanced_output.append(f"  Result: INCOMPLETE - {'; '.join(temporal_notes)}")
+                temporal_notes = []
             else:
                 enhanced_output.append("  Result: PASSED")
+            for note in temporal_notes:
+                enhanced_output.append(f"  Note: {note}")
         else:
+            has_notes = False
             enhanced_output.append("Stage 2: Skipped (file < 1GB)")
         
         # Stage 3: Multi-point sampling for large files
@@ -2242,7 +2271,7 @@ class PixelProbe:
             enhanced_output.append("  Result: PASSED")
         
         enhanced_output.append(f"=== Enhanced Analysis Complete: {'CORRUPTED' if is_corrupted else 'CLEAN'} ===")
-        return is_corrupted, corruption_details, enhanced_output, warning_details
+        return is_corrupted, corruption_details, enhanced_output, warning_details, has_notes
     
     def _check_frame_integrity(self, file_path):
         """Verify frame count matches expected count based on duration and framerate"""
@@ -2316,20 +2345,26 @@ class PixelProbe:
         (fades and title cards), which is where vertical-line repetition is
         legitimately highest.
 
-        TOUT (temporal outliers) marks corruption. VREP (vertical line
-        repetition) only warns: measured against real damage it does not
-        discriminate -- clean flat/graphic content scores higher than a file with
-        genuine decoder-concealed corruption, because signalstats is analog-tape
-        QC tooling and high VREP is expected in born-digital video.
+        TOUT (temporal outliers) and VREP (vertical line repetition) both only
+        warn: measured against real damage neither discriminates. Clean
+        flat/graphic content scores higher on VREP than a file with genuine
+        decoder-concealed corruption, and film grain pushes TOUT past its
+        per-frame threshold on 46-100% of frames of a pristine Bluray episode,
+        because signalstats is analog-tape QC tooling.
 
         Args:
             duration: video duration in seconds if the caller already probed it;
                 probed here when omitted.
 
-        Returns: (is_corrupted, corruption_details, warning_details)
+        Returns: (is_corrupted, corruption_details, warning_details, info_notes)
+
+        info_notes carries operational outcomes (timeouts, under-sampling) that
+        describe this run of the check, not the file - they belong in scan
+        output, never in warning status.
         """
         corruption_details = []
         warning_details = []
+        info_notes = []
         is_corrupted = False
 
         try:
@@ -2337,7 +2372,7 @@ class PixelProbe:
                 duration = _probe_video_duration(file_path)
             if duration is None:
                 logger.info(f"Temporal outlier check skipped for {file_path}: no usable duration")
-                return is_corrupted, corruption_details, warning_details
+                return is_corrupted, corruption_details, warning_details, info_notes
 
             logger.info(f"Checking temporal outliers for {file_path} (duration: {duration:.1f}s)")
 
@@ -2381,8 +2416,8 @@ class PixelProbe:
                 detail = (f"Temporal outlier check sampled only {total_frames} frame(s), "
                           f"below the {TEMPORAL_MIN_FRAMES}-frame minimum")
                 logger.warning(f"{detail} for {file_path}")
-                warning_details.append(detail)
-                return is_corrupted, corruption_details, warning_details
+                info_notes.append(detail)
+                return is_corrupted, corruption_details, warning_details, info_notes
 
             # Guarded independently: truncated output can yield one metric without
             # the other, and signalstats emits them as separate metadata lines.
@@ -2394,18 +2429,18 @@ class PixelProbe:
             logger.info(f"Temporal analysis over {total_frames} sampled frames: "
                         f"{tout_percent:.1f}% outliers, {vrep_percent:.1f}% vertical repetition")
 
+            # Both metrics warn only - rationale in the docstring above
             if tout_percent > TEMPORAL_TOUT_PERCENT:
-                corruption_details.append(f"High temporal outliers detected: {tout_percent:.1f}% of frames")
-                is_corrupted = True
+                warning_details.append(f"High temporal outliers detected: {tout_percent:.1f}% of frames")
             if vrep_percent > TEMPORAL_VREP_PERCENT:
                 warning_details.append(
                     f"Elevated vertical line repetition: {vrep_percent:.1f}% of sampled frames")
             if timed_out:
-                warning_details.append("Temporal outlier check partially timed out")
+                info_notes.append("Temporal outlier check partially timed out")
 
         except subprocess.TimeoutExpired:
             # Raised by the duration probe; the per-window timeout is handled above.
-            warning_details.append("Temporal outlier check timed out")
+            info_notes.append("Temporal outlier check timed out")
         except OSError as e:
             # OSError includes SIGBUS and other memory-related errors
             logger.error(f"FFmpeg process crashed with OS error during temporal outlier check for {file_path}: {str(e)}")
@@ -2415,9 +2450,9 @@ class PixelProbe:
             # Don't hide an incomplete deep check at debug level: a swallowed
             # error here means this corruption signal did not actually run.
             logger.warning(f"Temporal outlier check did not complete for {file_path}: {str(e)}")
-            warning_details.append("Temporal outlier check did not complete")
+            info_notes.append("Temporal outlier check did not complete")
 
-        return is_corrupted, corruption_details, warning_details
+        return is_corrupted, corruption_details, warning_details, info_notes
     
     def _check_multipoint_sampling(self, file_path, duration=None):
         """Check beginning, middle, and end of large files for corruption

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.1] - 2026-08-18
+
+### Fixed
+
+- **Opus "corruption" false positives (81 of 84 corrupted files were this).** ffmpeg 8 emits a single `Error parsing Opus packet header` for the final packet at EOF on MKV files that ffmpeg 6 validates silently - reproduced on the flagged files, where a full audio decode also completes cleanly with exit code 0. The validation stderr classifier treated any line containing "error" as a corruption verdict even when ffmpeg exited 0, so every Opus-in-MKV file hit by the artifact was condemned. Opus packet-header parse notices with exit code 0 now join the NAL/DTS/reference-frame benign group and the file stays healthy. The benign path is bounded (`OPUS_EOF_NOTICE_MAX`, default 4, roughly one notice per Opus stream): a flood of parse errors means mid-stream damage that a `-c copy` validation cannot surface through the exit code, because audio is never decoded, and still condemns the file.
+- **High-TOUT verdict demoted from corruption to warning.** The one non-Opus video flagged this scan was condemned at "17% temporal outliers"; re-sampling the same windows put 46-100% of frames over the per-frame TOUT threshold while extracted frames were visually pristine - film grain drives the metric, exactly the failure mode that demoted VREP in 2.8.0. TOUT now warns instead of condemning. Decode errors, frame integrity, and freeze detection keep their existing verdicts.
+- **Freeze events no longer display a neighbor's end timestamp.** ffmpeg emits `freeze_start`, then `freeze_duration`, then `freeze_end`, but the parser closed each event on `freeze_duration`, so the following `freeze_end` landed in the next event's dict - producing impossible ranges like "5955.3s - 5691.4s (duration: 5.3s)". Events now close only when all three fields are present, and a new `freeze_start` over a partial event resyncs the parser so a single unparsed line cannot shift every later event. Display-only: the black-frame filter and totals always used start + duration, so no verdicts changed.
+- **Stage 2 operational noise no longer sets warning status.** "Temporal outlier check sampled only N frame(s)" and "partially timed out" describe a run of the check aborted by load (both sample windows exceeding the 30s timeout while ~19 concurrent HEVC decodes saturate the CPU), not the file - yet they accounted for 43 of the first 100 warnings in production. These outcomes are now recorded in the scan output (as `Result: INCOMPLETE` when no verdict was reached, so an aborted check can never read as `PASSED`) and the file's warning status is left to signals that actually measured it.
+- **Details views now surface the verdict before the raw tool output.** The results modal ordered sections corruption/scan output/error/warning, and the row and card fallbacks picked scan output over warning details, so a warning file's most useful line was buried under the full FFmpeg transcript. One shared priority (corruption, warning, error, scan output) now drives the table cells, mobile cards, and the modal, and the modal was redesigned around it: verdict sections render as severity-tinted cards up top and the raw transcript collapses behind a "Full scan transcript" disclosure (expanded only when it is the sole content). The modal is titled "Scan Details".
+
+### Security
+
+- **Scan-launch responses no longer echo caller-supplied directory paths (CodeQL py/reflective-xss, both open alerts).** `/api/scan-files-parallel` and `/api/scan-parallel` returned the validated request paths in the response body; the frontend never read the field. The field is simply removed; the paths remain in the server-side audit log where the 2.8.0 pass already put them.
+
 ## [2.8.0] - 2026-07-24
 
 ### Added
