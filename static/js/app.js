@@ -1334,7 +1334,7 @@ class TableManager {
         const status = fileStatus(file);
         const statusClass = status.cls;
         const statusText = status.text.toUpperCase();
-        const details = details;
+        const details = fileDetails(file);
         
         return `
             <div class="result-card">
@@ -1404,7 +1404,7 @@ class TableManager {
 
     renderRow(file) {
         const { cls: statusClass, text: statusText } = fileStatus(file);
-        const details = details;
+        const details = fileDetails(file);
         
         return `
             <tr>

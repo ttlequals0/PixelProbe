@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.2] - 2026-08-18
+
+### Fixed
+
+- **Results table and cards rendered nothing in 2.8.1.** The details-priority refactor left both render functions with `const details = details;`, a self-referential declaration that throws at first render, so the dashboard showed no items. The line now calls `fileDetails(file)` as intended. 2.8.1 was live for under an hour; no data was affected.
+
 ## [2.8.1] - 2026-08-18
 
 ### Fixed
