@@ -293,6 +293,7 @@ class PixelProbeClient {
         return response.data;
     }
     
+    // SQLite only: PostgreSQL deployments (the default) return 400.
     async vacuumDatabase() {
         const response = await this.client.post('/api/vacuum');
         return response.data;

@@ -24,7 +24,7 @@ services:
   # PostgreSQL database
   # BREAKING (v2.7.0): default moved from postgres:15 to postgres:18. An
   # existing postgres_data volume created by 15 will NOT start on 18 -- follow
-  # the migration guide in docs/DOCKER_SETUP.md (dump on 15, restore into 18)
+  # the migration guide in docs/docker-setup.md (dump on 15, restore into 18)
   # BEFORE pulling this compose file, or pin the image back to postgres:15-alpine.
   postgres:
     image: postgres:18-alpine
@@ -71,7 +71,7 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.7.0}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
     container_name: pixelprobe-app
     environment:
       # Security
@@ -143,7 +143,7 @@ services:
 
   # P1 Celery Worker for distributed task processing
   celery-worker:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.7.0}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:

@@ -1,24 +1,25 @@
-# PixelProbe Troubleshooting Guide
+# PixelProbe troubleshooting guide
 
-## Table of Contents
+## Table of contents
 
-- [Quick Diagnostics](#quick-diagnostics)
-- [Installation Issues](#installation-issues)
-- [Database Issues](#database-issues)
-- [Scanning Issues](#scanning-issues)
-- [Performance Issues](#performance-issues)
-- [Authentication Issues](#authentication-issues)
-- [Docker Issues](#docker-issues)
-- [Worker Issues](#worker-issues)
-- [Debug Mode](#debug-mode)
-- [Log Locations](#log-locations)
-- [Getting Help](#getting-help)
+- [Quick diagnostics](#quick-diagnostics)
+- [Installation issues](#installation-issues)
+- [Database issues](#database-issues)
+- [Scanning issues](#scanning-issues)
+- [Performance issues](#performance-issues)
+- [Authentication issues](#authentication-issues)
+- [Docker issues](#docker-issues)
+- [Worker issues](#worker-issues)
+- [Debug mode](#debug-mode)
+- [Log locations](#log-locations)
+- [Getting help](#getting-help)
+- [Additional resources](#additional-resources)
 
-## Quick Diagnostics
+## Quick diagnostics
 
 Run these commands first to identify the problem area:
 
-### Docker Installation
+### Docker installation
 
 ```bash
 # Check container status
@@ -40,7 +41,7 @@ curl http://localhost:5000/healthz
 curl http://localhost:5000/health -H "Authorization: Bearer your-token-here"
 ```
 
-### Manual Installation
+### Manual installation
 
 ```bash
 # Check services
@@ -57,9 +58,9 @@ tail -f /path/to/logs/pixelprobe.log
 psql -U pixelprobe -d pixelprobe -h localhost
 ```
 
-## Installation Issues
+## Installation issues
 
-### FFmpeg Not Found
+### FFmpeg not found
 
 **Symptom:** `FFmpeg not found in PATH` error
 
@@ -83,7 +84,7 @@ ffmpeg -version
 RUN apt-get install -y ffmpeg
 ```
 
-**Verify Installation:**
+**Verify installation:**
 ```bash
 # Docker
 docker exec pixelprobe-app ffmpeg -version
@@ -92,34 +93,36 @@ docker exec pixelprobe-app ffmpeg -version
 ffmpeg -version
 ```
 
-### ImageMagick Not Found
+### ImageMagick not found
 
-**Symptom:** `ImageMagick not found` or `convert: command not found`
+**Symptom:** `ImageMagick not found` or `magick: command not found` (or `convert: command not found` with legacy ImageMagick 6)
 
 **Solutions:**
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt-get install imagemagick libmagickcore-6.q16hdri-7-extra
-identify -version
+sudo apt-get install imagemagick libmagickcore-7.q16-10-extra
+magick -version
 ```
 
 **macOS:**
 ```bash
 brew install imagemagick
-identify -version
+magick -version
 ```
 
-**Verify Installation:**
+**Verify installation:**
 ```bash
 # Docker
-docker exec pixelprobe-app identify -version
+docker exec pixelprobe-app magick -version
 
 # Manual
-identify -version
+magick -version
 ```
 
-### Python Dependencies Installation Failed
+Note: PixelProbe images ship ImageMagick 7. The `magick` command is the primary CLI; `convert` and `identify` remain available as legacy aliases.
+
+### Python dependencies installation failed
 
 **Symptom:** `pip install -r requirements.txt` fails
 
@@ -146,9 +149,9 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Database Issues
+## Database issues
 
-### Database Connection Failed
+### Database connection failed
 
 **Symptom:** `could not connect to server` or `connection refused`
 
@@ -198,13 +201,13 @@ docker-compose logs postgres
 sudo tail -f /var/log/postgresql/postgresql-18-main.log
 ```
 
-### Database Table Missing
+### Database table missing
 
 **Symptom:** `no such table: scan_results` or `relation does not exist`
 
 **Solution:**
 
-Tables are created automatically on first run. If missing:
+Tables are created automatically on first run, and schema migrations run automatically at startup. If tables are still missing:
 
 ```bash
 # Docker
@@ -214,7 +217,9 @@ docker exec pixelprobe-app python tools/fix_database_schema.py
 python tools/fix_database_schema.py
 ```
 
-### Connection Pool Exhausted
+Note: `tools/fix_database_schema.py` only repairs missing tables. Its attempt to re-run migrations silently no-ops (the functions it imports from `app` no longer exist), which is harmless because migrations already run at every startup.
+
+### Connection pool exhausted
 
 **Symptom:** `TimeoutError: QueuePool limit` or `no more connections available`
 
@@ -229,11 +234,14 @@ SHOW max_connections;
 
 **Solutions:**
 
-1. **Reduce MAX_WORKERS:**
+1. **Reduce pool settings:**
 ```bash
-# Total connections = 60 + MAX_WORKERS
-# Keep under PostgreSQL max_connections (default: 100)
-MAX_WORKERS=10  # Reduce from higher value
+# Each process holds up to DB_POOL_SIZE + DB_MAX_OVERFLOW connections
+# (defaults: 5 + 10 = 15). With 4 gunicorn workers that is
+# 4 x (5 + 10) = 60 connections, plus one pool per Celery worker child.
+# Keep the total under PostgreSQL max_connections (default: 100).
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=10
 ```
 
 2. **Increase PostgreSQL max_connections:**
@@ -252,7 +260,7 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c \
    ORDER BY query_start;"
 ```
 
-### Database Growth Too Large
+### Database growth too large
 
 **Symptom:** Database size growing rapidly
 
@@ -285,12 +293,17 @@ docker exec pixelprobe-app python tools/data_retention.py
 
 3. **Vacuum database:**
 ```bash
+# Via the API
+curl -X POST http://localhost:5000/api/maintenance/vacuum \
+  -H "Authorization: Bearer $TOKEN"
+
+# Or directly against PostgreSQL
 docker exec pixelprobe-postgres vacuumdb -U pixelprobe -d pixelprobe --analyze
 ```
 
-## Scanning Issues
+## Scanning issues
 
-### No Files Found During Scan
+### No files found during scan
 
 **Symptom:** `No valid files provided for scanning` or `0 files discovered`
 
@@ -334,25 +347,34 @@ chown -R 1000:1000 /path/to/media  # If needed
 
 4. **Verify path not excluded:**
 ```bash
-# Check exclusions in web UI: Tools > Exclusions
+# Check exclusions in web UI: Exclusions (sidebar)
 # Or check environment:
 echo $EXCLUDED_PATHS
 ```
 
-### Scan Stuck or Not Progressing
+### Scan stuck or not progressing
 
 **Symptom:** Scan progress doesn't update or stays at 0%
+
+**Triage first: is it actually stuck?**
+
+```bash
+curl http://localhost:5000/api/scan-status \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Since v2.7.3, `last_update` is a liveness heartbeat: it advances every ~120 seconds while workers are alive, even if `files_processed` is flat. A single large movie can take 30-60 minutes to validate, so a flat `files_processed` with an advancing `last_update` is normal, not a stuck scan. Only treat the scan as stuck when `last_update` itself stops moving.
 
 **Diagnosis:**
 ```bash
 # Check worker logs
 docker-compose logs celery-worker --tail=100
 
-# Check Redis queue
-docker exec pixelprobe-redis redis-cli LLEN celery
+# Check Redis queue depth (the queue is named "pixelprobe")
+docker exec pixelprobe-redis valkey-cli LLEN pixelprobe
 
 # Check active tasks
-docker exec pixelprobe-celery-worker celery -A celery_config inspect active
+docker exec pixelprobe-celery-worker celery -A app.celery inspect active
 ```
 
 **Solutions:**
@@ -361,17 +383,25 @@ docker exec pixelprobe-celery-worker celery -A celery_config inspect active
 ```bash
 docker-compose restart celery-worker
 ```
+Restarting a worker mid-scan is safe: revival is automatic. A sweeper runs every 5 minutes and re-dispatches a scan's chunks when its heartbeat is older than `CHUNK_REVIVE_STALENESS_SECS` (default 600 seconds), up to 3 attempts. Wait 10-15 minutes before intervening further.
 
-2. **Check Redis is running:**
+2. **Check Redis is running** (the redis container ships Valkey, so use `valkey-cli`):
 ```bash
 docker-compose ps redis
-docker exec pixelprobe-redis redis-cli ping  # Should return PONG
+docker exec pixelprobe-redis valkey-cli ping  # Should return PONG
 ```
 
-3. **Clear stuck tasks:**
+3. **Run scan recovery:**
 ```bash
-# Flush Redis queue (WARNING: cancels all tasks)
-docker exec pixelprobe-redis redis-cli FLUSHDB
+# Cleans up stuck scan state without destroying data
+curl -X POST http://localhost:5000/api/scan/recovery \
+  -H "Authorization: Bearer $TOKEN"
+# (alias: POST /api/force-cleanup-scan)
+```
+To cancel the scan outright instead:
+```bash
+curl -X POST http://localhost:5000/api/cancel-scan \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 4. **Check database locks:**
@@ -379,11 +409,38 @@ docker exec pixelprobe-redis redis-cli FLUSHDB
 SELECT * FROM pg_locks WHERE NOT granted;
 ```
 
-### High False Positive Rate
+5. **Flush the Redis queue (last resort):**
+```bash
+# WARNING: destroys all queued chunks and progress keys.
+# Only use if /api/scan/recovery did not help.
+docker exec pixelprobe-redis valkey-cli FLUSHDB
+```
+
+### Stuck scans, revival, and recovery
+
+A sweeper job runs every 5 minutes and handles stalled scans automatically. Its branches, in order:
+
+1. **Backstop finalize:** if all chunks completed but the finalize step died, the sweeper finishes the scan.
+2. **Revival:** if the heartbeat is older than `CHUNK_REVIVE_STALENESS_SECS` (default 600 seconds) and the scan still has active chunk rows, the sweeper re-dispatches the orphaned chunks instead of crashing the scan (up to 3 attempts per scan). Discovery-phase scans are not revivable.
+3. **Crash:** the scan is marked crashed when any of these hold:
+   - no update for more than 30 minutes, or
+   - no update for more than 5 minutes and the Celery task is gone, or
+   - the scan started more than 30 minutes ago with no updates at all.
+4. **Orphaned-row reclaim:** when no scan is active, files left in `scanning` state by a dead worker are reclaimed to `pending`.
+
+Log lines to grep for:
+
+```bash
+docker-compose logs celery-worker pixelprobe | grep -E "Revived scan|Marking stuck scan|Reclaimed"
+```
+
+At startup, active scans are given `STUCK_SCAN_STARTUP_GRACE_SECS` (default 1800 seconds) before being marked crashed, so a scan that was healthy just before a restart is left running for the sweeper to revive.
+
+### High false positive rate
 
 **Symptom:** Many valid files marked as corrupted
 
-**Possible Causes:**
+**Possible causes:**
 
 1. **Transient network issues** (for network storage)
 2. **Corrupt media files** (actually corrupt)
@@ -393,21 +450,40 @@ SELECT * FROM pg_locks WHERE NOT granted;
 
 1. **Check ImageMagick policies:**
 ```bash
-docker exec pixelprobe-app cat /etc/ImageMagick-6/policy.xml | grep -A2 PDF
+docker exec pixelprobe-app cat /etc/ImageMagick-7/policy.xml | grep -A2 PDF
 ```
 
-2. **Rescan specific files:**
-- Select files in web UI
-- Click "Rescan"
+2. **List files with errors:**
+```bash
+curl http://localhost:5000/api/error-files \
+  -H "Authorization: Bearer $TOKEN"
+```
 
-3. **Enable deep scan for verification:**
-- Tools > Deep Analysis
+3. **Rescan specific files:**
+- Select files in web UI and click "Rescan", or via the API:
+```bash
+# Reset selected files for rescan (by file IDs; type can also be
+# "corrupted", "error", or "all")
+curl -X POST http://localhost:5000/api/reset-for-rescan \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type": "selected", "file_ids": [1, 2, 3]}'
 
-4. **Mark false positives as good:**
+# Reset by exact file path(s)
+curl -X POST http://localhost:5000/api/reset-files-by-path \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"file_paths": ["/media/movies/example.mkv"]}'
+```
+
+4. **Run a deeper verification:**
+- Integrity Check (sidebar)
+
+5. **Mark false positives as good:**
 - Select files
 - Click "Mark as Good"
 
-### Scan Running but No Results
+### Scan running but no results
 
 **Symptom:** Scan shows progress but no results in dashboard
 
@@ -418,7 +494,12 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c \
   "SELECT COUNT(*) FROM scan_results;"
 
 # Check scan state
-curl http://localhost:5000/api/scan-status
+curl http://localhost:5000/api/scan-status \
+  -H "Authorization: Bearer $TOKEN"
+
+# Check why files are still pending
+curl http://localhost:5000/api/diagnose-pending-files \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 **Solutions:**
@@ -430,16 +511,52 @@ curl http://localhost:5000/api/scan-status
 docker-compose logs pixelprobe | grep -i database
 ```
 
-3. **Verify write permissions:**
+3. **Verify the database is writable:**
 ```bash
 docker exec pixelprobe-postgres psql -U pixelprobe -c \
-  "INSERT INTO scan_results (file_path, is_corrupted)
-   VALUES ('/test', false);"
+  "SELECT pg_is_in_recovery();"
+# Should return f (false). Then confirm writes work without touching real data:
+docker exec pixelprobe-postgres psql -U pixelprobe -c \
+  "CREATE TEMP TABLE _probe(x int); DROP TABLE _probe;"
 ```
 
-## Performance Issues
+### Files show healthy with N/A scan details
 
-### Slow Scanning Speed
+**Symptom:** Files display as healthy in the UI but show "N/A" for the tool details and scan date.
+
+**Cause:** The database row was created when the file was discovered but the file was never actually scanned. Historically this came from a pre-v2.2.59 chunk query bug; today it means a worker was killed mid-chunk or a scan crashed before those files were processed.
+
+**Diagnosis:**
+```bash
+curl http://localhost:5000/api/diagnose-incomplete-scans \
+  -H "Authorization: Bearer $TOKEN"
+```
+Or run the read-only queries in `scripts/find_incomplete_scans.sql` against PostgreSQL.
+
+**Fix:**
+```bash
+# Reset the affected rows to pending
+curl -X POST http://localhost:5000/api/reset-incomplete-scans \
+  -H "Authorization: Bearer $TOKEN"
+
+# Then scan the pending files
+curl -X POST http://localhost:5000/api/force-scan-pending \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**SQL fallback** (only if the API is unavailable):
+```sql
+UPDATE scan_results
+SET scan_status = 'pending',
+    is_corrupted = NULL,
+    marked_as_good = false,
+    scan_output = NULL
+WHERE scan_status = 'completed' AND scan_date IS NULL;
+```
+
+## Performance issues
+
+### Slow scanning speed
 
 **Symptom:** Scans taking too long to complete
 
@@ -477,6 +594,7 @@ volumes:
 ```bash
 BATCH_SIZE=200  # Increase from 100
 ```
+Note: `BATCH_SIZE`, `MAX_OUTPUT_SIZE`, and `OUTPUT_ROTATION_ENABLED` must be set on the celery-worker service to affect scans; setting them only on the pixelprobe service has no effect on scanning.
 
 5. **Allocate more resources:**
 ```yaml
@@ -488,7 +606,7 @@ celery-worker:
         memory: 8G
 ```
 
-### High Memory Usage
+### High memory usage
 
 **Symptom:** Out of memory errors or system slowdown
 
@@ -509,7 +627,7 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c \
 MAX_WORKERS=8  # Reduce from higher value
 ```
 
-2. **Enable output rotation:**
+2. **Enable output rotation** (set on the celery-worker service, not just pixelprobe):
 ```bash
 OUTPUT_ROTATION_ENABLED=true
 MAX_OUTPUT_SIZE=10000
@@ -534,7 +652,7 @@ pixelprobe:
 REDIS_MAX_MEMORY=4gb  # Increase from 2gb
 ```
 
-### Database Queries Slow
+### Database queries slow
 
 **Symptom:** Web interface slow to load or timeouts
 
@@ -549,9 +667,14 @@ LIMIT 10;
 
 **Solutions:**
 
-1. **Create indexes** (should be automatic):
+1. **Verify indexes exist** (they are created automatically at startup by the migration runner):
 ```bash
-docker exec pixelprobe-app python scripts/create_indexes.py
+docker exec pixelprobe-postgres psql -U pixelprobe -c "\di"
+```
+If an index is genuinely missing, create it manually without blocking writes:
+```sql
+CREATE INDEX CONCURRENTLY idx_scan_results_scan_status
+  ON scan_results (scan_status);
 ```
 
 2. **Vacuum and analyze:**
@@ -565,9 +688,9 @@ ALTER SYSTEM SET shared_buffers = '2GB';
 SELECT pg_reload_conf();
 ```
 
-## Authentication Issues
+## Authentication issues
 
-### Cannot Create Admin Account
+### Cannot create admin account
 
 **Symptom:** Setup endpoint returns error or admin already exists
 
@@ -598,7 +721,7 @@ docker exec pixelprobe-postgres psql -U pixelprobe -d pixelprobe -c \
 docker-compose logs pixelprobe | grep SECRET_KEY
 ```
 
-### API Token Not Working
+### API token not working
 
 **Symptom:** `401 Unauthorized` with Bearer token
 
@@ -618,7 +741,7 @@ curl http://localhost:5000/api/stats \
 - Navigate to Account > API Tokens
 - Click "Generate Token"
 
-### Session Expired Too Quickly
+### Session expired too quickly
 
 **Symptom:** Logged out after short time
 
@@ -630,9 +753,9 @@ Sessions last 24 hours, with an additional 30-minute inactivity timeout. Being l
 2. **Check SECRET_KEY hasn't changed** (invalidates sessions)
 3. **Clear browser cookies and re-login**
 
-## Docker Issues
+## Docker issues
 
-### Containers Won't Start
+### Containers won't start
 
 **Symptom:** `docker-compose up` fails or containers exit
 
@@ -656,7 +779,8 @@ cat .env  # Verify SECRET_KEY and POSTGRES_PASSWORD are set
 2. **Check port conflicts:**
 ```bash
 # Check if ports are already in use
-sudo netstat -tlnp | grep :5001
+# (the app listens on 5000 by default; override with the PORT env variable)
+sudo netstat -tlnp | grep :5000
 sudo netstat -tlnp | grep :5432
 sudo netstat -tlnp | grep :6379
 ```
@@ -673,7 +797,7 @@ df -h
 docker system df
 ```
 
-### Permission Denied Errors
+### Permission denied errors
 
 **Symptom:** `Permission denied` accessing media files
 
@@ -699,7 +823,7 @@ ls -la /path/to/media
 sudo chown -R 1000:1000 /path/to/media
 ```
 
-### Volume Mount Issues
+### Volume mount issues
 
 **Symptom:** Files not visible in container
 
@@ -732,9 +856,9 @@ volumes:
   - /path/to/media:/media:ro,z
 ```
 
-## Worker Issues
+## Worker issues
 
-### Worker Not Processing Tasks
+### Worker not processing tasks
 
 **Symptom:** Scans queued but not executing
 
@@ -747,7 +871,11 @@ docker-compose ps celery-worker
 docker-compose logs celery-worker
 
 # Check registered tasks
-docker exec pixelprobe-celery-worker celery -A celery_config inspect registered
+docker exec pixelprobe-celery-worker celery -A app.celery inspect registered
+
+# Check worker status via the API
+curl http://localhost:5000/api/worker-status \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 **Solutions:**
@@ -757,9 +885,10 @@ docker exec pixelprobe-celery-worker celery -A celery_config inspect registered
 docker-compose restart celery-worker
 ```
 
-2. **Check Redis connection:**
+2. **Check Redis connection from the worker** (the app image has no redis-cli):
 ```bash
-docker exec pixelprobe-celery-worker redis-cli -h redis ping
+docker exec pixelprobe-celery-worker python -c \
+  "import redis; print(redis.Redis.from_url('redis://redis:6379/0').ping())"
 ```
 
 3. **Verify CELERY_BROKER_URL:**
@@ -769,7 +898,7 @@ celery-worker:
     CELERY_BROKER_URL: redis://redis:6379/0  # Must match pixelprobe
 ```
 
-### Worker Crashing
+### Worker crashing
 
 **Symptom:** `celery-worker exited with code 1` or constant restarts
 
@@ -803,9 +932,9 @@ CELERY_CONCURRENCY=2  # Reduce from higher value
 docker-compose logs celery-worker | grep -i database
 ```
 
-## Debug Mode
+## Debug mode
 
-### Enable Debug Logging
+### Enable debug logging
 
 **Docker:**
 ```yaml
@@ -826,7 +955,7 @@ export DATABASE_ECHO=true
 export CELERY_LOG_LEVEL=DEBUG
 ```
 
-### View Detailed Logs
+### View detailed logs
 
 ```bash
 # All logs with timestamps
@@ -842,7 +971,7 @@ docker-compose logs | grep -i warning
 docker-compose logs | grep "connection refused"
 ```
 
-### SQL Query Logging
+### SQL query logging
 
 Enable in .env:
 ```bash
@@ -854,9 +983,9 @@ View queries:
 docker-compose logs pixelprobe | grep SELECT
 ```
 
-## Log Locations
+## Log locations
 
-### Docker Logs
+### Docker logs
 
 ```bash
 # All containers
@@ -872,7 +1001,7 @@ docker logs pixelprobe-redis
 docker-compose logs > pixelprobe-logs.txt
 ```
 
-### Manual Installation Logs
+### Manual installation logs
 
 **Application logs:**
 ```bash
@@ -893,7 +1022,7 @@ sudo tail -f /var/log/postgresql/postgresql-18-main.log
 sudo tail -f /var/log/redis/redis-server.log
 ```
 
-### Log Retention
+### Log retention
 
 Docker logs can grow large. Configure log rotation:
 
@@ -908,11 +1037,11 @@ services:
         max-file: "3"
 ```
 
-## Getting Help
+## Getting help
 
 If you've tried the solutions above and still have issues:
 
-### 1. Gather Information
+### 1. Gather information
 
 Collect this information before asking for help:
 
@@ -941,7 +1070,7 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c \
   "SELECT version();"
 ```
 
-### 2. Search Existing Issues
+### 2. Search existing issues
 
 Search GitHub issues: https://github.com/ttlequals0/PixelProbe/issues
 
@@ -952,7 +1081,7 @@ Common search terms:
 - "permission denied"
 - "scan stuck"
 
-### 3. Create New Issue
+### 3. Create new issue
 
 If no existing issue matches your problem:
 
@@ -964,16 +1093,17 @@ If no existing issue matches your problem:
    - Error messages and logs
    - What you've already tried
 
-### 4. Community Support
+### 4. Community support
 
 - GitHub Discussions: https://github.com/ttlequals0/PixelProbe/discussions
-- Check README.md for additional resources
-- Review documentation: INSTALLATION.md, CONFIGURATION.md
+- Check the README for additional resources
+- Review documentation: [installation.md](installation.md), [configuration.md](configuration.md)
 
-## Additional Resources
+## Additional resources
 
-- [INSTALLATION.md](INSTALLATION.md) - Installation guide
-- [CONFIGURATION.md](CONFIGURATION.md) - Configuration reference
-- [README.md](README.md) - General documentation
-- [docs/DOCKER_SETUP.md](docs/DOCKER_SETUP.md) - Docker architecture
-- [docs/PERFORMANCE_TUNING.md](docs/PERFORMANCE_TUNING.md) - Performance guide
+- [installation.md](installation.md) - Installation guide
+- [configuration.md](configuration.md) - Configuration reference
+- [docker-setup.md](docker-setup.md) - Docker architecture
+- [performance-tuning.md](performance-tuning.md) - Performance guide
+- [glossary.md](glossary.md) - Terminology reference
+- [README](../README.md) - General documentation

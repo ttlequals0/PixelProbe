@@ -23,7 +23,6 @@ import time
 import json
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-from urllib.parse import urljoin
 
 
 class PixelProbeException(Exception):
@@ -66,8 +65,12 @@ class PixelProbeClient:
         })
     
     def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
-        """Make an HTTP request to the API"""
-        url = urljoin(self.base_url, endpoint)
+        """Make an HTTP request to the API.
+
+        Endpoint paths are appended to base_url (not urljoin'd), so a base
+        URL with a path prefix like https://host/pixelprobe is preserved.
+        """
+        url = self.base_url.rstrip('/') + endpoint
         kwargs.setdefault('timeout', self.timeout)
         
         try:
@@ -179,7 +182,7 @@ class PixelProbeClient:
         
         Args:
             page: Page number (starts at 1)
-            per_page: Results per page (max 500)
+            per_page: Results per page (no server-side maximum; -1 returns all results)
             scan_status: Filter by status (all, pending, scanning, completed, error)
             is_corrupted: Filter by corruption (all, true, false)
             
@@ -337,7 +340,11 @@ class PixelProbeClient:
         return response.json()
     
     def vacuum_database(self) -> Dict:
-        """Vacuum the database to optimize performance"""
+        """Vacuum the database to optimize performance.
+
+        SQLite only: PostgreSQL deployments (the default) return 400,
+        which this client raises as PixelProbeException.
+        """
         response = self._request('POST', '/api/vacuum')
         return response.json()
 

@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from pixelprobe.models import db, ScanResult
 from pixelprobe.media_checker import MediaChecker
-from app import create_app
+from app import app
 
 # Set up logging
 logging.basicConfig(
@@ -36,8 +36,7 @@ def fix_tile_data_false_positives(dry_run=True):
         dry_run (bool): If True, only show what would be done without making changes
     """
     # Create app context for database access
-    app = create_app()
-    
+        
     with app.app_context():
         # Initialize MediaChecker
         media_checker = MediaChecker()

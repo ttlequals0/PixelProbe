@@ -16,14 +16,13 @@ import argparse
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import create_app
+from app import app
 from pixelprobe.models import db, ScanResult
 from sqlalchemy import or_
 
 def reset_incomplete_scans(dry_run=False):
     """Find and reset files with incomplete scan data"""
     
-    app = create_app()
     with app.app_context():
         # Find files marked as completed but missing scan details
         # OR files marked as healthy/not corrupted but never actually scanned
