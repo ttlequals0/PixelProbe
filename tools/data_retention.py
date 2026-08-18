@@ -209,12 +209,15 @@ def get_retention_stats():
         return stats
 
 
-def run_all_retention_policies():
+def run_all_retention_policies(dry_run=False):
     """
     Execute all retention policies in sequence.
 
     NOTE: scan_output archival is DISABLED to preserve all scan result details.
     Only reports and scan states are cleaned up.
+
+    Args:
+        dry_run: report what would be deleted without deleting anything
 
     Returns:
         dict: Results from each retention policy
@@ -234,6 +237,17 @@ def run_all_retention_policies():
         logger.info(f"Before cleanup:")
         logger.info(f"  - Reports to delete: {stats_before['reports']['total']:,}")
         logger.info(f"  - Scan states to delete: {stats_before['scan_states']['total']:,}")
+
+        if dry_run:
+            logger.info("DRY RUN - nothing deleted")
+            return {
+                'success': True,
+                'dry_run': True,
+                'outputs_archived': 0,
+                'reports_deleted': 0,
+                'states_deleted': 0,
+                'stats_before': stats_before
+            }
 
         # Run cleanup policies (scan_output archival DISABLED - keeps all scan results data)
         # outputs_archived = cleanup_scan_outputs()  # DISABLED - keeps full scan_output forever
@@ -264,6 +278,12 @@ def run_all_retention_policies():
 
 if __name__ == '__main__':
     # Can be run standalone for manual execution
+    import argparse
+    parser = argparse.ArgumentParser(description='Run data retention cleanup')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='report what would be deleted without deleting anything')
+    args = parser.parse_args()
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -272,11 +292,12 @@ if __name__ == '__main__':
     # Initialize Flask app context for database access
     from app import app
     with app.app_context():
-        result = run_all_retention_policies()
+        result = run_all_retention_policies(dry_run=args.dry_run)
 
         if result['success']:
-            print("\n✅ Data retention cleanup completed successfully")
+            print("\nData retention cleanup " +
+                  ("dry run finished (nothing deleted)" if args.dry_run else "completed successfully"))
             sys.exit(0)
         else:
-            print(f"\n❌ Data retention cleanup failed: {result.get('error')}")
+            print(f"\nData retention cleanup failed: {result.get('error')}")
             sys.exit(1)

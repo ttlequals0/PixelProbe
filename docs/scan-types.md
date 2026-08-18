@@ -1,11 +1,11 @@
-# PixelProbe Scan Types Documentation
+# PixelProbe scan types
 
 ## Overview
 PixelProbe has several scan types for different corruption-detection workflows.
 
-## Scan Types
+## Scan types
 
-### 1. Full Scan (`full`)
+### 1. Full scan (`full`)
 **Endpoint**: `POST /api/scan`
 **Purpose**: Complete scan of specified directories
 **When to use**: 
@@ -14,16 +14,19 @@ PixelProbe has several scan types for different corruption-detection workflows.
 - Periodic comprehensive checks
 
 **How it works**:
-1. **Phase 1 - Discovery**: Recursively walks through all specified directories to find media files
-2. **Phase 2 - Adding**: Adds discovered files to database, checks for duplicates
-3. **Phase 3 - Scanning**: Performs corruption detection on each file using FFmpeg/ImageMagick
+1. **Phase 1 - discovery**: Recursively walks through all specified directories to find media files
+2. **Phase 2 - adding**: Adds discovered files to database, checks for duplicates
+3. **Phase 3 - scanning**: Splits the work into chunks and distributes them across all available Celery workers; each chunk performs corruption detection with FFmpeg, PIL/Pillow, and ImageMagick
 
 **Features**:
 - Discovers all media files in specified paths
 - Adds new files to database
 - Updates existing file records
 - Performs deep corruption checking
+- Chunk-distributed across Celery workers with per-chunk progress tracking
 - Supports force_rescan option to re-check previously scanned files
+
+**Deprecated alias**: `POST /api/scan-parallel` runs the identical chunk-distributed engine and differs only in response shape. It is kept for API compatibility and will be removed in a future major release; use `/api/scan`.
 
 **Example**:
 ```json
@@ -34,41 +37,7 @@ POST /api/scan
 }
 ```
 
-### 2. Parallel Scan (`parallel`)
-**Endpoint**: `POST /api/scan-parallel`
-**Purpose**: High-performance scanning using multiple workers
-**When to use**:
-- Large media libraries (100k+ files)
-- When speed is critical
-- Multi-core systems with available resources
-
-**How it works**:
-1. Divides work into chunks based on available workers
-2. Distributes chunks across Celery workers
-3. Each worker processes its chunk independently
-4. Results are aggregated in real-time
-
-**Features**:
-- Automatically detects number of available workers
-- Dynamic chunk size calculation
-- Linear performance scaling with worker count
-- Real-time progress tracking per chunk
-- Worker utilization monitoring
-
-**Performance**:
-- 8 workers: ~267% faster than sequential
-- 16 workers: ~533% faster than sequential
-
-**Example**:
-```json
-POST /api/scan-parallel
-{
-  "directories": ["/media"],
-  "force_rescan": false
-}
-```
-
-### 3. Pending Scan (`pending`)
+### 2. Pending scan (`pending`)
 **Endpoint**: `POST /api/force-scan-pending`
 **Purpose**: Scan only files marked as pending
 **When to use**:
@@ -93,7 +62,7 @@ POST /api/scan-parallel
 POST /api/force-scan-pending
 ```
 
-### 4. File Changes Scan (`file_changes`)
+### 3. File changes scan (`file_changes`)
 **Endpoint**: `GET/POST /api/file-changes`
 **Purpose**: Verify stored content hashes and classify what changed (rolling integrity queue)
 **When to use**:
@@ -118,7 +87,9 @@ POST /api/file-changes
 {"time_budget_minutes": 10}
 ```
 
-### 5. Cleanup (`cleanup`)
+`time_budget_minutes` must be a positive integer and is only valid for `file_changes` scans and schedules; supplying it for any other scan type returns 400.
+
+### 4. Cleanup (`cleanup`)
 **Endpoint**: `POST /api/cleanup-orphaned`
 **Purpose**: Remove database entries for deleted files
 **When to use**:
@@ -127,8 +98,8 @@ POST /api/file-changes
 - To keep database in sync with filesystem
 
 **How it works**:
-1. **Phase 1 - Identify Orphans**: Checks each database entry against filesystem
-2. **Phase 2 - Cleanup**: Removes entries for non-existent files
+1. **Phase 1 - identify orphans**: Checks each database entry against filesystem
+2. **Phase 2 - cleanup**: Removes entries for non-existent files
 3. Reports number of orphaned entries removed
 
 **Features**:
@@ -142,7 +113,7 @@ POST /api/file-changes
 POST /api/cleanup-orphaned
 ```
 
-### 6. Single File Scan (`single`)
+### 5. Single file scan (`single`)
 **Endpoint**: `POST /api/scan-file`
 **Purpose**: Scan a specific file
 **When to use**:
@@ -170,7 +141,7 @@ POST /api/scan-file
 }
 ```
 
-### 7. Scheduled Scan (`scheduled`)
+### 6. Scheduled scan (`scheduled`)
 **Purpose**: Automated scanning at configured intervals
 **When to use**:
 - Nightly/weekly maintenance
@@ -188,7 +159,7 @@ POST /api/scan-file
 - Via database schedules
 - Cron expressions supported
 
-**Example Schedule**:
+**Example schedule**:
 ```python
 # Daily at 2 AM
 cron_expression = "0 2 * * *"
@@ -196,123 +167,122 @@ scan_type = "file_changes"
 scan_paths = ["/media"]
 ```
 
-## Scan Phases
+## Scan phases
 
-All multi-file scan types follow a three-phase approach:
+All directory scans run in three phases:
 
-### Phase 1: Discovery
+### Phase 1: discovery
 - Walks directories to find media files
 - Filters by supported extensions
 - Excludes configured paths
 - Builds list of files to process
 
-### Phase 2: Adding
+### Phase 2: adding
 - Adds discovered files to database
 - Checks for duplicates
 - Sets initial status to 'pending'
 - Updates file metadata
 
-### Phase 3: Scanning
+### Phase 3: scanning
 - Performs actual corruption detection
-- Uses FFmpeg for video files
-- Uses ImageMagick for image files
+- Uses FFmpeg for video and audio files
+- Uses PIL/Pillow and ImageMagick for image files
 - Updates corruption status
 - Stores scan results
 
-## Performance Considerations
+## Performance considerations
 
-### Scan Type Selection
-- **Small libraries (<10k files)**: Use full scan
-- **Large libraries (>100k files)**: Use parallel scan
+### Scan type selection
+- **Full scan**: initial setup and periodic comprehensive checks (any library size; work is chunk-distributed across workers)
 - **Regular maintenance**: Use file_changes scan
 - **After deletions**: Use orphan cleanup
 - **Selective scanning**: Use pending scan
 
-### Resource Usage
-- **Full/Parallel scans**: High CPU/IO usage
+### Resource usage
+- **Full scans**: High CPU/IO usage
 - **File changes**: Moderate usage
 - **Orphan cleanup**: Low usage
 - **Pending scan**: Depends on pending count
 
-### Optimization Tips
+### Optimization tips
 - Use force_rescan sparingly; it re-checks files that already have results.
-- On powerful systems, increase the worker count for parallel scans.
-- For scheduling cadence, see Best Practices below.
+- On powerful systems, increase the Celery worker count to scan more chunks concurrently.
+- For scheduling cadence, see Best practices below.
 
-## Scan Status Values
+## Scan status values
 
 Files can have the following scan statuses:
 - `pending`: Discovered but not yet scanned
 - `scanning`: Currently being processed
 - `completed`: Scan finished successfully
 - `error`: Scan failed with error
-- `skipped`: File skipped (unsupported format, etc.)
+- `skipped`: File skipped - rare; only set by the scan recovery path, not by normal scans
 
-## Corruption Detection
+## Corruption detection
 
-### Video Files (FFmpeg)
+### Video files (FFmpeg)
 - Decodes video streams
 - Checks for codec errors
 - Validates container format
 - Detects truncated files
 - Reports specific error types
 
-### Image Files (ImageMagick)
-- Validates image headers
-- Checks for decode errors
-- Detects truncated images
-- Validates color profiles
+### Audio files (FFmpeg)
+- First-class category with its own extension list
+- Decodes audio streams via FFmpeg to detect corruption and truncation
+
+### Image files (PIL/Pillow and ImageMagick)
+- PIL/Pillow verifies and decodes the image (pillow-heif adds HEIC/HEIF support)
+- ImageMagick decodes full pixel data, not just headers
+- Detects truncated images and decode errors
 - Reports corruption details
 
-### Detection Levels
+### Detection levels
 - **Healthy**: File passes all checks
 - **Warning**: Minor issues (e.g., 10-bit HEVC)
 - **Corrupted**: Definite corruption detected
 - **Error**: Could not scan file
 
-## API Response Examples
+## API response examples
 
-### Successful Scan Start
+### Successful scan start (`POST /api/scan`)
 ```json
 {
-  "status": "success",
-  "message": "Scan started successfully",
-  "scan_id": "abc-123-def",
-  "scan_type": "full",
-  "estimated_files": 10000
+  "status": "queued",
+  "scan_id": "uuid-string",
+  "task_id": "celery-task-id",
+  "message": "Scan queued successfully using Celery task queue",
+  "celery_enabled": true
 }
 ```
 
-### Scan Status
+### Scan status (`GET /api/scan-status`, abbreviated)
 ```json
 {
-  "is_active": true,
+  "current": 5000,
+  "total": 10000,
+  "file": "/media/movie.mp4",
+  "status": "scanning",
+  "is_running": true,
   "phase": "scanning",
   "phase_number": 3,
-  "files_processed": 5000,
-  "estimated_total": 10000,
-  "percentage": 50,
-  "current_file": "/media/movie.mp4",
-  "eta": "10 minutes"
+  "total_phases": 3,
+  "progress_message": "Phase 3 of 3: Scanning files - 5000 of 10,000 files",
+  "eta": "2025-08-25T11:15:00+00:00",
+  "files_per_second": 4.2
 }
 ```
 
-### Scan Conflict
+### Scan conflict (HTTP 409)
 ```json
 {
-  "error": "Another scan is already in progress",
-  "status_code": 409,
-  "active_scan": {
-    "type": "full",
-    "started": "2025-08-25T10:00:00Z",
-    "progress": 75
-  }
+  "error": "A scan is already in progress (Phase: scanning, Files processed: 5000). Please wait for it to complete or use /api/cancel-scan to stop it."
 }
 ```
 
-## Best Practices
+## Best practices
 
-- Initial setup: run a full scan on all media directories (parallel for large libraries).
+- Initial setup: run a full scan on all media directories.
 - Ongoing: schedule daily file_changes scans, weekly orphan cleanup, and a monthly full scan for critical data.
 - Run heavy scans during off-hours; limit worker count during business hours.
 - Re-scan error files individually and mark false positives as good.

@@ -1,40 +1,42 @@
-# PixelProbe Installation Guide
+# PixelProbe installation guide
 
 How to install PixelProbe, either with Docker (recommended) or manually.
 
-## Table of Contents
+## Table of contents
 
 - [Prerequisites](#prerequisites)
-- [Quick Start with Docker](#quick-start-with-docker)
-- [Manual Installation](#manual-installation)
-- [First-Time Setup](#first-time-setup)
+- [Quick start with Docker](#quick-start-with-docker)
+- [Manual installation](#manual-installation)
+- [First-time setup](#first-time-setup)
 - [Verification](#verification)
-- [Next Steps](#next-steps)
+- [Next steps](#next-steps)
 
 ## Prerequisites
 
-### For Docker Installation (Recommended)
+### For Docker installation (recommended)
 
 - **Docker**: Version 20.10 or higher
 - **Docker Compose**: Version 2.0 or higher
 - **System Requirements**:
   - 2 CPU cores minimum (4+ recommended)
-  - 4 GB RAM minimum (8 GB recommended for large libraries)
+  - 4 GB RAM minimum (8 GB recommended for large libraries). With only 4 GB,
+    lower CELERY_CONCURRENCY to 2 - the default of 4 slots budgets roughly
+    2 GB per worker child
   - 10 GB free disk space for database
   - Additional space for media files
 
-### For Manual Installation
+### For manual installation
 
 - **Operating System**: Ubuntu 20.04+, Debian 11+, macOS 11+, or Windows 10+ (WSL2)
-- **Python**: 3.9 or higher
+- **Python**: 3.10-3.12 (3.12 recommended; the Docker image ships 3.12)
 - **PostgreSQL**: 15 or higher
-- **Redis**: 7.0 or higher
+- **Redis**: 7.0 or higher, or Valkey (the Docker stack uses valkey/valkey:9-alpine)
 - **System Tools**:
-  - FFmpeg: 4.4 or higher
+  - FFmpeg: 4.4 or higher (the Docker image ships 8.0.1)
   - ImageMagick: 6.9.10+ or 7.0+
   - Git: 2.25 or higher
 
-#### Installing System Dependencies
+#### Installing system dependencies
 
 **Ubuntu/Debian:**
 ```bash
@@ -62,18 +64,18 @@ brew services start redis
 # Install WSL2 with Ubuntu 22.04, then follow Ubuntu instructions above
 ```
 
-## Quick Start with Docker
+## Quick start with Docker
 
-This is the recommended installation method for most users.
+Recommended for most users.
 
-### 1. Clone the Repository
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/ttlequals0/PixelProbe.git
 cd PixelProbe
 ```
 
-### 2. Configure Environment Variables
+### 2. Configure environment variables
 
 Copy the example environment file and edit it:
 
@@ -111,7 +113,7 @@ SCAN_PATHS=/media
 # Timezone (default: UTC)
 TZ=America/New_York
 
-# Performance tuning (see CONFIGURATION.md for details)
+# Performance tuning (see configuration.md for details)
 MAX_WORKERS=10
 CELERY_CONCURRENCY=4
 BATCH_SIZE=100
@@ -120,7 +122,7 @@ BATCH_SIZE=100
 PORT=5000
 ```
 
-### 3. Start the Application
+### 3. Start the application
 
 ```bash
 docker-compose up -d
@@ -133,7 +135,7 @@ This will:
 4. Start PixelProbe web application
 5. Start Celery worker for background processing
 
-### 4. Verify Containers are Running
+### 4. Verify containers are running
 
 ```bash
 docker-compose ps
@@ -148,7 +150,7 @@ pixelprobe-app            Up (healthy)
 pixelprobe-celery-worker  Up
 ```
 
-### 5. View Logs
+### 5. View logs
 
 ```bash
 # All containers
@@ -159,18 +161,18 @@ docker-compose logs -f pixelprobe-app
 docker-compose logs -f pixelprobe-celery-worker
 ```
 
-## Manual Installation
+## Manual installation
 
 For running PixelProbe without Docker.
 
-### 1. Clone the Repository
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/ttlequals0/PixelProbe.git
 cd PixelProbe
 ```
 
-### 2. Set Up PostgreSQL Database
+### 2. Set up PostgreSQL database
 
 ```bash
 # Create database user and database
@@ -182,7 +184,7 @@ GRANT ALL PRIVILEGES ON DATABASE pixelprobe TO pixelprobe;
 EOF
 ```
 
-### 3. Set Up Redis
+### 3. Set up Redis
 
 Redis should already be running if installed via package manager. Verify:
 
@@ -191,7 +193,7 @@ redis-cli ping
 # Should return: PONG
 ```
 
-### 4. Create Python Virtual Environment
+### 4. Create Python virtual environment
 
 ```bash
 # Create virtual environment
@@ -203,14 +205,14 @@ source venv/bin/activate  # Linux/macOS
 .\venv\Scripts\activate  # Windows
 ```
 
-### 5. Install Python Dependencies
+### 5. Install Python dependencies
 
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 6. Configure Environment Variables
+### 6. Configure environment variables
 
 ```bash
 cp .env.example .env
@@ -220,6 +222,7 @@ nano .env  # Edit configuration
 Set the following in `.env`:
 ```bash
 SECRET_KEY=your-generated-secret-key
+FLASK_ENV=production
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=pixelprobe
@@ -230,7 +233,14 @@ CELERY_RESULT_BACKEND=redis://localhost:6379/0
 SCAN_PATHS=/path/to/your/media
 ```
 
-### 7. Initialize Database
+Notes:
+- `FLASK_ENV=production` is required for a real deployment; the code default
+  is `development` (the Docker image sets production for you).
+- If you serve the app over plain HTTP on a LAN (no TLS), also set
+  `SESSION_COOKIE_SECURE=false` or the browser will refuse to send the
+  session cookie and login will not stick.
+
+### 7. Initialize database
 
 ```bash
 # The database tables will be created automatically on first run
@@ -239,7 +249,7 @@ python app.py
 
 Press Ctrl+C after seeing "Running on http://127.0.0.1:5000".
 
-### 8. Start Celery Worker
+### 8. Start Celery worker
 
 In a new terminal (with venv activated):
 
@@ -248,7 +258,7 @@ source venv/bin/activate
 python celery_worker.py
 ```
 
-### 9. Start Web Application
+### 9. Start web application
 
 In a new terminal (with venv activated):
 
@@ -260,14 +270,18 @@ python app.py
 Or for production with Gunicorn:
 
 ```bash
-gunicorn -w 4 -b 0.0.0.0:5000 app:app
+gunicorn -c gunicorn.conf.py app:app
 ```
 
-## First-Time Setup
+Use the bundled `gunicorn.conf.py` rather than bare flags like `-w 4` - the
+config file also sets the 300-second worker timeout that long scan requests
+need.
+
+## First-time setup
 
 After installation, you must create the admin account.
 
-### Option 1: Web Setup Wizard
+### Option 1: web setup wizard
 
 1. Open your browser and navigate to http://localhost:5000
 
@@ -276,7 +290,7 @@ After installation, you must create the admin account.
 4. Click "Create Admin Account"
 5. You'll be automatically logged in
 
-### Option 2: API Setup
+### Option 2: API setup
 
 Create the admin account via API:
 
@@ -286,11 +300,11 @@ curl -X POST http://localhost:5000/api/auth/setup \
   -d '{"password":"YourSecurePassword123"}'
 ```
 
-**Security Note:** No default admin account exists. You must explicitly create it on first run. The setup endpoint is only available when no admin account exists.
+**Security note:** No default admin account exists. You must explicitly create it on first run. The setup endpoint is only available when no admin account exists.
 
 ## Verification
 
-### 1. Check Web Interface
+### 1. Check web interface
 
 Open your browser at http://localhost:5000
 
@@ -298,7 +312,7 @@ You should see the login page. Log in with:
 - Username: `admin`
 - Password: (the password you created during setup)
 
-### 2. Check API Health
+### 2. Check API health
 
 ```bash
 curl http://localhost:5000/healthz
@@ -306,13 +320,13 @@ curl http://localhost:5000/healthz
 
 Should return:
 ```json
-{"status": "ok", "version": "2.7.0"}
+{"status": "ok", "version": "2.8.0"}
 ```
 
 Note: `/health` also exists but requires authentication; `/healthz` is the
 unauthenticated liveness probe used by the container healthcheck.
 
-### 3. Check Celery Worker
+### 3. Check Celery worker
 
 ```bash
 # Docker
@@ -336,7 +350,7 @@ You should see:
   . pixelprobe.tasks_parallel.process_chunk_task
 ```
 
-### 4. Test a Simple Scan
+### 4. Test a simple scan
 
 1. Log in to the web interface
 2. Click "Tools" in the sidebar
@@ -344,19 +358,19 @@ You should see:
 4. The scan should begin and show progress
 5. Check the Dashboard for results
 
-## Next Steps
+## Next steps
 
-After successful installation:
+After installation:
 
-1. **Configure Scan Paths**: See [CONFIGURATION.md](CONFIGURATION.md) for details on setting up multiple scan paths
-2. **Performance Tuning**: Adjust MAX_WORKERS and other settings based on your system
-3. **Schedule Automated Scans**: Set up periodic scans in the web interface under Tools > Schedules
-4. **Configure Exclusions**: Add paths and extensions to exclude under Tools > Exclusions
-5. **Review API Documentation**: Access the API docs at /api-docs (after login)
+1. Set up scan paths; [configuration.md](configuration.md) covers multiple scan paths
+2. Adjust MAX_WORKERS and other performance settings for your system
+3. Set up periodic scans in the web interface under Tools > Schedules
+4. Add paths and extensions to exclude under Tools > Exclusions
+5. Read the API docs at /api-docs (after login)
 
-## Upgrade Process
+## Upgrade process
 
-### Docker Installation
+### Docker installation
 
 ```bash
 # Stop containers
@@ -372,7 +386,7 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
-### Manual Installation
+### Manual installation
 
 ```bash
 # Activate virtual environment
@@ -390,7 +404,7 @@ pip install -r requirements.txt --upgrade
 
 ## Troubleshooting
 
-If you encounter issues during installation, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for solutions to common problems.
+If you encounter issues during installation, see [troubleshooting.md](troubleshooting.md) for solutions to common problems.
 
 Common installation issues:
 - FFmpeg/ImageMagick not found: Ensure they're installed and in PATH
@@ -398,9 +412,9 @@ Common installation issues:
 - Permission errors: Ensure user has read access to media directories (Docker: use `user:` directive)
 - Port conflicts: Change PORT in .env if 5000 is already in use
 
-## Getting Help
+## Getting help
 
-1. Check [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues
+1. Check [troubleshooting.md](troubleshooting.md) for common issues
 2. Review logs: `docker-compose logs` or check terminal output
 3. Search existing issues: https://github.com/ttlequals0/PixelProbe/issues
 4. Create new issue with logs and system info
