@@ -8,6 +8,7 @@ Full documentation for PixelProbe. Start with the [project README](../README.md)
 
 - [Installation](installation.md) - requirements, Docker quick start, manual install, first-run setup
 - [Docker Setup](docker-setup.md) - the full compose stack, container roles, PostgreSQL tuning, the 15-to-18 migration guide
+- [Web Interface](web-interface.md) - dashboard, file actions, admin views, screenshots
 - [Configuration](configuration.md) - every environment variable with its real default, notification providers, schedules, exclusions
 - [Performance Tuning](performance-tuning.md) - concurrency knobs, chunk sizing, worker recycling, CPU sizing for video scanning
 - [Troubleshooting](troubleshooting.md) - symptom-driven recipes, stuck-scan revival and recovery, incomplete scan repair
@@ -15,7 +16,7 @@ Full documentation for PixelProbe. Start with the [project README](../README.md)
 ### Understanding PixelProbe
 
 - [How It Works](how-it-works.md) - layers, containers, the scan lifecycle from claim to finalize, the validation pipeline, failure recovery
-- [Scan Types](scan-types.md) - the seven scan types, what each one checks, and when to use which
+- [Scan Types](scan-types.md) - the scan types, what each one checks, and when to use which
 - [Project Structure](project-structure.md) - where everything lives in the repository
 - [Glossary](glossary.md) - every term the app uses, defined and linked to the doc that covers it
 
