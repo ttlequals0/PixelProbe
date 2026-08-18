@@ -52,13 +52,6 @@ python tools/script_name.py --execute
 | `analyze_gif_header_errors.py` | Analyze GIF error patterns | Statistics and patterns |
 | `analyze_webp_errors.py` | Analyze WebP issues | Error distribution |
 
-### System Utilities
-
-| Script | Purpose | Usage |
-|--------|---------|--------|
-| `update_version.py` | Update version number | `python update_version.py 2.2.47` |
-| `patches/v2_2_47_fixes.py` | v2.2.47 specific fixes | Applied patches |
-
 ###  Utility Scripts
 
 | Script | Purpose | Warning |
@@ -118,10 +111,10 @@ Run tools inside the container:
 
 ```bash
 # Method 1: Direct execution
-docker exec pixelprobe python /app/tools/fix_nal_warnings.py --execute
+docker exec pixelprobe-app python /app/tools/fix_nal_warnings.py --execute
 
 # Method 2: Interactive shell
-docker exec -it pixelprobe bash
+docker exec -it pixelprobe-app bash
 cd /app
 python tools/fix_database_schema.py
 ```

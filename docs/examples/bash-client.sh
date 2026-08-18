@@ -280,6 +280,11 @@ cmd_cleanup() {
         sleep 5
     done
 
+    # Re-fetch once after the loop so the final count reflects the
+    # finished cleanup, not an in-progress snapshot.
+    status_response=$(api_request GET /api/cleanup-status)
+    orphaned=$(echo "$status_response" | jq -r '.orphaned_found')
+
     echo -e "\n${GREEN}Results:${NC}"
     echo "  Orphaned entries found: $orphaned"
 }

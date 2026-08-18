@@ -1,25 +1,25 @@
-# PixelProbe Configuration Guide
+# PixelProbe configuration guide
 
 Reference for PixelProbe environment variables and performance tuning.
 
-## Table of Contents
+## Table of contents
 
-- [Environment Variables](#environment-variables)
-- [Docker Compose Configuration](#docker-compose-configuration)
-- [Database Configuration](#database-configuration)
-- [Performance Tuning](#performance-tuning)
-- [Scanning Configuration](#scanning-configuration)
-- [Celery Configuration](#celery-configuration)
-- [Data Retention Configuration](#data-retention-configuration)
-- [Notification Providers](#notification-providers)
-- [Security Configuration](#security-configuration)
-- [Resource Recommendations](#resource-recommendations)
+- [Environment variables](#environment-variables)
+- [Docker Compose configuration](#docker-compose-configuration)
+- [Database configuration](#database-configuration)
+- [Performance tuning](#performance-tuning)
+- [Scanning configuration](#scanning-configuration)
+- [Celery configuration](#celery-configuration)
+- [Data retention configuration](#data-retention-configuration)
+- [Notification providers](#notification-providers)
+- [Security configuration](#security-configuration)
+- [Resource recommendations](#resource-recommendations)
 
-## Environment Variables
+## Environment variables
 
 All configuration is done via environment variables, either in `.env` file or directly in `docker-compose.yml`.
 
-### Required Variables
+### Required variables
 
 | Variable | Description | Example |
 |----------|-------------|---------|
@@ -27,7 +27,7 @@ All configuration is done via environment variables, either in `.env` file or di
 | `POSTGRES_PASSWORD` | PostgreSQL database password | `your-secure-password` |
 | `MEDIA_PATH` | Host path to media files (Docker only) | `/mnt/media` |
 
-### Database Variables
+### Database variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -40,21 +40,21 @@ All configuration is done via environment variables, either in `.env` file or di
 | `DB_MAX_OVERFLOW` | `10` | Extra SQLAlchemy connections when the pool is exhausted |
 | `DATABASE_ECHO` | `false` | Enable SQL query logging (debug) |
 
-### Application Variables
+### Application variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FLASK_ENV` | `production` | Flask environment (`production`, `development`, `testing`) |
-| `SCAN_PATHS` | `/media` | Comma-separated paths to scan inside container |
+| `FLASK_ENV` | `development` | Flask environment (`production`, `development`, `testing`). The code default is `development`; the Docker image sets `production` |
+| `SCAN_PATHS` | (empty) | Comma-separated paths to scan inside container. The code default is empty; the bundled compose file sets `/media` |
 | `TZ` | `UTC` | Timezone for timestamps (e.g., `America/New_York`) |
-| `PORT` | `5000` | Web interface port |
-| `GUNICORN_BIND` | `0.0.0.0:5000` | Gunicorn listen address; accepts a comma-separated list for multiple sockets. For dual-stack IPv4+IPv6 (e.g. rootless podman) set `[::]:5000` -- one IPv6 wildcard also accepts IPv4 when the kernel keeps `net.ipv6.bindv6only=0` (the Linux default). Do not list both `0.0.0.0:5000` and `[::]:5000` on such kernels; the second bind fails with `EADDRINUSE`. |
+| `PORT` | `5000` | Host port published by the compose file; gunicorn always binds 5000 inside the container |
+| `GUNICORN_BIND` | `0.0.0.0:5000` | Gunicorn listen address; accepts a comma-separated list for multiple sockets. For dual-stack IPv4+IPv6 (e.g. rootless podman) set `[::]:5000`; one IPv6 wildcard also accepts IPv4 when the kernel keeps `net.ipv6.bindv6only=0` (the Linux default). Do not list both `0.0.0.0:5000` and `[::]:5000` on such kernels; the second bind fails with `EADDRINUSE`. |
 | `GUNICORN_WORKERS` | `4` | Gunicorn worker process count |
 | `GUNICORN_TIMEOUT` | `300` | Gunicorn per-request timeout in seconds |
 | `GUNICORN_LOG_LEVEL` | `info` | Gunicorn log level |
 | `SCHEDULER_ENABLED` | `true` | Whether this process may run the scan scheduler. In multi-container deployments set `false` on the web container so only the Celery worker competes for the scheduler lock. Leave `true` in single-container setups. |
 
-### Performance Variables
+### Performance variables
 
 | Variable | Default | Description | Recommendations |
 |----------|---------|-------------|-----------------|
@@ -71,13 +71,13 @@ All configuration is done via environment variables, either in `.env` file or di
 | `TEMPORAL_SAMPLE_TIMEOUT_SECS` | `30` | Per-window deadline for the signalstats decode. Two timed-out windows abandon the remaining ones | Raise on storage slower than realtime decode |
 | `TEMPORAL_MIN_FRAMES` | `100` | Minimum sampled frames before the temporal check will issue any verdict. Below it the percentages are noise and the check reports a warning instead | Leave at default |
 
-**Performance Notes:**
+**Performance notes:**
 - `MAX_WORKERS` controls parallelism within each scan task
 - Each worker creates 1 database connection
-- Total connections = 60 (main app pool) + MAX_WORKERS
-- Keep under PostgreSQL max_connections (default: 100)
+- Worst-case connections = web app 4 gunicorn workers x (5 base + 10 overflow) = 60, plus CELERY_CONCURRENCY x (5 + 10) from the worker children, plus ~MAX_WORKERS checker connections
+- Keep the total under PostgreSQL max_connections (default: 100). The extra large profile below exceeds 100 and needs `max_connections` raised to 150+
 
-### Celery Variables
+### Celery variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -86,23 +86,23 @@ All configuration is done via environment variables, either in `.env` file or di
 | `CELERY_CONCURRENCY` | `4` | Number of concurrent Celery tasks |
 | `CELERY_LOG_LEVEL` | `INFO` | Celery log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
-**Celery Notes:**
+**Celery notes:**
 - `CELERY_CONCURRENCY` controls how many scan tasks run simultaneously
 - Independent from `MAX_WORKERS` (which controls parallelism within each task)
 - Recommended: 4-8 for most systems
 
-### Redis Variables
+### Redis variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REDIS_MAX_MEMORY` | `2gb` | Maximum Redis memory for task queue |
 
-**Redis Notes:**
+**Redis notes:**
 - For large libraries (1M+ files), increase to 4gb
 - Redis stores task queue and results temporarily
 - Uses `noeviction` policy to prevent task loss
 
-### Scanning Variables
+### Scanning variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -111,7 +111,7 @@ All configuration is done via environment variables, either in `.env` file or di
 | `PERIODIC_SCAN_SCHEDULE` | (empty) | Automated scan schedule (cron or interval format) |
 | `CLEANUP_SCHEDULE` | (empty) | Automated cleanup schedule (cron or interval format) |
 
-**Schedule Format Examples:**
+**Schedule format examples:**
 ```bash
 # Cron format (standard cron syntax)
 PERIODIC_SCAN_SCHEDULE=cron:0 2 * * *        # Daily at 2 AM
@@ -122,7 +122,7 @@ PERIODIC_SCAN_SCHEDULE=interval:hours:6      # Every 6 hours
 CLEANUP_SCHEDULE=interval:days:7             # Every 7 days
 ```
 
-### Data Retention Variables
+### Data retention variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -130,28 +130,69 @@ CLEANUP_SCHEDULE=interval:days:7             # Every 7 days
 | `REPORT_RETENTION_DAYS` | `90` | Days before deleting old reports |
 | `SCAN_STATE_RETENTION_DAYS` | `7` | Days before deleting completed scan states |
 
-**Data Retention Notes:**
+**Data retention notes:**
 - Automated cleanup runs daily via the built-in MediaScheduler (APScheduler): data retention at 04:00, log retention at 03:00
 - `SCAN_OUTPUT_RETENTION_DAYS` is currently not used (scan results kept forever)
-- Configurable via environment variables for future flexibility
 - Log retention days is not an environment variable: it is stored in the `app_configs` database table (default 30) and changed via the UI (System > View Logs) or API (`PUT /api/logs/retention`)
 
-### Monitoring Variables (Future)
+### Advanced variables
+
+Rarely-changed knobs with sensible defaults.
+
+**Scan and task lifecycle:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STUCK_SCAN_STARTUP_GRACE_SECS` | `1800` | Grace period after startup before a scan with no liveness signal is treated as stuck |
+| `DISCOVERY_TASK_TIMEOUT_SECS` | `3600` | Soft time limit for a single directory discovery task |
+| `DISCOVERY_RESULT_TIMEOUT_SECS` | `7200` | How long the orchestrator waits for discovery results |
+| `CELERY_MAX_TASKS_PER_CHILD` | `1000` | Tasks a Celery prefork child processes before being recycled |
+| `INTEGRITY_BATCH_SIZE` | `10000` | Files per batch when queueing integrity (file-changes) checks |
+| `INTEGRITY_TASK_TIMEOUT_SECS` | `10800` | Deadline before a stuck integrity check task is abandoned |
+| `CLEANUP_TASK_TIMEOUT_SECS` | `600` | Deadline before a stuck existence-check (cleanup) task is abandoned |
+| `MAX_CONCURRENT_SMALL` | `5000` | Max in-flight hash tasks for small files |
+| `MAX_CONCURRENT_MEDIUM` | `500` | Max in-flight hash tasks for medium files |
+| `MAX_CONCURRENT_LARGE` | `50` | Max in-flight hash tasks for large files |
+| `MAX_CONCURRENT_HUGE` | `5` | Max in-flight hash tasks for huge files |
+| `BITROT_STABLE_CHECKS_TO_EXPIRE` | `2` | Stable integrity checks before a bitrot suspicion expires |
+| `ORPHAN_CLEANUP_ABORT_FLOOR` | `100` | Minimum missing-file count before the mass-delete safety check applies |
+| `ORPHAN_CLEANUP_MAX_DELETE_FRACTION` | `0.5` | Abort orphan cleanup if more than this fraction of records would be deleted (guards against an unmounted volume) |
+
+**Startup and migrations:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MIGRATION_LOCK_TIMEOUT_MS` | `10000` | PostgreSQL lock_timeout during startup migrations |
+| `MIGRATION_STATEMENT_TIMEOUT_MS` | `300000` | PostgreSQL statement_timeout during startup migrations |
+
+**Web security and networking:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SESSION_COOKIE_SECURE` | `true` | Send the session cookie over HTTPS only. Set `false` for plain-HTTP LAN deployments or login will not stick |
+| `CORS_ORIGINS` | (empty) | Comma-separated origins allowed for cross-origin API requests |
+| `RATELIMIT_STORAGE_URI` | (derived) | Storage for rate-limit counters. Defaults to the Celery broker's Redis on database 1; falls back to per-process memory if Redis is unavailable |
+
+**Image processing:**
+
+`PILLOW_BLOCKS_MAX` (set to `256` in the bundled compose file) is a
+Pillow-internal memory allocator tuning knob read by the Pillow library
+itself, not by PixelProbe code.
+
+### Monitoring variables (future)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENABLE_MONITORING` | `false` | Enable Prometheus metrics endpoint |
 | `METRICS_PORT` | `9090` | Metrics endpoint port |
 
-## Docker Compose Configuration
+## Docker Compose configuration
 
-### Basic Configuration
+### Basic configuration
 
 Minimal `docker-compose.yml` for production:
 
 ```yaml
-version: '3.8'
-
 services:
   postgres:
     image: postgres:18-alpine
@@ -179,7 +220,7 @@ services:
       retries: 5
 
   pixelprobe:
-    image: ttlequals0/pixelprobe:latest
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
     container_name: pixelprobe-app
     environment:
       SECRET_KEY: ${SECRET_KEY}
@@ -201,7 +242,7 @@ services:
         condition: service_healthy
 
   celery-worker:
-    image: ttlequals0/pixelprobe:latest
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:
@@ -224,11 +265,11 @@ volumes:
   postgres_data:
 ```
 
-### Multiple Scan Paths
+### Multiple scan paths
 
 To scan multiple directories:
 
-**Method 1: Multiple Volume Mounts**
+**Method 1: multiple volume mounts**
 ```yaml
 pixelprobe:
   environment:
@@ -247,7 +288,7 @@ celery-worker:
     - /mnt/photos:/photos:ro
 ```
 
-**Method 2: Single Parent Volume**
+**Method 2: single parent volume**
 ```yaml
 pixelprobe:
   environment:
@@ -256,7 +297,7 @@ pixelprobe:
     - /mnt/all-media:/media:ro
 ```
 
-### User Permissions (Important)
+### User permissions (important)
 
 Both `pixelprobe` and `celery-worker` MUST run as the same user to access media files:
 
@@ -278,9 +319,9 @@ id -u  # Shows UID (typically 1000)
 id -g  # Shows GID (typically 1000)
 ```
 
-## Database Configuration
+## Database configuration
 
-### Connection Pool Settings
+### Connection pool settings
 
 Configured in `config.py`:
 
@@ -291,39 +332,44 @@ SQLALCHEMY_ENGINE_OPTIONS = {
     'pool_recycle': 3600,      # Recycle connections after 1 hour
     'max_overflow': 10,        # Extra connections when pool exhausted (DB_MAX_OVERFLOW)
     'pool_timeout': 30,        # Timeout waiting for connection
+    'connect_args': {'options': '-c timezone=UTC'},  # Pin the PostgreSQL session timezone to UTC
 }
 ```
 
-**Total Connections:** 4 gunicorn workers x (5 base + 10 overflow) = 60 max for the web app, plus Celery prefork children and ~MAX_WORKERS checker connections
+**Total connections (worst case):** web app 4 gunicorn workers x (5 base + 10 overflow) = 60, plus CELERY_CONCURRENCY x (5 + 10) from the Celery prefork children, plus ~MAX_WORKERS checker connections
 
 **PostgreSQL max_connections:**
 - Default: 100 connections
 - Recommended: 150+ for production
 - Set in PostgreSQL: `ALTER SYSTEM SET max_connections = 150;`
 
-### Database Performance
+### Database performance
 
 For PostgreSQL optimization:
 
 ```sql
--- Increase shared buffers (25% of RAM)
+-- Increase shared buffers (25% of RAM) - requires a full restart
 ALTER SYSTEM SET shared_buffers = '2GB';
 
--- Increase work memory for sorts
+-- Increase work memory for sorts - picked up by a config reload
 ALTER SYSTEM SET work_mem = '16MB';
 
 -- Enable parallel queries
 ALTER SYSTEM SET max_parallel_workers_per_gather = 4;
-
--- Restart PostgreSQL
-SELECT pg_reload_conf();
 ```
 
-## Performance Tuning
+`work_mem` and `max_parallel_workers_per_gather` take effect after
+`SELECT pg_reload_conf();`, but `shared_buffers` and `max_connections`
+require a full PostgreSQL restart
+(`docker compose restart postgres`) - a reload is not enough. The same
+settings can instead be passed as `command:` flags on the postgres service;
+see [docker-setup.md](docker-setup.md).
 
-### Recommended Settings by System Size
+## Performance tuning
 
-#### Small Library (< 10,000 files)
+### Recommended settings by system size
+
+#### Small library (< 10,000 files)
 ```bash
 MAX_WORKERS=4
 CELERY_CONCURRENCY=2
@@ -331,7 +377,7 @@ BATCH_SIZE=50
 REDIS_MAX_MEMORY=512mb
 ```
 
-#### Medium Library (10,000 - 100,000 files)
+#### Medium library (10,000 - 100,000 files)
 ```bash
 MAX_WORKERS=10
 CELERY_CONCURRENCY=4
@@ -339,7 +385,7 @@ BATCH_SIZE=100
 REDIS_MAX_MEMORY=1gb
 ```
 
-#### Large Library (100,000 - 1,000,000 files)
+#### Large library (100,000 - 1,000,000 files)
 ```bash
 MAX_WORKERS=16
 CELERY_CONCURRENCY=6
@@ -347,7 +393,7 @@ BATCH_SIZE=200
 REDIS_MAX_MEMORY=2gb
 ```
 
-#### Extra Large Library (1,000,000+ files)
+#### Extra large library (1,000,000+ files)
 ```bash
 MAX_WORKERS=24
 CELERY_CONCURRENCY=8
@@ -355,7 +401,7 @@ BATCH_SIZE=200
 REDIS_MAX_MEMORY=4gb
 ```
 
-### Resource Allocation
+### Resource allocation
 
 Docker resource limits for large libraries:
 
@@ -371,45 +417,48 @@ celery-worker:
         memory: 4G         # Guaranteed RAM
 ```
 
-### Storage Performance
+### Storage performance
 
 For best performance:
 
-1. **Database Storage**: SSD strongly recommended
-2. **Media Storage**: Can be HDD, but SSD improves scan speed
-3. **Temp Files**: Use tmpfs for temporary files (optional)
+1. Database storage: SSD strongly recommended
+2. Media storage: can be HDD, but SSD improves scan speed
+3. Temp files: use tmpfs for temporary files (optional)
 
 ```yaml
-pixelprobe:
+postgres:
   volumes:
     - /mnt/ssd/postgres_data:/var/lib/postgresql  # SSD for database
-    - /mnt/hdd/media:/media:ro                          # HDD OK for media
+
+pixelprobe:
+  volumes:
+    - /mnt/hdd/media:/media:ro                    # HDD OK for media
   tmpfs:
-    - /tmp:size=1G                                      # tmpfs for temp files
+    - /tmp:size=1G                                # tmpfs for temp files
 ```
 
-## Scanning Configuration
+## Scanning configuration
 
-### Exclusion Configuration
+### Exclusion configuration
 
 Exclude specific paths or file types from scanning:
 
-**Via Environment Variables:**
+**Via environment variables:**
 ```bash
 EXCLUDED_PATHS=/media/temp,/media/incomplete,/media/.cache
 EXCLUDED_EXTENSIONS=.tmp,.partial,.!qB,.part,.crdownload
 ```
 
-**Via Web Interface:**
+**Via web interface:**
 1. Navigate to Tools > Exclusions
 2. Add paths or extensions
 3. Click Save
 
-### Schedule Configuration
+### Schedule configuration
 
 Schedule automated scans:
 
-**Via Environment Variables:**
+**Via environment variables:**
 ```bash
 # Daily full scan at 2 AM
 PERIODIC_SCAN_SCHEDULE=cron:0 2 * * *
@@ -418,15 +467,15 @@ PERIODIC_SCAN_SCHEDULE=cron:0 2 * * *
 CLEANUP_SCHEDULE=cron:0 3 * * 0
 ```
 
-**Via Web Interface:**
+**Via web interface:**
 1. Navigate to Tools > Schedules
 2. Click "Create Schedule"
 3. Configure schedule type, frequency, and scan type
 4. Click Save
 
-## Celery Configuration
+## Celery configuration
 
-### Worker Concurrency
+### Worker concurrency
 
 Number of concurrent scan tasks:
 
@@ -441,24 +490,26 @@ CELERY_CONCURRENCY=4
 CELERY_CONCURRENCY=8
 ```
 
-### Task Prioritization
+### Task prioritization
 
-All tasks run on a single queue named `pixelprobe`. Priorities (0 = highest, 9 = lowest) are set per task:
+All tasks run on a single queue named `pixelprobe`. Priorities (0 = highest, 9 = lowest) are set per task and bucketed by `priority_steps` `[0, 3, 6, 9]`:
 
-- **Default**: Tasks without an explicit priority (priority 5)
-- **Scan tasks**: High priority (priority 3)
-- **Maintenance tasks**: File changes checks, cleanup (priority 7, background)
+- Scan tasks: priority 3 (high)
+- Default: tasks without an explicit priority (priority 5)
+- check_file_exists: priority 6 (quick cleanup checks)
+- calculate_file_hash: priority 7 (background maintenance)
+- Retention cleanup: priority 9 (lowest)
 
-### Scheduled Maintenance (Automated Tasks)
+### Scheduled maintenance (automated tasks)
 
 There is no Celery Beat process. Scheduled maintenance runs in the built-in MediaScheduler (APScheduler, inside the Celery worker container by default):
 
 - Log retention cleanup: daily at 03:00
 - Data retention cleanup: daily at 04:00
 
-## Data Retention Configuration
+## Data retention configuration
 
-### Retention Policies
+### Retention policies
 
 Configure how long data is retained:
 
@@ -473,7 +524,7 @@ REPORT_RETENTION_DAYS=90
 SCAN_STATE_RETENTION_DAYS=7
 ```
 
-### Manual Cleanup
+### Manual cleanup
 
 Run data retention manually:
 
@@ -485,13 +536,10 @@ docker exec pixelprobe-app python tools/data_retention.py
 python tools/data_retention.py
 ```
 
-Preview what would be cleaned:
+**Warning:** the script has no dry-run mode - running it deletes expired
+reports and scan states immediately.
 
-```bash
-python tools/data_retention.py --dry-run
-```
-
-## Notification Providers
+## Notification providers
 
 Notifications are configured through the API, not environment variables. A
 *provider* is where messages go; a *rule* maps an event to a provider. Provider
@@ -551,15 +599,15 @@ curl -X POST http://localhost:5000/api/notifications/rules \
   store. `none` sends unencrypted and should only be used for a relay on
   localhost.
 - Private, LAN and loopback SMTP hosts are allowed without a
-  `TRUSTED_INTERNAL_HOSTS` entry; see [SSRF Trusted Hosts](#ssrf-trusted-hosts).
+  `TRUSTED_INTERNAL_HOSTS` entry; see [SSRF trusted hosts](#ssrf-trusted-hosts).
 - A send failure is logged and recorded on the provider, never raised, so a
   broken mail server cannot fail a scan.
 - Because secrets come back masked, submitting `***` for a field keeps the
   stored value rather than overwriting it.
 
-## Security Configuration
+## Security configuration
 
-### SSRF Trusted Hosts
+### SSRF trusted hosts
 
 PixelProbe includes SSRF protection that blocks outbound requests to private/reserved IP ranges. If you use internal services for healthchecks, notifications (ntfy, webhooks), or similar integrations that resolve to private IPs, you can allowlist them:
 
@@ -588,7 +636,7 @@ TRUSTED_INTERNAL_HOSTS=healthcheck.internal.local,ntfy.internal.local,10.0.0.0/8
 - Must be set in both `pixelprobe` and `celery-worker` containers (or via shared `.env`)
 - Public IPs are always allowed; this setting only affects private/reserved ranges
 
-### Secret Key Generation
+### Secret key generation
 
 Generate a secure secret key:
 
@@ -598,7 +646,7 @@ python3 -c "import secrets; print(secrets.token_hex(32))"
 
 Copy the output to `SECRET_KEY` in `.env`.
 
-### Session Configuration
+### Session configuration
 
 Session settings are configured in Flask:
 
@@ -613,7 +661,7 @@ SESSION_COOKIE_HTTPONLY = True # Prevent JavaScript access
 SESSION_COOKIE_SAMESITE = 'Lax' # CSRF protection
 ```
 
-### API Token Authentication
+### API token authentication
 
 Users can generate API tokens via:
 1. Web UI: Account > API Tokens
@@ -621,9 +669,9 @@ Users can generate API tokens via:
 
 Tokens support optional expiration dates.
 
-## Resource Recommendations
+## Resource recommendations
 
-### CPU Requirements
+### CPU requirements
 
 | Library Size | Minimum CPUs | Recommended CPUs |
 |--------------|-------------|------------------|
@@ -632,7 +680,7 @@ Tokens support optional expiration dates.
 | 100K-1M files | 8 cores | 16 cores |
 | 1M+ files | 16 cores | 32 cores |
 
-### Memory Requirements
+### Memory requirements
 
 | Library Size | Minimum RAM | Recommended RAM |
 |--------------|------------|-----------------|
@@ -641,26 +689,26 @@ Tokens support optional expiration dates.
 | 100K-1M files | 8 GB | 16 GB |
 | 1M+ files | 16 GB | 32 GB |
 
-### Disk Requirements
+### Disk requirements
 
-- **Database**: 100 MB per 10,000 files (estimated)
-- **Logs**: 1-10 GB (depending on retention)
-- **Reports**: 100 MB per 1,000 reports
-- **Temp Files**: 1-2 GB during scans
+- Database: 100 MB per 10,000 files (estimated)
+- Logs: 1-10 GB (depending on retention)
+- Reports: 100 MB per 1,000 reports
+- Temp files: 1-2 GB during scans
 
-### Network Requirements
+### Network requirements
 
-- **Bandwidth**: Minimal (local file access)
-- **Latency**: Low latency to database required
-- **Ports**: 5000 (web), 5432 (postgres), 6379 (redis)
+- Bandwidth: minimal (local file access)
+- Latency: low latency to database required
+- Ports: 5000 (web), 5432 (postgres), 6379 (redis)
 
-## Configuration Best Practices
+## Configuration best practices
 
 Start with the defaults and raise `MAX_WORKERS` and `CELERY_CONCURRENCY` gradually, watching `docker stats` for CPU and memory pressure. Back up the database and `.env` before upgrades, use strong passwords, and keep `SECRET_KEY` secret.
 
 ## Examples
 
-### Home Media Server (20K files)
+### Home media server (20K files)
 ```bash
 MAX_WORKERS=8
 CELERY_CONCURRENCY=3
@@ -670,7 +718,7 @@ POSTGRES_PASSWORD=strong-password-here
 SCAN_PATHS=/movies,/tv
 ```
 
-### Professional Archive (500K files)
+### Professional archive (500K files)
 ```bash
 MAX_WORKERS=20
 CELERY_CONCURRENCY=6
@@ -682,7 +730,7 @@ OUTPUT_ROTATION_ENABLED=true
 MAX_OUTPUT_SIZE=50000
 ```
 
-### Multi-User Production (2M files)
+### Multi-user production (2M files)
 ```bash
 MAX_WORKERS=24
 CELERY_CONCURRENCY=8
@@ -690,9 +738,8 @@ BATCH_SIZE=200
 REDIS_MAX_MEMORY=8gb
 POSTGRES_PASSWORD=enterprise-strength-password
 SCAN_PATHS=/storage/media1,/storage/media2,/storage/media3
-ENABLE_MONITORING=true
 ```
 
-## Troubleshooting Configuration
+## Troubleshooting configuration
 
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for solutions to common configuration issues.
+See [troubleshooting.md](troubleshooting.md) for solutions to common configuration issues.

@@ -1,15 +1,15 @@
-# PixelProbe Integration Guide
+# PixelProbe integration guide
 
-This guide provides examples for integrating PixelProbe into your applications and workflows.
+Examples for integrating PixelProbe into your applications and workflows.
 
-## Table of Contents
+## Table of contents
 1. [Authentication](#authentication)
-2. [Basic Integration](#basic-integration)
-3. [Automated Scanning](#automated-scanning)
-4. [Monitoring Integration](#monitoring-integration)
-5. [CI/CD Integration](#cicd-integration)
-6. [Backup System Integration](#backup-system-integration)
-7. [Media Server Integration](#media-server-integration)
+2. [Basic integration](#basic-integration)
+3. [Automated scanning](#automated-scanning)
+4. [Monitoring integration](#monitoring-integration)
+5. [CI/CD integration](#cicd-integration)
+6. [Backup system integration](#backup-system-integration)
+7. [Media server integration](#media-server-integration)
 
 ## Authentication
 
@@ -21,12 +21,19 @@ session) and send it as a Bearer token on every request:
 Authorization: Bearer your-api-token
 ```
 
-All examples below assume a valid API token. The only endpoint that does not require
-authentication is the liveness probe `GET /healthz`.
+All examples below assume a valid API token. The only endpoints that do not require
+authentication are `GET /healthz` (liveness probe), `GET /api/auth/status`,
+`POST /api/auth/setup` (first-run only), `POST /api/auth/login`, and
+`GET /api/openapi.yaml` / `GET /api/openapi.json`.
 
-## Basic Integration
+Note: `/api/scan-status` never reports `error` or `cancelled` in its `status`
+field - finished scans surface as `completed` or `idle`. Wait loops must treat
+`idle` as terminal and read the `phase` field (`error`, `cancelled`, `crashed`)
+to classify failures. The wait loops below do this.
 
-### Python Client Class
+## Basic integration
+
+### Python client class
 
 ```python
 import requests
@@ -69,12 +76,16 @@ class PixelProbeClient:
         return response.json()
     
     def wait_for_scan(self, check_interval: int = 5) -> Dict:
-        """Wait for scan to complete"""
+        """Wait for scan to complete.
+
+        status never reports 'error' or 'cancelled' - finished scans surface
+        as 'completed' or 'idle'. Read 'phase' to classify failures.
+        """
         while True:
             status = self.get_scan_status()
-            if status['status'] in ['completed', 'error', 'cancelled']:
+            if not status.get('is_active') and status['status'] in ('completed', 'idle'):
                 return status
-            
+
             print(f"Scan progress: {status['current']}/{status['total']}")
             time.sleep(check_interval)
     
@@ -107,7 +118,11 @@ if __name__ == "__main__":
     
     # Wait for completion
     result = client.wait_for_scan()
-    print(f"Scan completed: {result['status']}")
+    if result['phase'] == 'completed':
+        print("Scan completed")
+    else:
+        # phase is 'error', 'cancelled', or 'crashed'
+        print(f"Scan did not complete cleanly (phase: {result['phase']})")
     
     # Get corrupted files
     corrupted = client.get_corrupted_files()
@@ -117,7 +132,7 @@ if __name__ == "__main__":
         print(f"- {file['file_path']}: {file['error_message']}")
 ```
 
-### Node.js Client
+### Node.js client
 
 ```javascript
 const axios = require('axios');
@@ -155,15 +170,17 @@ class PixelProbeClient {
     }
     
     async waitForScan(checkInterval = 5000) {
+        // status never reports 'error' or 'cancelled' - finished scans
+        // surface as 'completed' or 'idle'. Read phase to classify failures.
         return new Promise((resolve) => {
             const checkStatus = async () => {
                 const status = await this.getScanStatus();
-                
-                if (['completed', 'error', 'cancelled'].includes(status.status)) {
+
+                if (!status.is_active && ['completed', 'idle'].includes(status.status)) {
                     resolve(status);
                     return;
                 }
-                
+
                 console.log(`Scan progress: ${status.current}/${status.total}`);
                 setTimeout(checkStatus, checkInterval);
             };
@@ -195,7 +212,12 @@ class PixelProbeClient {
         
         // Wait for completion
         const result = await client.waitForScan();
-        console.log(`Scan completed: ${result.status}`);
+        if (result.phase === 'completed') {
+            console.log('Scan completed');
+        } else {
+            // phase is 'error', 'cancelled', or 'crashed'
+            console.log(`Scan did not complete cleanly (phase: ${result.phase})`);
+        }
         
         // Get corrupted files
         const corrupted = await client.getCorruptedFiles();
@@ -210,9 +232,9 @@ class PixelProbeClient {
 })();
 ```
 
-## Automated Scanning
+## Automated scanning
 
-### Daily Scan Script
+### Daily scan script
 
 ```bash
 #!/bin/bash
@@ -231,17 +253,25 @@ SCAN_RESPONSE=$(curl -s -X POST "$PIXELPROBE_URL/api/scan" \
     -H "Content-Type: application/json" \
     -d '{"force_rescan": false}')
 
-# Wait for completion
+# Wait for completion. status never reports 'error' or 'cancelled':
+# finished scans surface as 'completed' or 'idle'; read .phase to classify.
 while true; do
     STATUS=$(curl -s -H "$AUTH_HEADER" "$PIXELPROBE_URL/api/scan-status")
     CURRENT_STATUS=$(echo "$STATUS" | jq -r '.status')
-    
-    if [[ "$CURRENT_STATUS" == "completed" ]] || [[ "$CURRENT_STATUS" == "error" ]]; then
+    IS_ACTIVE=$(echo "$STATUS" | jq -r '.is_active')
+
+    if [[ "$IS_ACTIVE" != "true" ]] && { [[ "$CURRENT_STATUS" == "completed" ]] || [[ "$CURRENT_STATUS" == "idle" ]]; }; then
         break
     fi
-    
+
     sleep 30
 done
+
+PHASE=$(echo "$STATUS" | jq -r '.phase')
+if [[ "$PHASE" != "completed" ]]; then
+    echo "$(date): Scan did not complete cleanly (phase: $PHASE)" >> "$LOG_FILE"
+    exit 1
+fi
 
 # Get statistics
 STATS=$(curl -s -H "$AUTH_HEADER" "$PIXELPROBE_URL/api/stats")
@@ -266,7 +296,7 @@ fi
 echo "$(date): Scan completed. Corrupted files: $CORRUPTED_COUNT" >> "$LOG_FILE"
 ```
 
-### Cron Configuration
+### Cron configuration
 
 ```bash
 # Run daily scan at 2 AM
@@ -279,9 +309,9 @@ echo "$(date): Scan completed. Corrupted files: $CORRUPTED_COUNT" >> "$LOG_FILE"
 0 4 1 * * curl -X POST http://localhost:5000/api/cleanup-orphaned -H "Authorization: Bearer your-api-token"
 ```
 
-## Monitoring Integration
+## Monitoring integration
 
-### Prometheus Metrics Exporter
+### Prometheus metrics exporter
 
 ```python
 from prometheus_client import Gauge, Counter, generate_latest
@@ -322,7 +352,7 @@ def metrics():
     return Response(generate_latest(), mimetype='text/plain')
 ```
 
-### Grafana Dashboard JSON
+### Grafana dashboard JSON
 
 ```json
 {
@@ -361,9 +391,9 @@ def metrics():
 }
 ```
 
-## CI/CD Integration
+## CI/CD integration
 
-### GitHub Actions Workflow
+### GitHub Actions workflow
 
 ```yaml
 name: Media Integrity Check
@@ -410,13 +440,22 @@ jobs:
       env:
         API_TOKEN: ${{ secrets.PIXELPROBE_API_TOKEN }}
       run: |
+        # status never reports 'error' or 'cancelled': finished scans surface
+        # as 'completed' or 'idle'; read .phase to classify failures.
         while true; do
-          STATUS=$(curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:5000/api/scan-status | jq -r '.status')
-          if [[ "$STATUS" == "completed" ]]; then
+          STATUS_JSON=$(curl -s -H "Authorization: Bearer $API_TOKEN" http://localhost:5000/api/scan-status)
+          STATUS=$(echo "$STATUS_JSON" | jq -r '.status')
+          IS_ACTIVE=$(echo "$STATUS_JSON" | jq -r '.is_active')
+          if [[ "$IS_ACTIVE" != "true" && ( "$STATUS" == "completed" || "$STATUS" == "idle" ) ]]; then
             break
           fi
           sleep 10
         done
+        PHASE=$(echo "$STATUS_JSON" | jq -r '.phase')
+        if [[ "$PHASE" != "completed" ]]; then
+          echo "Scan did not complete cleanly (phase: $PHASE)"
+          exit 1
+        fi
     
     - name: Check for corrupted files
       env:
@@ -432,7 +471,7 @@ jobs:
         fi
 ```
 
-### GitLab CI Pipeline
+### GitLab CI pipeline
 
 ```yaml
 stages:
@@ -453,9 +492,22 @@ media-integrity:
         -H "Content-Type: application/json" \
         -d '{"directories": ["/media"]}'
     - |
-      while [ "$(curl -s -H "Authorization: Bearer $PIXELPROBE_API_TOKEN" http://localhost:5000/api/scan-status | jq -r '.status')" != "completed" ]; do
+      # status never reports 'error' or 'cancelled': finished scans surface
+      # as 'completed' or 'idle'; read .phase to classify failures.
+      while true; do
+        STATUS_JSON=$(curl -s -H "Authorization: Bearer $PIXELPROBE_API_TOKEN" http://localhost:5000/api/scan-status)
+        STATUS=$(echo "$STATUS_JSON" | jq -r '.status')
+        IS_ACTIVE=$(echo "$STATUS_JSON" | jq -r '.is_active')
+        if [ "$IS_ACTIVE" != "true" ] && { [ "$STATUS" = "completed" ] || [ "$STATUS" = "idle" ]; }; then
+          break
+        fi
         sleep 10
       done
+      PHASE=$(echo "$STATUS_JSON" | jq -r '.phase')
+      if [ "$PHASE" != "completed" ]; then
+        echo "Scan did not complete cleanly (phase: $PHASE)"
+        exit 1
+      fi
     - |
       CORRUPTED=$(curl -s -H "Authorization: Bearer $PIXELPROBE_API_TOKEN" http://localhost:5000/api/stats | jq -r '.corrupted_files')
       if [ "$CORRUPTED" -gt 0 ]; then
@@ -470,9 +522,9 @@ media-integrity:
     - main
 ```
 
-## Backup System Integration
+## Backup system integration
 
-### Pre-Backup Validation Script
+### Pre-backup validation script
 
 ```python
 #!/usr/bin/env python3
@@ -494,9 +546,10 @@ def validate_before_backup(directories):
     
     # Wait for completion
     result = client.wait_for_scan()
-    
-    if result['status'] != 'completed':
-        print(f"Scan failed with status: {result['status']}")
+
+    if result['phase'] != 'completed':
+        # phase is 'error', 'cancelled', or 'crashed'
+        print(f"Scan did not complete cleanly (phase: {result['phase']})")
         return False
     
     # Check for corrupted files
@@ -527,7 +580,7 @@ if __name__ == "__main__":
         sys.exit(1)  # Failure
 ```
 
-### Rsync Wrapper with Validation
+### Rsync wrapper with validation
 
 ```bash
 #!/bin/bash
@@ -548,9 +601,9 @@ else
 fi
 ```
 
-## Media Server Integration
+## Media server integration
 
-### Jellyfin/Plex Post-Processing
+### Jellyfin/Plex post-processing
 
 ```python
 #!/usr/bin/env python3
@@ -575,7 +628,10 @@ def scan_new_media(file_path):
         import time
         time.sleep(2)
         
-        # Check if file is corrupted
+        # Check if file is corrupted. The search parameter is a
+        # case-insensitive substring (ILIKE) match on file_path, and
+        # results are sorted by scan_date descending by default, so the
+        # most recently scanned match comes first.
         scan_results = client.session.get(
             f"{client.base_url}/api/scan-results",
             params={"search": file_path}
@@ -620,7 +676,7 @@ if __name__ == "__main__":
         sys.exit(1)
 ```
 
-### Nextcloud External Script
+### Nextcloud external script
 
 ```php
 <?php
@@ -692,7 +748,7 @@ class MediaValidator {
 }
 ```
 
-## Docker Compose Integration
+## Docker Compose integration
 
 ```yaml
 version: '3.8'
@@ -744,45 +800,66 @@ volumes:
   grafana_data:
 ```
 
-## Webhook Integration
+## Webhook integration
 
-### Webhook Notifier
+PixelProbe can push notifications to your own HTTP endpoint through its
+notification system. Configure a webhook provider and an event rule:
+
+```bash
+# 1. Create a webhook provider
+curl -X POST http://localhost:5000/api/notifications/providers \
+  -H "Authorization: Bearer your-api-token" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-webhook", "provider_type": "webhook", "configuration": {"webhook_url": "https://your-endpoint.example/pixelprobe-webhook"}}'
+
+# 2. Create a rule binding an event to the provider
+curl -X POST http://localhost:5000/api/notifications/rules \
+  -H "Authorization: Bearer your-api-token" \
+  -H "Content-Type: application/json" \
+  -d '{"event_type": "bitrot_suspected", "provider_id": 1}'
+```
+
+The only event dispatched today is `bitrot_suspected`, sent when a
+file-changes scan finds files whose content hash changed while the
+modification time did not. There is no `scan_completed` webhook event; to
+act on scan completion, poll `/api/scan-status` as shown above.
+
+The generic webhook payload looks like:
+
+```json
+{
+  "title": "Bitrot suspected on 2 file(s)",
+  "message": "Content hash changed while file modification time did not - ...",
+  "priority": "high",
+  "timestamp": "2025-01-20T12:00:00+00:00",
+  "source": "PixelProbe",
+  "data": {
+    "count": 2,
+    "file_paths": ["/media/photos/a.jpg", "/media/photos/b.jpg"]
+  }
+}
+```
+
+### Webhook receiver
 
 ```python
-import requests
 from flask import Flask, request
 
 app = Flask(__name__)
 
-WEBHOOK_URL = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-
 @app.route('/pixelprobe-webhook', methods=['POST'])
 def handle_webhook():
-    """Handle PixelProbe scan completion webhook"""
+    """Handle a PixelProbe notification webhook"""
     data = request.json
-    
-    if data['event'] == 'scan_completed':
-        stats = data['stats']
-        
-        if stats['corrupted_files'] > 0:
-            message = {
-                "text": f" PixelProbe found {stats['corrupted_files']} corrupted files!",
-                "attachments": [{
-                    "color": "danger",
-                    "fields": [
-                        {"title": "Total Files", "value": stats['total_files'], "short": True},
-                        {"title": "Corrupted", "value": stats['corrupted_files'], "short": True},
-                        {"title": "Corruption Rate", "value": f"{stats['corruption_rate']}%", "short": True}
-                    ]
-                }]
-            }
-            
-            requests.post(WEBHOOK_URL, json=message)
-    
+
+    print(f"[{data['priority']}] {data['title']}: {data['message']}")
+    for path in data.get('data', {}).get('file_paths', []):
+        print(f"  - {path}")
+
     return "OK", 200
 ```
 
-## Best Practices
+## Best practices
 
 - Respect the API rate limits; back off and retry on 429 responses.
 - Alert on corruption findings (webhook or Prometheus, both shown above) instead of checking manually.

@@ -2,7 +2,7 @@
 
 Defaults match the previous hardcoded Dockerfile CMD, so existing deployments
 behave as before. GUNICORN_BIND accepts a comma-separated list of addresses;
-see docs/CONFIGURATION.md for the dual-stack (IPv6) guidance and caveats.
+see docs/configuration.md for the dual-stack (IPv6) guidance and caveats.
 """
 
 import os

@@ -1,50 +1,42 @@
 # PixelProbe Documentation
 
-## Documentation Structure
+Full documentation for PixelProbe. Start with the [project README](../README.md) for a quick install, then come here for the details.
 
-### Core Documentation
-- **[Architecture Overview](ARCHITECTURE.md)** - System design and component architecture
-- **[System Architecture](SYSTEM_ARCHITECTURE.md)** - Detailed system components and interactions
-- **[Project Structure](PROJECT_STRUCTURE.md)** - Code organization and module descriptions
-- **[Docker Setup](DOCKER_SETUP.md)** - Container configuration and deployment
-- **[Performance Tuning](PERFORMANCE_TUNING.md)** - Optimization guide for large-scale deployments
+## Contents
 
-### Maintenance & Tools
-- **[Tools and Scripts](maintenance/TOOLS_AND_SCRIPTS.md)** - Complete reference for all maintenance tools
-- **[Tools Directory](../tools/README.md)** - Utility scripts
+### Running PixelProbe
 
-### Development
-- **[Developer Guide](developer/README.md)** - Setup and contribution guidelines
+- [Installation](installation.md) - requirements, Docker quick start, manual install, first-run setup
+- [Docker Setup](docker-setup.md) - the full compose stack, container roles, PostgreSQL tuning, the 15-to-18 migration guide
+- [Web Interface](web-interface.md) - dashboard, file actions, admin views, screenshots
+- [Configuration](configuration.md) - every environment variable with its real default, notification providers, schedules, exclusions
+- [Performance Tuning](performance-tuning.md) - concurrency knobs, chunk sizing, worker recycling, CPU sizing for video scanning
+- [Troubleshooting](troubleshooting.md) - symptom-driven recipes, stuck-scan revival and recovery, incomplete scan repair
 
-### API Documentation
-- **[API Reference](api/README.md)** - Complete API endpoint documentation
-- **[Scan Types Documentation](api/SCAN_TYPES_DOCUMENTATION.md)** - Guide to all 7 scan types
-- **[OpenAPI Specification](../openapi.yaml)** - OpenAPI 3.0 specification
+### Understanding PixelProbe
 
-### Integration Examples
-- **[Python Client](examples/python-client.py)** - Full-featured Python client
-- **[Node.js Client](examples/nodejs-client.js)** - JavaScript/Node.js implementation
-- **[Bash Client](examples/bash-client.sh)** - Shell script using curl
-- **[Integration Guide](examples/integration-guide.md)** - Integration best practices
+- [How It Works](how-it-works.md) - layers, containers, the scan lifecycle from claim to finalize, the validation pipeline, failure recovery
+- [Scan Types](scan-types.md) - the scan types, what each one checks, and when to use which
+- [Project Structure](project-structure.md) - where everything lives in the repository
+- [Glossary](glossary.md) - every term the app uses, defined and linked to the doc that covers it
+
+### Integrating with PixelProbe
+
+- [API Reference](api.md) - authentication, every endpoint, rate limits, response shapes
+- [OpenAPI Specification](../openapi.yaml) - machine-readable spec (partial; the API reference is authoritative)
+- [Integration Guide](examples/integration-guide.md) - polling patterns, CI hooks, notification payloads
+- Client examples: [Python](examples/python-client.py), [Node.js](examples/nodejs-client.js), [Bash](examples/bash-client.sh)
+
+### Developing PixelProbe
+
+- [Developer Guide](developer-guide.md) - local setup, code layout, conventions, contribution flow
+- [Database Schema](database-schema.md) - all 17 models, real column names, indexes, the startup migration pattern
+- [Testing Guide](testing-guide.md) - test layout, markers, fixtures, what CI actually runs
+- [Release Process](release-process.md) - version bump to deployed container, including the scripted GitHub release
+- [Tools and Scripts](tools-and-scripts.md) - every maintenance tool and helper script, with the dry-run conventions
 
 ### Screenshots
-- **[UI Screenshots](screenshots/)** - Visual guide to the interface
 
-## Quick Links
+- [UI Screenshots](screenshots/) - visual guide to the interface
 
-### For Users
-1. Start with [Docker Setup](DOCKER_SETUP.md) for installation
-2. Review [Performance Tuning](PERFORMANCE_TUNING.md) for optimization
-
-### For Developers
-1. Read [Architecture Overview](ARCHITECTURE.md) first
-2. Review [Project Structure](PROJECT_STRUCTURE.md) for code organization
-3. Check [Developer Guide](developer/README.md) for contribution guidelines
-
-### For System Administrators
-1. See [Tools Documentation](maintenance/TOOLS_AND_SCRIPTS.md) for maintenance scripts
-2. Check [Performance Tuning](PERFORMANCE_TUNING.md) for optimization
-
-## Documentation Standards
-
-When contributing documentation, test all code examples and update this index if you add or move files.
+[< Project README](../README.md)
