@@ -169,6 +169,7 @@ class TestPerformance:
         for endpoint, avg_time in response_times.items():
             print(f"  {endpoint}: {avg_time*1000:.1f}ms")
     
+    @pytest.mark.slow
     def test_sustained_load(self, authenticated_client, db, performance_monitor):
         """Test system behavior under sustained load"""
         import concurrent.futures

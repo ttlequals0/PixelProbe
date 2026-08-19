@@ -30,6 +30,8 @@ import os
 import random
 import subprocess
 
+from PIL import Image
+
 SAMPLES_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -60,7 +62,6 @@ def generate_valid_fixtures():
     ]
     for cmd in commands:
         subprocess.run(cmd, check=True)
-    from PIL import Image
     Image.new('RGB', (320, 240), (60, 120, 180)).save(_path('valid.webp'), quality=80)
 
 

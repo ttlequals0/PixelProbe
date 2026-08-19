@@ -12,8 +12,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from PIL import Image
+from sqlalchemy import create_engine, text
 
 from pixelprobe.media_checker import PixelProbe
+from pixelprobe.models import db
 
 POSTGRES_URI = os.environ.get('PIXELPROBE_TEST_POSTGRES_URI')
 
@@ -22,9 +24,6 @@ POSTGRES_URI = os.environ.get('PIXELPROBE_TEST_POSTGRES_URI')
 @pytest.mark.timeout(300)
 @pytest.mark.skipif(not POSTGRES_URI, reason='PIXELPROBE_TEST_POSTGRES_URI not set')
 def test_parallel_scan_file_saves_are_connection_safe(tmp_path):
-    from sqlalchemy import create_engine, text
-    from pixelprobe.models import db
-
     engine = create_engine(POSTGRES_URI)
     db.metadata.create_all(engine)
 

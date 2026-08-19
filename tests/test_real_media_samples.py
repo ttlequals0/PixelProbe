@@ -2,13 +2,20 @@
 Tests using real media samples from FFmpeg
 """
 
-import pytest
 import os
+import subprocess
+from unittest.mock import patch
+
+import pytest
+from PIL import Image
+
+from pixelprobe.media_checker import PixelProbe
 from pixelprobe.models import ScanResult
 
 # Fixture scanning is session-cached; the first test to touch it pays the
-# full corpus scan, so every test in this module shares one generous timeout
-pytestmark = pytest.mark.timeout(300)
+# full corpus scan (minutes on a loaded CI runner), so every test in this
+# module shares one generous timeout
+pytestmark = pytest.mark.timeout(900)
 
 
 @pytest.mark.real_media
@@ -134,7 +141,6 @@ class TestOversizedImages:
     """Regression: images beyond tool pixel/resource limits are warnings, not corruption"""
 
     def _make_oversized(self, path, mode, size, **save_kwargs):
-        from PIL import Image
         old_limit = Image.MAX_IMAGE_PIXELS
         Image.MAX_IMAGE_PIXELS = None
         try:
@@ -143,7 +149,6 @@ class TestOversizedImages:
             Image.MAX_IMAGE_PIXELS = old_limit
 
     def test_oversized_valid_png_is_warning_not_corrupted(self, tmp_path):
-        from pixelprobe.media_checker import PixelProbe
         # 400MP exceeds both Pillow's DecompressionBombError threshold
         # (2x MAX_IMAGE_PIXELS, ~358MP) and ImageMagick's default 256MP area policy
         big = tmp_path / 'big_valid.png'
@@ -161,9 +166,6 @@ class TestOversizedImages:
         # A huge valid image can outlast the size-scaled ImageMagick timeout
         # before hitting its cache limit; with PIL's bomb guard also fired,
         # that combination must stay a warning, not corruption
-        import subprocess
-        from unittest.mock import patch
-        from pixelprobe.media_checker import PixelProbe
         big = tmp_path / 'big_timeout.png'
         self._make_oversized(big, 'L', (20000, 20000), compress_level=1)
 
@@ -176,10 +178,10 @@ class TestOversizedImages:
         assert warning_details
 
     def test_decompression_bomb_scale_image_not_corrupted(self, tmp_path):
-        from pixelprobe.media_checker import PixelProbe
-        # 3.6GP 1-bit image, tiny on disk: both guards must trigger, verdict stays sane
+        # 625MP 1-bit image (just past both guards), tiny on disk: verdict
+        # stays sane without allocating multiple GB on a CI runner
         bomb = tmp_path / 'bomb.png'
-        self._make_oversized(bomb, '1', (60000, 60000), compress_level=9)
+        self._make_oversized(bomb, '1', (25000, 25000), compress_level=9)
 
         checker = PixelProbe(database_path=None)
         is_corrupted, _, _, _, warning_details = checker._check_image_corruption(str(bomb))

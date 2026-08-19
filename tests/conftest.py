@@ -438,7 +438,6 @@ def real_scan_results(db, real_scan_data):
     return results
 
 
-
 @pytest.fixture
 def mock_corrupted_result(db):
     """Create a mock corrupted scan result"""
