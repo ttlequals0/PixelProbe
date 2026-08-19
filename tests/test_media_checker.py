@@ -1018,3 +1018,15 @@ class TestOpusEofParseError:
 
         assert is_corrupted is True
         assert any('Opus' in d for d in corruption_details)
+
+
+class TestWorkerDatabasePool:
+    """Worker DB engine must not share one raw connection across scan threads"""
+
+    def test_postgres_engine_uses_queuepool_sized_to_workers(self):
+        from sqlalchemy.pool import QueuePool
+        # create_engine connects lazily, so a bogus URI is safe here
+        checker = PixelProbe(database_path='postgresql://u:p@localhost:5/db', max_workers=6)
+        assert checker._db_engine is not None
+        assert isinstance(checker._db_engine.pool, QueuePool)
+        assert checker._db_engine.pool.size() == 6

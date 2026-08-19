@@ -269,11 +269,12 @@ class ScanService:
                     excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
                     checker = PixelProbe(
                         database_path=self.database_uri,
+                        max_workers=num_workers,  # sizes the checker's DB connection pool
                         excluded_paths=excluded_paths,
                         excluded_extensions=excluded_extensions,
                         excluded_patterns=excluded_patterns
                     )
-                    
+
                     # Skip discovery phase - we already have the files
                     total_files = len(valid_files)
                     logger.info(f"Scanning {total_files} specific files")

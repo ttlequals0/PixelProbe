@@ -288,18 +288,22 @@ class PixelProbe:
             try:
                 from sqlalchemy import create_engine
                 from sqlalchemy.orm import sessionmaker
-                from sqlalchemy.pool import StaticPool
+                from sqlalchemy.pool import QueuePool, StaticPool
                 from pixelprobe.config import PG_SESSION_TZ_UTC
-                # Thread-local instances use StaticPool with single persistent connection
-                # This avoids both connection pool exhaustion AND NullPool's concurrent operation errors
                 if self.database_path.startswith('postgresql://'):
-                    # Use StaticPool with single connection per worker
-                    # With MAX_WORKERS=10: 10 workers × 1 connection = 10 connections from workers
-                    # Main app pool: 20+40=60, workers: 10, total: 70 (well under PostgreSQL default 100)
-                    # NullPool caused "concurrent operations not permitted" errors during progress updates
+                    # QueuePool sized to the worker count: each scan thread checks out
+                    # its own connection. StaticPool shared one raw psycopg2 connection
+                    # across ThreadPoolExecutor workers, which psycopg2 forbids using
+                    # concurrently (sporadic save/cache failures under num_workers > 1).
+                    # NullPool caused "concurrent operations not permitted" errors during
+                    # progress updates. Budget: main app pool 20+40=60, workers
+                    # max_workers+2, still well under PostgreSQL's default 100.
                     self._db_engine = create_engine(
                         self.database_path,
-                        poolclass=StaticPool,  # Single persistent connection per engine
+                        poolclass=QueuePool,
+                        pool_size=self.max_workers,
+                        max_overflow=2,
+                        pool_pre_ping=True,
                         connect_args={
                             'connect_timeout': 10,
                             'application_name': 'pixelprobe_worker',
@@ -309,13 +313,16 @@ class PixelProbe:
                         }
                     )
                 else:
-                    # SQLite or other database - also use StaticPool for consistency
+                    # SQLite (tests only; production is PostgreSQL-only since v2.2.0).
+                    # StaticPool is required for :memory: databases to share one
+                    # connection; check_same_thread=False permits cross-thread use.
                     self._db_engine = create_engine(
                         self.database_path,
-                        poolclass=StaticPool
+                        poolclass=StaticPool,
+                        connect_args={'check_same_thread': False}
                     )
                 self._db_session_factory = sessionmaker(bind=self._db_engine)
-                logger.info("Thread-local database connection initialized (StaticPool with 1 connection)")
+                logger.info(f"Worker database engine initialized (pool sized for {self.max_workers} workers)")
             except Exception as e:
                 logger.error(f"Failed to initialize database connection: {e}")
                 self._db_engine = None
