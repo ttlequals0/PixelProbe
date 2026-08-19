@@ -18,15 +18,15 @@ Every term PixelProbe uses, defined once and linked to the doc that covers it.
 ## Validation verdicts
 
 - **Healthy** - The file decoded and validated without corruption signals. Benign decoder noise (NAL unit warnings, DTS/PTS timestamp warnings, ffmpeg 8 Opus EOF parse notices) does not affect this verdict.
-- **Corrupted** - A corruption signal with a verdict fired: FFmpeg validation failure, frame integrity mismatch, JPEG pixel corruption, or a decode error flood. See [Scan Types](scan-types.md).
-- **Warning** - A signal that is informative but does not prove damage: freeze events, elevated TOUT or VREP, strict-decode notices. Warning files play back fine in most cases. See [Scan Types](scan-types.md).
+- **Corrupted** - A corruption signal with a verdict fired: FFmpeg validation failure, JPEG pixel corruption, or a decode error flood. See [Scan Types](scan-types.md).
+- **Warning** - A signal that is informative but does not prove damage: freeze events, frame-count mismatches, elevated TOUT or VREP, strict-decode notices, tool resource limits on oversized images. Warning files play back fine in most cases. See [Scan Types](scan-types.md).
 - **Marked as good** - A manual override: the file keeps its scan history but is treated as healthy in stats and filters.
 - **Error** - The file could not be read or scanned at all (permissions, I/O failure, unreadable media).
 
 ## Deep checks
 
 - **Enhanced corruption analysis** - The staged deep check for video files: Stage 1 frame integrity, Stage 2 temporal outliers, Stage 3 multi-point sampling, Stage 4 strict error detection. See [How It Works](how-it-works.md).
-- **Frame integrity check (Stage 1)** - Compares the decodable frame count against the expected count from duration and frame rate.
+- **Frame integrity check (Stage 1)** - Compares the counted packets (confirmed by a decode when they disagree by more than 5%) against the count expected from duration and frame rate. Warning-only: container metadata is unreliable on sparse-video and variable-frame-rate files.
 - **Temporal outlier check (Stage 2)** - Samples three 10-second windows at 25/50/75% of the file and computes signalstats TOUT/VREP percentages. Warning-only.
 - **TOUT (temporal outliers)** - A signalstats metric flagging pixels that differ from both temporal neighbors. Film grain triggers it on clean content, so it warns rather than condemns.
 - **VREP (vertical line repetition)** - A signalstats metric from analog-tape QC; high values are normal in flat or graphic digital content, so it warns rather than condemns.

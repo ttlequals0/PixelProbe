@@ -428,7 +428,7 @@ Each file is validated in `pixelprobe/media_checker.py` (`PixelProbe.scan_file`)
    - ffprobe metadata probe (stream presence, codec, duration)
    - Full remux validation: FFmpeg reads the ENTIRE file with `-map 0 -c copy -f null -` and aggressive error detection to validate container integrity across all streams
    - Enhanced corruption analysis, run for every video:
-     - **Stage 1 - Frame integrity** (always): frame count verified against duration and framerate via `ffprobe -count_frames`; this is the authoritative deep corruption check
+     - **Stage 1 - Frame integrity** (always, warning-only): the packet count from a demux-only `ffprobe -count_packets` pass is compared against duration and framerate; a mismatch above 5% is confirmed with a full `-count_frames` decode before a warning is recorded. Never a corruption verdict - container framerate metadata lies on sparse-video and VFR files
      - **Stage 2 - Temporal outlier detection** (files > 1GB): sampled decode windows checked for timing anomalies; can mark corrupt or warn
      - **Stage 3 - Multi-point sampling** (files > 5GB): decodes 10s samples at beginning, middle, and end; NEVER marks a file corrupted (seeking produces FFmpeg-version-dependent false positives), results are informational
      - **Stage 4 - Strict error detection** (warnings only): `-err_detect crccheck+bitstream+buffer+explode` over the first 30 seconds; findings are container/muxing warnings, never corruption verdicts
