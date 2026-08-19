@@ -2345,12 +2345,14 @@ class PixelProbe:
         (fades and title cards), which is where vertical-line repetition is
         legitimately highest.
 
-        TOUT (temporal outliers) and VREP (vertical line repetition) both only
-        warn: measured against real damage neither discriminates. Clean
-        flat/graphic content scores higher on VREP than a file with genuine
-        decoder-concealed corruption, and film grain pushes TOUT past its
-        per-frame threshold on 46-100% of frames of a pristine Bluray episode,
-        because signalstats is analog-tape QC tooling.
+        TOUT (temporal outliers) warns; VREP (vertical line repetition) is an
+        informational note only. Measured against real damage neither metric
+        discriminates well, because signalstats is analog-tape QC tooling:
+        film grain pushes TOUT past its per-frame threshold on 46-100% of
+        frames of a pristine Bluray episode, and VREP tracks dark scenes,
+        letterboxing and monochrome lighting - 298 production files flagged,
+        spot checks across the 10-96% range all visually pristine, and clean
+        synthetic content outscores genuinely corrupted content.
 
         Args:
             duration: video duration in seconds if the caller already probed it;
@@ -2429,11 +2431,11 @@ class PixelProbe:
             logger.info(f"Temporal analysis over {total_frames} sampled frames: "
                         f"{tout_percent:.1f}% outliers, {vrep_percent:.1f}% vertical repetition")
 
-            # Both metrics warn only - rationale in the docstring above
+            # TOUT warns; VREP is informational only - rationale in the docstring
             if tout_percent > TEMPORAL_TOUT_PERCENT:
                 warning_details.append(f"High temporal outliers detected: {tout_percent:.1f}% of frames")
             if vrep_percent > TEMPORAL_VREP_PERCENT:
-                warning_details.append(
+                info_notes.append(
                     f"Elevated vertical line repetition: {vrep_percent:.1f}% of sampled frames")
             if timed_out:
                 info_notes.append("Temporal outlier check partially timed out")

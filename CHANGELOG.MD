@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.3] - 2026-08-18
+
+### Fixed
+
+- **VREP (vertical line repetition) no longer sets warning status.** 298 production files carried the "Elevated vertical line repetition" warning; spot checks across the full 10-96% severity range were all visually pristine, with dark scenes, letterboxing, and monochrome lighting as the common factor. Combined with the 2.8.0 measurement that genuinely corrupted content scores lower than clean synthetic content on this metric, the warning has no discriminating power on born-digital video (signalstats' VREP exists to catch analog tape head-clog line repeats). The percentage is still recorded as a note in the scan output; TOUT keeps its warning.
+
 ## [2.8.2] - 2026-08-18
 
 ### Fixed

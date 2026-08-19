@@ -718,8 +718,13 @@ class TestTemporalOutlierDetection:
 
     @patch('pixelprobe.media_checker._probe_video_duration')
     @patch('subprocess.run')
-    def test_high_vrep_warns_without_corruption(self, mock_run, mock_duration):
-        """Vertical line repetition is a warning, not a corruption verdict"""
+    def test_high_vrep_is_note_not_warning(self, mock_run, mock_duration):
+        """Vertical line repetition is an informational note, never a warning.
+
+        Verified against production: 298 flagged files, spot checks across the
+        10-96% range all visually pristine (dark scenes, letterboxing,
+        monochrome lighting); genuinely corrupted content scores lower than
+        clean synthetic content on this metric."""
         mock_duration.return_value = 1000.0
         # Every sampled frame far over the 0.5 per-frame VREP threshold
         mock_run.return_value = self._mock_result([(0.0, 0.99)] * 200)
@@ -729,9 +734,8 @@ class TestTemporalOutlierDetection:
 
         assert is_corrupted is False
         assert details == []
-        assert len(warnings) == 1
-        assert 'vertical line repetition' in warnings[0].lower()
-        assert '100.0%' in warnings[0]
+        assert warnings == []
+        assert any('vertical line repetition' in n.lower() and '100.0%' in n for n in info)
 
     @patch('pixelprobe.media_checker._probe_video_duration')
     @patch('subprocess.run')
@@ -855,9 +859,9 @@ class TestTemporalOutlierDetection:
     @patch('pixelprobe.media_checker._probe_video_duration')
     @patch('subprocess.run')
     def test_stage2_warning_routed_to_warnings(self, mock_run, mock_duration):
-        """A Stage 2 VREP warning reaches the enhanced check as a warning"""
+        """A Stage 2 TOUT warning reaches the enhanced check as a warning"""
         mock_duration.return_value = 1000.0
-        mock_run.return_value = self._mock_result([(0.0, 0.99)] * 200)
+        mock_run.return_value = self._mock_result([(0.5, 0.0)] * 200)
 
         checker = PixelProbe()
         with patch.object(checker, '_check_frame_integrity', return_value=(False, [])), \
@@ -868,7 +872,7 @@ class TestTemporalOutlierDetection:
 
         assert is_corrupted is False
         assert details == []
-        assert any('Stage 2: Elevated vertical line repetition' in w for w in warnings)
+        assert any('Stage 2: High temporal outliers' in w for w in warnings)
         assert any('Result: WARNING' in line for line in output)
 
     @patch('pixelprobe.media_checker._probe_video_duration')
