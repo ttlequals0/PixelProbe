@@ -1054,6 +1054,17 @@ class TestFrameIntegrityPacketFirst:
         assert run.call_count == 1
         assert '-count_packets' in run.call_args_list[0][0][0]
 
+    def test_small_packet_diff_skips_decode(self):
+        # A 1-5% packet diff can never produce the >5% warning, so the
+        # expensive confirm decode must not run for it
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.return_value = self._proc('25/1', 'nb_read_packets', 240, '10.000000')  # 4% diff
+            is_corrupted, details, warnings = checker._check_frame_integrity('/fake.mp4')
+        assert is_corrupted is False
+        assert warnings == []
+        assert run.call_count == 1
+
     def test_packet_mismatch_falls_back_to_frame_count(self):
         checker = PixelProbe()
         with patch('pixelprobe.media_checker.safe_subprocess_run') as run:

@@ -13,16 +13,26 @@ Pillow. Known detection limits, asserted as such rather than papered over:
   erroring); only structural truncation is caught.
 """
 
+import importlib.util
 import os
-import random
 import subprocess
+from shutil import which
 
 import pytest
 from PIL import Image
 
-from pixelprobe.media_checker import PixelProbe
+from pixelprobe.media_checker import IMAGEMAGICK_BINARY, PixelProbe
 
 SAMPLES_DIR = os.path.join(os.path.dirname(__file__), 'fixtures', 'media_samples')
+
+# media_samples is not a package; load the committed fixture generator so the
+# test-time damage recipe cannot drift from the committed-fixture recipe
+_spec = importlib.util.spec_from_file_location(
+    'generate_corrupted_fixtures',
+    os.path.join(SAMPLES_DIR, 'generate_corrupted_fixtures.py'))
+_fixture_gen = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_fixture_gen)
+scattered_bytes = _fixture_gen.scattered_bytes
 
 VALID_SVG = (b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
              b'<rect width="10" height="10" fill="red"/></svg>')
@@ -31,17 +41,6 @@ VALID_SVG = (b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
 def _read(name):
     with open(os.path.join(SAMPLES_DIR, name), 'rb') as f:
         return f.read()
-
-
-def _scattered(data, stride=8192, span=1024, skip_head=8192, seed=7):
-    rng = random.Random(seed)
-    out = bytearray(data)
-    pos = skip_head
-    while pos < len(out):
-        for i in range(pos, min(pos + span, len(out))):
-            out[i] = rng.randrange(256)
-        pos += stride
-    return bytes(out)
 
 
 @pytest.fixture(scope='module')
@@ -69,7 +68,7 @@ def synthetic_dir(tmp_path_factory):
         'empty_mp4': write('empty.mp4', b''),
         'empty_jpg': write('empty.jpg', b''),
         'png_as_jpg': write('actually_png.jpg', png),
-        'mdat_damaged_mp4': write('mdat_damaged.mp4', _scattered(mp4)),
+        'mdat_damaged_mp4': write('mdat_damaged.mp4', scattered_bytes(mp4, stride=8192, span=1024, seed=7)),
         'valid_svg': write('valid.svg', VALID_SVG),
         'corrupted_svg': write('corrupted.svg', VALID_SVG[:40]),
     }
@@ -81,15 +80,14 @@ def synthetic_dir(tmp_path_factory):
     paths['trunc_progressive_jpg'] = write('trunc_progressive.jpg',
                                            prog_bytes[:int(len(prog_bytes) * 0.7)])
 
-    magick = 'magick' if _tool_available('magick') else 'convert'
-    if _tool_available(magick):
+    if which(IMAGEMAGICK_BINARY):
         psd = dest / 'valid.psd'
-        subprocess.run([magick, os.path.join(SAMPLES_DIR, 'valid.png'), str(psd)],
+        subprocess.run([IMAGEMAGICK_BINARY, os.path.join(SAMPLES_DIR, 'valid.png'), str(psd)],
                        check=True, capture_output=True)
         paths['valid_psd'] = psd
         paths['corrupted_psd'] = write('corrupted.psd', psd.read_bytes()[:200])
 
-    if _tool_available('ffmpeg'):
+    if which('ffmpeg'):
         anim = dest / 'valid_anim.webp'
         subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
                         'testsrc=duration=2:size=64x64:rate=10', '-y', str(anim)],
@@ -100,11 +98,6 @@ def synthetic_dir(tmp_path_factory):
                                          anim_bytes[:int(len(anim_bytes) * 0.6)])
 
     return paths
-
-
-def _tool_available(name):
-    from shutil import which
-    return which(name) is not None
 
 
 @pytest.fixture(scope='module')

@@ -400,7 +400,7 @@ def real_scan_data():
     samples_dir = os.path.join(os.path.dirname(__file__), 'fixtures', 'media_samples')
     data = []
     for filename in sorted(os.listdir(samples_dir)):
-        if filename.startswith(('valid.', 'corrupted.')) and not filename.endswith(('.md', '.py')):
+        if filename.startswith(('valid.', 'corrupted.')):
             path = os.path.join(samples_dir, filename)
             scan = checker.scan_file(path)
             if scan:

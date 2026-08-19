@@ -12,6 +12,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      SECRET_KEY: test-secret-key-for-github-actions
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
@@ -57,15 +59,12 @@ jobs:
 
     - name: Run tests with pytest
       env:
-        SECRET_KEY: test-secret-key-for-github-actions
         PIXELPROBE_TEST_POSTGRES_URI: postgresql://postgres:pixelprobe_test@localhost:5432/postgres
       run: |
         pytest -m "not real_media" --cov=pixelprobe --cov-report=xml --cov-report=term
 
     - name: Run real-media corruption detection tests
       if: matrix.python-version == '3.12'
-      env:
-        SECRET_KEY: test-secret-key-for-github-actions
       run: |
         pytest -m real_media -v
 

@@ -83,16 +83,20 @@ def truncate(src, dest, fraction):
     open(dest, 'wb').write(data[:int(len(data) * fraction)])
 
 
-def scattered(src, dest, stride, span, seed=42, skip_head=8192):
+def scattered_bytes(data, stride, span, seed=42, skip_head=8192):
     """Damage `span` bytes every `stride` bytes, leaving the header intact."""
     rng = random.Random(seed)
-    data = bytearray(open(src, 'rb').read())
+    out = bytearray(data)
     pos = skip_head
-    while pos < len(data):
-        for i in range(pos, min(pos + span, len(data))):
-            data[i] = rng.randrange(256)
+    while pos < len(out):
+        for i in range(pos, min(pos + span, len(out))):
+            out[i] = rng.randrange(256)
         pos += stride
-    open(dest, 'wb').write(data)
+    return bytes(out)
+
+
+def scattered(src, dest, stride, span, seed=42, skip_head=8192):
+    open(dest, 'wb').write(scattered_bytes(open(src, 'rb').read(), stride, span, seed, skip_head))
 
 
 def generate_corrupted_fixtures():

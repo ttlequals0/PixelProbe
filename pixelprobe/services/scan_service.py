@@ -130,6 +130,7 @@ class ScanService:
 
         # Create scan thread
         def run_scan():
+            checker = None
             # Set up Flask app context for the thread
             with app.app_context():
                 try:
@@ -179,6 +180,8 @@ class ScanService:
                     self.update_progress(1, 1, file_path, 'error')
                     raise
                 finally:
+                    if checker is not None:
+                        checker.dispose_database_connection()
                     # Clear thread reference to allow new scans
                     self.current_scan_thread = None
                     logger.debug("Single file scan thread cleaned up")
@@ -258,6 +261,7 @@ class ScanService:
         
         # Create scan thread
         def run_scan():
+            checker = None
             with app.app_context():
                 try:
                     # Get fresh ScanState object in worker thread
@@ -349,6 +353,8 @@ class ScanService:
                     db.session.commit()
                     raise
                 finally:
+                    if checker is not None:
+                        checker.dispose_database_connection()
                     # Clear thread reference to allow new scans
                     self.current_scan_thread = None
                     logger.info("File scan thread cleaned up")

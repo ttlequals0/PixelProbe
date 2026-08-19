@@ -302,7 +302,10 @@ class PixelProbe:
                         self.database_path,
                         poolclass=QueuePool,
                         pool_size=self.max_workers,
-                        max_overflow=2,
+                        # Overflow headroom so a caller that forgets to size
+                        # max_workers to its thread count degrades to on-demand
+                        # connections instead of a 30s checkout timeout
+                        max_overflow=10,
                         pool_pre_ping=True,
                         connect_args={
                             'connect_timeout': 10,
@@ -333,6 +336,11 @@ class PixelProbe:
         if self._db_session_factory:
             return self._db_session_factory()
         return None
+
+    def dispose_database_connection(self):
+        """Release pooled connections deterministically when a scan finishes"""
+        if self._db_engine:
+            self._db_engine.dispose()
     
     def discover_media_files(self, directories, max_files=None, existing_files=None, batch_check_callback=None, progress_callback=None):
         """Phase 1: Discover all supported files and return their paths (parallel version)
@@ -1149,7 +1157,7 @@ class PixelProbe:
                     logger.info(f"HEIC PIL load failed (may be libheif limitation) for {file_path}: {str(e)}")
                     # Don't mark as corrupted yet - ImageMagick will provide the definitive answer
                 # Pillow's decompression-bomb guard is a pixel-count limit, not corruption evidence
-                elif 'decompression bomb' in error_lower:
+                elif isinstance(e, Image.DecompressionBombError):
                     warning_details.append("Image exceeds Pillow pixel-count limit; PIL validation skipped (file likely valid)")
                     scan_output.append("PIL load test: SKIPPED (exceeds pixel-count limit)")
                     logger.info(f"Pillow decompression-bomb guard for {file_path}: {str(e)}")
@@ -2310,7 +2318,7 @@ class PixelProbe:
             count_flag,
             '-of', 'default=noprint_wrappers=1',
             '-v', 'quiet',
-            file_path
+            ensure_cli_safe_path(file_path)
         ], capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0 or not result.stdout.strip():
             return None
@@ -2334,6 +2342,13 @@ class PixelProbe:
             return None
         return framerate, count, duration
 
+    @staticmethod
+    def _frame_mismatch(framerate, count, duration):
+        """Return (expected, diff, diff_percent) for a counted stream"""
+        expected = int(framerate * duration)
+        diff = abs(expected - count)
+        return expected, diff, (diff / expected * 100) if expected > 0 else 0
+
     def _check_frame_integrity(self, file_path):
         """Compare decodable frame count against container metadata expectations.
 
@@ -2353,32 +2368,27 @@ class PixelProbe:
             # Cheap pass first: -count_packets does no decode. The full
             # -count_frames decode is sequential and can take minutes on large
             # files, so it only runs to confirm an ambiguous packet count.
+            # (Header metadata such as nb_frames cannot stand in for this pass:
+            # a truncated mdat with an intact moov still claims the full sample
+            # count, so only counting what is actually present has signal.)
             probed = self._probe_stream_counts(
                 file_path, '-count_packets', 'nb_read_packets', timeout=60)
             if probed:
-                framerate, actual_packets, duration = probed
-                expected_frames = int(framerate * duration)
-                packet_diff_percent = (abs(expected_frames - actual_packets) / expected_frames * 100) \
-                    if expected_frames > 0 else 0
-                if packet_diff_percent <= 1.0:
-                    logger.info(f"Frame analysis (packets): expected {expected_frames}, "
-                                f"found {actual_packets} ({packet_diff_percent:.1f}% diff) - OK")
-                else:
+                expected, diff, diff_percent = self._frame_mismatch(*probed)
+                logger.info(f"Frame analysis (packets): expected {expected}, "
+                            f"found {probed[1]}, diff {diff} ({diff_percent:.1f}%)")
+                if diff_percent > 5.0:
                     # Packets and frames can legitimately differ; confirm with a decode
                     probed = self._probe_stream_counts(
                         file_path, '-count_frames', 'nb_read_frames', timeout=120)
                     if probed:
-                        framerate, actual_frames, duration = probed
-                        expected_frames = int(framerate * duration)
-                        frame_diff = abs(expected_frames - actual_frames)
-                        frame_diff_percent = (frame_diff / expected_frames * 100) \
-                            if expected_frames > 0 else 0
-                        logger.info(f"Frame analysis (decoded): expected {expected_frames}, "
-                                    f"found {actual_frames}, diff {frame_diff} ({frame_diff_percent:.1f}%)")
-                        if frame_diff_percent > 5.0:
+                        expected, diff, diff_percent = self._frame_mismatch(*probed)
+                        logger.info(f"Frame analysis (decoded): expected {expected}, "
+                                    f"found {probed[1]}, diff {diff} ({diff_percent:.1f}%)")
+                        if diff_percent > 5.0:
                             warning_details.append(
-                                f"Frame count differs from container metadata by {frame_diff} frames "
-                                f"({frame_diff_percent:.1f}%) - possible missing frames or "
+                                f"Frame count differs from container metadata by {diff} frames "
+                                f"({diff_percent:.1f}%) - possible missing frames or "
                                 f"sparse/variable frame rate content")
 
         except subprocess.TimeoutExpired:
