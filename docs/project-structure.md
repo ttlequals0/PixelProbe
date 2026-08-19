@@ -46,7 +46,6 @@ PixelProbe/
 |   |   +-- maintenance_service.py
 |   |   +-- notification_service.py
 |   |   +-- scan_engine.py        # Chunk building, scan finalization
-|   |   +-- scan_executor.py
 |   |   +-- scan_reporting.py     # Scan reports, batch file inserts
 |   |   +-- scan_service.py
 |   |   `-- stats_service.py

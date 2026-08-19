@@ -157,7 +157,6 @@ api/
 - `MaintenanceService`: Database maintenance
 - `NotificationService`: Notification provider dispatch and rule evaluation
 - `HealthcheckService`: Outbound healthcheck pings for scheduled scans
-- `ScanExecutor`: Bounded thread-pool execution for selected-file rescans
 - `scan_engine`: Celery-free core of the chunk-distributed scan engine (scan-slot claim, chunk building, finalization)
 - `scan_reporting`: Scan report creation
 

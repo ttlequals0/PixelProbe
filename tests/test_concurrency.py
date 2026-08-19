@@ -302,33 +302,3 @@ class TestConcurrency:
         
         # Check for inconsistencies
         assert len(inconsistencies) == 0, f"State inconsistencies detected: {inconsistencies}"
-    
-    def test_file_discovery_deduplication(self, app):
-        """Test that file discovery properly deduplicates across parallel workers"""
-        from pixelprobe.services.scan_executor import BatchProcessor
-        
-        test_files = [f'/test/file_{i}.mp4' for i in range(100)]
-        
-        # Simulate parallel discovery with overlapping results
-        def discover_files(start, end):
-            # Intentionally create overlaps
-            return test_files[max(0, start-5):min(100, end+5)]
-        
-        # Run parallel discovery
-        results = BatchProcessor.parallel_map(
-            lambda r: discover_files(r[0], r[1]),
-            [(0, 25), (20, 50), (45, 75), (70, 100)],
-            max_workers=4
-        )
-        
-        # Flatten and deduplicate
-        all_files = []
-        for batch in results:
-            if batch:
-                all_files.extend(batch)
-        
-        unique_files = list(set(all_files))
-        
-        # Verify deduplication works
-        assert len(unique_files) == len(test_files), \
-            f"Expected {len(test_files)} unique files, got {len(unique_files)}"
