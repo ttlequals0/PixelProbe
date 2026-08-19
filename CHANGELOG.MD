@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Valid oversized images are no longer reported corrupted.** Any image past Pillow's decompression-bomb threshold (~358MP at defaults) fell through to ImageMagick, whose `cache resources exhausted` exit landed in the generic corruption branch, so a perfectly valid 625MP scan was flagged the same as real pixel damage. Both guards are resource limits, not corruption evidence; they now produce a warning verdict following the existing HEIC libheif pattern.
-- **Parallel file-list scans no longer share one database connection across worker threads.** The scan-files API path (default `num_workers=4`) fanned a single PixelProbe instance across a thread pool while its engine used StaticPool, one raw psycopg2 connection that psycopg2 forbids using concurrently - surfacing as sporadic save/cache failures. The worker engine now uses a QueuePool sized to the worker count, and a postgres-backed regression test fails against the old pool.
+- **Valid oversized images are no longer reported corrupted.** Any image past Pillow's decompression-bomb threshold (~358MP at defaults) fell through to ImageMagick, whose `cache resources exhausted` exit landed in the generic corruption branch, so a valid 625MP scan was flagged the same as real pixel damage. Both guards are resource limits, not corruption evidence; they now produce a warning verdict following the existing HEIC libheif pattern.
+- **Parallel file-list scans no longer share one database connection across worker threads.** The scan-files API path (default `num_workers=4`) fanned a single PixelProbe instance across a thread pool while its engine used StaticPool, one raw psycopg2 connection that psycopg2 forbids using concurrently; the symptom was sporadic save and cache failures. The worker engine now uses a QueuePool sized to the worker count, and a postgres-backed regression test fails against the old pool.
 
 ### Changed
 
