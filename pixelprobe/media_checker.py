@@ -290,7 +290,8 @@ class PixelProbe:
                 from sqlalchemy.orm import sessionmaker
                 from sqlalchemy.pool import QueuePool, StaticPool
                 from pixelprobe.config import PG_SESSION_TZ_UTC
-                if self.database_path.startswith('postgresql://'):
+                # Match driver-qualified URLs too (postgresql+psycopg2://...)
+                if self.database_path.startswith(('postgresql://', 'postgresql+')):
                     # QueuePool sized to the worker count: each scan thread checks out
                     # its own connection. StaticPool shared one raw psycopg2 connection
                     # across ThreadPoolExecutor workers, which psycopg2 forbids using
@@ -318,11 +319,14 @@ class PixelProbe:
                 else:
                     # SQLite (tests only; production is PostgreSQL-only since v2.2.0).
                     # StaticPool is required for :memory: databases to share one
-                    # connection; check_same_thread=False permits cross-thread use.
+                    # connection; check_same_thread=False permits cross-thread use
+                    # (and is an invalid connect arg for any other driver).
+                    connect_args = {'check_same_thread': False} \
+                        if self.database_path.startswith('sqlite') else {}
                     self._db_engine = create_engine(
                         self.database_path,
                         poolclass=StaticPool,
-                        connect_args={'check_same_thread': False}
+                        connect_args=connect_args
                     )
                 self._db_session_factory = sessionmaker(bind=self._db_engine)
                 logger.info(f"Worker database engine initialized (pool sized for {self.max_workers} workers)")
@@ -1099,6 +1103,7 @@ class PixelProbe:
         
         pil_load_failed = False
         pil_load_error = None
+        pil_size_limited = False  # Pillow bomb guard fired: a size limit, not a PIL failure
 
         # File size needed for JPEG pixel analysis guard and ImageMagick timeout
         try:
@@ -1158,6 +1163,7 @@ class PixelProbe:
                     # Don't mark as corrupted yet - ImageMagick will provide the definitive answer
                 # Pillow's decompression-bomb guard is a pixel-count limit, not corruption evidence
                 elif isinstance(e, Image.DecompressionBombError):
+                    pil_size_limited = True
                     warning_details.append("Image exceeds Pillow pixel-count limit; PIL validation skipped (file likely valid)")
                     scan_output.append("PIL load test: SKIPPED (exceeds pixel-count limit)")
                     logger.info(f"Pillow decompression-bomb guard for {file_path}: {str(e)}")
@@ -1221,7 +1227,7 @@ class PixelProbe:
                 else:
                     # Check if PIL passed before marking as corrupted
                     # ImageMagick might fail due to missing delegates/decoders
-                    if not pil_failed and not pil_load_failed:
+                    if pil_size_limited or (not pil_failed and not pil_load_failed):
                         # PIL passed, so file is likely OK - ImageMagick issue
                         warning_details.append("ImageMagick convert failed (but PIL passed - likely decoder issue)")
                         scan_output.append("Note: ImageMagick failed but PIL verified OK")
@@ -1276,8 +1282,10 @@ class PixelProbe:
             # Only mark as corrupted if other tools also failed
             timeout_msg = f"ImageMagick convert timeout ({imagemagick_timeout}s) - file may be very complex"
             
-            # If PIL passed, treat timeout as warning rather than corruption
-            if not pil_failed and not pil_load_failed:
+            # If PIL passed (or only hit its size guard), treat timeout as
+            # warning rather than corruption - a huge valid image can outlast
+            # the size-scaled timeout before hitting ImageMagick's cache limit
+            if pil_size_limited or (not pil_failed and not pil_load_failed):
                 warning_details.append(timeout_msg)
                 scan_output.append("ImageMagick identify: TIMEOUT (treating as warning - PIL verification passed)")
                 logger.warning(f"ImageMagick timeout for {file_path} - treating as warning since PIL passed")

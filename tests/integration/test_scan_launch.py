@@ -89,3 +89,31 @@ class TestScanLaunchResponseShape:
                                 'pixelprobe.api.scan_routes_parallel')
         assert response.status_code == 200
         assert 'directories' not in response.get_json()
+
+
+class TestNumWorkersCap:
+
+    def test_api_num_workers_is_capped(self, authenticated_client, app, db,
+                                       monkeypatch, tmp_path):
+        """Caller-supplied num_workers sizes thread pools and the checker's
+        DB connection pool, so the route must clamp it to MAX_WORKERS."""
+        with app.app_context():
+            captured = {}
+
+            def fake_scan_files(file_paths, force_rescan=False, num_workers=1, **kwargs):
+                captured['num_workers'] = num_workers
+                return {'status': 'started', 'num_workers': num_workers}
+
+            monkeypatch.setattr(app.scan_service, 'scan_files', fake_scan_files)
+            monkeypatch.setattr('pixelprobe.api.scan_routes.check_celery_available',
+                                lambda: False)
+            media = tmp_path / 'clip.mp4'
+            media.write_bytes(b'\x00' * 128)
+
+            response = authenticated_client.post('/api/scan-files-parallel', json={
+                'file_paths': [str(media)],
+                'num_workers': 999,
+            })
+            assert response.status_code == 200
+            assert captured['num_workers'] <= app.config.get('MAX_WORKERS', 10)
+            assert captured['num_workers'] >= 1

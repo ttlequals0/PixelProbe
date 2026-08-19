@@ -157,6 +157,24 @@ class TestOversizedImages:
         assert warning_details, "expected a tool-limit warning"
         assert any('limit' in w.lower() for w in warning_details)
 
+    def test_oversized_image_imagemagick_timeout_is_warning(self, tmp_path):
+        # A huge valid image can outlast the size-scaled ImageMagick timeout
+        # before hitting its cache limit; with PIL's bomb guard also fired,
+        # that combination must stay a warning, not corruption
+        import subprocess
+        from unittest.mock import patch
+        from pixelprobe.media_checker import PixelProbe
+        big = tmp_path / 'big_timeout.png'
+        self._make_oversized(big, 'L', (20000, 20000), compress_level=1)
+
+        checker = PixelProbe(database_path=None)
+        with patch('pixelprobe.media_checker.safe_subprocess_run',
+                   side_effect=subprocess.TimeoutExpired(cmd='magick', timeout=60)):
+            is_corrupted, corruption_details, _, _, warning_details = \
+                checker._check_image_corruption(str(big))
+        assert is_corrupted is False, corruption_details
+        assert warning_details
+
     def test_decompression_bomb_scale_image_not_corrupted(self, tmp_path):
         from pixelprobe.media_checker import PixelProbe
         # 3.6GP 1-bit image, tiny on disk: both guards must trigger, verdict stays sane

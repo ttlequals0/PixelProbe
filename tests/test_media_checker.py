@@ -1031,6 +1031,15 @@ class TestWorkerDatabasePool:
         assert isinstance(checker._db_engine.pool, QueuePool)
         assert checker._db_engine.pool.size() == 6
 
+    def test_driver_qualified_postgres_url_not_treated_as_sqlite(self):
+        # postgresql+psycopg2:// URLs pass app.py's startswith('postgresql')
+        # check and must not fall into the SQLite branch, whose
+        # check_same_thread connect arg psycopg2 rejects
+        from sqlalchemy.pool import QueuePool
+        checker = PixelProbe(database_path='postgresql+psycopg2://u:p@localhost:5/db', max_workers=3)
+        assert checker._db_engine is not None
+        assert isinstance(checker._db_engine.pool, QueuePool)
+
 
 class TestFrameIntegrityPacketFirst:
     """Stage 1 frame check: cheap -count_packets pass before full-decode -count_frames"""

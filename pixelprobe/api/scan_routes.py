@@ -912,7 +912,14 @@ def scan_files_parallel():
     
     data = request.get_json() or {}
     force_rescan = data.get('force_rescan', False)
-    num_workers = data.get('num_workers', 4)
+    # Cap caller-supplied worker counts: num_workers sizes thread pools and
+    # the checker's DB connection pool, so an uncapped value translates
+    # directly into PostgreSQL connections
+    try:
+        num_workers = int(data.get('num_workers', 4))
+    except (TypeError, ValueError):
+        num_workers = 4
+    num_workers = max(1, min(num_workers, current_app.config.get('MAX_WORKERS', 10)))
     scan_dirs = data.get('directories', [])
     file_paths = data.get('file_paths', [])
     
