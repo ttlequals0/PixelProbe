@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.4] - 2026-08-18
+
+### Fixed
+
+- **Scan progress no longer freezes after a revival.** Each revived chunk task restarted its tally at zero and overwrote the chunk's cumulative `files_scanned`, so the scan-wide sum collapsed below the stored high-water mark and the progress counter froze there (observed in production: headline stuck at 3,386 while chunk sums restarted from 131), with the final report undercounting by every pre-revival file. Chunk accounting is now additive across attempts, and the base is cross-checked against files actually finished in the chunk's range since the scan started, which also repairs tallies already clobbered by earlier revivals - the live scan self-heals on its next revival cycle.
+
 ## [2.8.3] - 2026-08-18
 
 ### Fixed

@@ -351,3 +351,71 @@ class TestWorkerLostRedelivery:
             assert result['files_processed'] == 1
             row = ScanResult.query.filter_by(file_path='/nonexistent/f1.mkv').first()
             assert row.scan_status != 'scanning'
+
+
+class TestRevivalPreservesProgress:
+    """A revived chunk restarts its local counter at zero; the chunk's prior
+    tally must survive, or the scan's aggregate freezes at the pre-revival
+    high-water mark (sync_progress_from_chunks never decreases) and the final
+    report undercounts by every pre-revival file."""
+
+    def test_revived_chunk_adds_to_prior_tally(self, tp, app, db):
+        with app.app_context():
+            _add_pending(db, ['/nonexistent/r1.mkv'])
+            row = ScanResult.query.filter_by(file_path='/nonexistent/r1.mkv').first()
+            row.scan_status = 'scanning'  # claimed by the dead pre-revival attempt
+            _make_scan_state(db, 'scan-rv1')
+            chunk = _make_chunk(db, 'scan-rv1', '/nonexistent/r1.mkv',
+                                '/nonexistent/r1.mkv', status='processing',
+                                files_scanned=300)
+            db.session.commit()
+
+            result = tp.process_chunk_task.apply(args=(chunk.id, 'scan-rv1')).get()
+
+            assert result['status'] == 'SUCCESS'
+            db.session.expire_all()
+            chunk = db.session.get(ScanChunk, chunk.id)
+            assert chunk.files_scanned == 301
+            state = ScanState.query.filter_by(scan_id='scan-rv1').first()
+            assert state.files_processed == 301
+
+    def test_clobbered_tally_recovered_from_db(self, tp, app, db):
+        """A chunk whose tally was overwritten by a pre-fix revival recomputes
+        its base from files completed in-range since the scan started."""
+        with app.app_context():
+            state = _make_scan_state(db, 'scan-rv3')
+            done = ScanResult(file_path='/nonexistent/s1.mkv',
+                              scan_status='completed',
+                              scan_date=datetime.now(timezone.utc))
+            db.session.add(done)
+            _add_pending(db, ['/nonexistent/s2.mkv'])
+            chunk = _make_chunk(db, 'scan-rv3', '/nonexistent/s1.mkv',
+                                '/nonexistent/s2.mkv', status='processing',
+                                files_scanned=0)  # clobbered by the old bug
+            db.session.commit()
+
+            result = tp.process_chunk_task.apply(args=(chunk.id, 'scan-rv3')).get()
+
+            assert result['status'] == 'SUCCESS'
+            db.session.expire_all()
+            chunk = db.session.get(ScanChunk, chunk.id)
+            assert chunk.files_scanned == 2
+
+    def test_empty_reclaim_keeps_prior_tally(self, tp, app, db):
+        with app.app_context():
+            # Every file in range already completed; revival redelivery finds
+            # nothing to claim and must not zero the prior tally
+            db.session.add(ScanResult(file_path='/nonexistent/r2.mkv',
+                                      scan_status='completed'))
+            _make_scan_state(db, 'scan-rv2')
+            chunk = _make_chunk(db, 'scan-rv2', '/nonexistent/r2.mkv',
+                                '/nonexistent/r2.mkv', status='processing',
+                                files_scanned=250)
+            db.session.commit()
+
+            result = tp.process_chunk_task.apply(args=(chunk.id, 'scan-rv2')).get()
+
+            assert result['status'] == 'SKIPPED'
+            db.session.expire_all()
+            chunk = db.session.get(ScanChunk, chunk.id)
+            assert chunk.files_scanned == 250
