@@ -5,12 +5,22 @@ committed files were HTML error pages) are produced with ffmpeg/PIL; their
 corrupted counterparts are derived from them with deterministic damage
 recipes tuned so the scanner genuinely detects each one.
 
+The corrupted.mp3/aiff/jpg/png/gif/bmp samples originally came from the
+FFmpeg bug tracker, but the bugs they exercised were in old FFmpeg, not in
+the files: modern decoders accept all six without a single error, so they
+could never fail a detection test. They are likewise replaced with derived
+damage from the valid samples.
+
 Detection expectations per format (verified against ffmpeg 6/8 and
 ImageMagick 6/7):
-- mkv, opus, wmv, 3gp, flv, heic, heif: corruption verdict
+- mkv, opus, wmv, 3gp, flv, heic, heif, mp3, aiff, jpg, png, bmp:
+  corruption verdict
 - mpg: warning verdict only. MPEG-1 decoders conceal even heavy scattered
   damage and exit cleanly, so the frame-count-vs-metadata warning is the
   only signal PixelProbe can produce for this format.
+- gif: warning verdict only. GIF header issues are deliberately demoted to
+  warnings (historical false positives on playable files), and GIF pixel
+  damage decodes without errors.
 
 Run from the repository root:
     python tests/fixtures/media_samples/generate_corrupted_fixtures.py
@@ -45,6 +55,8 @@ def generate_valid_fixtures():
                   '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2',
                   '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac',
                   '-shortest', _path('valid.mkv')],
+        ffmpeg + ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2',
+                  '-c:a', 'pcm_s16be', _path('valid.aiff')],
     ]
     for cmd in commands:
         subprocess.run(cmd, check=True)
@@ -94,6 +106,13 @@ def generate_corrupted_fixtures():
     truncate(_path('valid.flv'), _path('corrupted.flv'), 0.15)
     # MPEG-1 conceals damage; this still only yields a frame-count warning
     scattered(_path('valid.mpg'), _path('corrupted.mpg'), stride=4096, span=2048)
+    truncate(_path('valid.mp3'), _path('corrupted.mp3'), 0.3)
+    corrupt_range(_path('valid.aiff'), _path('corrupted.aiff'), 0, 256)
+    truncate(_path('valid.jpg'), _path('corrupted.jpg'), 0.5)
+    truncate(_path('valid.png'), _path('corrupted.png'), 0.5)
+    truncate(_path('valid.bmp'), _path('corrupted.bmp'), 0.5)
+    # GIF header issues are deliberately demoted; truncation yields a warning
+    truncate(_path('valid.gif'), _path('corrupted.gif'), 0.5)
 
 
 if __name__ == '__main__':

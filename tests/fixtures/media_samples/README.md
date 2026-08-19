@@ -30,7 +30,7 @@ synthesized files (see "Synthesized fixtures" below).
 - `valid.ogg` - Ogg Vorbis audio
 - `valid.wma` - Windows Media Audio
 - `valid.opus` - Opus audio codec
-- `valid.aiff` - Audio Interchange File Format
+- `valid.aiff` - 16-bit PCM AIFF (synthesized)
 
 ## Corrupted/Problematic Files (17 formats)
 ### Video Issues
@@ -41,21 +41,21 @@ synthesized files (see "Synthesized fixtures" below).
 - `corrupted.webm` - WebM from roundup issue
 
 ### Image Issues
-- `corrupted.jpg` - Small/incomplete JPEG (authentica.jpg)
-- `corrupted.png` - PNG with known bug (pngbug_001)
-- `corrupted.gif` - Broken GIF (ban4[1].gif)
-- `corrupted.bmp` - BMP from bug #874 (correct_rgb_image.bmp)
+- `corrupted.jpg` - valid.jpg truncated at 50%
+- `corrupted.png` - valid.png truncated at 50%
+- `corrupted.gif` - valid.gif truncated at 50% (warning-level: GIF header issues are deliberately demoted)
+- `corrupted.bmp` - valid.bmp truncated at 50%
 - `corrupted.tiff` - TIFF with invalid strip offset size
 
 ### Audio Issues
 - `corrupted.flac` - FLAC from bug #810 (milk_30sec.flac)
 - `corrupted.wav` - WAV with format 0x1501
-- `corrupted.mp3` - MP3 with broken first frame
+- `corrupted.mp3` - valid.mp3 truncated at 30%
 - `corrupted.aac` - AAC with decoding errors
 - `corrupted.m4a` - M4A from issue #1254
 - `corrupted.ogg` - Ogg Vorbis with bad loop (Lumme-Badloop)
 - `corrupted.wma` - Broken WMA2 file
-- `corrupted.aiff` - Invalid AIFF with no common chunk
+- `corrupted.aiff` - valid.aiff with randomized header (first 256 bytes)
 
 ## Synthesized fixtures
 
@@ -63,6 +63,10 @@ The originally committed `valid.3gp`, `valid.flv`, `valid.mpg`, and
 `valid.wmv` were 189-byte HTML error pages from failed downloads. They and
 their corrupted counterparts (plus `corrupted.mkv`, `corrupted.opus`,
 `corrupted.heic`, `corrupted.heif`) are now generated locally by
+`generate_corrupted_fixtures.py`. The corrupted mp3/aiff/jpg/png/gif/bmp
+samples originally came from the FFmpeg bug tracker, but the bugs they
+exercised were in old FFmpeg rather than in the files - modern decoders
+accept all six without error - so they are also generated locally by
 `generate_corrupted_fixtures.py` with deterministic damage recipes; run it
 from the repository root to regenerate. `valid.3g2`, `valid.mpe`,
 `valid.mpeg`, and `valid.mpv` remain symlinks to their sibling formats.
