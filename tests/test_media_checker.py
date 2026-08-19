@@ -864,7 +864,7 @@ class TestTemporalOutlierDetection:
         mock_run.return_value = self._mock_result([(0.5, 0.0)] * 200)
 
         checker = PixelProbe()
-        with patch.object(checker, '_check_frame_integrity', return_value=(False, [])), \
+        with patch.object(checker, '_check_frame_integrity', return_value=(False, [], [])), \
              patch.object(checker, '_check_strict_error_detection', return_value=(False, [])):
             is_corrupted, details, output, warnings, has_notes = checker._enhanced_corruption_check(
                 '/fake/video.mkv', file_size_gb=2.0
@@ -886,7 +886,7 @@ class TestTemporalOutlierDetection:
         ]
 
         checker = PixelProbe()
-        with patch.object(checker, '_check_frame_integrity', return_value=(False, [])), \
+        with patch.object(checker, '_check_frame_integrity', return_value=(False, [], [])), \
              patch.object(checker, '_check_strict_error_detection', return_value=(False, [])):
             is_corrupted, details, output, warnings, has_notes = checker._enhanced_corruption_check(
                 '/fake/video.mkv', file_size_gb=2.0
@@ -1030,3 +1030,68 @@ class TestWorkerDatabasePool:
         assert checker._db_engine is not None
         assert isinstance(checker._db_engine.pool, QueuePool)
         assert checker._db_engine.pool.size() == 6
+
+
+class TestFrameIntegrityPacketFirst:
+    """Stage 1 frame check: cheap -count_packets pass before full-decode -count_frames"""
+
+    def _proc(self, framerate, count_key, count, duration, rc=0):
+        m = MagicMock()
+        m.returncode = rc
+        m.stdout = f"avg_frame_rate={framerate}\n{count_key}={count}\nduration={duration}\n"
+        m.stderr = ''
+        return m
+
+    def test_packet_count_match_skips_frame_decode(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            # 25fps * 10s = 250 expected; 250 packets reported
+            run.return_value = self._proc('25/1', 'nb_read_packets', 250, '10.000000')
+            is_corrupted, details, warnings = checker._check_frame_integrity('/fake.mp4')
+        assert is_corrupted is False
+        assert details == []
+        assert warnings == []
+        assert run.call_count == 1
+        assert '-count_packets' in run.call_args_list[0][0][0]
+
+    def test_packet_mismatch_falls_back_to_frame_count(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.side_effect = [
+                self._proc('25/1', 'nb_read_packets', 200, '10.000000'),  # 20% short: ambiguous
+                self._proc('25/1', 'nb_read_frames', 248, '10.000000'),   # decode: 0.8% diff, fine
+            ]
+            is_corrupted, details, warnings = checker._check_frame_integrity('/fake.mp4')
+        assert is_corrupted is False
+        assert details == []
+        assert warnings == []
+        assert run.call_count == 2
+        assert '-count_frames' in run.call_args_list[1][0][0]
+
+    def test_confirmed_frame_mismatch_is_warning_not_corruption(self):
+        # Container metadata lies on sparse-video/VFR files, so even a
+        # decode-confirmed mismatch must never produce a corruption verdict
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.side_effect = [
+                self._proc('25/1', 'nb_read_packets', 200, '10.000000'),
+                self._proc('25/1', 'nb_read_frames', 200, '10.000000'),   # decode confirms 20% diff
+            ]
+            is_corrupted, details, warnings = checker._check_frame_integrity('/fake.mp4')
+        assert is_corrupted is False
+        assert details == []
+        assert any('frame count differs' in w.lower() for w in warnings)
+
+    def test_unavailable_metadata_skips_check(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = "avg_frame_rate=N/A\nnb_read_packets=200\nduration=N/A\n"
+            m.stderr = ''
+            run.return_value = m
+            is_corrupted, details, warnings = checker._check_frame_integrity('/fake.mkv')
+        assert is_corrupted is False
+        assert details == []
+        assert warnings == []
+        assert run.call_count == 1

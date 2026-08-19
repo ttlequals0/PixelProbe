@@ -2226,12 +2226,15 @@ class PixelProbe:
         enhanced_output.append(f"=== Enhanced Corruption Analysis for {file_size_gb:.2f}GB file ===")
         
         # Stage 1: Frame count verification
-        frame_corrupted, frame_details = self._check_frame_integrity(file_path)
+        frame_corrupted, frame_details, frame_warnings = self._check_frame_integrity(file_path)
         enhanced_output.append("Stage 1: Frame integrity check")
         if frame_corrupted:
             is_corrupted = True
             corruption_details.extend(frame_details)
             enhanced_output.append(f"  Result: FAILED - {'; '.join(frame_details)}")
+        elif frame_warnings:
+            warning_details.extend([f"Stage 1: {detail}" for detail in frame_warnings])
+            enhanced_output.append(f"  Result: WARNING - {'; '.join(frame_warnings)}")
         else:
             enhanced_output.append("  Result: PASSED")
         
@@ -2290,57 +2293,94 @@ class PixelProbe:
         enhanced_output.append(f"=== Enhanced Analysis Complete: {'CORRUPTED' if is_corrupted else 'CLEAN'} ===")
         return is_corrupted, corruption_details, enhanced_output, warning_details, has_notes
     
+    def _probe_stream_counts(self, file_path, count_flag, count_key, timeout):
+        """One ffprobe pass; returns (framerate, count, duration) or None if unavailable.
+
+        Uses key=value output because ffprobe orders csv columns by its own
+        section layout, not the requested order (the old csv parser expected a
+        column count ffmpeg 8 never emits, so the check silently never ran).
+        Duration comes from the format section because Matroska streams report
+        duration=N/A. avg_frame_rate is used instead of r_frame_rate so
+        variable-frame-rate content does not overshoot the expected count.
+        """
+        result = safe_subprocess_run([
+            'ffprobe',
+            '-show_entries', f'stream=avg_frame_rate,{count_key}:format=duration',
+            '-select_streams', 'v:0',
+            count_flag,
+            '-of', 'default=noprint_wrappers=1',
+            '-v', 'quiet',
+            file_path
+        ], capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        values = {}
+        for line in result.stdout.strip().splitlines():
+            key, sep, value = line.partition('=')
+            if sep and value and value != 'N/A' and key not in values:
+                values[key] = value
+        try:
+            framerate_str = values['avg_frame_rate']
+            if '/' in framerate_str:
+                num, den = map(float, framerate_str.split('/'))
+                framerate = num / den if den != 0 else 0.0
+            else:
+                framerate = float(framerate_str)
+            count = int(values[count_key])
+            duration = float(values['duration'])
+        except (KeyError, ValueError):
+            return None
+        if framerate <= 0 or duration <= 0:
+            return None
+        return framerate, count, duration
+
     def _check_frame_integrity(self, file_path):
-        """Verify frame count matches expected count based on duration and framerate"""
+        """Compare decodable frame count against container metadata expectations.
+
+        Returns (is_corrupted, corruption_details, warning_details). A confirmed
+        mismatch is a warning, never a corruption verdict: container framerate
+        lies on sparse-video and variable-frame-rate files (a 240s QuickTime
+        with 244 real frames declares 25fps), and real decode damage is caught
+        by the err_detect deep-decode stage. Only an ffprobe process crash
+        marks corruption here.
+        """
         corruption_details = []
+        warning_details = []
         is_corrupted = False
-        
+
         try:
             logger.info(f"Checking frame integrity for {file_path}")
-            result = safe_subprocess_run([
-                'ffprobe', 
-                '-show_entries', 'stream=r_frame_rate,nb_read_frames,duration',
-                '-select_streams', 'v:0',
-                '-count_frames',
-                '-of', 'csv=p=0',
-                '-v', 'quiet',
-                file_path
-            ], capture_output=True, text=True, timeout=120)
-            
-            if result.returncode == 0 and result.stdout.strip():
-                lines = result.stdout.strip().split('\n')
-                if lines:
-                    # Parse: stream,framerate,frame_count,duration
-                    parts = lines[0].split(',')
-                    if len(parts) >= 4:
-                        framerate_str = parts[1]
-                        frame_count_str = parts[2]
-                        duration_str = parts[3]
-                        
-                        if framerate_str and frame_count_str and duration_str:
-                            # Calculate expected vs actual frames
-                            if '/' in framerate_str:
-                                num, den = map(float, framerate_str.split('/'))
-                                framerate = num / den if den != 0 else 0
-                            else:
-                                framerate = float(framerate_str)
-                            
-                            actual_frames = int(frame_count_str) if frame_count_str.isdigit() else 0
-                            duration = float(duration_str)
-                            expected_frames = int(framerate * duration)
-                            
-                            frame_diff = abs(expected_frames - actual_frames)
-                            frame_diff_percent = (frame_diff / expected_frames * 100) if expected_frames > 0 else 0
-                            
-                            logger.info(f"Frame analysis: Expected {expected_frames}, Found {actual_frames}, Diff: {frame_diff} ({frame_diff_percent:.1f}%)")
-                            
-                            # Consider significant frame loss as corruption (>5% missing)
-                            if frame_diff_percent > 5.0:
-                                corruption_details.append(f"Significant frame loss: {frame_diff} frames missing ({frame_diff_percent:.1f}%)")
-                                is_corrupted = True
-                            elif frame_diff_percent > 1.0:
-                                corruption_details.append(f"Minor frame inconsistency: {frame_diff} frames ({frame_diff_percent:.1f}%)")
-                        
+            # Cheap pass first: -count_packets does no decode. The full
+            # -count_frames decode is sequential and can take minutes on large
+            # files, so it only runs to confirm an ambiguous packet count.
+            probed = self._probe_stream_counts(
+                file_path, '-count_packets', 'nb_read_packets', timeout=60)
+            if probed:
+                framerate, actual_packets, duration = probed
+                expected_frames = int(framerate * duration)
+                packet_diff_percent = (abs(expected_frames - actual_packets) / expected_frames * 100) \
+                    if expected_frames > 0 else 0
+                if packet_diff_percent <= 1.0:
+                    logger.info(f"Frame analysis (packets): expected {expected_frames}, "
+                                f"found {actual_packets} ({packet_diff_percent:.1f}% diff) - OK")
+                else:
+                    # Packets and frames can legitimately differ; confirm with a decode
+                    probed = self._probe_stream_counts(
+                        file_path, '-count_frames', 'nb_read_frames', timeout=120)
+                    if probed:
+                        framerate, actual_frames, duration = probed
+                        expected_frames = int(framerate * duration)
+                        frame_diff = abs(expected_frames - actual_frames)
+                        frame_diff_percent = (frame_diff / expected_frames * 100) \
+                            if expected_frames > 0 else 0
+                        logger.info(f"Frame analysis (decoded): expected {expected_frames}, "
+                                    f"found {actual_frames}, diff {frame_diff} ({frame_diff_percent:.1f}%)")
+                        if frame_diff_percent > 5.0:
+                            warning_details.append(
+                                f"Frame count differs from container metadata by {frame_diff} frames "
+                                f"({frame_diff_percent:.1f}%) - possible missing frames or "
+                                f"sparse/variable frame rate content")
+
         except subprocess.TimeoutExpired:
             corruption_details.append("Frame integrity check timeout")
         except OSError as e:
@@ -2350,8 +2390,8 @@ class PixelProbe:
             is_corrupted = True
         except Exception as e:
             logger.debug(f"Frame integrity check error: {str(e)}")
-        
-        return is_corrupted, corruption_details
+
+        return is_corrupted, corruption_details, warning_details
     
     def _check_temporal_outliers(self, file_path, duration=None):
         """Detect temporal outliers that indicate visual corruption using signalstats
