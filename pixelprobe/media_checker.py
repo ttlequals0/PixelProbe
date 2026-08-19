@@ -1107,9 +1107,8 @@ class PixelProbe:
                 else:
                     scan_output.append(f"Image dimensions: {img.size[0]}x{img.size[1]}")
                 
-                # Note: After load(), tile data is consumed and cleared in PIL - this is normal behavior
-                # Removed incorrect tile data check that was causing false positives
-                
+                    # Note: After load(), tile data is consumed and cleared in PIL - this is normal behavior
+                    # Removed incorrect tile data check that was causing false positives
                     img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
                     scan_output.append("Transform test: PASSED")
 
@@ -1142,6 +1141,11 @@ class PixelProbe:
                 elif is_heic and 'cannot identify image file' in error_lower:
                     logger.info(f"HEIC PIL load failed (may be libheif limitation) for {file_path}: {str(e)}")
                     # Don't mark as corrupted yet - ImageMagick will provide the definitive answer
+                # Pillow's decompression-bomb guard is a pixel-count limit, not corruption evidence
+                elif 'decompression bomb' in error_lower:
+                    warning_details.append("Image exceeds Pillow pixel-count limit; PIL validation skipped (file likely valid)")
+                    scan_output.append("PIL load test: SKIPPED (exceeds pixel-count limit)")
+                    logger.info(f"Pillow decompression-bomb guard for {file_path}: {str(e)}")
         
         logger.info(f"Starting ImageMagick verification for: {file_path}")
         
@@ -1189,6 +1193,12 @@ class PixelProbe:
                         scan_output.append(f"Note: iOS 18+ HEIC files may use features not supported by older libheif versions")
                         logger.info(f"HEIC libheif limitation (not corruption) for {file_path}: {result.stderr[:100]}")
                         # Don't mark as corrupted - this is a tool limitation, not file corruption
+                    # ImageMagick resource/policy limits (cache resources exhausted, width/height/area
+                    # exceeds user limit) are tool limits on oversized-but-valid images, not corruption
+                    elif 'cache resources exhausted' in stderr_lower or 'exceeds user limit' in stderr_lower:
+                        warning_details.append("Image validation skipped: exceeds ImageMagick resource limit (file likely valid)")
+                        scan_output.append("ImageMagick convert: SKIPPED (resource limit - not corruption)")
+                        logger.info(f"ImageMagick resource limit (not corruption) for {file_path}: {result.stderr[:100]}")
                     else:
                         corruption_details.append("ImageMagick pixel validation failed")
                         is_corrupted = True

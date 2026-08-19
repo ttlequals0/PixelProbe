@@ -138,3 +138,44 @@ class TestCorruptionDetails:
                 detected = any(r.is_corrupted or r.error_message or r.warning_details or r.scan_status == 'completed' 
                              for r in corrupted_images)
                 assert detected, f"No corrupted {ext} files were processed"
+
+@pytest.mark.real_media
+class TestOversizedImages:
+    """Regression: images beyond tool pixel/resource limits are warnings, not corruption"""
+
+    def _make_oversized(self, path, mode, size, **save_kwargs):
+        from PIL import Image
+        old_limit = Image.MAX_IMAGE_PIXELS
+        Image.MAX_IMAGE_PIXELS = None
+        try:
+            Image.new(mode, size, 128 if mode != '1' else 0).save(str(path), **save_kwargs)
+        finally:
+            Image.MAX_IMAGE_PIXELS = old_limit
+
+    @pytest.mark.timeout(300)
+    def test_oversized_valid_png_is_warning_not_corrupted(self, tmp_path):
+        from pixelprobe.media_checker import PixelProbe
+        # 400MP exceeds both Pillow's DecompressionBombError threshold
+        # (2x MAX_IMAGE_PIXELS, ~358MP) and ImageMagick's default 256MP area policy
+        big = tmp_path / 'big_valid.png'
+        self._make_oversized(big, 'L', (20000, 20000), compress_level=1)
+
+        checker = PixelProbe(database_path=None)
+        is_corrupted, corruption_details, scan_tool, scan_output, warning_details = \
+            checker._check_image_corruption(str(big))
+
+        assert is_corrupted is False, f"valid oversized PNG flagged corrupted: {corruption_details}"
+        assert warning_details, "expected a tool-limit warning"
+        assert any('limit' in w.lower() for w in warning_details)
+
+    @pytest.mark.timeout(300)
+    def test_decompression_bomb_scale_image_not_corrupted(self, tmp_path):
+        from pixelprobe.media_checker import PixelProbe
+        # 3.6GP 1-bit image, tiny on disk: both guards must trigger, verdict stays sane
+        bomb = tmp_path / 'bomb.png'
+        self._make_oversized(bomb, '1', (60000, 60000), compress_level=9)
+
+        checker = PixelProbe(database_path=None)
+        is_corrupted, _, _, _, warning_details = checker._check_image_corruption(str(bomb))
+        assert is_corrupted is False
+        assert warning_details
