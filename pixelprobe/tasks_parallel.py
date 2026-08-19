@@ -199,6 +199,24 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
             return {'status': 'ERROR', 'chunk_id': chunk_db_id, 'error': 'Invalid chunk range'}
         first_path, last_path = fcp
 
+        # Prior attempts' tally (revival or worker-lost redelivery): this
+        # attempt's counter starts at zero, so every accounting write below is
+        # base + local count, or the aggregate freezes at the pre-revival
+        # high-water mark (sync_progress_from_chunks never decreases) and the
+        # final report undercounts. The stored tally is cross-checked against
+        # files actually finished in-range since the scan started, which also
+        # repairs tallies clobbered by pre-fix revivals.
+        scan_started = db.session.query(ScanState.start_time).filter_by(
+            scan_id=scan_id).scalar()
+        base_scanned = chunk.files_scanned or 0
+        if scan_started is not None:
+            finished_in_range = ScanResult.query.filter(
+                ScanResult.file_path >= first_path,
+                ScanResult.file_path <= last_path,
+                ScanResult.scan_date >= scan_started,
+            ).count()
+            base_scanned = max(base_scanned, finished_in_range)
+
         chunk.status = 'processing'
         chunk.start_time = datetime.now(timezone.utc)
         db.session.commit()
@@ -231,9 +249,11 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
             claimed_ids = claim_pending()
 
         if not claimed_ids:
-            # Empty chunk: terminal, but never touch shared progress fields
+            # Empty chunk: terminal, but never touch shared progress fields.
+            # Keep the prior attempts' tally - zeroing it here after a revival
+            # would erase real, committed work from the aggregate.
             logger.info(f"Chunk {chunk_db_id} has no pending files, marking complete")
-            _mark_chunk_terminal(chunk, 'completed', files_scanned=0)
+            _mark_chunk_terminal(chunk, 'completed', files_scanned=base_scanned)
             maybe_finalize_scan(scan_id)
             return {'status': 'SKIPPED', 'chunk_id': chunk_db_id, 'files_processed': 0}
 
@@ -254,7 +274,8 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
             if not is_active:
                 logger.info(f"Chunk {chunk_db_id}: scan cancelled, stopping")
                 _reclaim_chunk_range(first_path, last_path)
-                _mark_chunk_terminal(chunk, 'cancelled', files_scanned=files_processed)
+                _mark_chunk_terminal(chunk, 'cancelled',
+                                     files_scanned=base_scanned + files_processed)
                 return {'status': 'CANCELLED', 'chunk_id': chunk_db_id,
                         'files_processed': files_processed}
 
@@ -334,10 +355,11 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
 
                 # Time-based progress write for slow large files (sweeper safety)
                 if time.time() - last_progress_write > _PROGRESS_WRITE_INTERVAL_SECS:
-                    _write_chunk_progress(chunk, files_processed, scan_id, current_file)
+                    _write_chunk_progress(chunk, base_scanned + files_processed,
+                                          scan_id, current_file)
                     last_progress_write = time.time()
 
-            _write_chunk_progress(chunk, files_processed, scan_id, current_file)
+            _write_chunk_progress(chunk, base_scanned + files_processed, scan_id, current_file)
             last_progress_write = time.time()
 
             # Cosmetic task metadata: a result-backend blip must not abort a
@@ -361,8 +383,11 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
                            f"{chunk.celery_task_id} while this task ran; yielding")
             return {'status': 'SUPERSEDED', 'chunk_id': chunk_db_id}
 
-        _mark_chunk_terminal(chunk, 'completed', files_scanned=files_processed)
-        logger.info(f"Chunk {chunk_db_id} completed: {files_processed} files, {files_corrupted} corrupted")
+        _mark_chunk_terminal(chunk, 'completed',
+                             files_scanned=base_scanned + files_processed)
+        logger.info(f"Chunk {chunk_db_id} completed: {files_processed} files "
+                    f"this attempt ({base_scanned + files_processed} total), "
+                    f"{files_corrupted} corrupted")
         maybe_finalize_scan(scan_id)
 
         return {

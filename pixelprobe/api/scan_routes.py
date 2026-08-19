@@ -990,7 +990,7 @@ def scan_files_parallel():
     payload, status = launch_directory_scan(validated_dirs, force_rescan=force_rescan, scan_type='parallel')
     if status == 200:
         payload['scan_type'] = 'parallel'
-        payload['directories'] = validated_dirs
+        # CodeQL py/reflective-xss: never echo caller-supplied paths here
     return payload, status
 
 @scan_bp.route('/reset-for-rescan', methods=['POST'])

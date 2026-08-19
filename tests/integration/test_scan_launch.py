@@ -62,3 +62,30 @@ class TestScanClaimRelease:
             state.is_active = False
             state.phase = 'completed'
             db.session.commit()
+
+
+class TestScanLaunchResponseShape:
+    """CodeQL py/reflective-xss: launch responses must not echo caller-supplied
+    directory paths back into the response body."""
+
+    def _launch(self, authenticated_client, monkeypatch, tmp_path, url, module):
+        monkeypatch.setattr(f'{module}.validate_directory_path', lambda d: d)
+        monkeypatch.setattr(f'{module}.launch_directory_scan',
+                            lambda *a, **k: ({'message': 'Scan started'}, 200))
+        return authenticated_client.post(url, json={'directories': [str(tmp_path)]})
+
+    def test_parallel_scan_response_omits_directories(self, authenticated_client,
+                                                      monkeypatch, tmp_path):
+        response = self._launch(authenticated_client, monkeypatch, tmp_path,
+                                '/api/scan-files-parallel',
+                                'pixelprobe.api.scan_routes')
+        assert response.status_code == 200
+        assert 'directories' not in response.get_json()
+
+    def test_scan_parallel_v2_response_omits_directories(self, authenticated_client,
+                                                         monkeypatch, tmp_path):
+        response = self._launch(authenticated_client, monkeypatch, tmp_path,
+                                '/api/scan-parallel',
+                                'pixelprobe.api.scan_routes_parallel')
+        assert response.status_code == 200
+        assert 'directories' not in response.get_json()

@@ -54,7 +54,7 @@ def scan_parallel():
         payload['status'] = 'launched'  # legacy response shape for this endpoint
         payload['scan_type'] = 'parallel_v2'
         payload['force_rescan'] = force_rescan
-        payload['directories'] = validated_dirs
+        # CodeQL py/reflective-xss: never echo caller-supplied paths here
     return payload, status
 
 
