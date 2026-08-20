@@ -864,7 +864,7 @@ class TestTemporalOutlierDetection:
         mock_run.return_value = self._mock_result([(0.5, 0.0)] * 200)
 
         checker = PixelProbe()
-        with patch.object(checker, '_check_frame_integrity', return_value=(False, [])), \
+        with patch.object(checker, '_check_frame_integrity', return_value=(False, [], [], [])), \
              patch.object(checker, '_check_strict_error_detection', return_value=(False, [])):
             is_corrupted, details, output, warnings, has_notes = checker._enhanced_corruption_check(
                 '/fake/video.mkv', file_size_gb=2.0
@@ -886,7 +886,7 @@ class TestTemporalOutlierDetection:
         ]
 
         checker = PixelProbe()
-        with patch.object(checker, '_check_frame_integrity', return_value=(False, [])), \
+        with patch.object(checker, '_check_frame_integrity', return_value=(False, [], [], [])), \
              patch.object(checker, '_check_strict_error_detection', return_value=(False, [])):
             is_corrupted, details, output, warnings, has_notes = checker._enhanced_corruption_check(
                 '/fake/video.mkv', file_size_gb=2.0
@@ -1018,3 +1018,138 @@ class TestOpusEofParseError:
 
         assert is_corrupted is True
         assert any('Opus' in d for d in corruption_details)
+
+
+class TestWorkerDatabasePool:
+    """Worker DB engine must not share one raw connection across scan threads"""
+
+    def test_postgres_engine_uses_queuepool_sized_to_workers(self):
+        from sqlalchemy.pool import QueuePool
+        # create_engine connects lazily, so a bogus URI is safe here
+        checker = PixelProbe(database_path='postgresql://u:p@localhost:5/db', max_workers=6)
+        assert checker._db_engine is not None
+        assert isinstance(checker._db_engine.pool, QueuePool)
+        assert checker._db_engine.pool.size() == 6
+
+    def test_driver_qualified_postgres_url_not_treated_as_sqlite(self):
+        # postgresql+psycopg2:// URLs pass app.py's startswith('postgresql')
+        # check and must not fall into the SQLite branch, whose
+        # check_same_thread connect arg psycopg2 rejects
+        from sqlalchemy.pool import QueuePool
+        checker = PixelProbe(database_path='postgresql+psycopg2://u:p@localhost:5/db', max_workers=3)
+        assert checker._db_engine is not None
+        assert isinstance(checker._db_engine.pool, QueuePool)
+
+
+class TestFrameIntegrityPacketFirst:
+    """Stage 1 frame check: cheap -count_packets pass before full-decode -count_frames"""
+
+    def _proc(self, framerate, count_key, count, duration, rc=0):
+        m = MagicMock()
+        m.returncode = rc
+        m.stdout = f"avg_frame_rate={framerate}\n{count_key}={count}\nduration={duration}\n"
+        m.stderr = ''
+        return m
+
+    def test_packet_count_match_skips_frame_decode(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            # 25fps * 10s = 250 expected; 250 packets reported
+            run.return_value = self._proc('25/1', 'nb_read_packets', 250, '10.000000')
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mp4')
+        assert is_corrupted is False
+        assert details == []
+        assert warnings == []
+        assert run.call_count == 1
+        assert '-count_packets' in run.call_args_list[0][0][0]
+
+    def test_small_packet_diff_skips_decode(self):
+        # A 1-5% packet diff can never produce the >5% warning, so the
+        # expensive confirm decode must not run for it
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.return_value = self._proc('25/1', 'nb_read_packets', 240, '10.000000')  # 4% diff
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mp4')
+        assert is_corrupted is False
+        assert warnings == []
+        assert run.call_count == 1
+
+    def test_packet_mismatch_falls_back_to_frame_count(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.side_effect = [
+                self._proc('25/1', 'nb_read_packets', 200, '10.000000'),  # 20% short: ambiguous
+                self._proc('25/1', 'nb_read_frames', 248, '10.000000'),   # decode: 0.8% diff, fine
+            ]
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mp4')
+        assert is_corrupted is False
+        assert details == []
+        assert warnings == []
+        assert run.call_count == 2
+        assert '-count_frames' in run.call_args_list[1][0][0]
+
+    def test_confirmed_frame_mismatch_is_warning_not_corruption(self):
+        # Container metadata lies on sparse-video/VFR files, so even a
+        # decode-confirmed mismatch must never produce a corruption verdict
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.side_effect = [
+                self._proc('25/1', 'nb_read_packets', 200, '10.000000'),
+                self._proc('25/1', 'nb_read_frames', 200, '10.000000'),   # decode confirms 20% diff
+            ]
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mp4')
+        assert is_corrupted is False
+        assert details == []
+        assert any('frame count differs' in w.lower() for w in warnings)
+
+    def test_confirm_probe_failure_degrades_to_packet_warning(self):
+        # Heavily damaged files are where -count_frames errors out; the
+        # packet-pass evidence must survive as a warning, not vanish
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.side_effect = [
+                self._proc('25/1', 'nb_read_packets', 200, '10.000000'),  # 20% short
+                self._proc('25/1', 'nb_read_frames', 0, '10.000000', rc=1),
+            ]
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mp4')
+        assert is_corrupted is False
+        assert any('decode confirmation failed' in w for w in warnings)
+
+    def test_stream_duration_preferred_over_format_duration(self):
+        # A container carrying audio longer than its video track must be
+        # measured against the video stream's own duration
+        checker = PixelProbe()
+        m = MagicMock()
+        m.returncode = 0
+        m.stdout = ("avg_frame_rate=25/1\nduration=10.000000\n"
+                    "nb_read_packets=250\nduration=120.000000\n")
+        m.stderr = ''
+        with patch('pixelprobe.media_checker.safe_subprocess_run', return_value=m) as run:
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mp4')
+        assert is_corrupted is False
+        assert warnings == []
+        assert run.call_count == 1  # 250 packets vs 25fps*10s: no decode needed
+
+    def test_timeout_is_inconclusive_note_not_pass(self):
+        import subprocess as sp
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run',
+                   side_effect=sp.TimeoutExpired(cmd='ffprobe', timeout=120)):
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mkv')
+        assert is_corrupted is False
+        assert warnings == []
+        assert any('timed out' in n for n in notes)
+
+    def test_unavailable_metadata_skips_check(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = "avg_frame_rate=N/A\nnb_read_packets=200\nduration=N/A\n"
+            m.stderr = ''
+            run.return_value = m
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mkv')
+        assert is_corrupted is False
+        assert details == []
+        assert warnings == []
+        assert run.call_count == 1

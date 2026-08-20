@@ -385,64 +385,58 @@ def mock_scan_result(db):
     return result
 
 
-@pytest.fixture
-def real_scan_results(db, test_data_dir):
-    """Scan real media files into test database"""
-    from pixelprobe.models import ScanResult
+@pytest.fixture(scope='session')
+def real_scan_data():
+    """Scan every media fixture once per session.
+
+    Scanning all fixtures takes minutes; the previous function-scoped fixture
+    rescanned everything for every test and blew each test's timeout, so the
+    real_media suite could never complete. Files are scanned in place (the
+    checker has no database configured, so scans are read-only).
+    """
     from pixelprobe.media_checker import PixelProbe
-    from datetime import datetime, timezone
-    
+
     checker = PixelProbe()
+    samples_dir = os.path.join(os.path.dirname(__file__), 'fixtures', 'media_samples')
+    data = []
+    for filename in sorted(os.listdir(samples_dir)):
+        if filename.startswith(('valid.', 'corrupted.')):
+            path = os.path.join(samples_dir, filename)
+            scan = checker.scan_file(path)
+            if scan:
+                data.append((path, scan))
+    return data
+
+
+@pytest.fixture
+def real_scan_results(db, real_scan_data):
+    """Insert the session-cached scan results into this test's database"""
+    from pixelprobe.models import ScanResult
+    from datetime import datetime, timezone
+
     results = []
-    
-    # Scan valid files
-    for key, path in test_data_dir.items():
-        if key.startswith('valid_') and os.path.exists(path):
-            scan_data = checker.scan_file(path)
-            if scan_data:
-                result = ScanResult(
-                    file_path=path,
-                    file_size=scan_data.get('file_size', 0),
-                    file_type=scan_data.get('file_type', ''),
-                    file_hash=scan_data.get('file_hash', ''),
-                    scan_date=datetime.now(timezone.utc),
-                    scan_status='completed',
-                    is_corrupted=scan_data.get('is_corrupted', False),
-                    error_message=scan_data.get('error_message'),
-                    corruption_details=scan_data.get('corruption_details'),
-                    scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
-                    scan_output=scan_data.get('scan_output'),
-                    warning_details=scan_data.get('warning_details'),
-                    marked_as_good=False
-                )
-                db.session.add(result)
-                results.append(result)
-    
-    # Scan corrupted files
-    for key, path in test_data_dir.items():
-        if key.startswith('corrupted_') and os.path.exists(path):
-            scan_data = checker.scan_file(path)
-            if scan_data:
-                result = ScanResult(
-                    file_path=path,
-                    file_size=scan_data.get('file_size', 0),
-                    file_type=scan_data.get('file_type', ''),
-                    file_hash=scan_data.get('file_hash', ''),
-                    scan_date=datetime.now(timezone.utc),
-                    scan_status='completed',
-                    is_corrupted=scan_data.get('is_corrupted', False),
-                    error_message=scan_data.get('error_message'),
-                    corruption_details=scan_data.get('corruption_details'),
-                    scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
-                    scan_output=scan_data.get('scan_output'),
-                    warning_details=scan_data.get('warning_details'),
-                    marked_as_good=False
-                )
-                db.session.add(result)
-                results.append(result)
-    
+    for path, scan_data in real_scan_data:
+        result = ScanResult(
+            file_path=path,
+            file_size=scan_data.get('file_size', 0),
+            file_type=scan_data.get('file_type', ''),
+            file_hash=scan_data.get('file_hash', ''),
+            scan_date=datetime.now(timezone.utc),
+            scan_status='completed',
+            is_corrupted=scan_data.get('is_corrupted', False),
+            error_message=scan_data.get('error_message'),
+            corruption_details=scan_data.get('corruption_details'),
+            scan_tool=scan_data.get('scan_tool', 'ffmpeg'),
+            scan_output=scan_data.get('scan_output'),
+            warning_details=scan_data.get('warning_details'),
+            marked_as_good=False
+        )
+        db.session.add(result)
+        results.append(result)
+
     db.session.commit()
     return results
+
 
 @pytest.fixture
 def mock_corrupted_result(db):

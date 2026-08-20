@@ -288,18 +288,31 @@ class PixelProbe:
             try:
                 from sqlalchemy import create_engine
                 from sqlalchemy.orm import sessionmaker
-                from sqlalchemy.pool import StaticPool
+                from sqlalchemy.pool import QueuePool, StaticPool
                 from pixelprobe.config import PG_SESSION_TZ_UTC
-                # Thread-local instances use StaticPool with single persistent connection
-                # This avoids both connection pool exhaustion AND NullPool's concurrent operation errors
-                if self.database_path.startswith('postgresql://'):
-                    # Use StaticPool with single connection per worker
-                    # With MAX_WORKERS=10: 10 workers × 1 connection = 10 connections from workers
-                    # Main app pool: 20+40=60, workers: 10, total: 70 (well under PostgreSQL default 100)
-                    # NullPool caused "concurrent operations not permitted" errors during progress updates
+                # Match driver-qualified URLs too (postgresql+psycopg2://...)
+                if self.database_path.startswith(('postgresql://', 'postgresql+')):
+                    # QueuePool sized to the worker count: each scan thread checks out
+                    # its own connection. StaticPool shared one raw psycopg2 connection
+                    # across ThreadPoolExecutor workers, which psycopg2 forbids using
+                    # concurrently (sporadic save/cache failures under num_workers > 1).
+                    # NullPool caused "concurrent operations not permitted" errors during
+                    # progress updates. Budget: main app pool 20+40=60, workers
+                    # max_workers+10 overflow ceiling, still under PostgreSQL's
+                    # default 100 for any MAX_WORKERS the config allows.
                     self._db_engine = create_engine(
                         self.database_path,
-                        poolclass=StaticPool,  # Single persistent connection per engine
+                        poolclass=QueuePool,
+                        pool_size=self.max_workers,
+                        # Overflow headroom so a caller that forgets to size
+                        # max_workers to its thread count degrades to on-demand
+                        # connections instead of a 30s checkout timeout
+                        max_overflow=10,
+                        # No pre-ping: the scan hot path checks out a session
+                        # per cache read and per save, and a per-checkout
+                        # SELECT 1 across a million-file scan is real traffic;
+                        # recycle covers long-lived staleness instead
+                        pool_recycle=3600,
                         connect_args={
                             'connect_timeout': 10,
                             'application_name': 'pixelprobe_worker',
@@ -309,13 +322,19 @@ class PixelProbe:
                         }
                     )
                 else:
-                    # SQLite or other database - also use StaticPool for consistency
+                    # SQLite (tests only; production is PostgreSQL-only since v2.2.0).
+                    # StaticPool is required for :memory: databases to share one
+                    # connection; check_same_thread=False permits cross-thread use
+                    # (and is an invalid connect arg for any other driver).
+                    connect_args = {'check_same_thread': False} \
+                        if self.database_path.startswith('sqlite') else {}
                     self._db_engine = create_engine(
                         self.database_path,
-                        poolclass=StaticPool
+                        poolclass=StaticPool,
+                        connect_args=connect_args
                     )
                 self._db_session_factory = sessionmaker(bind=self._db_engine)
-                logger.info("Thread-local database connection initialized (StaticPool with 1 connection)")
+                logger.info(f"Worker database engine initialized (pool sized for {self.max_workers} workers)")
             except Exception as e:
                 logger.error(f"Failed to initialize database connection: {e}")
                 self._db_engine = None
@@ -326,6 +345,11 @@ class PixelProbe:
         if self._db_session_factory:
             return self._db_session_factory()
         return None
+
+    def dispose_database_connection(self):
+        """Release pooled connections deterministically when a scan finishes"""
+        if self._db_engine:
+            self._db_engine.dispose()
     
     def discover_media_files(self, directories, max_files=None, existing_files=None, batch_check_callback=None, progress_callback=None):
         """Phase 1: Discover all supported files and return their paths (parallel version)
@@ -1084,6 +1108,7 @@ class PixelProbe:
         
         pil_load_failed = False
         pil_load_error = None
+        pil_size_limited = False  # Pillow bomb guard fired: a size limit, not a PIL failure
 
         # File size needed for JPEG pixel analysis guard and ImageMagick timeout
         try:
@@ -1107,9 +1132,8 @@ class PixelProbe:
                 else:
                     scan_output.append(f"Image dimensions: {img.size[0]}x{img.size[1]}")
                 
-                # Note: After load(), tile data is consumed and cleared in PIL - this is normal behavior
-                # Removed incorrect tile data check that was causing false positives
-                
+                    # Note: After load(), tile data is consumed and cleared in PIL - this is normal behavior
+                    # Removed incorrect tile data check that was causing false positives
                     img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
                     scan_output.append("Transform test: PASSED")
 
@@ -1142,7 +1166,22 @@ class PixelProbe:
                 elif is_heic and 'cannot identify image file' in error_lower:
                     logger.info(f"HEIC PIL load failed (may be libheif limitation) for {file_path}: {str(e)}")
                     # Don't mark as corrupted yet - ImageMagick will provide the definitive answer
+                # Pillow's decompression-bomb guard is a pixel-count limit, not corruption evidence
+                elif isinstance(e, Image.DecompressionBombError):
+                    pil_size_limited = True
+                    warning_details.append("Image exceeds Pillow pixel-count limit; PIL validation skipped (file likely valid)")
+                    scan_output.append("PIL load test: SKIPPED (exceeds pixel-count limit)")
+                    logger.info(f"Pillow decompression-bomb guard for {file_path}: {str(e)}")
         
+        if pil_size_limited:
+            # The shipped image's ImageMagick policy (256MP area) is below
+            # Pillow's bomb threshold (~358MP), so the convert can only grind
+            # its pixel cache and fail at a resource limit; the warning is
+            # already recorded, so skip the subprocess outright
+            scan_output.append("ImageMagick convert: SKIPPED (image exceeds pixel-count limits)")
+            logger.info(f"Skipping ImageMagick for {file_path}: exceeds Pillow pixel-count limit")
+            return is_corrupted, corruption_details, "pil", scan_output, warning_details
+
         logger.info(f"Starting ImageMagick verification for: {file_path}")
         
         # Scale timeout with file size, no artificial limit for large files
@@ -1189,6 +1228,12 @@ class PixelProbe:
                         scan_output.append(f"Note: iOS 18+ HEIC files may use features not supported by older libheif versions")
                         logger.info(f"HEIC libheif limitation (not corruption) for {file_path}: {result.stderr[:100]}")
                         # Don't mark as corrupted - this is a tool limitation, not file corruption
+                    # ImageMagick resource/policy limits (cache resources exhausted, width/height/area
+                    # exceeds user limit) are tool limits on oversized-but-valid images, not corruption
+                    elif 'cache resources exhausted' in stderr_lower or 'exceeds user limit' in stderr_lower:
+                        warning_details.append("Image validation skipped: exceeds ImageMagick resource limit (file likely valid)")
+                        scan_output.append("ImageMagick convert: SKIPPED (resource limit - not corruption)")
+                        logger.info(f"ImageMagick resource limit (not corruption) for {file_path}: {result.stderr[:100]}")
                     else:
                         corruption_details.append("ImageMagick pixel validation failed")
                         is_corrupted = True
@@ -1196,7 +1241,7 @@ class PixelProbe:
                 else:
                     # Check if PIL passed before marking as corrupted
                     # ImageMagick might fail due to missing delegates/decoders
-                    if not pil_failed and not pil_load_failed:
+                    if pil_size_limited or (not pil_failed and not pil_load_failed):
                         # PIL passed, so file is likely OK - ImageMagick issue
                         warning_details.append("ImageMagick convert failed (but PIL passed - likely decoder issue)")
                         scan_output.append("Note: ImageMagick failed but PIL verified OK")
@@ -1251,8 +1296,10 @@ class PixelProbe:
             # Only mark as corrupted if other tools also failed
             timeout_msg = f"ImageMagick convert timeout ({imagemagick_timeout}s) - file may be very complex"
             
-            # If PIL passed, treat timeout as warning rather than corruption
-            if not pil_failed and not pil_load_failed:
+            # If PIL passed (or only hit its size guard), treat timeout as
+            # warning rather than corruption - a huge valid image can outlast
+            # the size-scaled timeout before hitting ImageMagick's cache limit
+            if pil_size_limited or (not pil_failed and not pil_load_failed):
                 warning_details.append(timeout_msg)
                 scan_output.append("ImageMagick identify: TIMEOUT (treating as warning - PIL verification passed)")
                 logger.warning(f"ImageMagick timeout for {file_path} - treating as warning since PIL passed")
@@ -2209,12 +2256,18 @@ class PixelProbe:
         enhanced_output.append(f"=== Enhanced Corruption Analysis for {file_size_gb:.2f}GB file ===")
         
         # Stage 1: Frame count verification
-        frame_corrupted, frame_details = self._check_frame_integrity(file_path)
+        frame_corrupted, frame_details, frame_warnings, frame_notes = self._check_frame_integrity(file_path)
         enhanced_output.append("Stage 1: Frame integrity check")
         if frame_corrupted:
             is_corrupted = True
             corruption_details.extend(frame_details)
             enhanced_output.append(f"  Result: FAILED - {'; '.join(frame_details)}")
+        elif frame_warnings:
+            warning_details.extend([f"Stage 1: {detail}" for detail in frame_warnings])
+            enhanced_output.append(f"  Result: WARNING - {'; '.join(frame_warnings)}")
+        elif frame_notes:
+            # Never claim PASSED for a check that did not measure the file
+            enhanced_output.append(f"  Result: INCOMPLETE - {'; '.join(frame_notes)}")
         else:
             enhanced_output.append("  Result: PASSED")
         
@@ -2273,59 +2326,112 @@ class PixelProbe:
         enhanced_output.append(f"=== Enhanced Analysis Complete: {'CORRUPTED' if is_corrupted else 'CLEAN'} ===")
         return is_corrupted, corruption_details, enhanced_output, warning_details, has_notes
     
+    def _probe_stream_counts(self, file_path, count_flag, count_key, timeout):
+        """One ffprobe pass; returns (framerate, count, duration) or None if unavailable.
+
+        Uses key=value output because ffprobe orders csv columns by its own
+        section layout, not the requested order (the old csv parser expected a
+        column count ffmpeg 8 never emits, so the check silently never ran).
+        The video stream's own duration is preferred (a container can carry
+        audio longer than the video track); the format duration is only the
+        fallback for Matroska streams that report duration=N/A. avg_frame_rate
+        is used instead of r_frame_rate so variable-frame-rate content does
+        not overshoot the expected count.
+        """
+        result = safe_subprocess_run([
+            'ffprobe',
+            '-show_entries', f'stream=avg_frame_rate,duration,{count_key}:format=duration',
+            '-select_streams', 'v:0',
+            count_flag,
+            '-of', 'default=noprint_wrappers=1',
+            '-v', 'quiet',
+            ensure_cli_safe_path(file_path)
+        ], capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        values = {}
+        for line in result.stdout.strip().splitlines():
+            key, sep, value = line.partition('=')
+            if sep and value and value != 'N/A' and key not in values:
+                values[key] = value
+        try:
+            framerate_str = values['avg_frame_rate']
+            if '/' in framerate_str:
+                num, den = map(float, framerate_str.split('/'))
+                framerate = num / den if den != 0 else 0.0
+            else:
+                framerate = float(framerate_str)
+            count = int(values[count_key])
+            duration = float(values['duration'])
+        except (KeyError, ValueError):
+            return None
+        if framerate <= 0 or duration <= 0:
+            return None
+        return framerate, count, duration
+
+    @staticmethod
+    def _frame_mismatch(framerate, count, duration):
+        """Return (expected, diff, diff_percent) for a counted stream"""
+        expected = int(framerate * duration)
+        diff = abs(expected - count)
+        return expected, diff, (diff / expected * 100) if expected > 0 else 0
+
     def _check_frame_integrity(self, file_path):
-        """Verify frame count matches expected count based on duration and framerate"""
+        """Compare decodable frame count against container metadata expectations.
+
+        Returns (is_corrupted, corruption_details, warning_details). A confirmed
+        mismatch is a warning, never a corruption verdict: container framerate
+        lies on sparse-video and variable-frame-rate files (a 240s QuickTime
+        with 244 real frames declares 25fps), and real decode damage is caught
+        by the err_detect deep-decode stage. Only an ffprobe process crash
+        marks corruption here.
+        """
         corruption_details = []
+        warning_details = []
+        info_notes = []
         is_corrupted = False
-        
+
         try:
             logger.info(f"Checking frame integrity for {file_path}")
-            result = safe_subprocess_run([
-                'ffprobe', 
-                '-show_entries', 'stream=r_frame_rate,nb_read_frames,duration',
-                '-select_streams', 'v:0',
-                '-count_frames',
-                '-of', 'csv=p=0',
-                '-v', 'quiet',
-                file_path
-            ], capture_output=True, text=True, timeout=120)
-            
-            if result.returncode == 0 and result.stdout.strip():
-                lines = result.stdout.strip().split('\n')
-                if lines:
-                    # Parse: stream,framerate,frame_count,duration
-                    parts = lines[0].split(',')
-                    if len(parts) >= 4:
-                        framerate_str = parts[1]
-                        frame_count_str = parts[2]
-                        duration_str = parts[3]
-                        
-                        if framerate_str and frame_count_str and duration_str:
-                            # Calculate expected vs actual frames
-                            if '/' in framerate_str:
-                                num, den = map(float, framerate_str.split('/'))
-                                framerate = num / den if den != 0 else 0
-                            else:
-                                framerate = float(framerate_str)
-                            
-                            actual_frames = int(frame_count_str) if frame_count_str.isdigit() else 0
-                            duration = float(duration_str)
-                            expected_frames = int(framerate * duration)
-                            
-                            frame_diff = abs(expected_frames - actual_frames)
-                            frame_diff_percent = (frame_diff / expected_frames * 100) if expected_frames > 0 else 0
-                            
-                            logger.info(f"Frame analysis: Expected {expected_frames}, Found {actual_frames}, Diff: {frame_diff} ({frame_diff_percent:.1f}%)")
-                            
-                            # Consider significant frame loss as corruption (>5% missing)
-                            if frame_diff_percent > 5.0:
-                                corruption_details.append(f"Significant frame loss: {frame_diff} frames missing ({frame_diff_percent:.1f}%)")
-                                is_corrupted = True
-                            elif frame_diff_percent > 1.0:
-                                corruption_details.append(f"Minor frame inconsistency: {frame_diff} frames ({frame_diff_percent:.1f}%)")
-                        
+            # Cheap pass first: -count_packets does no decode. The full
+            # -count_frames decode is sequential and can take minutes on large
+            # files, so it only runs to confirm an ambiguous packet count.
+            # (Header metadata such as nb_frames cannot stand in for this pass:
+            # a truncated mdat with an intact moov still claims the full sample
+            # count, so only counting what is actually present has signal.)
+            packets = self._probe_stream_counts(
+                file_path, '-count_packets', 'nb_read_packets', timeout=120)
+            if packets:
+                framerate, packet_count, duration = packets
+                expected, diff, diff_percent = self._frame_mismatch(framerate, packet_count, duration)
+                logger.info(f"Frame analysis (packets): expected {expected}, "
+                            f"found {packet_count}, diff {diff} ({diff_percent:.1f}%)")
+                if diff_percent > 5.0:
+                    # Packets and frames can legitimately differ; confirm with a decode
+                    decoded = self._probe_stream_counts(
+                        file_path, '-count_frames', 'nb_read_frames', timeout=120)
+                    if decoded:
+                        framerate, frame_count, duration = decoded
+                        expected, diff, diff_percent = self._frame_mismatch(framerate, frame_count, duration)
+                        logger.info(f"Frame analysis (decoded): expected {expected}, "
+                                    f"found {frame_count}, diff {diff} ({diff_percent:.1f}%)")
+                        if diff_percent > 5.0:
+                            warning_details.append(
+                                f"Frame count differs from container metadata by {diff} frames "
+                                f"({diff_percent:.1f}%) - possible missing frames or "
+                                f"sparse/variable frame rate content")
+                    else:
+                        # Heavily damaged files are exactly where the confirm
+                        # decode errors out; the packet evidence must not
+                        # vanish with it
+                        warning_details.append(
+                            f"Packet count differs from container metadata by {diff} frames "
+                            f"({diff_percent:.1f}%) and decode confirmation failed")
+
         except subprocess.TimeoutExpired:
-            corruption_details.append("Frame integrity check timeout")
+            # Operational outcome, not a file signal (Stage 2's pattern):
+            # surfaced as INCOMPLETE, never as warning status
+            info_notes.append("Frame integrity check timed out; result inconclusive")
         except OSError as e:
             # OSError includes SIGBUS and other memory-related errors
             logger.error(f"FFprobe process crashed with OS error for {file_path}: {str(e)}")
@@ -2333,8 +2439,8 @@ class PixelProbe:
             is_corrupted = True
         except Exception as e:
             logger.debug(f"Frame integrity check error: {str(e)}")
-        
-        return is_corrupted, corruption_details
+
+        return is_corrupted, corruption_details, warning_details, info_notes
     
     def _check_temporal_outliers(self, file_path, duration=None):
         """Detect temporal outliers that indicate visual corruption using signalstats

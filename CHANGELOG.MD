@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.5] - 2026-08-19
+
+### Fixed
+
+- **Valid oversized images are no longer reported corrupted.** Any image past Pillow's decompression-bomb threshold (~358MP at defaults) fell through to ImageMagick, whose `cache resources exhausted` exit landed in the generic corruption branch, so a valid 625MP scan was flagged the same as real pixel damage. Both guards are resource limits, not corruption evidence; they now produce a warning verdict following the existing HEIC libheif pattern.
+- **Parallel file-list scans no longer share one database connection across worker threads.** The scan-files API path (default `num_workers=4`) fanned a single PixelProbe instance across a thread pool while its engine used StaticPool, one raw psycopg2 connection that psycopg2 forbids using concurrently; the symptom was sporadic save and cache failures. The worker engine now uses a QueuePool sized to the worker count, and a postgres-backed regression test fails against the old pool.
+
+### Changed
+
+- **Frame integrity check: packets first, decode only to confirm, warning verdict.** Stage 1 paid a full sequential `-count_frames` decode on every video and then discarded the result - ffprobe's csv column order never matched what the parser expected under ffmpeg 8, so the check has been silently inert while costing minutes on large files. It now compares the near-free packet count first and runs the full decode only on a mismatch. A confirmed mismatch produces a warning, not a corruption verdict: container framerate metadata lies on sparse-video files (a 240s QuickTime fixture with 244 real frames declares 25fps), and real decode damage is caught by the deep-decode stage.
+
+### Removed
+
+- Dead `ScanExecutor`/`BatchProcessor` (`pixelprobe/services/scan_executor.py`), superseded by the Celery task path; its only callers were its own tests.
+
+### Tests
+
+- **Fixture corpus repaired.** Four committed "valid" samples (3gp, flv, mpg, wmv) were 189-byte HTML error pages from failed downloads; valid.mkv failed h264 decode under ffmpeg 8; valid.webp failed both PIL and ImageMagick; six "corrupted" samples (mp3, aiff, jpg, png, gif, bmp) decode cleanly under modern tools because the FFmpeg-bug-tracker bugs they exercised were in FFmpeg, not the files. All are replaced by a committed deterministic generator script, with per-format detection expectations documented (mpg and gif are warning-level by design).
+- **real_media suite made runnable and wired into CI.** The scan fixture rescanned every sample per test and blew each test's timeout, so the suite could never complete - and CI always deselected the marker, which is how the fixture rot went unnoticed. Scans are now session-cached, the tautological `scan_status == 'completed'` assertion clause is gone, and CI runs the suite on the Python 3.12 leg with a PostgreSQL service for the concurrency test.
+- New synthetic corruption matrix (truncation at header/mid/tail, zero-byte files, PNG-renamed-to-JPG, scattered mdat damage, SVG/PSD/progressive-JPEG/animated-WebP, symlink-loop discovery) plus oversized-image regression tests.
+
 ## [2.8.4] - 2026-08-18
 
 ### Fixed

@@ -130,6 +130,7 @@ class ScanService:
 
         # Create scan thread
         def run_scan():
+            checker = None
             # Set up Flask app context for the thread
             with app.app_context():
                 try:
@@ -179,6 +180,8 @@ class ScanService:
                     self.update_progress(1, 1, file_path, 'error')
                     raise
                 finally:
+                    if checker is not None:
+                        checker.dispose_database_connection()
                     # Clear thread reference to allow new scans
                     self.current_scan_thread = None
                     logger.debug("Single file scan thread cleaned up")
@@ -258,6 +261,7 @@ class ScanService:
         
         # Create scan thread
         def run_scan():
+            checker = None
             with app.app_context():
                 try:
                     # Get fresh ScanState object in worker thread
@@ -269,11 +273,12 @@ class ScanService:
                     excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
                     checker = PixelProbe(
                         database_path=self.database_uri,
+                        max_workers=num_workers,  # sizes the checker's DB connection pool
                         excluded_paths=excluded_paths,
                         excluded_extensions=excluded_extensions,
                         excluded_patterns=excluded_patterns
                     )
-                    
+
                     # Skip discovery phase - we already have the files
                     total_files = len(valid_files)
                     logger.info(f"Scanning {total_files} specific files")
@@ -348,6 +353,8 @@ class ScanService:
                     db.session.commit()
                     raise
                 finally:
+                    if checker is not None:
+                        checker.dispose_database_connection()
                     # Clear thread reference to allow new scans
                     self.current_scan_thread = None
                     logger.info("File scan thread cleaned up")

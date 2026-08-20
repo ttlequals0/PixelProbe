@@ -12,9 +12,22 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      SECRET_KEY: test-secret-key-for-github-actions
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: pixelprobe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
 
     steps:
     - uses: actions/checkout@v4
@@ -46,9 +59,14 @@ jobs:
 
     - name: Run tests with pytest
       env:
-        SECRET_KEY: test-secret-key-for-github-actions
+        PIXELPROBE_TEST_POSTGRES_URI: postgresql://postgres:pixelprobe_test@localhost:5432/postgres
       run: |
         pytest -m "not real_media" --cov=pixelprobe --cov-report=xml --cov-report=term
+
+    - name: Run real-media corruption detection tests
+      if: matrix.python-version == '3.12'
+      run: |
+        pytest -m real_media -v
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5

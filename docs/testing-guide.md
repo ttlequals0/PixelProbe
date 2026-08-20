@@ -23,9 +23,11 @@ tests/
 |-- test_migration_lock.py         # Advisory-lock migration coordination
 |-- test_performance.py            # Performance-oriented tests
 |-- test_read_timeout.py           # Unreadable-file / read timeout handling
+|-- test_postgres_concurrency.py   # Marker-gated parallel-scan test against real Postgres
 |-- test_real_media_samples.py     # Marker-gated real media parser tests
 |-- test_scheduler.py              # Scheduled scan management
 |-- test_security_fixes.py         # Security regression tests
+|-- test_synthetic_corruption.py   # Marker-gated synthetic damage matrix (truncation, mid-stream, format confusion)
 |-- unit/                          # Unit tests for individual components
 |   |-- test_bitrot_classification.py
 |   |-- test_celery_settings.py
@@ -57,10 +59,13 @@ tests/
 
 Two files deserve a call-out:
 
-- `test_real_media_samples.py` is gated behind the `real_media` marker. It
-  exercises the FFmpeg/ImageMagick stderr parsers against the real sample
-  corpus and is sensitive to tool versions, so it is excluded from the
-  default local run and executed in CI inside the Docker image instead.
+- `test_real_media_samples.py` and `test_synthetic_corruption.py` are gated
+  behind the `real_media` marker. They exercise the FFmpeg/ImageMagick
+  validation paths against the sample corpus (plus fixtures synthesized at
+  test time) and are sensitive to tool versions, so they are excluded from
+  the default local run; CI runs them on the Python 3.12 matrix leg.
+  Committed synthesized fixtures are regenerated with
+  `tests/fixtures/media_samples/generate_corrupted_fixtures.py`.
 - `test_frontend_build.py` actually runs `npm install` and `npm run build`,
   so it needs Node.js 20 and npm available.
 
@@ -107,6 +112,7 @@ Markers are declared in `pytest.ini`:
 | Marker | Meaning |
 |--------|---------|
 | `real_media` | Requires the real media sample corpus and matching tool versions; deselect locally with `-m "not real_media"` |
+| `postgres` | Requires a live PostgreSQL; set `PIXELPROBE_TEST_POSTGRES_URI`, otherwise skipped |
 | `slow` | Long-running tests; deselect with `-m "not slow"` |
 | `integration` | Integration tests |
 | `timeout` | Sets a per-test execution timeout |
