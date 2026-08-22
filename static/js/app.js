@@ -19,8 +19,9 @@ function fileStatus(file) {
 }
 
 // Single source of truth for a file's detail sections, most useful first:
-// the verdict summaries, then errors, then the raw tool transcript (used by
-// the desktop table, mobile cards, and the details modal - keep in lockstep)
+// the verdict summaries, then errors, then the raw tool transcript. Only the
+// details modal renders the transcript; the table and cards show verdicts
+// only (see fileDetails) - keep the three in lockstep.
 function fileDetailSections(file) {
     const sections = [
         { label: 'Corruption Details', content: file.corruption_details },
@@ -31,10 +32,13 @@ function fileDetailSections(file) {
     return sections.filter(s => s.content);
 }
 
-// First (highest-priority) detail line for compact table/card cells
+// Highest-priority verdict line for compact table/card cells. The raw
+// transcript is deliberately excluded: these cells report what the scan
+// concluded, and a healthy file concluded nothing worth a line. Its transcript
+// stays one click away under View.
 function fileDetails(file) {
-    const sections = fileDetailSections(file);
-    return sections.length > 0 ? sections[0].content : '';
+    const verdict = fileDetailSections(file).find(s => s.label !== 'Scan Output');
+    return verdict ? verdict.content : '';
 }
 
 // Severity accent for each detail section in the details modal
@@ -4130,8 +4134,8 @@ class PixelProbeApp {
         
         const modalBody = modal.querySelector('.modal-body');
         
-        // Verdict sections lead; the raw transcript is supporting evidence,
-        // collapsed unless it is the only content
+        // Verdict sections lead; the raw transcript is supporting evidence and
+        // stays collapsed until the reader asks for it
         const details = fileDetailSections(file);
         const verdicts = details.filter(d => d.label !== 'Scan Output');
         const transcript = details.find(d => d.label === 'Scan Output');
@@ -4144,7 +4148,7 @@ class PixelProbeApp {
         `).join('');
 
         const transcriptHtml = transcript ? `
-            <details class="detail-transcript" ${verdicts.length === 0 ? 'open' : ''}>
+            <details class="detail-transcript">
                 <summary>Full scan transcript</summary>
                 <pre class="scan-output-text">${this.escapeHtml(transcript.content)}</pre>
             </details>
