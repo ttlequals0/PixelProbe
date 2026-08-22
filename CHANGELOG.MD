@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.6] - 2026-08-22
+
+### Added
+
+- **Data integrity check for every media file, ahead of any decode.** An interrupted download or copy leaves a file at its correct length with regions inside it that were never written. Demuxers skip past those regions, so the picture holds while the clock keeps running, and freeze detection reported that as a frozen picture rather than as missing data. Allocated blocks against nominal size is only a gate deciding which files are worth opening, since compression and dedup under-allocate healthy files too; the verdict comes from `SEEK_HOLE`, which reports regions the filesystem never allocated and reads no file data. That distinction is the whole point: a valid file can legitimately contain long runs of zero bytes, such as digital silence in PCM audio, and those bytes were written. A file with unwritten regions is marked **corrupted** and skips decoding entirely, which also removes a full-length decode pass from every damaged file. A filesystem without sparse-region support yields no verdict rather than a guess. Tunable via `DATA_HOLE_ALLOC_RATIO` and `DATA_HOLE_MIN_PCT`.
+- **Shared `env_float` helper** in `pixelprobe/utils/helpers.py`, alongside the existing `env_int`, with optional floor and ceiling clamping.
+
+### Fixed
+
+- **Static title and end cards are no longer reported as freezes.** Programmes open and close on motionless plates: distributor logos, copyright notices, sponsor credits. The picture genuinely stops, so the detector was right and only the verdict was wrong. A solitary freeze no longer than `STATIC_CARD_MAX_SECS` sitting within `STATIC_CARD_EDGE_SECS` of either end of the file is now discounted, with the reason recorded in the scan transcript. The edge window is also capped at `STATIC_CARD_EDGE_FRACTION` of runtime so it cannot reach the middle of a short clip and swallow a genuine freeze.
+- **Held animation cels are no longer reported as freezes.** `freezedetect`'s noise tolerance compares a whole-frame mean. Limited animation holds its background and moves only small figures, which shifts that mean by a fraction of the threshold, so the segment reported as frozen even though every frame in it differed. Surviving candidates are now re-checked over their own window at a tolerance only repeated frames can clear. Each check is its own ffmpeg process, bounded both by `FREEZE_CONFIRM_MAX_WINDOWS` (default 20) and by `FREEZE_CONFIRM_BUDGET_SECS` (default 600) of wall time per file, so a file reporting hundreds of events cannot stall a scan. A confirmation pass that times out, exits non-zero, hits either bound, or cannot run keeps the candidate, so a failure never erases a finding.
+- **Reported frozen time can no longer exceed the runtime.** Freeze durations were summed naively, so events overlapping the same span were counted once per event and produced percentages above 100%. Overlapping events are now merged before summing and the percentage is capped at 100%.
+
+### Security
+
+- **Reflected request data removed from the deprecated `/api/scan-parallel` response** (CodeQL `py/reflective-xss`, alert 87). The endpoint echoed `force_rescan` straight from the request body into its JSON response. The input decorator already rejects a non-bool, so the flow was not exploitable, but the value is now coerced before it is echoed. Pre-existing on main, unrelated to the freeze work in this release.
+
+### Changed
+
+- Freeze detection parsing moved into a shared `_parse_freeze_events` helper, used by both the detection pass and the confirmation pass. `get_file_info` now also returns the file's allocated block count, so the data integrity check needs no stat of its own.
+- Documented the full set of failure types in `docs/scan-types.md`, covering every verdict, the reasons behind each, and the findings PixelProbe deliberately discounts along with why.
+
+### Tests
+
+- 22 new tests covering static card suppression at both ends of a file, the relative edge bound on short clips, multi-event files never being treated as cards, confirmation pass accept and reject paths, confirmation timeout and missing-binary fallbacks, overlapping event merging, and the data integrity check across holed files, compressed filesystems, filesystems that do not report block counts, undersized files, and unreadable paths.
+- The `_check_video_corruption` propagation test moved its freeze event into the body of the file; the previous fixture placed a 5-second event 5 seconds into a 60-second file, which is a title-card shape under the new rule.
+
 ## [2.8.5] - 2026-08-19
 
 ### Fixed

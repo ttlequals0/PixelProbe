@@ -1,3 +1,4 @@
+import errno
 import os
 import re
 import subprocess
@@ -24,7 +25,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from pixelprobe.utils.security import safe_subprocess_run, validate_file_path, ensure_cli_safe_path
-from pixelprobe.utils.helpers import env_int
+from pixelprobe.utils.helpers import env_int, env_float
 from pixelprobe.utils.integrity import apply_scan_baseline
 from pixelprobe.utils.paths import is_path_under
 
@@ -139,6 +140,120 @@ def _read_with_timeout(func, timeout, file_path, operation):
 _RE_FREEZE_START = re.compile(r'freeze_start:\s*([\d.]+)')
 _RE_FREEZE_END = re.compile(r'freeze_end:\s*([\d.]+)')
 _RE_FREEZE_DURATION = re.compile(r'freeze_duration:\s*([\d.]+)')
+
+def _parse_freeze_events(lines):
+    """Parse freezedetect events out of pre-split FFmpeg stderr lines.
+
+    FFmpeg emits freeze_start, then freeze_duration, then freeze_end. An event
+    closes only once all three fields are in, so an end line cannot leak into
+    the next event's dict, and a new start over a partial dict resyncs.
+
+    Returns a list of {start, duration, end} dicts.
+    """
+    events = []
+    current = {}
+    for line in lines:
+        if 'freezedetect' not in line.lower():
+            continue
+
+        start_match = _RE_FREEZE_START.search(line)
+        if start_match:
+            current = {'start': float(start_match.group(1))}
+
+        end_match = _RE_FREEZE_END.search(line)
+        if end_match:
+            current['end'] = float(end_match.group(1))
+
+        dur_match = _RE_FREEZE_DURATION.search(line)
+        if dur_match:
+            current['duration'] = float(dur_match.group(1))
+
+        if len(current) == 3:
+            events.append(current)
+            current = {}
+    return events
+
+
+def _merged_frozen_seconds(events):
+    """Total seconds covered by freeze events, counting overlapping spans once.
+
+    A naive sum double-counts events that span the same stretch and can run
+    past the file's own runtime.
+    """
+    total = 0.0
+    reach = float('-inf')
+    for start, end in sorted(
+            (e.get('start', 0), e.get('start', 0) + e.get('duration', 0)) for e in events):
+        if end > reach:
+            total += end - max(start, reach)
+            reach = end
+    return total
+
+
+def _drop_static_cards(freeze_events, duration):
+    """Separate static title and end cards from freeze events worth reporting.
+
+    Programmes open and close on motionless plates, so the picture genuinely
+    stops and the detector is right; the plate is simply not a defect. The
+    shape is distinctive: one event, only a little longer than the detector's
+    own minimum, hard against one end of the file.
+
+    Returns (kept_events, discounted_cards).
+    """
+    if len(freeze_events) != 1 or not duration:
+        return freeze_events, []
+
+    event = freeze_events[0]
+    start = event.get('start', 0)
+    length = event.get('duration', 0)
+    if STATIC_CARD_EDGE_SECS <= 0:
+        return freeze_events, []
+
+    tail = duration - (start + length)
+    if tail < 0:
+        # The event runs past the reported duration, so the container's
+        # duration is short of the real runtime and says nothing about where
+        # in the programme this sits.
+        return freeze_events, []
+
+    edge_window = min(STATIC_CARD_EDGE_SECS, duration * STATIC_CARD_EDGE_FRACTION)
+    is_card = length <= STATIC_CARD_MAX_SECS and min(start, tail) <= edge_window
+    return ([], [event]) if is_card else (freeze_events, [])
+
+
+# A lone freeze barely past the detector's minimum, hard against either end of
+# a file, is a static title or end card. Measured against a 21k-file library
+# these bounds sit in a gap: no single-event edge freeze runs 15-20s. The edge
+# window is also capped as a fraction of runtime so it cannot stretch across
+# the middle of a short clip and swallow a genuine freeze.
+STATIC_CARD_EDGE_SECS = env_float('STATIC_CARD_EDGE_SECS', 60.0, floor=0.0)
+STATIC_CARD_MAX_SECS = env_float('STATIC_CARD_MAX_SECS', 15.0, floor=0.0)
+STATIC_CARD_EDGE_FRACTION = 0.10
+
+# freezedetect's tolerance compares a whole-frame mean, so a held animation cel
+# whose only motion is a few small figures scores below it and reports as
+# frozen even though no two frames match. Candidates are re-checked at a
+# tolerance only truly repeated frames can clear.
+FREEZE_CONFIRM_NOISE = env_float('FREEZE_CONFIRM_NOISE', 0.0001, floor=0.0)
+FREEZE_CONFIRM_TIMEOUT_SECS = env_int('FREEZE_CONFIRM_TIMEOUT_SECS', 300, floor=30)
+FREEZE_CONFIRM_MIN_SECS = 2.0
+# Each confirmation is its own ffmpeg process, so a file reporting hundreds of
+# events would spend minutes on spawn overhead alone. Past the cap the
+# remaining events are kept unconfirmed, matching the fail-open policy used
+# when the pass times out or ffmpeg is missing.
+FREEZE_CONFIRM_MAX_WINDOWS = env_int('FREEZE_CONFIRM_MAX_WINDOWS', 20, floor=1)
+# The window cap bounds process count; this bounds wall time, which is what
+# actually matters on a project with no global scan timeout.
+FREEZE_CONFIRM_BUDGET_SECS = env_int('FREEZE_CONFIRM_BUDGET_SECS', 600, floor=30)
+
+# A file whose allocated blocks fall short of its nominal size may have holes
+# in it. Compression and dedup under-allocate healthy files too, so the ratio
+# is only a cheap gate deciding which files are worth opening; the verdict
+# comes from SEEK_HOLE, which reports regions that were never written rather
+# than regions that happen to contain zeroes.
+DATA_HOLE_ALLOC_RATIO = env_float('DATA_HOLE_ALLOC_RATIO', 0.90, floor=0.0, ceiling=1.0)
+DATA_HOLE_MIN_PCT = env_float('DATA_HOLE_MIN_PCT', 1.0, floor=0.0, ceiling=100.0)
+DATA_HOLE_MIN_SIZE = 1024 * 1024
 
 # Pre-compiled patterns for parsing FFmpeg blackdetect filter output
 _RE_BLACK_START = re.compile(r'black_start:\s*([\d.]+)')
@@ -681,7 +796,10 @@ class PixelProbe:
                 'file_size': file_size,
                 'file_type': file_type,
                 'creation_date': creation_date,
-                'last_modified': last_modified
+                'last_modified': last_modified,
+                # Allocated blocks, for the data integrity check. Carried here
+                # so nothing downstream has to stat the file a second time.
+                'file_blocks': getattr(file_stats, 'st_blocks', 0)
             }
         except FileReadTimeoutError:
             raise
@@ -695,6 +813,117 @@ class PixelProbe:
                 'last_modified': datetime.now(timezone.utc)
             }
     
+    def _check_data_holes(self, file_path, file_size, file_blocks):
+        """Detect files that were allocated at full size but never fully written.
+
+        An interrupted download or copy leaves the file the right length with
+        unwritten regions inside it. Demuxers skip past those regions, so the
+        picture holds while the clock runs, which freeze detection then reports
+        as a frozen picture rather than as the missing data it is.
+
+        The allocated-blocks ratio is only a gate deciding which files are
+        worth opening, because compression and dedup under-allocate healthy
+        files too. The verdict comes from SEEK_HOLE, which reports regions the
+        filesystem never allocated. That distinction matters: a valid file can
+        legitimately contain long runs of zero bytes (digital silence in PCM
+        audio, flat colour in an uncompressed image), and those bytes were
+        written. Only a real hole means data is absent.
+
+        Takes the size and block count from the caller's existing stat. Returns
+        (is_incomplete, corruption_details, scan_output).
+        """
+        if file_size < DATA_HOLE_MIN_SIZE or not file_blocks or file_blocks <= 0:
+            # Too small to carry a meaningful hole, or a filesystem that does
+            # not report allocation - either way there is nothing to compare.
+            return False, [], []
+
+        alloc_ratio = (file_blocks * 512) / file_size
+        if alloc_ratio >= DATA_HOLE_ALLOC_RATIO:
+            return False, [], []
+
+        hole_bytes, hole_runs, supported = self._measure_sparse_holes(file_path, file_size)
+        size_mb = file_size / (1024 * 1024)
+        scan_output = [
+            "=== Data Integrity Check ===",
+            f"Allocated {alloc_ratio * 100:.1f}% of {size_mb:.1f} MB nominal size",
+        ]
+
+        if not supported:
+            scan_output.append(
+                "Filesystem does not report sparse regions - no conclusion drawn")
+            scan_output.append("=== Data Integrity Check Complete ===")
+            return False, [], scan_output
+
+        hole_pct = hole_bytes * 100.0 / file_size
+        scan_output.append(
+            f"Sparse regions: {hole_runs} run(s), {hole_bytes / (1024 * 1024):.1f} MB "
+            f"({hole_pct:.1f}% of the file) never written")
+
+        if hole_pct < DATA_HOLE_MIN_PCT:
+            # Under-allocated with every byte written: compression or dedup.
+            scan_output.append(
+                "Under-allocation is filesystem compression, not missing data")
+            scan_output.append("=== Data Integrity Check Complete ===")
+            return False, [], scan_output
+
+        summary = (
+            f"Incomplete file: {hole_runs} unwritten region(s) totalling "
+            f"{hole_bytes / (1024 * 1024):.1f} MB, {hole_pct:.1f}% of its "
+            f"{size_mb:.1f} MB length"
+        )
+        scan_output.append(summary)
+        scan_output.append("=== Data Integrity Check Complete ===")
+        logger.warning(f"Incomplete file detected: {file_path} - {summary}")
+        return True, [summary], scan_output
+
+    def _measure_sparse_holes(self, file_path, size):
+        """Total the file's unwritten regions using SEEK_HOLE / SEEK_DATA.
+
+        Costs a handful of seeks and reads no data. Returns
+        (hole_bytes, hole_runs, supported). A filesystem without sparse-region
+        support reports the whole file as data, which is indistinguishable from
+        a healthy file, so it is reported as unsupported rather than as clean.
+        """
+        def scan():
+            fd = os.open(file_path, os.O_RDONLY)
+            try:
+                # A filesystem without sparse-region support rejects the whence
+                # itself rather than reporting a fully-written file, so the
+                # error is what separates "cannot tell" from "no holes".
+                try:
+                    os.lseek(fd, 0, os.SEEK_HOLE)
+                except OSError as e:
+                    if e.errno in (errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP):
+                        return 0, 0, False
+                    raise
+                hole_bytes = 0
+                hole_runs = 0
+                offset = 0
+                while offset < size:
+                    hole_start = os.lseek(fd, offset, os.SEEK_HOLE)
+                    if hole_start >= size:
+                        break
+                    try:
+                        hole_end = os.lseek(fd, hole_start, os.SEEK_DATA)
+                    except OSError:
+                        hole_end = size  # no further data: hole runs to EOF
+                    hole_bytes += hole_end - hole_start
+                    hole_runs += 1
+                    offset = hole_end
+                return hole_bytes, hole_runs, True
+            finally:
+                os.close(fd)
+
+        try:
+            return _read_with_timeout(scan, FILE_READ_TIMEOUT_SECS, file_path, 'sparse scan')
+        except FileReadTimeoutError:
+            # A stalled mount is not evidence that data is missing.
+            logger.warning(f"Sparse-region scan stalled for {file_path}; drawing no conclusion")
+            return 0, 0, False
+        except (OSError, ValueError) as e:
+            logger.debug(f"Sparse-region scan failed for {file_path}: {e}")
+            return 0, 0, False
+
     def calculate_file_hash(self, file_path, timeout=None, file_size=None):
         """Calculate SHA-256 hash of a file with optimized chunk size
 
@@ -988,8 +1217,22 @@ class PixelProbe:
             warning_details = []
             
             extension = Path(file_path).suffix.lower()
-            
-            if extension in self.supported_image_formats:
+            # Unwritten regions are checked before any decode. A file with holes
+            # in it is missing data, and that verdict does not depend on what the
+            # decoder makes of what is left - running a full decode over it only
+            # produces freeze and frame-count noise that describes the holes.
+            holes_found = False
+            if extension in self.supported_formats:
+                holes_found, hole_details, hole_output = self._check_data_holes(
+                    file_path, file_info['file_size'], file_info.get('file_blocks', 0))
+                # Kept even when the file is cleared: an operator looking at a
+                # suspiciously under-allocated file needs the reason it passed.
+                scan_output.extend(hole_output)
+            if holes_found:
+                corruption_details.extend(hole_details)
+                is_corrupted = True
+                scan_tool = "data-integrity"
+            elif extension in self.supported_image_formats:
                 is_corrupted, details, tool, output, warnings = self._check_image_corruption(file_path)
                 corruption_details.extend(details)
                 scan_tool = tool
@@ -2082,6 +2325,81 @@ class PixelProbe:
         
         return is_corrupted, corruption_details, hevc_output
 
+    def _confirm_freeze_events(self, file_path, freeze_events):
+        """Re-check each candidate window at a tolerance only repeated frames clear.
+
+        The main pass uses freezedetect's default noise tolerance, which
+        compares a whole-frame mean. Limited animation holds its background and
+        moves only small figures, which moves that mean by far less than the
+        tolerance - so the segment reports as frozen even though every frame in
+        it differs. Re-running the window with the tolerance near zero keeps
+        genuinely repeated frames and drops the rest.
+
+        Returns (confirmed_events, unconfirmed_events). If FFmpeg cannot be run
+        the events are returned unchanged, so a broken confirmation pass can
+        never silently erase findings.
+        """
+        confirmed = []
+        unconfirmed = []
+        checked = 0
+        deadline = time.time() + FREEZE_CONFIRM_BUDGET_SECS
+        for event in freeze_events:
+            start = event.get('start', 0)
+            length = event.get('duration', 0)
+            if (length < FREEZE_CONFIRM_MIN_SECS
+                    or checked >= FREEZE_CONFIRM_MAX_WINDOWS
+                    or time.time() >= deadline):
+                confirmed.append(event)
+                continue
+            checked += 1
+            try:
+                result = safe_subprocess_run([
+                    'ffmpeg',
+                    '-nostdin',
+                    '-v', 'info',
+                    '-ss', f'{start:.3f}',
+                    '-i', file_path,
+                    '-t', f'{length:.3f}',
+                    '-an', '-sn', '-dn',
+                    '-map', '0:v:0',
+                    '-vf', f'freezedetect=n={FREEZE_CONFIRM_NOISE}:d={FREEZE_CONFIRM_MIN_SECS}',
+                    '-f', 'null',
+                    '-'
+                ], capture_output=True, text=True, timeout=FREEZE_CONFIRM_TIMEOUT_SECS)
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    f"Freeze confirmation timed out for {file_path} at {start:.1f}s; "
+                    f"keeping the event")
+                confirmed.append(event)
+                continue
+            except OSError as e:
+                logger.warning(f"Freeze confirmation could not run for {file_path}: {e}")
+                confirmed.append(event)
+                continue
+
+            if result.returncode != 0:
+                # A failed run produces stderr with no freezedetect lines,
+                # which is indistinguishable from "frames differ". Keep the
+                # event rather than let a broken run erase a finding.
+                logger.warning(
+                    f"Freeze confirmation exited {result.returncode} for {file_path} "
+                    f"at {start:.1f}s; keeping the event")
+                confirmed.append(event)
+            elif _parse_freeze_events((result.stderr or '').split('\n')):
+                confirmed.append(event)
+            else:
+                unconfirmed.append(event)
+
+        if checked < len(freeze_events):
+            logger.info(
+                f"Freeze confirmation checked {checked} of {len(freeze_events)} event(s) "
+                f"for {file_path}; the rest are reported without being confirmed")
+        if unconfirmed:
+            logger.info(
+                f"Freeze confirmation dropped {len(unconfirmed)} of "
+                f"{len(freeze_events)} event(s) for {file_path} (frames differ)")
+        return confirmed, unconfirmed
+
     def _check_video_freeze(self, file_path, duration):
         """Detect frozen video frames using FFmpeg's freezedetect filter.
 
@@ -2115,44 +2433,17 @@ class PixelProbe:
                 '-'
             ], capture_output=True, text=True, timeout=timeout_seconds)
 
-            stderr = result.stderr or ''
+            stderr_lines = (result.stderr or '').split('\n')
 
-            freeze_events = []
+            freeze_events = _parse_freeze_events(stderr_lines)
             black_events = []
-            current_freeze = {}
             current_black = {}
 
-            for line in stderr.split('\n'):
+            for line in stderr_lines:
                 line_lower = line.lower()
 
-                # Parse freezedetect events
-                if 'freezedetect' in line_lower:
-                    start_match = _RE_FREEZE_START.search(line)
-                    if start_match:
-                        # A new event over a partial dict means a field line
-                        # went unparsed; resync so one glitch cannot phase-shift
-                        # every later event into impossible ranges
-                        if current_freeze:
-                            current_freeze = {}
-                        current_freeze['start'] = float(start_match.group(1))
-
-                    end_match = _RE_FREEZE_END.search(line)
-                    if end_match:
-                        current_freeze['end'] = float(end_match.group(1))
-
-                    dur_match = _RE_FREEZE_DURATION.search(line)
-                    if dur_match:
-                        current_freeze['duration'] = float(dur_match.group(1))
-
-                    # ffmpeg emits freeze_start, then freeze_duration, then
-                    # freeze_end - close the event only once all three are in,
-                    # so an end line cannot leak into the next event's dict
-                    if len(current_freeze) == 3:
-                        freeze_events.append(current_freeze)
-                        current_freeze = {}
-
                 # Parse blackdetect events
-                elif 'blackdetect' in line_lower or 'black_start' in line_lower:
+                if 'blackdetect' in line_lower or 'black_start' in line_lower:
                     bs = _RE_BLACK_START.search(line)
                     if bs:
                         current_black['start'] = float(bs.group(1))
@@ -2196,10 +2487,28 @@ class PixelProbe:
                     )
                 freeze_events = filtered
 
+            # A lone short freeze against either end of the file is a static
+            # title or end card, not a defect
+            freeze_events, cards = _drop_static_cards(freeze_events, duration)
+            for card in cards:
+                scan_output.append(
+                    f"Discounted static card at {card.get('start', 0):.1f}s "
+                    f"({card.get('duration', 0):.1f}s) - title or end card, not a defect"
+                )
+
+            # Confirm what is left against a tolerance only repeated frames can
+            # clear, so held animation cels do not read as frozen video
+            freeze_events, unconfirmed = self._confirm_freeze_events(file_path, freeze_events)
+            for event in unconfirmed:
+                scan_output.append(
+                    f"Discounted near-static segment at {event.get('start', 0):.1f}s "
+                    f"({event.get('duration', 0):.1f}s) - frames differ, picture is not frozen"
+                )
+
             if freeze_events:
                 has_warnings = True
-                total_frozen = sum(e.get('duration', 0) for e in freeze_events)
-                frozen_pct = total_frozen / duration * 100
+                total_frozen = min(_merged_frozen_seconds(freeze_events), duration)
+                frozen_pct = min(total_frozen / duration * 100, 100.0)
 
                 summary = (
                     f"Video freeze warning: {len(freeze_events)} event(s), "

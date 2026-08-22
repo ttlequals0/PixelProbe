@@ -53,8 +53,12 @@ def scan_parallel():
     if status == 200:
         payload['status'] = 'launched'  # legacy response shape for this endpoint
         payload['scan_type'] = 'parallel_v2'
-        payload['force_rescan'] = force_rescan
-        # CodeQL py/reflective-xss: never echo caller-supplied paths here
+        # Coerce before echoing: this value comes straight from the request
+        # body. The input decorator already rejects a non-bool, so this cannot
+        # change a valid response, and it keeps request data out of the
+        # response as a string (CodeQL py/reflective-xss).
+        payload['force_rescan'] = bool(force_rescan)
+        # Caller-supplied paths are never echoed here.
     return payload, status
 
 
