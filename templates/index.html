@@ -90,6 +90,10 @@
                         <i class="fas fa-scroll"></i>
                         <span>View Logs</span>
                     </a>
+                    <a href="#" class="nav-item" onclick="app.showTunables(); return false;" title="Tunables">
+                        <i class="fas fa-toolbox"></i>
+                        <span>Tunables</span>
+                    </a>
                     <a href="https://github.com/ttlequals0/PixelProbe" target="_blank" class="nav-item" title="Build Info">
                         <i class="fas fa-info-circle"></i>
                         <span>Build Info</span>
@@ -765,6 +769,31 @@
     </div>
 
     <!-- Exclusions Modal -->
+    <!-- Tunables Modal -->
+    <div id="tunables-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Tunables</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="tunables-intro">
+                    These take effect on the next file scanned. A scan already running picks them
+                    up without restarting.
+                </p>
+                <div id="tunables-groups">
+                    <div class="loading">Loading...</div>
+                </div>
+                <div class="tunables-actions">
+                    <span id="tunables-status" class="tunables-status" role="status" aria-live="polite"></span>
+                    <button class="btn btn-primary" id="tunables-save" onclick="app.saveTunables()">
+                        <i class="fas fa-check"></i> Save changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="exclusions-modal" class="modal">
         <div class="modal-content">
             <div class="modal-header">

@@ -220,6 +220,12 @@ Files can have the following scan statuses:
 
 ## Corruption detection
 
+### Data integrity (all media types)
+- Runs before any decode
+- Compares allocated blocks against the file's nominal size as a gate, then queries `SEEK_HOLE` for the regions the filesystem never allocated
+- Catches downloads and copies that were interrupted after the file was allocated at full size
+- Marks the file corrupted and skips decoding, since a decode of a file with gaps reports the gaps rather than the picture
+
 ### Video files (FFmpeg)
 - Decodes video streams
 - Checks for codec errors
@@ -237,11 +243,51 @@ Files can have the following scan statuses:
 - Detects truncated images and decode errors
 - Reports corruption details
 
-### Detection levels
-- **Healthy**: File passes all checks
-- **Warning**: Minor issues (e.g., 10-bit HEVC)
-- **Corrupted**: Definite corruption detected
-- **Error**: Could not scan file
+## Failure types
+
+Every scanned file lands on exactly one verdict, graded by what the evidence proves.
+
+### Healthy
+The file decoded and validated. Benign decoder noise does not change this: NAL unit warnings, DTS/PTS timestamp warnings, and ffmpeg 8 Opus EOF parse notices all appear on files that play perfectly.
+
+### Corrupted
+Something failed that proves damage. The reason is recorded in the file's corruption details:
+
+| Reason | What it means |
+|---|---|
+| Incomplete file | The file is the right length but parts of it were never written. An interrupted download or copy. The missing share is reported in the detail line |
+| FFmpeg validation failure | A full remux pass could not read the container or its streams |
+| Decode error flood | Enough decode errors to rule out ordinary noise |
+| JPEG pixel corruption | Pixel-level damage found by the JPEG analyzer |
+| No streams found | The container holds no readable media |
+
+### Warning
+A signal worth surfacing that does not prove damage. These files usually play fine:
+
+| Reason | What it means |
+|---|---|
+| Freeze events | The picture stops changing for a stretch, confirmed as genuinely repeated frames |
+| Frame-count mismatch | Counted packets disagree with what duration and frame rate predict. Container metadata is unreliable on sparse-video and variable-frame-rate files |
+| Elevated TOUT or VREP | Temporal outliers or vertical line repetition. Film grain raises the first; flat graphic content raises the second |
+| Strict-decode notices | Findings from an aggressive error-detection pass, usually container or muxing quirks |
+| Tool resource limits | The image exceeded a Pillow or ImageMagick limit, so one validator was skipped |
+
+### Error
+The file could not be read or scanned at all: permissions, I/O failure, a dead mount, or unreadable media. No verdict was reached about its contents.
+
+### Bitrot suspected
+The file's hash changed while its modification time did not. See [How It Works](how-it-works.md).
+
+### Deliberately not flagged
+
+These are real observations, not defects. PixelProbe discounts them and records the reason in the scan transcript:
+
+| Finding | Why it is discounted |
+|---|---|
+| Freeze over a black section | Fades and transitions hold black. A real freeze sticks on picture |
+| Static title or end card | Distributor logos, copyright plates, and sponsor credits are motionless by design. A solitary short freeze against either end of a file is a card |
+| Near-static segment | Limited animation holds its background and moves a few small figures, which scores below the detector's whole-frame tolerance even though every frame differs. A confirmation pass separates these from a stuck picture |
+| Under-allocation without gaps | Filesystems with compression or dedup store a healthy file in fewer blocks than its size. Only genuinely unallocated regions produce a verdict, so written zero bytes such as digital silence never count |
 
 ## API response examples
 

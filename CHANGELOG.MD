@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.7] - 2026-08-23
+
+### Added
+
+- **Tunables: scanner settings you can edit while a scan runs.** Detection thresholds, per-file work limits and storage timeouts were environment variables read once at import, so changing one meant editing a compose file and restarting. They are stored in the database now, editable under **System > Tunables** or through `GET`, `PUT` and `DELETE` on `/api/settings`, and a change reaches a running scan without a restart. Fifteen settings across three groups: Detection decides what gets flagged, Performance bounds what one file may cost, Timeouts bound how long to wait on storage. One registry defines each setting's type, range, default and wording, and the API validation, the settings screen and the documentation table all derive from it.
+- **A settings screen that shows what you changed.** Each row carries its label, a sentence explaining what the value does, the current value and a reset. Anything differing from the shipped default is marked, because on a settings screen the useful question is which values are no longer stock.
+
+### Changed
+
+- **The shortest reported freeze is now 7 seconds, up from 5.** Animation holds a drawing still for several seconds at a time, and at 5 seconds ordinary cartoons were reported as freezes. The value drives `freezedetect` directly, so shorter events are never produced and never cost a confirmation pass. Measured on a 21k-file library, the freeze warning rate had already fallen from 7.8% to 2.8% with the v2.8.6 filters; the remaining reports were dominated by held animation cels.
+- **Scanner settings no longer read the environment.** On the first start after upgrading, any of the old variables still set in your environment is copied into the database once, so behaviour does not change under an operator who never opens the settings screen. After that the stored value is authoritative and the variable is ignored.
+- Freeze detection can be switched off from the settings screen rather than only through `FREEZE_DETECTION_ENABLED`.
+
+### Fixed
+
+- **The settings API no longer reflects request data into its responses** (CodeQL `py/reflective-xss` and `py/stack-trace-exposure`). A rejected key was echoed back in the error, and a rejected value's message was built by the validator that had just handled the raw input. Errors are now composed from the registry alone: an unknown key gets a fixed message pointing at `GET /api/settings`, and an out-of-range value gets the setting's name and its accepted range, which is more use than repeating what was typed.
+- **The number column in the settings screen lines up.** Rows without a unit pushed their input right, so the values zig-zagged down the panel. The control area is a fixed three-slot grid now: value, unit, reset.
+
+### Tests
+
+- 31 new tests: registry consistency, value coercion and range errors for every type, resolution precedence, an out-of-range stored value falling back to its default, an unreadable database yielding defaults rather than failing a scan, the API's grouped read, whole-batch rejection leaving nothing written, reset, authentication, proof that a changed setting reaches the `freezedetect` command, and a check that a script tag sent as a setting key is never echoed back.
+- The freeze toggle test now exercises the setting rather than the environment variable. It previously passed for the wrong reason: its event sat inside the title card window, so no freeze was reported either way.
+
+## [2.8.6] - 2026-08-22
+
+### Added
+
+- **Data integrity check for every media file, ahead of any decode.** An interrupted download or copy leaves a file at its correct length with regions inside it that were never written. Demuxers skip past those regions, so the picture holds while the clock keeps running, and freeze detection reported that as a frozen picture rather than as missing data. Allocated blocks against nominal size is only a gate deciding which files are worth opening, since compression and dedup under-allocate healthy files too; the verdict comes from `SEEK_HOLE`, which reports regions the filesystem never allocated and reads no file data. That distinction is the whole point: a valid file can legitimately contain long runs of zero bytes, such as digital silence in PCM audio, and those bytes were written. A file with unwritten regions is marked **corrupted** and skips decoding entirely, which also removes a full-length decode pass from every damaged file. A filesystem without sparse-region support yields no verdict rather than a guess. Tunable via `DATA_HOLE_ALLOC_RATIO` and `DATA_HOLE_MIN_PCT`.
+- **Shared `env_float` helper** in `pixelprobe/utils/helpers.py`, alongside the existing `env_int`, with optional floor and ceiling clamping.
+
+### Fixed
+
+- **Static title and end cards are no longer reported as freezes.** Programmes open and close on motionless plates: distributor logos, copyright notices, sponsor credits. The picture genuinely stops, so the detector was right and only the verdict was wrong. A solitary freeze no longer than `STATIC_CARD_MAX_SECS` sitting within `STATIC_CARD_EDGE_SECS` of either end of the file is now discounted, with the reason recorded in the scan transcript. The edge window is also capped at `STATIC_CARD_EDGE_FRACTION` of runtime so it cannot reach the middle of a short clip and swallow a genuine freeze.
+- **Held animation cels are no longer reported as freezes.** `freezedetect`'s noise tolerance compares a whole-frame mean. Limited animation holds its background and moves only small figures, which shifts that mean by a fraction of the threshold, so the segment reported as frozen even though every frame in it differed. Surviving candidates are now re-checked over their own window at a tolerance only repeated frames can clear. Each check is its own ffmpeg process, bounded both by `FREEZE_CONFIRM_MAX_WINDOWS` (default 20) and by `FREEZE_CONFIRM_BUDGET_SECS` (default 600) of wall time per file, so a file reporting hundreds of events cannot stall a scan. A confirmation pass that times out, exits non-zero, hits either bound, or cannot run keeps the candidate, so a failure never erases a finding.
+- **Healthy files no longer print their scan transcript in the results table.** With no corruption, warning, or error to report, the Details column and the mobile card fell through to the raw ffmpeg output, so every healthy file carried a multi-line transcript in the cell and in its hover tooltip. Those cells report what the scan concluded, and a healthy file concluded nothing worth a line; the transcript stays one click away under View. The details modal also stopped auto-expanding the transcript for exactly those files, which was the one case where it opened uninvited.
+- **Reported frozen time can no longer exceed the runtime.** Freeze durations were summed naively, so events overlapping the same span were counted once per event and produced percentages above 100%. Overlapping events are now merged before summing and the percentage is capped at 100%.
+
+### Security
+
+- **Reflected request data removed from the deprecated `/api/scan-parallel` response** (CodeQL `py/reflective-xss`, alert 87). The endpoint echoed `force_rescan` straight from the request body into its JSON response. The input decorator already rejects a non-bool, so the flow was not exploitable, but the value is now coerced before it is echoed. Pre-existing on main, unrelated to the freeze work in this release.
+
+### Changed
+
+- Freeze detection parsing moved into a shared `_parse_freeze_events` helper, used by both the detection pass and the confirmation pass. `get_file_info` now also returns the file's allocated block count, so the data integrity check needs no stat of its own.
+- Documented the full set of failure types in `docs/scan-types.md`, covering every verdict, the reasons behind each, and the findings PixelProbe deliberately discounts along with why.
+
+### Tests
+
+- 22 new tests covering static card suppression at both ends of a file, the relative edge bound on short clips, multi-event files never being treated as cards, confirmation pass accept and reject paths, confirmation timeout and missing-binary fallbacks, overlapping event merging, and the data integrity check across holed files, compressed filesystems, filesystems that do not report block counts, undersized files, and unreadable paths.
+- The `_check_video_corruption` propagation test moved its freeze event into the body of the file; the previous fixture placed a 5-second event 5 seconds into a 60-second file, which is a title-card shape under the new rule.
+
 ## [2.8.5] - 2026-08-19
 
 ### Fixed

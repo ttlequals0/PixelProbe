@@ -101,7 +101,7 @@ class TestRealMediaSamples:
         """Test that scan tool is recorded"""
         for result in real_scan_results:
             assert result.scan_tool is not None
-            assert result.scan_tool in ['ffmpeg', 'imagemagick', 'pillow', 'pil']
+            assert result.scan_tool in ['ffmpeg', 'imagemagick', 'pillow', 'pil', 'data-integrity']
 
 
 @pytest.mark.real_media

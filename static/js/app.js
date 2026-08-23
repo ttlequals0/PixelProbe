@@ -19,8 +19,9 @@ function fileStatus(file) {
 }
 
 // Single source of truth for a file's detail sections, most useful first:
-// the verdict summaries, then errors, then the raw tool transcript (used by
-// the desktop table, mobile cards, and the details modal - keep in lockstep)
+// the verdict summaries, then errors, then the raw tool transcript. Only the
+// details modal renders the transcript; the table and cards show verdicts
+// only (see fileDetails) - keep the three in lockstep.
 function fileDetailSections(file) {
     const sections = [
         { label: 'Corruption Details', content: file.corruption_details },
@@ -31,10 +32,13 @@ function fileDetailSections(file) {
     return sections.filter(s => s.content);
 }
 
-// First (highest-priority) detail line for compact table/card cells
+// Highest-priority verdict line for compact table/card cells. The raw
+// transcript is deliberately excluded: these cells report what the scan
+// concluded, and a healthy file concluded nothing worth a line. Its transcript
+// stays one click away under View.
 function fileDetails(file) {
-    const sections = fileDetailSections(file);
-    return sections.length > 0 ? sections[0].content : '';
+    const verdict = fileDetailSections(file).find(s => s.label !== 'Scan Output');
+    return verdict ? verdict.content : '';
 }
 
 // Severity accent for each detail section in the details modal
@@ -4130,8 +4134,8 @@ class PixelProbeApp {
         
         const modalBody = modal.querySelector('.modal-body');
         
-        // Verdict sections lead; the raw transcript is supporting evidence,
-        // collapsed unless it is the only content
+        // Verdict sections lead; the raw transcript is supporting evidence and
+        // stays collapsed until the reader asks for it
         const details = fileDetailSections(file);
         const verdicts = details.filter(d => d.label !== 'Scan Output');
         const transcript = details.find(d => d.label === 'Scan Output');
@@ -4144,7 +4148,7 @@ class PixelProbeApp {
         `).join('');
 
         const transcriptHtml = transcript ? `
-            <details class="detail-transcript" ${verdicts.length === 0 ? 'open' : ''}>
+            <details class="detail-transcript">
                 <summary>Full scan transcript</summary>
                 <pre class="scan-output-text">${this.escapeHtml(transcript.content)}</pre>
             </details>
@@ -4635,6 +4639,138 @@ class PixelProbeApp {
     }
 
     // Exclusions Management
+    async showTunables() {
+        const modal = document.querySelector('#tunables-modal');
+        if (!modal) return;
+
+        modal.style.display = 'block';
+        await this.loadTunables();
+    }
+
+    async loadTunables() {
+        const container = document.querySelector('#tunables-groups');
+        if (!container) return;
+
+        try {
+            const response = await fetch('/api/settings');
+            if (!response.ok) throw new Error('Request failed');
+            const data = await response.json();
+            container.innerHTML = data.groups.map(group => this.renderTunableGroup(group)).join('');
+            this.setTunablesStatus('');
+        } catch (error) {
+            console.error('Error loading tunables:', error);
+            container.innerHTML =
+                '<p class="tunables-error">Could not load settings. Check that the app can reach its database, then reopen this panel.</p>';
+        }
+    }
+
+    renderTunableGroup(group) {
+        return `
+            <section class="tunable-group">
+                <h4>${this.escapeHtml(group.label)}</h4>
+                <p class="tunable-group-help">${this.escapeHtml(group.help)}</p>
+                ${group.settings.map(s => this.renderTunable(s)).join('')}
+            </section>
+        `;
+    }
+
+    renderTunable(setting) {
+        const id = `tunable-${setting.key.replace(/\./g, '-')}`;
+        const changed = setting.is_default
+            ? '<span></span>'
+            : `<button type="button" class="tunable-reset" title="Restore the default"
+                   onclick="app.resetTunable('${this.escapeHtml(setting.key)}')">Reset</button>`;
+        const badge = setting.is_default
+            ? ''
+            : '<span class="tunable-changed" title="Changed from the default">Changed</span>';
+
+        const control = setting.type === 'bool'
+            ? `<label class="tunable-switch">
+                   <input type="checkbox" id="${id}" data-key="${this.escapeHtml(setting.key)}"
+                          data-type="bool" ${setting.value ? 'checked' : ''}>
+                   <span>${setting.value ? 'On' : 'Off'}</span>
+               </label>`
+            : `<input type="number" id="${id}" class="form-control tunable-input"
+                      data-key="${this.escapeHtml(setting.key)}" data-type="${setting.type}"
+                      value="${setting.value}"
+                      ${setting.min !== null ? `min="${setting.min}"` : ''}
+                      ${setting.max !== null ? `max="${setting.max}"` : ''}
+                      step="${setting.type === 'int' ? '1' : 'any'}">
+               <span class="tunable-unit">${setting.unit ? this.escapeHtml(setting.unit) : ''}</span>`;
+
+        return `
+            <div class="tunable-row">
+                <div class="tunable-text">
+                    <label class="tunable-label" for="${id}">${this.escapeHtml(setting.label)}${badge}</label>
+                    <p class="tunable-help">${this.escapeHtml(setting.help)}</p>
+                </div>
+                <div class="tunable-control${setting.type === 'bool' ? ' tunable-control-switch' : ''}">
+                    ${control}
+                    ${changed}
+                </div>
+            </div>
+        `;
+    }
+
+    collectTunables() {
+        const payload = {};
+        document.querySelectorAll('#tunables-groups [data-key]').forEach(el => {
+            payload[el.dataset.key] = el.dataset.type === 'bool' ? el.checked : el.value;
+        });
+        return payload;
+    }
+
+    setTunablesStatus(message, kind) {
+        const status = document.querySelector('#tunables-status');
+        if (!status) return;
+        status.textContent = message || '';
+        status.className = `tunables-status${kind ? ' tunables-status-' + kind : ''}`;
+    }
+
+    async saveTunables() {
+        const button = document.querySelector('#tunables-save');
+        if (button) button.disabled = true;
+        this.setTunablesStatus('Saving...');
+
+        try {
+            const response = await fetch('/api/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(this.collectTunables())
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                // The API rejects the whole batch on one bad value, so nothing
+                // was saved and the message names the setting at fault.
+                this.setTunablesStatus(data.error || 'Nothing was saved.', 'error');
+                return;
+            }
+
+            await this.loadTunables();
+            this.setTunablesStatus('Saved. In effect from the next file scanned.', 'success');
+            this.showNotification('Settings saved', 'success');
+        } catch (error) {
+            console.error('Error saving tunables:', error);
+            this.setTunablesStatus('Could not reach the server. Nothing was saved.', 'error');
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
+    async resetTunable(key) {
+        try {
+            const response = await fetch(`/api/settings/${encodeURIComponent(key)}`,
+                                         { method: 'DELETE' });
+            if (!response.ok) throw new Error('Request failed');
+            await this.loadTunables();
+            this.setTunablesStatus('Default restored.', 'success');
+        } catch (error) {
+            console.error('Error resetting tunable:', error);
+            this.setTunablesStatus('Could not restore the default.', 'error');
+        }
+    }
+
     async showExclusions() {
         const modal = document.querySelector('#exclusions-modal');
         if (!modal) return;

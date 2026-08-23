@@ -205,6 +205,20 @@ def env_int(name, default, floor=None):
     return value
 
 
+def env_float(name, default, floor=None, ceiling=None):
+    """Parse a float environment variable, falling back to default on a
+    garbage value and optionally clamping to a range."""
+    try:
+        value = float(os.environ.get(name, default))
+    except ValueError:
+        return default
+    if floor is not None:
+        value = max(floor, value)
+    if ceiling is not None:
+        value = min(ceiling, value)
+    return value
+
+
 def create_state_dict(state_obj, extra_fields=None):
     """Create a standardized dictionary from state objects"""
     base_dict = {

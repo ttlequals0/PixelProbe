@@ -160,6 +160,42 @@ components:
       description: Session-based authentication via login
 
   schemas:
+    ScannerSetting:
+      type: object
+      properties:
+        key:
+          type: string
+          example: detection.freeze_min_duration_secs
+        group:
+          type: string
+          enum: [detection, performance, timeouts]
+        label:
+          type: string
+          example: Shortest freeze to report
+        help:
+          type: string
+        type:
+          type: string
+          enum: [bool, int, float]
+        value:
+          oneOf:
+            - type: boolean
+            - type: number
+        default:
+          oneOf:
+            - type: boolean
+            - type: number
+        min:
+          type: number
+          nullable: true
+        max:
+          type: number
+          nullable: true
+        unit:
+          type: string
+          nullable: true
+        is_default:
+          type: boolean
     Error:
       type: object
       properties:
@@ -1505,6 +1541,126 @@ paths:
       responses:
         '200':
           description: Configuration added successfully
+
+  /settings:
+    get:
+      summary: Get scanner settings
+      description: |
+        Every scanner setting with its current value, grouped as Detection,
+        Performance and Timeouts. Each entry carries its type, default, valid
+        range and a description, and reports whether the stored value still
+        matches the default.
+
+        **Example:**
+        ```bash
+        curl -X GET http://your-server/api/settings \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Admin]
+      responses:
+        '200':
+          description: Settings retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key:
+                          type: string
+                          example: detection
+                        label:
+                          type: string
+                        help:
+                          type: string
+                        settings:
+                          type: array
+                          items:
+                            $ref: '#/components/schemas/ScannerSetting'
+        '401':
+          description: Authentication required
+
+    put:
+      summary: Update scanner settings
+      description: |
+        Save one or more settings. Values take effect on the next file scanned,
+        including in a scan that is already running.
+
+        Every supplied value is validated before anything is written, so a
+        rejected batch leaves the stored settings untouched. The error names the
+        setting and its accepted range.
+
+        **Example:**
+        ```bash
+        curl -X PUT http://your-server/api/settings \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"detection.freeze_min_duration_secs": 10}'
+        ```
+      tags: [Admin]
+      requestBody:
+        required: true
+        description: Object of setting keys and their new values
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              example:
+                detection.freeze_min_duration_secs: 10
+                detection.freeze_detection_enabled: true
+      responses:
+        '200':
+          description: Settings saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    type: array
+                    items:
+                      type: string
+                  settings:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ScannerSetting'
+        '400':
+          description: Unknown setting, or a value outside its accepted range. Nothing was saved
+        '401':
+          description: Authentication required
+
+  /settings/{key}:
+    delete:
+      summary: Reset a setting to its default
+      description: |
+        Remove the stored value for one setting so it falls back to the shipped
+        default.
+
+        **Example:**
+        ```bash
+        curl -X DELETE http://your-server/api/settings/detection.freeze_min_duration_secs \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      tags: [Admin]
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+          example: detection.freeze_min_duration_secs
+      responses:
+        '200':
+          description: Default restored
+        '401':
+          description: Authentication required
+        '404':
+          description: Unknown setting
 
   /mark-as-good:
     post:

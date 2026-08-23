@@ -420,11 +420,19 @@ Each file is validated in `pixelprobe/media_checker.py` (`PixelProbe.scan_file`)
 
 1. **Format detection**: file metadata and MIME type are read via libmagic (with a read timeout so an unreadable file is skipped instead of hanging the scan), and the file is routed by type to the matching checker.
 
-2. **Images**: PIL verification (`Image.open` + `verify()` and a load test) followed by ImageMagick validation with `-regard-warnings` (warnings treated as errors). ImageMagick timeouts scale with file size.
+2. **Data integrity** (all media types, before any decode): an interrupted download or copy leaves a file at its correct length with regions inside it that were never written. Two steps, and only the second decides:
+   - Allocated blocks are compared against nominal size. This is a gate, not a verdict: filesystems with compression or dedup under-allocate healthy files too, so it only decides which files are worth opening
+   - Files below the ratio are queried with `SEEK_HOLE` / `SEEK_DATA`, which reports the regions the filesystem never allocated. This reads no file data and costs a handful of seeks
 
-3. **Audio**: ffprobe stream analysis - stream presence, codec, sample rate, channels, and duration checks.
+   The distinction matters. A valid file can legitimately hold long runs of zero bytes, such as digital silence in PCM audio or flat colour in an uncompressed image, and those bytes were written. Only a real hole means data is absent, and a byte-level test cannot tell the two apart.
 
-4. **Video**: three passes plus staged deep analysis:
+   A file with unwritten regions is marked **corrupted** and no decode runs. Decoding one produces freeze and frame-count findings that describe the gaps rather than the picture, which is why this check comes first. A filesystem that does not support sparse-region queries yields no verdict rather than a guess. Both thresholds are settings under System > Tunables.
+
+3. **Images**: PIL verification (`Image.open` + `verify()` and a load test) followed by ImageMagick validation with `-regard-warnings` (warnings treated as errors). ImageMagick timeouts scale with file size.
+
+4. **Audio**: ffprobe stream analysis - stream presence, codec, sample rate, channels, and duration checks.
+
+5. **Video**: three passes plus staged deep analysis:
    - ffprobe metadata probe (stream presence, codec, duration)
    - Full remux validation: FFmpeg reads the ENTIRE file with `-map 0 -c copy -f null -` and aggressive error detection to validate container integrity across all streams
    - Enhanced corruption analysis, run for every video:
@@ -433,9 +441,14 @@ Each file is validated in `pixelprobe/media_checker.py` (`PixelProbe.scan_file`)
      - **Stage 3 - Multi-point sampling** (files > 5GB): decodes 10s samples at beginning, middle, and end; NEVER marks a file corrupted (seeking produces FFmpeg-version-dependent false positives), results are informational
      - **Stage 4 - Strict error detection** (warnings only): `-err_detect crccheck+bitstream+buffer+explode` over the first 30 seconds; findings are container/muxing warnings, never corruption verdicts
 
-5. **Freeze detection** (videos, separate pass): a full-decode pass through FFmpeg's `freezedetect` filter (with `blackdetect`) flags frozen-picture segments. Warning-only - it never marks a file corrupted - and can be disabled with `FREEZE_DETECTION_ENABLED=false`.
+6. **Freeze detection** (videos, separate pass): a full-decode pass through FFmpeg's `freezedetect` filter (with `blackdetect`) flags frozen-picture segments, then three filters run over the candidates:
+   - Segments overlapping a black section are dropped, because a real freeze sticks on picture rather than on a fade
+   - A solitary short freeze against either end of the file is discounted as a static title or end card. The bound is the smaller of 60 seconds and 10% of runtime, so on a short clip it cannot reach the middle of the file
+   - Each surviving candidate is re-checked over its own window at a noise tolerance only repeated frames can clear. The default tolerance compares a whole-frame mean, which limited animation scores below while every frame still differs; the confirmation pass drops those. If the pass cannot run, the candidate is kept, so a failure never erases a finding
 
-6. **Dynamic timeouts**: FFmpeg validation timeouts are computed from file size and duration (roughly 3 minutes per GB or ~2x realtime, capped at 2 hours), so large files are neither killed prematurely nor allowed to hang forever.
+   What survives is a warning - it never marks a file corrupted - and the whole pass can be switched off under System > Tunables. Reported frozen time counts overlapping events once and is capped at the runtime.
+
+7. **Dynamic timeouts**: FFmpeg validation timeouts are computed from file size and duration (roughly 3 minutes per GB or ~2x realtime, capped at 2 hours), so large files are neither killed prematurely nor allowed to hang forever.
 
 ## Container interactions
 
@@ -665,6 +678,12 @@ deploy:
 
 ## Environment variables
 
+Scanner detection, performance and timeout values are no longer environment
+variables. They are stored in the database and edited under System > Tunables or
+through `/api/settings`, so a change reaches a running scan without a restart.
+See [Configuration](configuration.md#scanner-settings).
+
+
 ### Required
 
 Only one variable is truly required - the app refuses to start without it:
@@ -695,7 +714,6 @@ Only one variable is truly required - the app refuses to start without it:
 | `MAX_WORKERS`                   | `10`                       | Thread pool size for selected-file rescans          |
 | `BATCH_SIZE`                    | `100`                      | Batch size for bulk operations                      |
 | `SCHEDULER_ENABLED`             | `true`                     | Whether this process may compete for the scheduler lock |
-| `FREEZE_DETECTION_ENABLED`      | `true`                     | Toggle the freeze-detection pass for videos         |
 | `REDIS_MAX_MEMORY`              | `2gb` (compose)            | Valkey maxmemory for the task queue                 |
 | `TRUSTED_INTERNAL_HOSTS`        | (empty)                    | Hosts/CIDRs that bypass SSRF private-IP blocking    |
 | `CHUNK_HEARTBEAT_INTERVAL_SECS` | `120`                      | Chunk liveness heartbeat interval                   |

@@ -864,6 +864,32 @@ The endpoints below are not documented in detail above; methods and one-line pur
 | GET, PUT | `/api/exclusions` | Read / replace path and extension exclusions |
 | POST, DELETE | `/api/exclusions/{type}` | Add / remove a single exclusion (`type` is `path` or `extension`) |
 
+### Scanner settings
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/settings` | Every scanner setting with its current value, grouped as Detection, Performance and Timeouts |
+| PUT | `/api/settings` | Save one or more settings. Send a JSON object of keys and values |
+| DELETE | `/api/settings/{key}` | Restore one setting to its default |
+
+Values are validated against the type and range declared for each setting. A `PUT`
+carrying a bad value is rejected whole, with a message naming the setting, and
+nothing is written. Settings take effect on the next file scanned, including in a
+scan that is already running. Every key and default is listed in
+[Configuration](configuration.md#scanner-settings).
+
+```bash
+# Report only freezes of 10 seconds or longer
+curl -X PUT https://your-host/api/settings \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"detection.freeze_min_duration_secs": 10}'
+
+# Put it back to the default
+curl -X DELETE https://your-host/api/settings/detection.freeze_min_duration_secs \
+  -H "Authorization: Bearer $TOKEN"
+```
+
 ### Notifications
 
 | Method | Endpoint | Purpose |

@@ -10,6 +10,20 @@ from unittest.mock import Mock, patch, MagicMock
 
 from pixelprobe.media_checker import PixelProbe
 
+def settings_with(**overrides):
+    """Registry defaults with specific settings overridden, keyed as the scanner reads them."""
+    from pixelprobe.constants import SCANNER_SETTINGS
+    values = {spec['key']: spec['default'] for spec in SCANNER_SETTINGS}
+    values.update(overrides)
+    return values
+
+
+def patch_settings(**overrides):
+    """Patch the scanner's settings resolution for the duration of a test."""
+    return patch('pixelprobe.media_checker.resolve_settings',
+                 return_value=settings_with(**overrides))
+
+
 class TestMediaChecker:
     """Test the core PixelProbe media checking functionality"""
     
@@ -528,9 +542,11 @@ class TestVideoFreezeDetection:
             result = Mock()
             result.returncode = 0
             result.stdout = ''
-            # Detect the freezedetect call by checking for the filter arg
+            # Detect the freezedetect call by checking for the filter arg.
+            # The event sits in the body of the file: an event against either
+            # edge is a title or end card and is discounted by design.
             if any('freezedetect' in str(arg) for arg in cmd):
-                result.stderr = self._make_freezedetect_stderr([(5.0, 10.0, 5.0)])
+                result.stderr = self._make_freezedetect_stderr([(25.0, 30.0, 5.0)])
             else:
                 result.stderr = ''
             return result
@@ -569,15 +585,14 @@ class TestVideoFreezeDetection:
         assert warning_details == []
         assert any('No freeze events' in line for line in scan_output)
 
-    @patch.dict('os.environ', {'FREEZE_DETECTION_ENABLED': 'false'})
     @patch('os.path.getsize')
     @patch('os.path.exists')
     @patch('subprocess.run')
     @patch('pixelprobe.media_checker._ffprobe_with_timeout')
-    def test_freeze_detection_disabled_via_env(
+    def test_freeze_detection_disabled_via_setting(
         self, mock_probe, mock_run, mock_exists, mock_getsize
     ):
-        """Freeze detection is skipped when FREEZE_DETECTION_ENABLED=false"""
+        """Freeze detection is skipped when the setting is turned off"""
         mock_exists.return_value = True
         mock_getsize.return_value = 1024 * 1024
 
@@ -608,13 +623,15 @@ class TestVideoFreezeDetection:
         mock_run.side_effect = subprocess_side_effect
 
         checker = PixelProbe()
-        is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
-            checker._check_video_corruption('/fake/freeze_disabled.mp4')
-        )
+        with patch_settings(**{'detection.freeze_detection_enabled': False}):
+            is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
+                checker._check_video_corruption('/fake/freeze_disabled.mp4')
+            )
 
-        # Should NOT be corrupted -- freeze detection was skipped
-        assert not any('Video freeze detected' in d for d in corruption_details)
+        # The pass never ran, so its heading is absent entirely
+        assert not any('Freeze Detection Analysis' in line for line in scan_output)
         assert not any('Freeze #' in line for line in scan_output)
+        assert warning_details == []
 
     @patch('subprocess.run')
     def test_video_freeze_black_frame_filtered(self, mock_run):
@@ -670,6 +687,540 @@ class TestVideoFreezeDetection:
         assert len(warning_details) == 1
         assert '1 event(s)' in warning_details[0]
         assert any('Filtered 1 of 2' in line for line in scan_output)
+
+
+class TestStaticCardSuppression:
+    """Static title and end cards are real freezes but not defects"""
+
+    def _stderr(self, events):
+        lines = []
+        for start, end, duration in events:
+            lines.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: {start}")
+            lines.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: {duration}")
+            lines.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: {end}")
+        return "\n".join(lines)
+
+    @patch('subprocess.run')
+    def test_end_card_discounted(self, mock_run):
+        """A lone short freeze just before the last frame is an end card"""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = self._stderr([(2628.8, 2633.8, 5.0)])
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/episode.mkv', duration=2641.6
+        )
+
+        assert has_warnings is False
+        assert warning_details == []
+        assert any('Discounted static card at 2628.8s' in line for line in scan_output)
+
+    @patch('subprocess.run')
+    def test_title_card_discounted(self, mock_run):
+        """A lone short freeze at the head of the file is a title card"""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = self._stderr([(8.1, 18.2, 10.1)])
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/episode.mkv', duration=1290.0
+        )
+
+        assert has_warnings is False
+        assert any('Discounted static card at 8.1s' in line for line in scan_output)
+
+    @patch('subprocess.run')
+    def test_mid_programme_freeze_kept(self, mock_run):
+        """A freeze in the body of the programme is not a card"""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = self._stderr([(640.0, 645.0, 5.0)])
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/episode.mkv', duration=1290.0
+        )
+
+        assert has_warnings is True
+        assert '1 event(s)' in warning_details[0]
+
+    @patch('subprocess.run')
+    def test_long_edge_freeze_kept(self, mock_run):
+        """An edge freeze far longer than a card is still reported"""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = self._stderr([(5.0, 65.0, 60.0)])
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/episode.mkv', duration=1290.0
+        )
+
+        assert has_warnings is True
+
+    @patch('subprocess.run')
+    def test_short_clip_middle_freeze_kept(self, mock_run):
+        """On a short clip the edge window must not stretch across the middle"""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = self._stderr([(50.0, 55.0, 5.0)])
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/clip.mp4', duration=120.0
+        )
+
+        assert has_warnings is True
+        assert not any('Discounted static card' in line for line in scan_output)
+
+    @patch('subprocess.run')
+    def test_two_events_never_treated_as_cards(self, mock_run):
+        """Card suppression applies only to a solitary event"""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = self._stderr([(2.0, 7.0, 5.0), (1280.0, 1285.0, 5.0)])
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/episode.mkv', duration=1290.0
+        )
+
+        assert has_warnings is True
+        assert '2 event(s)' in warning_details[0]
+
+
+    @patch('subprocess.run')
+    def test_event_past_reported_duration_is_not_a_card(self, mock_run):
+        """A short container duration must not turn a mid-file freeze into a card"""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = self._stderr([(700.0, 710.0, 10.0)])
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/short_duration.mkv', duration=600.0
+        )
+
+        assert has_warnings is True
+        assert not any('Discounted static card' in line for line in scan_output)
+
+
+class TestFreezeConfirmationPass:
+    """Held animation cels report as frozen but every frame differs"""
+
+    MAIN = (
+        "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 640.0\n"
+        "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 5.0\n"
+        "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 645.0"
+    )
+
+    def _dispatch(self, confirm_stderr=None, raises=None, confirm_returncode=0):
+        """Route the main detection pass and the confirmation pass separately"""
+        def side_effect(cmd, *args, **kwargs):
+            is_confirm = 'blackdetect' not in ' '.join(str(part) for part in cmd)
+            if is_confirm and raises is not None:
+                raise raises
+            result = Mock()
+            result.returncode = confirm_returncode if is_confirm else 0
+            result.stdout = ''
+            result.stderr = confirm_stderr if is_confirm else self.MAIN
+            return result
+        return side_effect
+
+    @patch('subprocess.run')
+    def test_unconfirmed_segment_dropped(self, mock_run):
+        """Frames that all differ are not a frozen picture"""
+        mock_run.side_effect = self._dispatch('frame=120 fps=60 time=00:00:05.00')
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/cartoon.mkv', duration=1290.0
+        )
+
+        assert has_warnings is False
+        assert warning_details == []
+        assert any('Discounted near-static segment at 640.0s' in line for line in scan_output)
+
+    @patch('subprocess.run')
+    def test_confirmed_segment_kept(self, mock_run):
+        """Genuinely repeated frames survive confirmation"""
+        mock_run.side_effect = self._dispatch(self.MAIN)
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/stuck.mkv', duration=1290.0
+        )
+
+        assert has_warnings is True
+        assert '1 event(s)' in warning_details[0]
+
+    @patch('subprocess.run')
+    def test_confirmation_failure_keeps_event(self, mock_run):
+        """A confirmation pass that cannot run must not erase findings"""
+        mock_run.side_effect = self._dispatch(raises=FileNotFoundError('ffmpeg missing'))
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/stuck.mkv', duration=1290.0
+        )
+
+        assert has_warnings is True
+
+    @patch('subprocess.run')
+    def test_confirmation_timeout_keeps_event(self, mock_run):
+        """A confirmation pass that times out must not erase findings"""
+        mock_run.side_effect = self._dispatch(
+            raises=subprocess.TimeoutExpired(cmd='ffmpeg', timeout=300))
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/stuck.mkv', duration=1290.0
+        )
+
+        assert has_warnings is True
+
+
+    @patch('subprocess.run')
+    def test_failed_confirmation_run_keeps_event(self, mock_run):
+        """A non-zero ffmpeg exit is not evidence that the frames differ"""
+        mock_run.side_effect = self._dispatch(
+            confirm_stderr='Error opening input file', confirm_returncode=1)
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/unreadable.mkv', duration=1290.0
+        )
+
+        assert has_warnings is True
+        assert not any('Discounted near-static' in line for line in scan_output)
+
+
+class TestFrozenPercentageClamp:
+    """Overlapping events must not report more frozen time than the runtime"""
+
+    @patch('subprocess.run')
+    def test_overlapping_events_counted_once(self, mock_run):
+        """Two events over the same span count that span once"""
+        stderr = []
+        for start, end, duration in [(100.0, 400.0, 300.0), (110.0, 410.0, 300.0)]:
+            stderr.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: {start}")
+            stderr.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: {duration}")
+            stderr.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: {end}")
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = "\n".join(stderr)
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/gappy.mkv', duration=1000.0
+        )
+
+        assert has_warnings is True
+        # Naive summing gives 600s; the union of the two spans is 310s
+        assert '310.0s frozen' in warning_details[0]
+        assert '31.0% of video' in warning_details[0]
+
+    @patch('subprocess.run')
+    def test_percentage_never_exceeds_one_hundred(self, mock_run):
+        """An event running past the container duration still reports 100%"""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stderr = (
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 100.0\n"
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 5000.0\n"
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 5100.0\n"
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 110.0\n"
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 5000.0\n"
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 5110.0"
+        )
+        mock_result.stdout = ''
+        mock_run.return_value = mock_result
+
+        checker = PixelProbe()
+        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/gappy.mkv', duration=1000.0
+        )
+
+        assert has_warnings is True
+        assert '1000.0s frozen' in warning_details[0]
+        assert '100.0% of video' in warning_details[0]
+
+
+class TestSettingsReachTheScanner:
+    """A changed setting must actually alter what the scanner does"""
+
+    def _run(self, mock_run, duration=1290.0, **overrides):
+        result = Mock()
+        result.returncode = 0
+        result.stdout = ''
+        result.stderr = ''
+        mock_run.return_value = result
+        checker = PixelProbe()
+        with patch_settings(**overrides):
+            checker._check_video_freeze('/fake/video.mkv', duration=duration)
+        return ' '.join(str(part) for part in mock_run.call_args[0][0])
+
+    @patch('subprocess.run')
+    def test_minimum_duration_drives_the_detector(self, mock_run):
+        """The configured minimum becomes freezedetect's own d= value"""
+        cmd = self._run(mock_run, **{'detection.freeze_min_duration_secs': 7.0})
+        assert 'freezedetect=n=-60dB:d=7.0' in cmd
+
+    @patch('subprocess.run')
+    def test_raising_the_minimum_changes_the_command(self, mock_run):
+        """Editing the setting is reflected without any code change"""
+        cmd = self._run(mock_run, **{'detection.freeze_min_duration_secs': 20.0})
+        assert 'freezedetect=n=-60dB:d=20.0' in cmd
+        assert 'd=7.0' not in cmd
+
+    @patch('subprocess.run')
+    def test_default_minimum_is_seven_seconds(self, mock_run):
+        """The shipped default no longer reports the 5s events cartoons produce"""
+        cmd = self._run(mock_run)
+        assert 'freezedetect=n=-60dB:d=7.0' in cmd
+
+    @patch('subprocess.run')
+    def test_card_suppression_can_be_switched_off(self, mock_run):
+        """An edge window of zero reports title and end cards instead of discounting them"""
+        stderr = (
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 2.0\n"
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 8.0\n"
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 10.0"
+        )
+        result = Mock()
+        result.returncode = 0
+        result.stdout = ''
+        result.stderr = stderr
+        mock_run.return_value = result
+        checker = PixelProbe()
+
+        with patch_settings(**{'detection.static_card_edge_secs': 60.0}):
+            on, _, out = checker._check_video_freeze('/fake/v.mkv', duration=1290.0)
+        assert on is False
+        assert any('Discounted static card' in line for line in out)
+
+        with patch_settings(**{'detection.static_card_edge_secs': 0.0}):
+            on, details, out = checker._check_video_freeze('/fake/v.mkv', duration=1290.0)
+        assert on is True
+        assert '1 event(s)' in details[0]
+
+    def test_data_integrity_threshold_is_a_setting(self, tmp_path):
+        """Raising the required unwritten share stops a marginal file being called incomplete"""
+        path = tmp_path / 'marginal.mkv'
+        with open(path, 'wb') as handle:
+            handle.write(b'\xa5' * 1024 * 1024 * 8)
+            handle.seek(2 * 1024 * 1024, os.SEEK_CUR)
+            handle.write(b'\xa5')
+        size = os.path.getsize(path)
+        fd = os.open(str(path), os.O_RDONLY)
+        try:
+            supported = os.lseek(fd, 0, os.SEEK_HOLE) < size
+        except OSError:
+            supported = False
+        finally:
+            os.close(fd)
+        if not supported:
+            pytest.skip('filesystem does not report sparse regions')
+
+        checker = PixelProbe()
+        blocks = (size // 512) // 2
+
+        with patch_settings(**{'detection.data_hole_min_pct': 1.0}):
+            found, _, _ = checker._check_data_holes(str(path), size, blocks)
+        assert found is True
+
+        with patch_settings(**{'detection.data_hole_min_pct': 99.0}):
+            found, details, out = checker._check_data_holes(str(path), size, blocks)
+        assert found is False
+        assert any('compression' in line for line in out)
+
+
+class TestDataHoleDetection:
+    """Files allocated at full size but never fully written are missing data"""
+
+    def _sparse(self, tmp_path, name, written_mb, hole_mb):
+        """Create a genuinely sparse file: written data, then an unwritten hole"""
+        path = tmp_path / name
+        with open(path, 'wb') as handle:
+            handle.write(b'\xa5' * 1024 * 1024 * written_mb)
+            handle.seek(hole_mb * 1024 * 1024, os.SEEK_CUR)
+            handle.write(b'\xa5')
+        return str(path)
+
+    def _dense(self, tmp_path, name, written_mb, zero_mb):
+        """Create a fully written file whose tail is real, written zero bytes"""
+        path = tmp_path / name
+        with open(path, 'wb') as handle:
+            handle.write(b'\xa5' * 1024 * 1024 * written_mb)
+            handle.write(b'\x00' * 1024 * 1024 * zero_mb)
+        return str(path)
+
+    @staticmethod
+    def _supports_sparse(path):
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            return os.lseek(fd, 0, os.SEEK_HOLE) < os.fstat(fd).st_size
+        except OSError:
+            return False
+        finally:
+            os.close(fd)
+
+    def test_holed_file_is_corruption(self, tmp_path):
+        """Unwritten regions confirmed by SEEK_HOLE are a corruption verdict"""
+        path = self._sparse(tmp_path, 'holed.mkv', written_mb=4, hole_mb=28)
+        if not self._supports_sparse(path):
+            pytest.skip('filesystem does not report sparse regions')
+        size = os.path.getsize(path)
+
+        checker = PixelProbe()
+        found, details, scan_output = checker._check_data_holes(path, size, (size // 512) // 4)
+
+        assert found is True
+        assert 'Incomplete file' in details[0]
+        assert any('never written' in line for line in scan_output)
+
+    def test_written_zeroes_are_not_holes(self, tmp_path):
+        """Real zero bytes are data. Silence in PCM audio must not read as damage"""
+        path = self._dense(tmp_path, 'silence.wav', written_mb=4, zero_mb=28)
+        size = os.path.getsize(path)
+
+        checker = PixelProbe()
+        found, details, scan_output = checker._check_data_holes(path, size, (size // 512) // 4)
+
+        assert found is False
+        assert details == []
+        assert any('compression' in line or 'no conclusion' in line for line in scan_output)
+
+    def test_fully_allocated_file_skips_probe(self):
+        """A file allocated at its nominal size is never opened"""
+        checker = PixelProbe()
+        size = 32 * 1024 * 1024
+        found, details, scan_output = checker._check_data_holes(
+            '/nonexistent/never-opened.mkv', size, size // 512)
+
+        assert found is False
+        assert scan_output == []
+
+    def test_filesystem_without_block_counts_is_skipped(self):
+        """st_blocks of 0 means the filesystem does not report allocation"""
+        checker = PixelProbe()
+        found, details, scan_output = checker._check_data_holes(
+            '/nonexistent/never-opened.mkv', 32 * 1024 * 1024, 0)
+
+        assert found is False
+        assert scan_output == []
+
+    def test_small_file_is_skipped(self):
+        """Files below the size floor cannot carry a meaningful hole"""
+        checker = PixelProbe()
+        found, details, scan_output = checker._check_data_holes(
+            '/nonexistent/tiny.jpg', 1024, 1)
+
+        assert found is False
+        assert scan_output == []
+
+    def test_unreadable_file_draws_no_conclusion(self):
+        """A file that cannot be opened is not accused of being incomplete"""
+        checker = PixelProbe()
+        size = 32 * 1024 * 1024
+        found, details, scan_output = checker._check_data_holes(
+            '/nonexistent/path.mkv', size, (size // 512) // 4)
+
+        assert found is False
+        assert details == []
+
+    def test_stalled_read_draws_no_conclusion(self, tmp_path):
+        """A mount that stalls is not evidence that data is missing"""
+        from pixelprobe.media_checker import FileReadTimeoutError
+
+        path = self._dense(tmp_path, 'stalled.mkv', written_mb=2, zero_mb=0)
+        size = os.path.getsize(path)
+
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker._read_with_timeout',
+                   side_effect=FileReadTimeoutError('stalled')):
+            found, details, scan_output = checker._check_data_holes(
+                path, size, (size // 512) // 4)
+
+        assert found is False
+        assert details == []
+        assert any('no conclusion' in line for line in scan_output)
+
+
+class TestDataHolesInScanFile:
+    """The missing-data verdict reaches scan_file and short-circuits decoding"""
+
+    @patch('pixelprobe.media_checker.PixelProbe._check_video_corruption')
+    @patch('pixelprobe.media_checker.PixelProbe._check_data_holes')
+    @patch('pixelprobe.media_checker.PixelProbe.calculate_file_hash')
+    @patch('pixelprobe.media_checker.PixelProbe.get_file_info')
+    def test_holed_video_marked_corrupt_without_decoding(
+        self, mock_info, mock_hash, mock_holes, mock_video
+    ):
+        from datetime import datetime, timezone
+
+        mock_info.return_value = {
+            'file_path': '/fake/holed.mkv',
+            'file_size': 400 * 1024 * 1024,
+            'file_type': 'video/x-matroska',
+            'creation_date': datetime.now(timezone.utc),
+            'last_modified': datetime.now(timezone.utc),
+            'file_blocks': 8,
+        }
+        mock_hash.return_value = 'deadbeef'
+        mock_holes.return_value = (
+            True,
+            ['Incomplete file: 60.2% of 381.6 MB allocated'],
+            ['=== Data Integrity Check ==='],
+        )
+
+        checker = PixelProbe()
+        result = checker.scan_file('/fake/holed.mkv')
+
+        assert result['is_corrupted'] is True
+        assert 'Incomplete file' in result['corruption_details']
+        assert result['scan_tool'] == 'data-integrity'
+        assert result['has_warnings'] is False
+        mock_video.assert_not_called()
+
+    @patch('pixelprobe.media_checker.PixelProbe._check_data_holes')
+    @patch('pixelprobe.media_checker.PixelProbe.calculate_file_hash')
+    @patch('pixelprobe.media_checker.PixelProbe.get_file_info')
+    def test_non_media_file_skips_hole_check(self, mock_info, mock_hash, mock_holes):
+        from datetime import datetime, timezone
+
+        mock_info.return_value = {
+            'file_path': '/fake/notes.nfo',
+            'file_size': 400 * 1024 * 1024,
+            'file_type': 'text/plain',
+            'creation_date': datetime.now(timezone.utc),
+            'last_modified': datetime.now(timezone.utc),
+        }
+        mock_hash.return_value = 'deadbeef'
+
+        checker = PixelProbe()
+        result = checker.scan_file('/fake/notes.nfo')
+
+        assert result['is_corrupted'] is False
+        mock_holes.assert_not_called()
 
 
 class TestTemporalOutlierDetection:

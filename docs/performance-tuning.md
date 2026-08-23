@@ -6,7 +6,9 @@
 - `CELERY_CONCURRENCY=4` - Number of Celery worker processes (default: 4). This is the main scan-throughput knob: scans are split into chunks that fan out across these workers.
 - `MAX_WORKERS=10` - ThreadPoolExecutor threads for parallel file validation within a scan task (default: 10). Distinct from Celery concurrency.
 - `BATCH_SIZE=100` - Paths per database lookup batch during file discovery (default: 100). Leave at 100; it does not control scan chunk size, which is automatic (see the chunk table below).
-- `FREEZE_DETECTION_ENABLED=true` - Toggle video freeze-frame detection (default: true). Disabling it speeds up video scans at the cost of coverage.
+- Freeze detection, its confirmation limits, and the scan timeouts are settings rather than environment variables. Edit them under System > Tunables or through `/api/settings`; a change reaches a running scan without a restart. See [Configuration](configuration.md#scanner-settings).
+- The data integrity check is close to free. The allocation gate reuses the block count from the `stat` the scanner already performs, and files that fail it are queried with `SEEK_HOLE`, which reads no file data. A file it marks incomplete skips decoding entirely, which on a large damaged file saves a full-length pass.
+- The freeze confirmation pass runs only on files that already produced a candidate, and only over that candidate's own window. Each window is its own ffmpeg process, bounded two ways: a cap on how many run (default 20) and a wall-time budget per file (default 600s). Events past either bound are reported without confirmation rather than dropped.
 - `time_budget_minutes` - Per-schedule setting on file-changes schedules. Caps how long a rolling integrity check runs; the next run resumes where the last one stopped.
 
 ### Database performance
@@ -79,7 +81,7 @@ Freeze detection fully decodes every video, and that decode is the dominant
 cost, often more than 90% of per-file scan time. Aggregate scan throughput
 is therefore bounded by the host's total decode rate: match
 `CELERY_CONCURRENCY` to physical cores rather than oversubscribing. On a
-saturated host, raise `TEMPORAL_SAMPLE_TIMEOUT_SECS` (default 30) to 60-90
+saturated host, raise the sampled window timeout (default 30s) to 60-90
 to avoid Stage 2 sample-window timeouts caused by CPU contention rather
 than bad files.
 
