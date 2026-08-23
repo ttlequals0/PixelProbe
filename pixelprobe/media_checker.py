@@ -2122,7 +2122,8 @@ class PixelProbe:
             logger.error(f"FFprobe error on audio {file_path}: {stderr[:200]}")
             return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
         except subprocess.TimeoutExpired:
-            corruption_details.append(f"FFprobe timed out after {_setting('timeouts.ffprobe_timeout_secs')}s")
+            probe_timeout = _setting('timeouts.ffprobe_timeout_secs')
+            corruption_details.append(f"FFprobe timed out after {probe_timeout}s")
             is_corrupted = True
             scan_tool = "ffmpeg"
             scan_output.append("FFprobe: FAILED - timed out")
@@ -2340,12 +2341,15 @@ class PixelProbe:
         confirmed = []
         unconfirmed = []
         checked = 0
+        confirm_noise = _setting('detection.freeze_confirm_noise')
+        confirm_timeout = _setting('timeouts.freeze_confirm_timeout_secs')
+        max_windows = _setting('performance.freeze_confirm_max_windows')
         deadline = time.time() + _setting('performance.freeze_confirm_budget_secs')
         for event in freeze_events:
             start = event.get('start', 0)
             length = event.get('duration', 0)
             if (length < FREEZE_CONFIRM_MIN_SECS
-                    or checked >= _setting('performance.freeze_confirm_max_windows')
+                    or checked >= max_windows
                     or time.time() >= deadline):
                 confirmed.append(event)
                 continue
@@ -2360,10 +2364,11 @@ class PixelProbe:
                     '-t', f'{length:.3f}',
                     '-an', '-sn', '-dn',
                     '-map', '0:v:0',
-                    '-vf', f'freezedetect=n={_setting('detection.freeze_confirm_noise')}:d={FREEZE_CONFIRM_MIN_SECS}',
+                    '-vf', (f"freezedetect=n={confirm_noise}"
+                            f":d={FREEZE_CONFIRM_MIN_SECS}"),
                     '-f', 'null',
                     '-'
-                ], capture_output=True, text=True, timeout=_setting('timeouts.freeze_confirm_timeout_secs'))
+                ], capture_output=True, text=True, timeout=confirm_timeout)
             except subprocess.TimeoutExpired:
                 logger.warning(
                     f"Freeze confirmation timed out for {file_path} at {start:.1f}s; "
@@ -2829,9 +2834,10 @@ class PixelProbe:
                 vrep_values.extend(float(v) for v in _RE_SIGNALSTATS_VREP.findall(result.stdout))
 
             total_frames = max(len(tout_values), len(vrep_values))
-            if total_frames < _setting('performance.temporal_min_frames'):
+            min_frames = _setting('performance.temporal_min_frames')
+            if total_frames < min_frames:
                 detail = (f"Temporal outlier check sampled only {total_frames} frame(s), "
-                          f"below the {_setting('performance.temporal_min_frames')}-frame minimum")
+                          f"below the {min_frames}-frame minimum")
                 logger.warning(f"{detail} for {file_path}")
                 info_notes.append(detail)
                 return is_corrupted, corruption_details, warning_details, info_notes

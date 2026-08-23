@@ -156,11 +156,25 @@ class TestSettingsApi:
         assert resp.status_code == 400
         assert 'Unknown setting' in resp.get_json()['error']
 
+    def test_an_unknown_key_is_never_echoed_back(self, authenticated_client):
+        """A rejected request must not reflect what the caller sent"""
+        probe = '<script>alert(1)</script>'
+        resp = authenticated_client.put('/api/settings', json={probe: 1})
+        assert resp.status_code == 400
+        assert probe not in resp.get_data(as_text=True)
+
+        resp = authenticated_client.delete(f'/api/settings/{probe}')
+        assert resp.status_code == 404
+        assert probe not in resp.get_data(as_text=True)
+
     def test_put_rejects_an_out_of_range_value(self, authenticated_client):
         resp = authenticated_client.put('/api/settings',
                           json={'detection.data_hole_min_pct': 500})
         assert resp.status_code == 400
-        assert '100 or less' in resp.get_json()['error']
+        error = resp.get_json()['error']
+        assert 'Unwritten share that means damage' in error
+        assert 'between 0 and 100' in error
+        assert '500' not in error
 
     def test_a_bad_value_leaves_the_batch_unwritten(self, authenticated_client, app):
         """Validation happens before any write, so a rejected batch changes nothing"""

@@ -61,13 +61,13 @@ def coerce_setting(spec, raw):
 
     low, high = spec.get('min'), spec.get('max')
     if low is not None and value < low:
-        raise SettingValueError(f"{label} must be {_plain(low)} or more")
+        raise SettingValueError(f"{label} must be {plain_bound(low)} or more")
     if high is not None and value > high:
-        raise SettingValueError(f"{label} must be {_plain(high)} or less")
+        raise SettingValueError(f"{label} must be {plain_bound(high)} or less")
     return value
 
 
-def _plain(number):
+def plain_bound(number):
     """Format a bound without a trailing .0 on whole numbers."""
     return str(int(number)) if float(number).is_integer() else str(number)
 

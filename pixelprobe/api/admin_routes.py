@@ -9,7 +9,8 @@ from apscheduler.triggers.cron import CronTrigger
 from pixelprobe.models import db, ScanResult, IgnoredErrorPattern, ScanConfiguration, ScanSchedule, AppConfig
 from pixelprobe.constants import SETTING_GROUPS, SCANNER_SETTINGS_BY_KEY
 from pixelprobe.services.settings_service import (describe_settings, coerce_setting,
-                                                  invalidate_cache, SettingValueError)
+                                                  invalidate_cache, plain_bound,
+                                                  SettingValueError)
 from pixelprobe.scheduler import MediaScheduler
 from pixelprobe.utils.security import validate_json_input, AuditLogger, validate_directory_path
 from pixelprobe.utils.validators import validate_time_budget
@@ -641,6 +642,29 @@ def remove_exclusion(exclusion_type):
         db.session.rollback()
         return {'error': 'Internal server error'}, 500
 
+def _rejection_message(spec):
+    """Why a value was rejected, phrased from the registry alone.
+
+    Deliberately built without touching what the caller sent. A validation
+    error must not reflect request data back into the response (CodeQL
+    py/reflective-xss), and stating the accepted range is more use to whoever
+    typed it than repeating what they typed.
+    """
+    label = spec['label']
+    if spec['type'] == 'bool':
+        return f"{label} must be true or false"
+
+    kind = 'a whole number' if spec['type'] == 'int' else 'a number'
+    low, high = spec.get('min'), spec.get('max')
+    if low is not None and high is not None:
+        return f"{label} must be {kind} between {plain_bound(low)} and {plain_bound(high)}"
+    if low is not None:
+        return f"{label} must be {kind} of {plain_bound(low)} or more"
+    if high is not None:
+        return f"{label} must be {kind} of {plain_bound(high)} or less"
+    return f"{label} must be {kind}"
+
+
 @admin_bp.route('/settings', methods=['GET'])
 @auth_required
 def get_settings():
@@ -669,16 +693,18 @@ def update_settings():
     if not isinstance(data, dict) or not data:
         return {'error': 'Send a JSON object of setting keys and values'}, 400
 
-    unknown = [k for k in data if k not in SCANNER_SETTINGS_BY_KEY]
-    if unknown:
-        return {'error': f"Unknown setting: {unknown[0]}"}, 400
+    if any(k not in SCANNER_SETTINGS_BY_KEY for k in data):
+        # The supplied name is not echoed back: GET /api/settings lists the
+        # valid keys, and reflecting request data is what CodeQL rejects.
+        return {'error': 'Unknown setting. GET /api/settings lists the valid keys.'}, 400
 
     validated = {}
     for key, raw in data.items():
+        spec = SCANNER_SETTINGS_BY_KEY[key]
         try:
-            validated[key] = coerce_setting(SCANNER_SETTINGS_BY_KEY[key], raw)
-        except SettingValueError as e:
-            return {'error': str(e)}, 400
+            validated[key] = coerce_setting(spec, raw)
+        except SettingValueError:
+            return {'error': _rejection_message(spec)}, 400
 
     for key, value in validated.items():
         spec = SCANNER_SETTINGS_BY_KEY[key]
@@ -700,13 +726,15 @@ def update_settings():
 @auth_required
 def reset_setting(key):
     """Restore one setting to its built-in default."""
-    if key not in SCANNER_SETTINGS_BY_KEY:
-        return {'error': f'Unknown setting: {key}'}, 404
+    spec = SCANNER_SETTINGS_BY_KEY.get(key)
+    if spec is None:
+        return {'error': 'Unknown setting. GET /api/settings lists the valid keys.'}, 404
 
     row = AppConfig.query.filter_by(key=key).first()
     if row:
         db.session.delete(row)
         db.session.commit()
         invalidate_cache()
-    AuditLogger.log_action('reset_setting', {'key': key})
-    return {'reset': key, 'settings': describe_settings()}
+    AuditLogger.log_action('reset_setting', {'key': spec['key']})
+    # The registry's own key, not the path segment the caller sent.
+    return {'reset': spec['key'], 'settings': describe_settings()}

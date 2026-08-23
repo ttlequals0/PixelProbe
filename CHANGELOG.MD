@@ -20,11 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The settings API no longer reflects request data into its responses** (CodeQL `py/reflective-xss` and `py/stack-trace-exposure`). A rejected key was echoed back in the error, and a rejected value's message was built by the validator that had just handled the raw input. Errors are now composed from the registry alone: an unknown key gets a fixed message pointing at `GET /api/settings`, and an out-of-range value gets the setting's name and its accepted range, which is more use than repeating what was typed.
 - **The number column in the settings screen lines up.** Rows without a unit pushed their input right, so the values zig-zagged down the panel. The control area is a fixed three-slot grid now: value, unit, reset.
 
 ### Tests
 
-- 29 new tests: registry consistency, value coercion and range errors for every type, resolution precedence, an out-of-range stored value falling back to its default, an unreadable database yielding defaults rather than failing a scan, the API's grouped read, whole-batch rejection leaving nothing written, reset, authentication, and proof that a changed setting reaches the `freezedetect` command.
+- 31 new tests: registry consistency, value coercion and range errors for every type, resolution precedence, an out-of-range stored value falling back to its default, an unreadable database yielding defaults rather than failing a scan, the API's grouped read, whole-batch rejection leaving nothing written, reset, authentication, proof that a changed setting reaches the `freezedetect` command, and a check that a script tag sent as a setting key is never echoed back.
 - The freeze toggle test now exercises the setting rather than the environment variable. It previously passed for the wrong reason: its event sat inside the title card window, so no freeze was reported either way.
 
 ## [2.8.6] - 2026-08-22
