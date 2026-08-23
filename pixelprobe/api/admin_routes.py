@@ -6,7 +6,10 @@ from datetime import datetime, timezone, timedelta
 
 from apscheduler.triggers.cron import CronTrigger
 
-from pixelprobe.models import db, ScanResult, IgnoredErrorPattern, ScanConfiguration, ScanSchedule
+from pixelprobe.models import db, ScanResult, IgnoredErrorPattern, ScanConfiguration, ScanSchedule, AppConfig
+from pixelprobe.constants import SETTING_GROUPS, SCANNER_SETTINGS_BY_KEY
+from pixelprobe.services.settings_service import (describe_settings, coerce_setting,
+                                                  invalidate_cache, SettingValueError)
 from pixelprobe.scheduler import MediaScheduler
 from pixelprobe.utils.security import validate_json_input, AuditLogger, validate_directory_path
 from pixelprobe.utils.validators import validate_time_budget
@@ -637,3 +640,73 @@ def remove_exclusion(exclusion_type):
         logger.error(f"Error removing exclusion: {e}", exc_info=True)
         db.session.rollback()
         return {'error': 'Internal server error'}, 500
+
+@admin_bp.route('/settings', methods=['GET'])
+@auth_required
+def get_settings():
+    """Every scanner setting with its current value, grouped for display."""
+    described = describe_settings()
+    return {
+        'groups': [{
+            'key': group['key'],
+            'label': group['label'],
+            'help': group['help'],
+            'settings': [s for s in described if s['group'] == group['key']],
+        } for group in SETTING_GROUPS]
+    }
+
+
+@admin_bp.route('/settings', methods=['PUT'])
+@auth_required
+def update_settings():
+    """Save one or more settings.
+
+    Every supplied value is validated before anything is written, so a bad
+    value in the batch leaves the stored settings untouched rather than
+    applying half of them.
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return {'error': 'Send a JSON object of setting keys and values'}, 400
+
+    unknown = [k for k in data if k not in SCANNER_SETTINGS_BY_KEY]
+    if unknown:
+        return {'error': f"Unknown setting: {unknown[0]}"}, 400
+
+    validated = {}
+    for key, raw in data.items():
+        try:
+            validated[key] = coerce_setting(SCANNER_SETTINGS_BY_KEY[key], raw)
+        except SettingValueError as e:
+            return {'error': str(e)}, 400
+
+    for key, value in validated.items():
+        spec = SCANNER_SETTINGS_BY_KEY[key]
+        stored = str(value).lower() if spec['type'] == 'bool' else str(value)
+        row = AppConfig.query.filter_by(key=key).first()
+        if row:
+            row.value = stored
+        else:
+            db.session.add(AppConfig(key=key, value=stored, description=spec['label']))
+
+    db.session.commit()
+    invalidate_cache()
+    AuditLogger.log_action('update_settings', {'keys': sorted(validated)})
+    logger.info("Scanner settings updated: %s", sorted(validated))
+    return {'updated': sorted(validated), 'settings': describe_settings()}
+
+
+@admin_bp.route('/settings/<path:key>', methods=['DELETE'])
+@auth_required
+def reset_setting(key):
+    """Restore one setting to its built-in default."""
+    if key not in SCANNER_SETTINGS_BY_KEY:
+        return {'error': f'Unknown setting: {key}'}, 404
+
+    row = AppConfig.query.filter_by(key=key).first()
+    if row:
+        db.session.delete(row)
+        db.session.commit()
+        invalidate_cache()
+    AuditLogger.log_action('reset_setting', {'key': key})
+    return {'reset': key, 'settings': describe_settings()}

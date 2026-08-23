@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.7] - 2026-08-23
+
+### Added
+
+- **Tunables: scanner settings you can edit while a scan runs.** Detection thresholds, per-file work limits and storage timeouts were environment variables read once at import, so changing one meant editing a compose file and restarting. They are stored in the database now, editable under **System > Tunables** or through `GET`, `PUT` and `DELETE` on `/api/settings`, and a change reaches a running scan without a restart. Fifteen settings across three groups: Detection decides what gets flagged, Performance bounds what one file may cost, Timeouts bound how long to wait on storage. One registry defines each setting's type, range, default and wording, and the API validation, the settings screen and the documentation table all derive from it.
+- **A settings screen that shows what you changed.** Each row carries its label, a sentence explaining what the value does, the current value and a reset. Anything differing from the shipped default is marked, because on a settings screen the useful question is which values are no longer stock.
+
+### Changed
+
+- **The shortest reported freeze is now 7 seconds, up from 5.** Animation holds a drawing still for several seconds at a time, and at 5 seconds ordinary cartoons were reported as freezes. The value drives `freezedetect` directly, so shorter events are never produced and never cost a confirmation pass. Measured on a 21k-file library, the freeze warning rate had already fallen from 7.8% to 2.8% with the v2.8.6 filters; the remaining reports were dominated by held animation cels.
+- **Scanner settings no longer read the environment.** On the first start after upgrading, any of the old variables still set in your environment is copied into the database once, so behaviour does not change under an operator who never opens the settings screen. After that the stored value is authoritative and the variable is ignored.
+- Freeze detection can be switched off from the settings screen rather than only through `FREEZE_DETECTION_ENABLED`.
+
+### Fixed
+
+- **The number column in the settings screen lines up.** Rows without a unit pushed their input right, so the values zig-zagged down the panel. The control area is a fixed three-slot grid now: value, unit, reset.
+
+### Tests
+
+- 29 new tests: registry consistency, value coercion and range errors for every type, resolution precedence, an out-of-range stored value falling back to its default, an unreadable database yielding defaults rather than failing a scan, the API's grouped read, whole-batch rejection leaving nothing written, reset, authentication, and proof that a changed setting reaches the `freezedetect` command.
+- The freeze toggle test now exercises the setting rather than the environment variable. It previously passed for the wrong reason: its event sat inside the title card window, so no freeze was reported either way.
+
 ## [2.8.6] - 2026-08-22
 
 ### Added

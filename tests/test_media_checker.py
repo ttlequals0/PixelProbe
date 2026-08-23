@@ -10,6 +10,20 @@ from unittest.mock import Mock, patch, MagicMock
 
 from pixelprobe.media_checker import PixelProbe
 
+def settings_with(**overrides):
+    """Registry defaults with specific settings overridden, keyed as the scanner reads them."""
+    from pixelprobe.constants import SCANNER_SETTINGS
+    values = {spec['key']: spec['default'] for spec in SCANNER_SETTINGS}
+    values.update(overrides)
+    return values
+
+
+def patch_settings(**overrides):
+    """Patch the scanner's settings resolution for the duration of a test."""
+    return patch('pixelprobe.media_checker.resolve_settings',
+                 return_value=settings_with(**overrides))
+
+
 class TestMediaChecker:
     """Test the core PixelProbe media checking functionality"""
     
@@ -571,15 +585,14 @@ class TestVideoFreezeDetection:
         assert warning_details == []
         assert any('No freeze events' in line for line in scan_output)
 
-    @patch.dict('os.environ', {'FREEZE_DETECTION_ENABLED': 'false'})
     @patch('os.path.getsize')
     @patch('os.path.exists')
     @patch('subprocess.run')
     @patch('pixelprobe.media_checker._ffprobe_with_timeout')
-    def test_freeze_detection_disabled_via_env(
+    def test_freeze_detection_disabled_via_setting(
         self, mock_probe, mock_run, mock_exists, mock_getsize
     ):
-        """Freeze detection is skipped when FREEZE_DETECTION_ENABLED=false"""
+        """Freeze detection is skipped when the setting is turned off"""
         mock_exists.return_value = True
         mock_getsize.return_value = 1024 * 1024
 
@@ -610,13 +623,15 @@ class TestVideoFreezeDetection:
         mock_run.side_effect = subprocess_side_effect
 
         checker = PixelProbe()
-        is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
-            checker._check_video_corruption('/fake/freeze_disabled.mp4')
-        )
+        with patch_settings(**{'detection.freeze_detection_enabled': False}):
+            is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
+                checker._check_video_corruption('/fake/freeze_disabled.mp4')
+            )
 
-        # Should NOT be corrupted -- freeze detection was skipped
-        assert not any('Video freeze detected' in d for d in corruption_details)
+        # The pass never ran, so its heading is absent entirely
+        assert not any('Freeze Detection Analysis' in line for line in scan_output)
         assert not any('Freeze #' in line for line in scan_output)
+        assert warning_details == []
 
     @patch('subprocess.run')
     def test_video_freeze_black_frame_filtered(self, mock_run):
@@ -947,6 +962,95 @@ class TestFrozenPercentageClamp:
         assert has_warnings is True
         assert '1000.0s frozen' in warning_details[0]
         assert '100.0% of video' in warning_details[0]
+
+
+class TestSettingsReachTheScanner:
+    """A changed setting must actually alter what the scanner does"""
+
+    def _run(self, mock_run, duration=1290.0, **overrides):
+        result = Mock()
+        result.returncode = 0
+        result.stdout = ''
+        result.stderr = ''
+        mock_run.return_value = result
+        checker = PixelProbe()
+        with patch_settings(**overrides):
+            checker._check_video_freeze('/fake/video.mkv', duration=duration)
+        return ' '.join(str(part) for part in mock_run.call_args[0][0])
+
+    @patch('subprocess.run')
+    def test_minimum_duration_drives_the_detector(self, mock_run):
+        """The configured minimum becomes freezedetect's own d= value"""
+        cmd = self._run(mock_run, **{'detection.freeze_min_duration_secs': 7.0})
+        assert 'freezedetect=n=-60dB:d=7.0' in cmd
+
+    @patch('subprocess.run')
+    def test_raising_the_minimum_changes_the_command(self, mock_run):
+        """Editing the setting is reflected without any code change"""
+        cmd = self._run(mock_run, **{'detection.freeze_min_duration_secs': 20.0})
+        assert 'freezedetect=n=-60dB:d=20.0' in cmd
+        assert 'd=7.0' not in cmd
+
+    @patch('subprocess.run')
+    def test_default_minimum_is_seven_seconds(self, mock_run):
+        """The shipped default no longer reports the 5s events cartoons produce"""
+        cmd = self._run(mock_run)
+        assert 'freezedetect=n=-60dB:d=7.0' in cmd
+
+    @patch('subprocess.run')
+    def test_card_suppression_can_be_switched_off(self, mock_run):
+        """An edge window of zero reports title and end cards instead of discounting them"""
+        stderr = (
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 2.0\n"
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 8.0\n"
+            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 10.0"
+        )
+        result = Mock()
+        result.returncode = 0
+        result.stdout = ''
+        result.stderr = stderr
+        mock_run.return_value = result
+        checker = PixelProbe()
+
+        with patch_settings(**{'detection.static_card_edge_secs': 60.0}):
+            on, _, out = checker._check_video_freeze('/fake/v.mkv', duration=1290.0)
+        assert on is False
+        assert any('Discounted static card' in line for line in out)
+
+        with patch_settings(**{'detection.static_card_edge_secs': 0.0}):
+            on, details, out = checker._check_video_freeze('/fake/v.mkv', duration=1290.0)
+        assert on is True
+        assert '1 event(s)' in details[0]
+
+    def test_data_integrity_threshold_is_a_setting(self, tmp_path):
+        """Raising the required unwritten share stops a marginal file being called incomplete"""
+        path = tmp_path / 'marginal.mkv'
+        with open(path, 'wb') as handle:
+            handle.write(b'\xa5' * 1024 * 1024 * 8)
+            handle.seek(2 * 1024 * 1024, os.SEEK_CUR)
+            handle.write(b'\xa5')
+        size = os.path.getsize(path)
+        fd = os.open(str(path), os.O_RDONLY)
+        try:
+            supported = os.lseek(fd, 0, os.SEEK_HOLE) < size
+        except OSError:
+            supported = False
+        finally:
+            os.close(fd)
+        if not supported:
+            pytest.skip('filesystem does not report sparse regions')
+
+        checker = PixelProbe()
+        blocks = (size // 512) // 2
+
+        with patch_settings(**{'detection.data_hole_min_pct': 1.0}):
+            found, _, _ = checker._check_data_holes(str(path), size, blocks)
+        assert found is True
+
+        with patch_settings(**{'detection.data_hole_min_pct': 99.0}):
+            found, details, out = checker._check_data_holes(str(path), size, blocks)
+        assert found is False
+        assert any('compression' in line for line in out)
 
 
 class TestDataHoleDetection:

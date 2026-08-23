@@ -10,7 +10,8 @@ import logging
 from contextlib import contextmanager
 
 from sqlalchemy import text, inspect, exc
-from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS, CONFIG_LOG_EXCLUDE_LOGGERS, DEFAULT_LOG_EXCLUDE_LOGGERS
+from pixelprobe.constants import (CONFIG_LOG_RETENTION_DAYS, CONFIG_LOG_EXCLUDE_LOGGERS,
+                                  DEFAULT_LOG_EXCLUDE_LOGGERS, SCANNER_SETTINGS)
 from pixelprobe.utils.helpers import env_int
 
 logger = logging.getLogger(__name__)
@@ -410,6 +411,49 @@ def run_v2_6_61_migrations(db):
         logger.error(f"Migration v2.6.61 failed: {e}")
 
 
+def run_v2_8_7_migrations(db):
+    """Move scanner settings out of the environment and into the database.
+
+    These were read from environment variables at import time, so changing one
+    meant editing a compose file and restarting. They are now stored rows the
+    API and UI can edit while a scan runs.
+
+    An existing deployment may already have some of these set in its
+    environment. Those values are copied across once, here, so behaviour does
+    not change under an operator who never opens the settings screen. After
+    this runs the stored value is authoritative and the variable is ignored.
+    Rows already present are left alone, which is what makes the migration
+    idempotent and stops it undoing later edits.
+    """
+    try:
+        with migration_connection(db) as conn:
+            seeded = []
+            for spec in SCANNER_SETTINGS:
+                env_name = spec.get('legacy_env')
+                raw = os.environ.get(env_name) if env_name else None
+                if raw is None:
+                    continue
+                result = conn.execute(text("""
+                    INSERT INTO app_configs (key, value, description)
+                    VALUES (:key, :value, :description)
+                    ON CONFLICT (key) DO NOTHING
+                """), {'key': spec['key'], 'value': str(raw).strip(),
+                       'description': spec['label']})
+                if result.rowcount:
+                    seeded.append(f"{spec['key']}={raw} (from {env_name})")
+
+            conn.commit()
+            if seeded:
+                logger.info(
+                    "Adopted %d scanner setting(s) from the environment: %s",
+                    len(seeded), '; '.join(seeded))
+            else:
+                logger.info("No environment scanner settings to adopt")
+
+    except Exception as e:
+        logger.error(f"Migration v2.8.7 failed: {e}")
+
+
 def create_performance_indexes(db):
     """Create performance indexes"""
     indexes = [
@@ -454,6 +498,12 @@ def _run_all_migrations(db):
         logger.info("Startup migrations completed successfully")
     except Exception as e:
         logger.error(f"Startup migration failed: {e}")
+
+    logger.info("Adopting scanner settings from the environment...")
+    try:
+        run_v2_8_7_migrations(db)
+    except Exception as e:
+        logger.error(f"v2.8.7 migration failed: {e}")
 
     logger.info("Checking authentication tables...")
     try:

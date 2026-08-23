@@ -426,7 +426,7 @@ Each file is validated in `pixelprobe/media_checker.py` (`PixelProbe.scan_file`)
 
    The distinction matters. A valid file can legitimately hold long runs of zero bytes, such as digital silence in PCM audio or flat colour in an uncompressed image, and those bytes were written. Only a real hole means data is absent, and a byte-level test cannot tell the two apart.
 
-   A file with unwritten regions is marked **corrupted** and no decode runs. Decoding one produces freeze and frame-count findings that describe the gaps rather than the picture, which is why this check comes first. A filesystem that does not support sparse-region queries yields no verdict rather than a guess. Tunable through `DATA_HOLE_ALLOC_RATIO` and `DATA_HOLE_MIN_PCT`.
+   A file with unwritten regions is marked **corrupted** and no decode runs. Decoding one produces freeze and frame-count findings that describe the gaps rather than the picture, which is why this check comes first. A filesystem that does not support sparse-region queries yields no verdict rather than a guess. Both thresholds are settings under System > Tunables.
 
 3. **Images**: PIL verification (`Image.open` + `verify()` and a load test) followed by ImageMagick validation with `-regard-warnings` (warnings treated as errors). ImageMagick timeouts scale with file size.
 
@@ -446,7 +446,7 @@ Each file is validated in `pixelprobe/media_checker.py` (`PixelProbe.scan_file`)
    - A solitary short freeze against either end of the file is discounted as a static title or end card. The bound is the smaller of 60 seconds and 10% of runtime, so on a short clip it cannot reach the middle of the file
    - Each surviving candidate is re-checked over its own window at a noise tolerance only repeated frames can clear. The default tolerance compares a whole-frame mean, which limited animation scores below while every frame still differs; the confirmation pass drops those. If the pass cannot run, the candidate is kept, so a failure never erases a finding
 
-   What survives is a warning - it never marks a file corrupted - and the whole pass can be disabled with `FREEZE_DETECTION_ENABLED=false`. Reported frozen time counts overlapping events once and is capped at the runtime.
+   What survives is a warning - it never marks a file corrupted - and the whole pass can be switched off under System > Tunables. Reported frozen time counts overlapping events once and is capped at the runtime.
 
 7. **Dynamic timeouts**: FFmpeg validation timeouts are computed from file size and duration (roughly 3 minutes per GB or ~2x realtime, capped at 2 hours), so large files are neither killed prematurely nor allowed to hang forever.
 
@@ -678,6 +678,12 @@ deploy:
 
 ## Environment variables
 
+Scanner detection, performance and timeout values are no longer environment
+variables. They are stored in the database and edited under System > Tunables or
+through `/api/settings`, so a change reaches a running scan without a restart.
+See [Configuration](configuration.md#scanner-settings).
+
+
 ### Required
 
 Only one variable is truly required - the app refuses to start without it:
@@ -708,15 +714,6 @@ Only one variable is truly required - the app refuses to start without it:
 | `MAX_WORKERS`                   | `10`                       | Thread pool size for selected-file rescans          |
 | `BATCH_SIZE`                    | `100`                      | Batch size for bulk operations                      |
 | `SCHEDULER_ENABLED`             | `true`                     | Whether this process may compete for the scheduler lock |
-| `FREEZE_DETECTION_ENABLED`      | `true`                     | Toggle the freeze-detection pass for videos         |
-| `STATIC_CARD_EDGE_SECS`         | `60`                       | Edge window for discounting static title/end cards  |
-| `STATIC_CARD_MAX_SECS`          | `15`                       | Longest freeze still treated as a static card       |
-| `FREEZE_CONFIRM_NOISE`          | `0.0001`                   | Noise tolerance for the freeze confirmation pass    |
-| `FREEZE_CONFIRM_TIMEOUT_SECS`   | `300`                      | Per-window timeout for the confirmation pass        |
-| `FREEZE_CONFIRM_MAX_WINDOWS`    | `20`                       | Most candidate windows confirmed per file           |
-| `FREEZE_CONFIRM_BUDGET_SECS`    | `600`                      | Wall-clock budget for one file's confirmation pass  |
-| `DATA_HOLE_ALLOC_RATIO`         | `0.90`                     | Allocation ratio below which a file is checked for gaps |
-| `DATA_HOLE_MIN_PCT`             | `1`                        | Unwritten share required to call a file incomplete  |
 | `REDIS_MAX_MEMORY`              | `2gb` (compose)            | Valkey maxmemory for the task queue                 |
 | `TRUSTED_INTERNAL_HOSTS`        | (empty)                    | Hosts/CIDRs that bypass SSRF private-IP blocking    |
 | `CHUNK_HEARTBEAT_INTERVAL_SECS` | `120`                      | Chunk liveness heartbeat interval                   |

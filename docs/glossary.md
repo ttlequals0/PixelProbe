@@ -34,9 +34,16 @@ Every term PixelProbe uses, defined once and linked to the doc that covers it.
 - **Strict error detection (Stage 4)** - A decode pass with aggressive error flags. Warning-only.
 - **Data integrity check** - A `SEEK_HOLE` query, run before any decode on files whose allocated blocks fall short of their length, that finds files allocated at full size but never fully written. Reads no file data. Marks the file corrupted. See [Scan Types](scan-types.md).
 - **Incomplete file** - A file whose length is correct but whose contents have gaps: an interrupted download or copy left regions the filesystem never allocated. Demuxers skip past them, so the picture holds while the clock keeps running. Reported as corruption, not as a freeze.
-- **Freeze detection** - A full-decode pass with FFmpeg's `freezedetect` filter that reports stretches where the picture stops changing; black frames, static cards, and unconfirmed near-static segments are filtered as false positives. Warning-only. Controlled by `FREEZE_DETECTION_ENABLED`. See [Configuration](configuration.md).
+- **Freeze detection** - A full-decode pass with FFmpeg's `freezedetect` filter that reports stretches where the picture stops changing; black frames, static cards, and unconfirmed near-static segments are filtered as false positives. Warning-only. Switched on and off, and its shortest reported freeze set, under Tunables. See [Configuration](configuration.md#scanner-settings).
 - **Static card** - A motionless title or end plate (distributor logo, copyright notice, sponsor credit). The picture really does stop, so the detector is correct and only the verdict would be wrong. A solitary short freeze against either end of a file is discounted rather than reported.
 - **Freeze confirmation pass** - A re-check of each surviving candidate at a noise tolerance only repeated frames can clear. Limited animation holds its background and moves a few small figures, which scores below the default whole-frame tolerance; the confirmation pass separates a genuinely stuck picture from a held cel.
+
+## Settings
+
+- **Tunable** - A scanner value stored in the database rather than in the environment, editable while a scan runs. Grouped into Detection, Performance and Timeouts. See [Configuration](configuration.md#scanner-settings).
+- **Tunables** - The System screen listing every tunable with its current value, what it does, and whether it still matches the default.
+- **Shortest freeze to report** - The minimum length a frozen stretch must reach before it becomes a warning, and the value passed to `freezedetect` as its own minimum. Animation holds a drawing still for several seconds at a time, which is why the default is 7 seconds rather than 5.
+- **Changed** - The marker beside a tunable whose value differs from the shipped default. Resetting it removes the stored value and restores that default.
 
 ## Integrity and bitrot
 

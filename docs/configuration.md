@@ -62,22 +62,8 @@ All configuration is done via environment variables, either in `.env` file or di
 | `BATCH_SIZE` | `100` | Files per batch during discovery | 50-200 based on file sizes |
 | `MAX_OUTPUT_SIZE` | `10000` | Max output characters before rotation | 10000-50000 |
 | `OUTPUT_ROTATION_ENABLED` | `true` | Enable output truncation | `true` for large scans |
-| `FREEZE_DETECTION_ENABLED` | `true` | Enable video freeze detection (freezedetect + blackdetect) | `false` to skip and reduce scan time |
-| `STATIC_CARD_EDGE_SECS` | `60` | How close to either end of a file a solitary short freeze must sit to be discounted as a static title or end card. Also capped at 10% of runtime so it cannot reach the middle of a short clip | Lower to report more edge freezes; `0` disables card suppression entirely |
-| `STATIC_CARD_MAX_SECS` | `15` | Longest a freeze can run and still be treated as a card | Raise only if your cards hold longer |
-| `FREEZE_CONFIRM_NOISE` | `0.0001` | Noise tolerance for the confirmation pass. The default whole-frame tolerance flags held animation cels, so candidates are re-checked at a tolerance only repeated frames clear | Raise toward `0.001` to keep more candidates |
-| `FREEZE_CONFIRM_TIMEOUT_SECS` | `300` | Per-window timeout for the confirmation pass. On timeout the candidate is kept | Raise on slow storage |
-| `FREEZE_CONFIRM_MAX_WINDOWS` | `20` | Most candidate windows confirmed per file. Each is its own ffmpeg process, so this bounds how many run; the remainder are reported without confirmation | Raise if you would rather pay the time than report unconfirmed events |
-| `FREEZE_CONFIRM_BUDGET_SECS` | `600` | Wall-clock budget for the whole confirmation pass on one file. Once spent, the remaining events are reported without confirmation | Raise on slow storage, lower to cap per-file scan time |
-| `DATA_HOLE_ALLOC_RATIO` | `0.90` | Allocated-blocks-to-size ratio below which a file is checked for unwritten regions. A gate deciding which files are opened; it never decides a verdict | Lower if a compressing filesystem causes needless checks |
-| `DATA_HOLE_MIN_PCT` | `1` | Share of the file that must be unwritten before it is called incomplete | Raise to be more conservative |
-| `FILE_READ_TIMEOUT_SECS` | `60` | Deadline in seconds for raw file reads (stat, type detection, hash). A file whose reads stall past it (dead network mount, failing sector) is marked corrupted and skipped instead of hanging the scan. The hash deadline scales up with file size assuming at least 5MB/s storage throughput | Raise the base on storage slower than 5MB/s sustained |
 | `CHUNK_HEARTBEAT_INTERVAL_SECS` | `120` | How often a running chunk task bumps the scan's liveness timestamp. Keeps a scan busy on one long movie from being falsely marked crashed by the 30-minute stuck-scan rule | Leave at default unless debugging |
 | `CHUNK_REVIVE_STALENESS_SECS` | `600` | How stale the scan liveness timestamp must be before the stuck-scan sweeper treats the chunk workers as gone and re-queues their chunks (recovers scans interrupted by container restarts) | Must exceed several heartbeat intervals |
-| `FFPROBE_TIMEOUT_SECS` | `120` | Hard ceiling in seconds for ffprobe metadata reads | Raise on very slow storage |
-| `TEMPORAL_SAMPLE_SECS` | `10` | Length in seconds of each signalstats sample window. Three windows are taken at 25/50/75% of duration, skipping the intro and credits where near-static frames make the statistics meaningless | Raise for a larger sample at the cost of scan time |
-| `TEMPORAL_SAMPLE_TIMEOUT_SECS` | `30` | Per-window deadline for the signalstats decode. Two timed-out windows abandon the remaining ones | Raise on storage slower than realtime decode |
-| `TEMPORAL_MIN_FRAMES` | `100` | Minimum sampled frames before the temporal check will issue any verdict. Below it the percentages are noise and the check reports a warning instead | Leave at default |
 
 **Performance notes:**
 - `MAX_WORKERS` controls parallelism within each scan task
@@ -751,3 +737,50 @@ SCAN_PATHS=/storage/media1,/storage/media2,/storage/media3
 ## Troubleshooting configuration
 
 See [troubleshooting.md](troubleshooting.md) for solutions to common configuration issues.
+
+## Scanner settings
+
+These are edited under **System > Tunables** in the web interface, or through
+`GET`, `PUT` and `DELETE` on `/api/settings`. They are stored in the database, so a
+change reaches a running scan without a restart and survives a container rebuild.
+
+Each one used to be an environment variable. On first start after upgrading, any of
+those variables still set in your environment is copied into the database once, so
+nothing changes under you. After that the stored value wins and the variable is
+ignored. Removing a setting through the API restores its default.
+
+### Detection
+
+What counts as a finding. These decide which files get flagged.
+
+| Setting | Name in the UI | Default | What it does |
+|---------|----------------|---------|--------------|
+| `detection.freeze_detection_enabled` | Detect frozen video | `on` | Look for stretches where the picture stops changing. This is a full decode of every video and is the slowest part of a scan. |
+| `detection.freeze_min_duration_secs` | Shortest freeze to report | `7.0` seconds | Seconds. Animation holds a drawing still for several seconds at a time, so a low value reports ordinary cartoons. Raise it to report only longer freezes. Range 1.0 to 600.0. |
+| `detection.static_card_edge_secs` | Title and end card window | `60.0` seconds | Seconds from either end of a file. A single short freeze inside this window is a motionless title or end card and is not reported. Set to 0 to report them. Range 0.0 to 600.0. |
+| `detection.static_card_max_secs` | Longest title or end card | `15.0` seconds | Seconds. A freeze longer than this is reported even when it sits at the very start or end of a file. Range 0.0 to 600.0. |
+| `detection.freeze_confirm_noise` | Freeze confirmation tolerance | `0.0001` | How different two frames may be and still count as identical, from 0 to 1. Every candidate is re-checked at this tolerance, which separates a stuck picture from a shot that is merely very still. Range 0.0 to 1.0. |
+| `detection.data_hole_alloc_ratio` | Incomplete file check threshold | `0.9` | A file storing less data than its length claims is opened and checked for unwritten regions. Compressing filesystems store healthy files in less space, so this only decides which files are worth checking. Range 0.0 to 1.0. |
+| `detection.data_hole_min_pct` | Unwritten share that means damage | `1.0` percent | Percent of a file that must be unwritten before it is called incomplete. Range 0.0 to 100.0. |
+
+### Performance
+
+Limits on how much work one file may cost. These bound scan time, not accuracy.
+
+| Setting | Name in the UI | Default | What it does |
+|---------|----------------|---------|--------------|
+| `performance.freeze_confirm_max_windows` | Freeze checks per file | `20` | Each check is its own decode. Past this count the remaining freezes are reported without being confirmed rather than dropped. Range 1 to 500. |
+| `performance.freeze_confirm_budget_secs` | Time budget for freeze checks | `600` seconds | Seconds one file may spend confirming freezes. Once spent, the rest are reported without being confirmed. Range 30 to 7200. |
+| `performance.temporal_sample_secs` | Length of each sampled window | `10` seconds | Seconds decoded at each of three points in a large file when looking for timing anomalies. Range 5 to 120. |
+| `performance.temporal_min_frames` | Frames needed to judge a window | `100` | Below this many decoded frames the measurements are noise and no verdict is recorded. Range 1 to 10000. |
+
+### Timeouts
+
+How long to wait on storage and tools before giving up on a file.
+
+| Setting | Name in the UI | Default | What it does |
+|---------|----------------|---------|--------------|
+| `timeouts.freeze_confirm_timeout_secs` | Single freeze check timeout | `300` seconds | Seconds to wait on one freeze confirmation before keeping the freeze unchecked. Range 30 to 7200. |
+| `timeouts.temporal_sample_timeout_secs` | Sampled window timeout | `30` seconds | Seconds to wait on one sampled window. Raise this on a busy host, where a timeout means contention rather than a bad file. Range 10 to 3600. |
+| `timeouts.ffprobe_timeout_secs` | Metadata read timeout | `120` seconds | Seconds to wait when reading a file's metadata. Raise it on slow storage. Range 10 to 3600. |
+| `timeouts.file_read_timeout_secs` | File read timeout | `60` seconds | Seconds to wait on a raw read before treating the file as unreadable and moving on. The hashing deadline scales up with file size on top of this. Range 10 to 3600. |
