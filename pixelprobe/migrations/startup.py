@@ -13,6 +13,7 @@ from sqlalchemy import text, inspect, exc
 from pixelprobe.constants import (CONFIG_LOG_RETENTION_DAYS, CONFIG_LOG_EXCLUDE_LOGGERS,
                                   DEFAULT_LOG_EXCLUDE_LOGGERS, SCANNER_SETTINGS)
 from pixelprobe.utils.helpers import env_int
+from pixelprobe.utils.overrides import classify_findings, encode_verdict
 
 logger = logging.getLogger(__name__)
 
@@ -454,6 +455,54 @@ def run_v2_8_7_migrations(db):
         logger.error(f"Migration v2.8.7 failed: {e}")
 
 
+def run_v2_8_8_migrations(db):
+    """Scope the mark-as-good override to what was actually excused.
+
+    Adds the columns recording which file version and which finding class a
+    mark-as-good judged. Existing marked rows are backfilled treating the
+    upgrade as the review moment: the current hash becomes the reviewed hash,
+    and the excused class is derived from whatever details the row carries.
+    Rows with no stored details keep a NULL verdict, which excuses everything,
+    so a mark placed before scoping existed keeps its old behaviour.
+    """
+    try:
+        with migration_connection(db) as conn:
+            existing = {c['name'] for c in inspect(conn).get_columns('scan_results')}
+            for name, ddl in (
+                ('marked_good_hash', 'VARCHAR(64)'),
+                ('marked_good_date', 'TIMESTAMP'),
+                ('marked_good_verdict', 'VARCHAR(128)'),
+            ):
+                if name not in existing:
+                    conn.execute(text(f'ALTER TABLE scan_results ADD COLUMN {name} {ddl}'))
+                    logger.info(f"Added scan_results.{name}")
+            # Commit the columns before touching rows: a backfill failure must
+            # leave the schema in place (the model declares these columns, so
+            # rolling them back would fail every ScanResult query app-wide)
+            conn.commit()
+
+            rows = conn.execute(text("""
+                SELECT id, corruption_details, warning_details
+                FROM scan_results
+                WHERE marked_as_good = TRUE AND marked_good_date IS NULL
+            """)).fetchall()
+            for row in rows:
+                verdict = encode_verdict(classify_findings(row[1], row[2]))
+                conn.execute(text("""
+                    UPDATE scan_results
+                    SET marked_good_hash = file_hash,
+                        marked_good_date = (now() AT TIME ZONE 'utc'),
+                        marked_good_verdict = :verdict
+                    WHERE id = :id
+                """), {'id': row[0], 'verdict': verdict})
+            conn.commit()
+            if rows:
+                logger.info(f"Backfilled override scope for {len(rows)} marked-good file(s)")
+
+    except Exception as e:
+        logger.error(f"Migration v2.8.8 failed: {e}")
+
+
 def create_performance_indexes(db):
     """Create performance indexes"""
     indexes = [
@@ -498,6 +547,12 @@ def _run_all_migrations(db):
         logger.info("Startup migrations completed successfully")
     except Exception as e:
         logger.error(f"Startup migration failed: {e}")
+
+    logger.info("Scoping mark-as-good overrides...")
+    try:
+        run_v2_8_8_migrations(db)
+    except Exception as e:
+        logger.error(f"v2.8.8 migration failed: {e}")
 
     logger.info("Adopting scanner settings from the environment...")
     try:

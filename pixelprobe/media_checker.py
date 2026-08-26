@@ -29,6 +29,7 @@ from pixelprobe.utils.helpers import env_int, env_float
 from pixelprobe.utils.integrity import apply_scan_baseline
 from pixelprobe.utils.paths import is_path_under
 from pixelprobe.services.settings_service import resolve_settings
+from pixelprobe.utils.overrides import retire_stale_override
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,40 @@ _RE_FREEZE_START = re.compile(r'freeze_start:\s*([\d.]+)')
 _RE_FREEZE_END = re.compile(r'freeze_end:\s*([\d.]+)')
 _RE_FREEZE_DURATION = re.compile(r'freeze_duration:\s*([\d.]+)')
 
+def _steady_cadence(pts, spread=2.0, minimum=8):
+    """Whether timestamps tick at a steady rhythm.
+
+    True when the large gaps between consecutive packets stay within `spread`
+    times the median gap. Constant-frame-rate video is steady; variable-rate
+    sources (screen recordings, slideshows) are not, and an absent stretch in
+    an unsteady stream proves nothing.
+    """
+    if len(pts) < minimum:
+        return False
+    gaps = sorted(b - a for a, b in zip(pts, pts[1:]) if b > a)
+    if not gaps:
+        return False
+    median = gaps[len(gaps) // 2]
+    high = gaps[int(len(gaps) * 0.95)] if len(gaps) > 1 else median
+    return median > 0 and high <= median * spread
+
+
+def _parse_rate(text):
+    """Parse an ffprobe rate fraction like '24000/1001'. None when unusable
+    (missing, zero, or the '0/0' ffprobe emits for unknown rates)."""
+    if not text:
+        return None
+    try:
+        if '/' in str(text):
+            num, den = str(text).split('/', 1)
+            value = float(num) / float(den)
+        else:
+            value = float(text)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return value if value > 0 else None
+
+
 def _parse_freeze_events(lines):
     """Parse freezedetect events out of pre-split FFmpeg stderr lines.
 
@@ -199,54 +234,19 @@ def _merged_frozen_seconds(events):
     return total
 
 
-def _drop_static_cards(freeze_events, duration):
-    """Separate static title and end cards from freeze events worth reporting.
+# Corroboration asks what else is true where the picture stopped: are the
+# packets even there, and can the decoder produce pictures? A freeze with
+# neither signal is a held animation cel or a static title/end card, not
+# damage. Thresholds are generous because observed real cases are extreme
+# (87-100% of packets absent; thousands of decode errors in one window).
+FREEZE_PACKET_ABSENT_RATIO = 0.2  # under this fraction of expected packets = missing content
+FREEZE_DECODE_ERROR_MIN = 20      # more error lines than this in one window = decode failure
+FREEZE_CORROBORATE_MAX_EVENTS = 12
+FREEZE_PROBE_TIMEOUT_SECS = 120
 
-    Programmes open and close on motionless plates, so the picture genuinely
-    stops and the detector is right; the plate is simply not a defect. The
-    shape is distinctive: one event, only a little longer than the detector's
-    own minimum, hard against one end of the file.
-
-    Returns (kept_events, discounted_cards).
-    """
-    if len(freeze_events) != 1 or not duration:
-        return freeze_events, []
-
-    event = freeze_events[0]
-    start = event.get('start', 0)
-    length = event.get('duration', 0)
-    if _setting('detection.static_card_edge_secs') <= 0:
-        return freeze_events, []
-
-    tail = duration - (start + length)
-    if tail < 0:
-        # The event runs past the reported duration, so the container's
-        # duration is short of the real runtime and says nothing about where
-        # in the programme this sits.
-        return freeze_events, []
-
-    edge_window = min(_setting('detection.static_card_edge_secs'), duration * STATIC_CARD_EDGE_FRACTION)
-    is_card = length <= _setting('detection.static_card_max_secs') and min(start, tail) <= edge_window
-    return ([], [event]) if is_card else (freeze_events, [])
-
-
-# A lone freeze barely past the detector's minimum, hard against either end of
-# a file, is a static title or end card. The edge window is also capped as a
-# fraction of runtime so it cannot stretch across the middle of a short clip
-# and swallow a genuine freeze.
-STATIC_CARD_EDGE_FRACTION = 0.10
-
-# freezedetect's tolerance compares a whole-frame mean, so a held animation cel
-# whose only motion is a few small figures scores below it and reports as
-# frozen even though no two frames match. Candidates are re-checked at a
-# tolerance only truly repeated frames can clear.
-FREEZE_CONFIRM_MIN_SECS = 2.0
-# Each confirmation is its own ffmpeg process, so a file reporting hundreds of
-# events would spend minutes on spawn overhead alone. Past the cap the
-# remaining events are kept unconfirmed, matching the fail-open policy used
-# when the pass times out or ffmpeg is missing.
-# The window cap bounds process count; a wall-time budget bounds what actually
-# matters on a project with no global scan timeout. Both are settings.
+_RE_DECODE_ERROR = re.compile(
+    r'Invalid NAL unit size|Error splitting the input|missing picture'
+    r'|Error submitting packet to decoder|error while decoding MB', re.IGNORECASE)
 
 # A file whose allocated blocks fall short of its nominal size may have holes
 # in it. Compression and dedup under-allocate healthy files too, so the ratio
@@ -2050,13 +2050,20 @@ class PixelProbe:
                 corruption_details.extend(hevc_details)
                 scan_output.extend(hevc_output)
         
-        # Freeze detection - check for stuck frames (warning only, not corruption)
+        # Freeze detection. A corroborated freeze (absent packets, failing
+        # decoder) is corruption; an uncorroborated long freeze is a warning.
         freeze_enabled = _setting('detection.freeze_detection_enabled')
         if freeze_enabled and duration and duration > 0:
-            freeze_detected, freeze_details, freeze_output = self._check_video_freeze(file_path, duration)
-            if freeze_detected:
-                warning_details.extend(freeze_details)
-                scan_output.extend(freeze_output)
+            avg_fps = _parse_rate(video_stream.get('avg_frame_rate')) if video_stream else None
+            frz_corrupted, frz_corruption, frz_warned, frz_warnings, frz_output = \
+                self._check_video_freeze(file_path, duration, avg_fps=avg_fps)
+            if frz_corrupted:
+                is_corrupted = True
+                corruption_details.extend(frz_corruption)
+            if frz_warned:
+                warning_details.extend(frz_warnings)
+            if frz_corrupted or frz_warned:
+                scan_output.extend(frz_output)
 
         # Return warning details as well
         return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
@@ -2324,97 +2331,88 @@ class PixelProbe:
         
         return is_corrupted, corruption_details, hevc_output
 
-    def _confirm_freeze_events(self, file_path, freeze_events):
-        """Re-check each candidate window at a tolerance only repeated frames clear.
+    def _corroborate_freeze(self, file_path, event, avg_fps=None):
+        """What else is true where the picture stopped.
 
-        The main pass uses freezedetect's default noise tolerance, which
-        compares a whole-frame mean. Limited animation holds its background and
-        moves only small figures, which moves that mean by far less than the
-        tolerance - so the segment reports as frozen even though every frame in
-        it differs. Re-running the window with the tolerance near zero keeps
-        genuinely repeated frames and drops the rest.
+        Two independent signals, checked cheapest-first:
+        - a packet probe over the window (no decode): if the stream barely has
+          packets where the clock kept running, content is missing;
+        - a decode of just the window: a flood of decoder errors means the
+          picture stopped because the decoder could not produce frames.
 
-        Returns (confirmed_events, unconfirmed_events). If FFmpeg cannot be run
-        the events are returned unchanged, so a broken confirmation pass can
-        never silently erase findings.
+        Returns ('missing-content'|'decode'|None, detail_line). A probe that
+        fails or times out returns None: corroboration exists to prove damage,
+        and an unprovable event falls through to the uncorroborated path
+        rather than being promoted to corruption on no evidence.
         """
-        confirmed = []
-        unconfirmed = []
-        checked = 0
-        confirm_noise = _setting('detection.freeze_confirm_noise')
-        confirm_timeout = _setting('timeouts.freeze_confirm_timeout_secs')
-        max_windows = _setting('performance.freeze_confirm_max_windows')
-        deadline = time.time() + _setting('performance.freeze_confirm_budget_secs')
-        for event in freeze_events:
-            start = event.get('start', 0)
-            length = event.get('duration', 0)
-            if (length < FREEZE_CONFIRM_MIN_SECS
-                    or checked >= max_windows
-                    or time.time() >= deadline):
-                confirmed.append(event)
-                continue
-            checked += 1
-            try:
-                result = safe_subprocess_run([
-                    'ffmpeg',
-                    '-nostdin',
-                    '-v', 'info',
-                    '-ss', f'{start:.3f}',
-                    '-i', file_path,
-                    '-t', f'{length:.3f}',
-                    '-an', '-sn', '-dn',
-                    '-map', '0:v:0',
-                    '-vf', (f"freezedetect=n={confirm_noise}"
-                            f":d={FREEZE_CONFIRM_MIN_SECS}"),
-                    '-f', 'null',
-                    '-'
-                ], capture_output=True, text=True, timeout=confirm_timeout)
-            except subprocess.TimeoutExpired:
-                logger.warning(
-                    f"Freeze confirmation timed out for {file_path} at {start:.1f}s; "
-                    f"keeping the event")
-                confirmed.append(event)
-                continue
-            except OSError as e:
-                logger.warning(f"Freeze confirmation could not run for {file_path}: {e}")
-                confirmed.append(event)
-                continue
+        start = event.get('start', 0)
+        length = max(event.get('duration', 0), 1.0)
+        lead = max(0.0, start - 3)
+        span = length + 6
 
-            if result.returncode != 0:
-                # A failed run produces stderr with no freezedetect lines,
-                # which is indistinguishable from "frames differ". Keep the
-                # event rather than let a broken run erase a finding.
-                logger.warning(
-                    f"Freeze confirmation exited {result.returncode} for {file_path} "
-                    f"at {start:.1f}s; keeping the event")
-                confirmed.append(event)
-            elif _parse_freeze_events((result.stderr or '').split('\n')):
-                confirmed.append(event)
-            else:
-                unconfirmed.append(event)
+        try:
+            probe = safe_subprocess_run([
+                'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                '-read_intervals', f'{lead}%+{span}',
+                '-show_entries', 'packet=pts_time', '-of', 'csv=p=0',
+                file_path,
+            ], capture_output=True, text=True, timeout=FREEZE_PROBE_TIMEOUT_SECS)
+            pts = sorted(float(x) for x in (probe.stdout or '').split()
+                         if x.strip() and x.strip() != 'N/A')
+            inside = sum(1 for t in pts if start - 0.05 <= t <= start + length + 0.05)
+            outside = [t for t in pts if t < start - 0.05 or t > start + length + 0.05]
+            if len(pts) > 2 and _steady_cadence(outside):
+                # Absent packets only mean damage on a stream that stores
+                # frames at a steady rhythm. A variable-frame-rate source
+                # (screen recordings, slideshows) legitimately stores nothing
+                # while the picture holds, so an irregular cadence around the
+                # window means this gap proves nothing. Expected packets come
+                # from the file's declared average rate when it has one.
+                rate = avg_fps or len(pts) / max(0.001, pts[-1] - pts[0])
+                expected = length * rate
+                if expected > 5 and inside < expected * FREEZE_PACKET_ABSENT_RATIO:
+                    absent_pct = 100.0 * (1 - inside / expected)
+                    return 'missing-content', (
+                        f"Missing content at {start:.1f}s: {inside} of ~{expected:.0f} "
+                        f"expected packets present ({absent_pct:.0f}% absent over {length:.1f}s)")
+        except (subprocess.TimeoutExpired, OSError, ValueError) as e:
+            logger.debug(f"Freeze packet probe failed for {file_path}: {e}")
 
-        if checked < len(freeze_events):
-            logger.info(
-                f"Freeze confirmation checked {checked} of {len(freeze_events)} event(s) "
-                f"for {file_path}; the rest are reported without being confirmed")
-        if unconfirmed:
-            logger.info(
-                f"Freeze confirmation dropped {len(unconfirmed)} of "
-                f"{len(freeze_events)} event(s) for {file_path} (frames differ)")
-        return confirmed, unconfirmed
+        try:
+            decode = safe_subprocess_run([
+                'ffmpeg', '-nostdin', '-v', 'error',
+                '-ss', f'{start:.3f}', '-i', file_path, '-t', f'{length:.3f}',
+                '-an', '-sn', '-dn', '-map', '0:v:0', '-f', 'null', '-',
+            ], capture_output=True, text=True, timeout=FREEZE_PROBE_TIMEOUT_SECS)
+            errors = len(_RE_DECODE_ERROR.findall(decode.stderr or ''))
+            if errors > FREEZE_DECODE_ERROR_MIN:
+                return 'decode', (
+                    f"Decode failure at {start:.1f}s: {errors} decoder error(s) "
+                    f"over {length:.1f}s - the picture held because no frames could be produced")
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.debug(f"Freeze decode probe failed for {file_path}: {e}")
 
-    def _check_video_freeze(self, file_path, duration):
-        """Detect frozen video frames using FFmpeg's freezedetect filter.
+        return None, None
 
-        A freeze is where the video picture stops changing while time (and audio)
-        continues.  Uses the lavfi freezedetect filter with a 5-second minimum
-        duration and -60 dB noise tolerance.  Black frame sections detected by
-        blackdetect are used to filter false positives from scene transitions,
-        studio logos, and end credits.
+    def _check_video_freeze(self, file_path, duration, avg_fps=None):
+        """Detect frozen video and decide whether the freeze is damage.
 
-        Returns (has_warnings, warning_details, scan_output).
+        freezedetect finds stretches where the picture stops changing. That
+        alone does not separate damage from intent: a held animation cel and a
+        static title card also stop the picture. So every candidate is
+        corroborated against the file itself - absent packets or a failing
+        decoder make it a corruption verdict; a freeze with neither signal is
+        the picture stopping on purpose and is discounted, unless a single
+        event runs past the uncorroborated minimum, which stays a warning so a
+        genuinely stuck source (valid frames, nothing else wrong) is not
+        silent. Black-frame overlaps are filtered first, as before.
+
+        Returns (is_corrupted, corruption_details, has_warnings,
+        warning_details, scan_output).
         """
+        corruption_details = []
         warning_details = []
+        is_corrupted = False
         has_warnings = False
         scan_output = []
 
@@ -2492,51 +2490,81 @@ class PixelProbe:
                     )
                 freeze_events = filtered
 
-            # A lone short freeze against either end of the file is a static
-            # title or end card, not a defect
-            freeze_events, cards = _drop_static_cards(freeze_events, duration)
-            for card in cards:
+            # Corroborate: a real freeze has a cause the file can show us.
+            # Either the packets are absent where the clock kept running, or
+            # the decoder is failing to produce pictures. Both are corruption
+            # verdicts, not warnings. An event with neither signal is a held
+            # animation cel or a static title/end card doing its job.
+            corroborated = []
+            uncorroborated = []
+            for index, event in enumerate(freeze_events):
+                if index >= FREEZE_CORROBORATE_MAX_EVENTS:
+                    uncorroborated.append(event)
+                    continue
+                cause, detail = self._corroborate_freeze(file_path, event, avg_fps)
+                if cause:
+                    corroborated.append((cause, detail, event))
+                else:
+                    uncorroborated.append(event)
+            if len(freeze_events) > FREEZE_CORROBORATE_MAX_EVENTS:
                 scan_output.append(
-                    f"Discounted static card at {card.get('start', 0):.1f}s "
-                    f"({card.get('duration', 0):.1f}s) - title or end card, not a defect"
-                )
+                    f"Corroborated the first {FREEZE_CORROBORATE_MAX_EVENTS} of "
+                    f"{len(freeze_events)} freeze event(s)")
 
-            # Confirm what is left against a tolerance only repeated frames can
-            # clear, so held animation cels do not read as frozen video
-            freeze_events, unconfirmed = self._confirm_freeze_events(file_path, freeze_events)
-            for event in unconfirmed:
+            if corroborated:
+                is_corrupted = True
+                causes = sorted({c for c, _, _ in corroborated})
+                n = len(corroborated)
+                if causes == ['missing-content']:
+                    summary = f"Missing content: {n} frozen segment(s) with absent packets"
+                elif causes == ['decode']:
+                    summary = f"Decode failure: {n} frozen segment(s) with decoder errors"
+                else:
+                    summary = (f"Damaged video: {n} frozen segment(s) with "
+                               f"missing packets or decoder errors")
+                corruption_details.append(summary)
+                scan_output.append(summary)
+                for _, detail, _ in corroborated[:10]:
+                    scan_output.append(f"  {detail}")
+                logger.warning(
+                    f"Corroborated freeze damage in {file_path}: {summary}")
+
+            long_minimum = _setting('detection.freeze_uncorroborated_min_secs')
+            reportable = [e for e in uncorroborated
+                          if e.get('duration', 0) >= long_minimum]
+            discounted = [e for e in uncorroborated
+                          if e.get('duration', 0) < long_minimum]
+            for event in discounted:
                 scan_output.append(
-                    f"Discounted near-static segment at {event.get('start', 0):.1f}s "
-                    f"({event.get('duration', 0):.1f}s) - frames differ, picture is not frozen"
-                )
+                    f"Discounted still segment at {event.get('start', 0):.1f}s "
+                    f"({event.get('duration', 0):.1f}s) - packets present and decodable, "
+                    f"the picture stopped on purpose")
 
-            if freeze_events:
+            if reportable:
                 has_warnings = True
-                total_frozen = min(_merged_frozen_seconds(freeze_events), duration)
+                total_frozen = min(_merged_frozen_seconds(reportable), duration)
                 frozen_pct = min(total_frozen / duration * 100, 100.0)
 
                 summary = (
-                    f"Video freeze warning: {len(freeze_events)} event(s), "
+                    f"Video freeze warning: {len(reportable)} event(s), "
                     f"{total_frozen:.1f}s frozen ({frozen_pct:.1f}% of video)"
                 )
                 warning_details.append(summary)
                 scan_output.append(summary)
 
-                for i, event in enumerate(freeze_events[:10]):
-                    start = event.get('start', 0)
-                    end = event.get('end', 0)
-                    dur = event.get('duration', 0)
+                for i, event in enumerate(reportable[:10]):
                     scan_output.append(
-                        f"  Freeze #{i + 1}: {start:.1f}s - {end:.1f}s (duration: {dur:.1f}s)"
+                        f"  Freeze #{i + 1}: {event.get('start', 0):.1f}s - "
+                        f"{event.get('end', 0):.1f}s (duration: {event.get('duration', 0):.1f}s)"
                     )
-                if len(freeze_events) > 10:
-                    scan_output.append(f"  ... and {len(freeze_events) - 10} more freeze event(s)")
+                if len(reportable) > 10:
+                    scan_output.append(f"  ... and {len(reportable) - 10} more freeze event(s)")
 
                 logger.info(
-                    f"Freeze warning in {file_path}: {len(freeze_events)} event(s), "
+                    f"Freeze warning in {file_path}: {len(reportable)} event(s), "
                     f"{total_frozen:.1f}s total frozen"
                 )
-            else:
+            if not corroborated and not reportable:
                 scan_output.append("No freeze events detected")
                 logger.info(f"No freeze detected in {file_path}")
 
@@ -2552,7 +2580,7 @@ class PixelProbe:
             logger.debug(f"Freeze detection error for {file_path}: {str(e)}")
 
         scan_output.append("=== Freeze Detection Complete ===")
-        return has_warnings, warning_details, scan_output
+        return is_corrupted, corruption_details, has_warnings, warning_details, scan_output
 
     def _enhanced_corruption_check(self, file_path, file_size_gb, duration=None):
         """Enhanced multi-stage corruption detection for files that fail basic checks
@@ -3144,6 +3172,10 @@ class PixelProbe:
                 # hash. Baseline updates for flagged files happen only via
                 # auto-expire or the manual accept action.
                 logger.info(f"Preserving hash/mtime baseline for bitrot-suspected file: {file_path}")
+            if retire_stale_override(db_result, scan_result.get('file_hash'),
+                                     scan_result.get('corruption_details'),
+                                     scan_result.get('warning_details')):
+                logger.info(f"Override retired for {file_path}: new findings outside its scope")
             db_result.is_corrupted = scan_result.get('is_corrupted', False)
             db_result.corruption_details = scan_result.get('corruption_details')
             db_result.scan_tool = scan_result.get('scan_tool')

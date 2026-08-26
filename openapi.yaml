@@ -231,6 +231,15 @@ components:
         marked_as_good:
           type: boolean
           description: User-marked as not corrupted (false positive)
+        marked_good_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the mark-as-good judgement was made
+        marked_good_verdict:
+          type: string
+          nullable: true
+          description: Comma-joined finding classes the mark excused; the override lapses if the content changes or a different class appears
         has_warnings:
           type: boolean
           description: Whether scan produced warnings

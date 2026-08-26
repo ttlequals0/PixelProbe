@@ -36,6 +36,7 @@ from pixelprobe.models import db, ScanState, ScanResult, ScanChunk
 from pixelprobe.media_checker import PixelProbe, load_exclusions_with_patterns
 from pixelprobe.progress_utils import clear_scan_progress_redis, update_scan_progress_redis
 from pixelprobe.utils.integrity import apply_scan_baseline
+from pixelprobe.utils.overrides import retire_stale_override
 from pixelprobe.services.scan_engine import (
     build_scan_chunks, claim_scan_slot, finalize_scan,
     maybe_finalize_scan, sync_progress_from_chunks
@@ -304,6 +305,15 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
                                     warning_details = corruption_details
                         if warning_details and not has_warnings:
                             has_warnings = True
+
+                        # A mark-as-good excused one finding class on one
+                        # version of the file; different content or a different
+                        # class of problem retires it (history columns stay)
+                        if retire_stale_override(db_result, scan_result.get('file_hash'),
+                                                 corruption_details, warning_details):
+                            logger.info(
+                                f"Override retired for {file_path}: new findings "
+                                f"outside its scope")
 
                         db_result.is_corrupted = is_corrupted
                         db_result.scan_status = 'completed'

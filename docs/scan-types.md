@@ -256,6 +256,8 @@ Something failed that proves damage. The reason is recorded in the file's corrup
 | Reason | What it means |
 |---|---|
 | Incomplete file | The file is the right length but parts of it were never written. An interrupted download or copy. The missing share is reported in the detail line |
+| Missing content | A frozen stretch whose packets are absent from the stream. The clock kept running but nothing was stored for it |
+| Decode failure | A frozen stretch where the decoder could not produce frames, with the error count in the detail line |
 | FFmpeg validation failure | A full remux pass could not read the container or its streams |
 | Decode error flood | Enough decode errors to rule out ordinary noise |
 | JPEG pixel corruption | Pixel-level damage found by the JPEG analyzer |
@@ -266,7 +268,7 @@ A signal worth surfacing that does not prove damage. These files usually play fi
 
 | Reason | What it means |
 |---|---|
-| Freeze events | The picture stops changing for a stretch, confirmed as genuinely repeated frames |
+| Freeze events | The picture stops changing for longer than the uncorroborated minimum, with nothing else wrong in the file |
 | Frame-count mismatch | Counted packets disagree with what duration and frame rate predict. Container metadata is unreliable on sparse-video and variable-frame-rate files |
 | Elevated TOUT or VREP | Temporal outliers or vertical line repetition. Film grain raises the first; flat graphic content raises the second |
 | Strict-decode notices | Findings from an aggressive error-detection pass, usually container or muxing quirks |
@@ -285,8 +287,7 @@ These are real observations, not defects. PixelProbe discounts them and records 
 | Finding | Why it is discounted |
 |---|---|
 | Freeze over a black section | Fades and transitions hold black. A real freeze sticks on picture |
-| Static title or end card | Distributor logos, copyright plates, and sponsor credits are motionless by design. A solitary short freeze against either end of a file is a card |
-| Near-static segment | Limited animation holds its background and moves a few small figures, which scores below the detector's whole-frame tolerance even though every frame differs. A confirmation pass separates these from a stuck picture |
+| Uncorroborated freeze | The picture stopped, the packets are present, and the frames decode. Title cards, end plates and held animation drawings all look like this, and so does any deliberate stillness. Only a stretch past the uncorroborated minimum is reported |
 | Under-allocation without gaps | Filesystems with compression or dedup store a healthy file in fewer blocks than its size. Only genuinely unallocated regions produce a verdict, so written zero bytes such as digital silence never count |
 
 ## API response examples

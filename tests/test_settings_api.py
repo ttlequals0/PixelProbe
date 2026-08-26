@@ -123,7 +123,7 @@ class TestResolution:
             db.session.commit()
             described = {s['key']: s for s in describe_settings()}
         assert described['detection.freeze_min_duration_secs']['is_default'] is False
-        assert described['detection.static_card_edge_secs']['is_default'] is True
+        assert described['detection.freeze_uncorroborated_min_secs']['is_default'] is True
 
 
 class TestSettingsApi:

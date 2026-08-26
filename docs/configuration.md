@@ -757,9 +757,7 @@ What counts as a finding. These decide which files get flagged.
 |---------|----------------|---------|--------------|
 | `detection.freeze_detection_enabled` | Detect frozen video | `on` | Look for stretches where the picture stops changing. This is a full decode of every video and is the slowest part of a scan. |
 | `detection.freeze_min_duration_secs` | Shortest freeze to report | `7.0` seconds | Seconds. Animation holds a drawing still for several seconds at a time, so a low value reports ordinary cartoons. Raise it to report only longer freezes. Range 1.0 to 600.0. |
-| `detection.static_card_edge_secs` | Title and end card window | `60.0` seconds | Seconds from either end of a file. A single short freeze inside this window is a motionless title or end card and is not reported. Set to 0 to report them. Range 0.0 to 600.0. |
-| `detection.static_card_max_secs` | Longest title or end card | `15.0` seconds | Seconds. A freeze longer than this is reported even when it sits at the very start or end of a file. Range 0.0 to 600.0. |
-| `detection.freeze_confirm_noise` | Freeze confirmation tolerance | `0.0001` | How different two frames may be and still count as identical, from 0 to 1. Every candidate is re-checked at this tolerance, which separates a stuck picture from a shot that is merely very still. Range 0.0 to 1.0. |
+| `detection.freeze_uncorroborated_min_secs` | Longest freeze to excuse | `60.0` seconds | Seconds. A frozen stretch with its packets present and its frames decodable stopped on purpose, so it is not reported. Past this length it is reported anyway, in case a source recorded a genuinely stuck picture. Range 10.0 to 3600.0. |
 | `detection.data_hole_alloc_ratio` | Incomplete file check threshold | `0.9` | A file storing less data than its length claims is opened and checked for unwritten regions. Compressing filesystems store healthy files in less space, so this only decides which files are worth checking. Range 0.0 to 1.0. |
 | `detection.data_hole_min_pct` | Unwritten share that means damage | `1.0` percent | Percent of a file that must be unwritten before it is called incomplete. Range 0.0 to 100.0. |
 
@@ -769,8 +767,6 @@ Limits on how much work one file may cost. These bound scan time, not accuracy.
 
 | Setting | Name in the UI | Default | What it does |
 |---------|----------------|---------|--------------|
-| `performance.freeze_confirm_max_windows` | Freeze checks per file | `20` | Each check is its own decode. Past this count the remaining freezes are reported without being confirmed rather than dropped. Range 1 to 500. |
-| `performance.freeze_confirm_budget_secs` | Time budget for freeze checks | `600` seconds | Seconds one file may spend confirming freezes. Once spent, the rest are reported without being confirmed. Range 30 to 7200. |
 | `performance.temporal_sample_secs` | Length of each sampled window | `10` seconds | Seconds decoded at each of three points in a large file when looking for timing anomalies. Range 5 to 120. |
 | `performance.temporal_min_frames` | Frames needed to judge a window | `100` | Below this many decoded frames the measurements are noise and no verdict is recorded. Range 1 to 10000. |
 
@@ -780,7 +776,6 @@ How long to wait on storage and tools before giving up on a file.
 
 | Setting | Name in the UI | Default | What it does |
 |---------|----------------|---------|--------------|
-| `timeouts.freeze_confirm_timeout_secs` | Single freeze check timeout | `300` seconds | Seconds to wait on one freeze confirmation before keeping the freeze unchecked. Range 30 to 7200. |
 | `timeouts.temporal_sample_timeout_secs` | Sampled window timeout | `30` seconds | Seconds to wait on one sampled window. Raise this on a busy host, where a timeout means contention rather than a bad file. Range 10 to 3600. |
 | `timeouts.ffprobe_timeout_secs` | Metadata read timeout | `120` seconds | Seconds to wait when reading a file's metadata. Raise it on slow storage. Range 10 to 3600. |
 | `timeouts.file_read_timeout_secs` | File read timeout | `60` seconds | Seconds to wait on a raw read before treating the file as unreadable and moving on. The hashing deadline scales up with file size on top of this. Range 10 to 3600. |

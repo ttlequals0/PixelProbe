@@ -24,6 +24,31 @@ def patch_settings(**overrides):
                  return_value=settings_with(**overrides))
 
 
+def freeze_router(freeze_stderr='', probe_stdout='', decode_stderr=''):
+    """subprocess.run side_effect for the freeze path's three processes.
+
+    The main detection pass carries 'freezedetect' in its filter argument; the
+    corroboration packet probe is ffprobe; the corroboration window decode is
+    an ffmpeg null decode with no filter. Defaults corroborate nothing, so
+    events fall through to the uncorroborated path.
+    """
+    def side_effect(cmd, *args, **kwargs):
+        result = Mock()
+        result.returncode = 0
+        joined = ' '.join(str(part) for part in cmd)
+        if str(cmd[0]).endswith('ffprobe'):
+            result.stdout = probe_stdout
+            result.stderr = ''
+        elif 'freezedetect' in joined:
+            result.stdout = ''
+            result.stderr = freeze_stderr
+        else:
+            result.stdout = ''
+            result.stderr = decode_stderr
+        return result
+    return side_effect
+
+
 class TestMediaChecker:
     """Test the core PixelProbe media checking functionality"""
     
@@ -421,27 +446,6 @@ class TestMediaChecker:
 class TestVideoFreezeDetection:
     """Test video freeze detection via FFmpeg freezedetect filter"""
 
-    def _make_freezedetect_stderr(self, events):
-        """Build fake FFmpeg stderr containing freezedetect log lines.
-
-        Args:
-            events: list of (start, end, duration) tuples
-        """
-        lines = []
-        # Real ffmpeg emission order per event: freeze_start, then at unfreeze
-        # freeze_duration followed by freeze_end (verified against ffmpeg 8).
-        for start, end, duration in events:
-            lines.append(
-                f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_start: {start}"
-            )
-            lines.append(
-                f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_duration: {duration}"
-            )
-            lines.append(
-                f"[freezedetect @ 0x1234] lavfi.freezedetect.freeze_end: {end}"
-            )
-        return "\n".join(lines)
-
     def _make_blackdetect_stderr(self, events):
         """Build fake FFmpeg stderr containing blackdetect log lines.
 
@@ -456,30 +460,24 @@ class TestVideoFreezeDetection:
         return "\n".join(lines)
 
     @patch('subprocess.run')
-    def test_video_freeze_detection(self, mock_run):
-        """Freeze events are detected and returned as warnings"""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = self._make_freezedetect_stderr([
-            (10.0, 15.0, 5.0),
-            (45.5, 50.0, 4.5),
-        ])
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
+    def test_video_freeze_detection_pairs_events_correctly(self, mock_run):
+        """Each event pairs its own start and end, not a neighbor's"""
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=_freeze_stderr([
+                (10.0, 75.0, 65.0),
+                (100.0, 170.5, 70.5),
+            ]),
+            probe_stdout=_packets(7.0, 174.0))
 
         checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/video.mp4', duration=120.0
-        )
+        is_corrupted, _, has_warnings, warning_details, scan_output = \
+            checker._check_video_freeze('/fake/video.mp4', duration=300.0)
 
+        assert is_corrupted is False
         assert has_warnings is True
-        assert len(warning_details) == 1
         assert '2 event(s)' in warning_details[0]
-        assert '9.5s frozen' in warning_details[0]
-        assert '7.9%' in warning_details[0]
-        # Each event must pair its own start and end, not a neighbor's
-        assert any('Freeze #1: 10.0s - 15.0s (duration: 5.0s)' in line for line in scan_output)
-        assert any('Freeze #2: 45.5s - 50.0s (duration: 4.5s)' in line for line in scan_output)
+        assert any('Freeze #1: 10.0s - 75.0s (duration: 65.0s)' in line for line in scan_output)
+        assert any('Freeze #2: 100.0s - 170.5s (duration: 70.5s)' in line for line in scan_output)
 
     @patch('subprocess.run')
     def test_video_no_freeze(self, mock_run):
@@ -491,7 +489,7 @@ class TestVideoFreezeDetection:
         mock_run.return_value = mock_result
 
         checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+        _, _, has_warnings, warning_details, scan_output = checker._check_video_freeze(
             '/fake/clean.mp4', duration=40.0
         )
 
@@ -505,7 +503,7 @@ class TestVideoFreezeDetection:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd='ffmpeg', timeout=60)
 
         checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+        _, _, has_warnings, warning_details, scan_output = checker._check_video_freeze(
             '/fake/big.mp4', duration=30.0
         )
 
@@ -530,28 +528,19 @@ class TestVideoFreezeDetection:
                 'codec_name': 'h264',
                 'profile': 'High',
                 'pix_fmt': 'yuv420p',
-                'duration': '60.0'
+                'duration': '300.0'
             }],
             'format': {
-                'duration': '60.0'
+                'duration': '300.0'
             }
         }
 
-        # All subprocess calls return clean except freeze detection
-        def subprocess_side_effect(cmd, *args, **kwargs):
-            result = Mock()
-            result.returncode = 0
-            result.stdout = ''
-            # Detect the freezedetect call by checking for the filter arg.
-            # The event sits in the body of the file: an event against either
-            # edge is a title or end card and is discounted by design.
-            if any('freezedetect' in str(arg) for arg in cmd):
-                result.stderr = self._make_freezedetect_stderr([(25.0, 30.0, 5.0)])
-            else:
-                result.stderr = ''
-            return result
-
-        mock_run.side_effect = subprocess_side_effect
+        # All subprocess calls return clean except the freeze pass. The event
+        # is uncorroborated but longer than the excuse threshold, which is the
+        # shape that propagates as a warning under corroboration.
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=_freeze_stderr([(100.0, 170.0, 70.0)]),
+            probe_stdout=_packets(97.0, 174.0))
 
         checker = PixelProbe()
         is_corrupted, corruption_details, scan_tool, scan_output, warning_details = (
@@ -577,7 +566,7 @@ class TestVideoFreezeDetection:
         mock_run.return_value = mock_result
 
         checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+        _, _, has_warnings, warning_details, scan_output = checker._check_video_freeze(
             '/fake/cutoff.mp4', duration=60.0
         )
 
@@ -615,7 +604,7 @@ class TestVideoFreezeDetection:
             result.returncode = 0
             result.stdout = ''
             if any('freezedetect' in str(arg) for arg in cmd):
-                result.stderr = self._make_freezedetect_stderr([(5.0, 10.0, 5.0)])
+                result.stderr = _freeze_stderr([(5.0, 10.0, 5.0)])
             else:
                 result.stderr = ''
             return result
@@ -638,23 +627,23 @@ class TestVideoFreezeDetection:
         """Freeze events overlapping black sections are filtered as false positives"""
         # Freeze at 0-3s and 100-105s, black at 0-4s and 99-106s
         # Both freezes overlap black -- should be filtered out entirely
-        freeze_stderr = self._make_freezedetect_stderr([
-            (0.0, 3.0, 3.0),
-            (100.0, 105.0, 5.0),
+        # Long freezes over black would otherwise pass the uncorroborated
+        # minimum and warn; the black filter is what keeps a fade-out quiet.
+        freeze_stderr = _freeze_stderr([
+            (0.0, 70.0, 70.0),
+            (100.0, 165.0, 65.0),
         ])
         black_stderr = self._make_blackdetect_stderr([
-            (0.0, 4.0, 4.0),
-            (99.0, 106.0, 7.0),
+            (0.0, 71.0, 71.0),
+            (99.0, 166.0, 67.0),
         ])
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = freeze_stderr + "\n" + black_stderr
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=freeze_stderr + "\n" + black_stderr,
+            probe_stdout=_packets(0.0, 170.0))
 
         checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/transitions.mp4', duration=120.0
+        _, _, has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/transitions.mp4', duration=200.0
         )
 
         assert has_warnings is False
@@ -665,22 +654,20 @@ class TestVideoFreezeDetection:
     def test_video_freeze_real_freeze_not_filtered(self, mock_run):
         """Freeze on actual content (no black overlap) is still flagged"""
         # Freeze at 50-55s on real content, black only at 0-2s (opening)
-        freeze_stderr = self._make_freezedetect_stderr([
-            (0.0, 2.0, 2.0),    # overlaps black -- filtered
-            (50.0, 55.0, 5.0),  # no black overlap -- kept
+        freeze_stderr = _freeze_stderr([
+            (0.0, 62.0, 62.0),    # overlaps black -- filtered
+            (100.0, 165.0, 65.0),  # no black overlap -- kept, uncorroborated but long
         ])
         black_stderr = self._make_blackdetect_stderr([
-            (0.0, 2.5, 2.5),
+            (0.0, 63.0, 63.0),
         ])
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = freeze_stderr + "\n" + black_stderr
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=freeze_stderr + "\n" + black_stderr,
+            probe_stdout=_packets(0.0, 170.0))
 
         checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/real_freeze.mp4', duration=120.0
+        _, _, has_warnings, warning_details, scan_output = checker._check_video_freeze(
+            '/fake/real_freeze.mp4', duration=300.0
         )
 
         assert has_warnings is True
@@ -689,226 +676,127 @@ class TestVideoFreezeDetection:
         assert any('Filtered 1 of 2' in line for line in scan_output)
 
 
-class TestStaticCardSuppression:
-    """Static title and end cards are real freezes but not defects"""
+def _freeze_stderr(events):
+    """freezedetect stderr lines in real ffmpeg emission order."""
+    lines = []
+    for start, end, duration in events:
+        lines.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: {start}")
+        lines.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: {duration}")
+        lines.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: {end}")
+    return "\n".join(lines)
 
-    def _stderr(self, events):
-        lines = []
-        for start, end, duration in events:
-            lines.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: {start}")
-            lines.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: {duration}")
-            lines.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: {end}")
-        return "\n".join(lines)
+
+def _packets(start, end, step=0.04):
+    """ffprobe csv stdout: one pts per line across [start, end)."""
+    out = []
+    t = start
+    while t < end:
+        out.append(f"{t:.3f}")
+        t += step
+    return "\n".join(out)
+
+
+class TestFreezeCorroboration:
+    """A freeze is damage only when the file can show why the picture stopped"""
+
+    def _run(self, mock_run, events, duration=1290.0, probe_stdout=None, decode_stderr=''):
+        # Default probe: packets present across the whole probed span, so
+        # nothing is corroborated unless a test says otherwise.
+        if probe_stdout is None:
+            lo = min(e[0] for e in events) - 3
+            hi = max(e[1] for e in events) + 3
+            probe_stdout = _packets(max(0, lo), hi)
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=_freeze_stderr(events),
+            probe_stdout=probe_stdout,
+            decode_stderr=decode_stderr)
+        checker = PixelProbe()
+        return checker._check_video_freeze('/fake/video.mkv', duration=duration)
 
     @patch('subprocess.run')
-    def test_end_card_discounted(self, mock_run):
-        """A lone short freeze just before the last frame is an end card"""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = self._stderr([(2628.8, 2633.8, 5.0)])
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/episode.mkv', duration=2641.6
-        )
-
-        assert has_warnings is False
-        assert warning_details == []
-        assert any('Discounted static card at 2628.8s' in line for line in scan_output)
+    def test_uncorroborated_freeze_is_discounted(self, mock_run):
+        """Packets present, frames decodable: the picture stopped on purpose"""
+        c, cd, w, wd, out = self._run(mock_run, [(640.0, 648.0, 8.0)])
+        assert c is False and w is False
+        assert cd == [] and wd == []
+        assert any('Discounted still segment at 640.0s' in line for line in out)
 
     @patch('subprocess.run')
-    def test_title_card_discounted(self, mock_run):
-        """A lone short freeze at the head of the file is a title card"""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = self._stderr([(8.1, 18.2, 10.1)])
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/episode.mkv', duration=1290.0
-        )
-
-        assert has_warnings is False
-        assert any('Discounted static card at 8.1s' in line for line in scan_output)
+    def test_end_card_is_discounted_without_a_special_rule(self, mock_run):
+        """The card shape needs no edge-window rule: it is simply uncorroborated"""
+        c, cd, w, wd, out = self._run(mock_run, [(2628.8, 2633.8, 7.0)], duration=2641.6)
+        assert c is False and w is False
 
     @patch('subprocess.run')
-    def test_mid_programme_freeze_kept(self, mock_run):
-        """A freeze in the body of the programme is not a card"""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = self._stderr([(640.0, 645.0, 5.0)])
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/episode.mkv', duration=1290.0
-        )
-
-        assert has_warnings is True
-        assert '1 event(s)' in warning_details[0]
+    def test_absent_packets_are_a_corruption_verdict(self, mock_run):
+        """87-100% of packets missing in the window means content is absent"""
+        # Packets exist only in the 3s lead-in and tail, none inside the event
+        probe = _packets(637.0, 640.0) + "\n" + _packets(648.0, 651.0)
+        c, cd, w, wd, out = self._run(mock_run, [(640.0, 648.0, 8.0)], probe_stdout=probe)
+        assert c is True and w is False
+        assert any('Missing content' in d for d in cd)
+        assert any('absent' in line for line in out)
 
     @patch('subprocess.run')
-    def test_long_edge_freeze_kept(self, mock_run):
-        """An edge freeze far longer than a card is still reported"""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = self._stderr([(5.0, 65.0, 60.0)])
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/episode.mkv', duration=1290.0
-        )
-
-        assert has_warnings is True
+    def test_decoder_errors_are_a_corruption_verdict(self, mock_run):
+        """A flood of decoder errors means the picture held because it had to"""
+        errors = "\n".join("[h264 @ 0x1] Invalid NAL unit size (0 > 100)." for _ in range(50))
+        c, cd, w, wd, out = self._run(
+            mock_run, [(4019.7, 4130.5, 110.8)], duration=6990.0,
+            probe_stdout=_packets(4016.0, 4137.0), decode_stderr=errors)
+        assert c is True
+        assert any('Decode failure' in d for d in cd)
 
     @patch('subprocess.run')
-    def test_short_clip_middle_freeze_kept(self, mock_run):
-        """On a short clip the edge window must not stretch across the middle"""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = self._stderr([(50.0, 55.0, 5.0)])
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/clip.mp4', duration=120.0
-        )
-
-        assert has_warnings is True
-        assert not any('Discounted static card' in line for line in scan_output)
+    def test_long_uncorroborated_freeze_stays_a_warning(self, mock_run):
+        """A stuck source with valid frames must not be silent"""
+        c, cd, w, wd, out = self._run(mock_run, [(100.0, 175.0, 75.0)])
+        assert c is False and w is True
+        assert 'Video freeze warning: 1 event(s)' in wd[0]
 
     @patch('subprocess.run')
-    def test_two_events_never_treated_as_cards(self, mock_run):
-        """Card suppression applies only to a solitary event"""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = self._stderr([(2.0, 7.0, 5.0), (1280.0, 1285.0, 5.0)])
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/episode.mkv', duration=1290.0
-        )
-
-        assert has_warnings is True
-        assert '2 event(s)' in warning_details[0]
-
+    def test_uncorroborated_minimum_is_a_setting(self, mock_run):
+        """Lowering the excuse threshold reports shorter uncorroborated freezes"""
+        with patch_settings(**{'detection.freeze_uncorroborated_min_secs': 10.0}):
+            c, cd, w, wd, out = self._run(mock_run, [(640.0, 655.0, 15.0)])
+        assert w is True
 
     @patch('subprocess.run')
-    def test_event_past_reported_duration_is_not_a_card(self, mock_run):
-        """A short container duration must not turn a mid-file freeze into a card"""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = self._stderr([(700.0, 710.0, 10.0)])
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
+    def test_variable_rate_stillness_is_not_missing_content(self, mock_run):
+        """A source that stores frames only when the picture changes proves nothing
+        by having no packets in a held stretch"""
+        # Irregular cadence around the window: bursts and long legitimate gaps
+        lead = [70.0, 70.04, 70.08, 74.5, 74.54, 81.0, 88.2, 88.24, 95.0, 95.04]
+        tail = [122.0, 122.04, 131.5, 140.0, 140.04, 152.0]
+        probe = "\n".join(f"{t:.3f}" for t in lead + tail)
+        c, cd, w, wd, out = self._run(
+            mock_run, [(100.0, 120.0, 20.0)], probe_stdout=probe)
+        assert c is False
+        assert cd == []
 
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/short_duration.mkv', duration=600.0
-        )
-
-        assert has_warnings is True
-        assert not any('Discounted static card' in line for line in scan_output)
-
-
-class TestFreezeConfirmationPass:
-    """Held animation cels report as frozen but every frame differs"""
-
-    MAIN = (
-        "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 640.0\n"
-        "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 5.0\n"
-        "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 645.0"
-    )
-
-    def _dispatch(self, confirm_stderr=None, raises=None, confirm_returncode=0):
-        """Route the main detection pass and the confirmation pass separately"""
+    @patch('subprocess.run')
+    def test_probe_failure_never_promotes_to_corruption(self, mock_run):
+        """No evidence means uncorroborated, not guilty"""
         def side_effect(cmd, *args, **kwargs):
-            is_confirm = 'blackdetect' not in ' '.join(str(part) for part in cmd)
-            if is_confirm and raises is not None:
-                raise raises
+            joined = ' '.join(str(part) for part in cmd)
+            if str(cmd[0]).endswith('ffprobe') or 'freezedetect' not in joined:
+                raise subprocess.TimeoutExpired(cmd='probe', timeout=120)
             result = Mock()
-            result.returncode = confirm_returncode if is_confirm else 0
+            result.returncode = 0
             result.stdout = ''
-            result.stderr = confirm_stderr if is_confirm else self.MAIN
+            result.stderr = _freeze_stderr([(640.0, 648.0, 8.0)])
             return result
-        return side_effect
+        mock_run.side_effect = side_effect
+        checker = PixelProbe()
+        c, cd, w, wd, out = checker._check_video_freeze('/fake/video.mkv', duration=1290.0)
+        assert c is False and w is False
 
     @patch('subprocess.run')
-    def test_unconfirmed_segment_dropped(self, mock_run):
-        """Frames that all differ are not a frozen picture"""
-        mock_run.side_effect = self._dispatch('frame=120 fps=60 time=00:00:05.00')
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/cartoon.mkv', duration=1290.0
-        )
-
-        assert has_warnings is False
-        assert warning_details == []
-        assert any('Discounted near-static segment at 640.0s' in line for line in scan_output)
-
-    @patch('subprocess.run')
-    def test_confirmed_segment_kept(self, mock_run):
-        """Genuinely repeated frames survive confirmation"""
-        mock_run.side_effect = self._dispatch(self.MAIN)
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/stuck.mkv', duration=1290.0
-        )
-
-        assert has_warnings is True
-        assert '1 event(s)' in warning_details[0]
-
-    @patch('subprocess.run')
-    def test_confirmation_failure_keeps_event(self, mock_run):
-        """A confirmation pass that cannot run must not erase findings"""
-        mock_run.side_effect = self._dispatch(raises=FileNotFoundError('ffmpeg missing'))
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/stuck.mkv', duration=1290.0
-        )
-
-        assert has_warnings is True
-
-    @patch('subprocess.run')
-    def test_confirmation_timeout_keeps_event(self, mock_run):
-        """A confirmation pass that times out must not erase findings"""
-        mock_run.side_effect = self._dispatch(
-            raises=subprocess.TimeoutExpired(cmd='ffmpeg', timeout=300))
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/stuck.mkv', duration=1290.0
-        )
-
-        assert has_warnings is True
-
-
-    @patch('subprocess.run')
-    def test_failed_confirmation_run_keeps_event(self, mock_run):
-        """A non-zero ffmpeg exit is not evidence that the frames differ"""
-        mock_run.side_effect = self._dispatch(
-            confirm_stderr='Error opening input file', confirm_returncode=1)
-
-        checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/unreadable.mkv', duration=1290.0
-        )
-
-        assert has_warnings is True
-        assert not any('Discounted near-static' in line for line in scan_output)
+    def test_corroboration_is_capped_per_file(self, mock_run):
+        """Past the cap, events are not probed and fall to the uncorroborated path"""
+        events = [(float(i * 100), float(i * 100 + 8), 8.0) for i in range(1, 15)]
+        c, cd, w, wd, out = self._run(mock_run, events)
+        assert any('Corroborated the first 12 of 14' in line for line in out)
 
 
 class TestFrozenPercentageClamp:
@@ -917,19 +805,13 @@ class TestFrozenPercentageClamp:
     @patch('subprocess.run')
     def test_overlapping_events_counted_once(self, mock_run):
         """Two events over the same span count that span once"""
-        stderr = []
-        for start, end, duration in [(100.0, 400.0, 300.0), (110.0, 410.0, 300.0)]:
-            stderr.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: {start}")
-            stderr.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: {duration}")
-            stderr.append(f"[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: {end}")
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = "\n".join(stderr)
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
+        stderr = _freeze_stderr([(100.0, 400.0, 300.0), (110.0, 410.0, 300.0)])
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=stderr,
+            probe_stdout=_packets(97.0, 413.0, step=0.5))
 
         checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
+        _, _, has_warnings, warning_details, scan_output = checker._check_video_freeze(
             '/fake/gappy.mkv', duration=1000.0
         )
 
@@ -940,28 +822,34 @@ class TestFrozenPercentageClamp:
 
     @patch('subprocess.run')
     def test_percentage_never_exceeds_one_hundred(self, mock_run):
-        """An event running past the container duration still reports 100%"""
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stderr = (
-            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 100.0\n"
-            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 5000.0\n"
-            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 5100.0\n"
-            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 110.0\n"
-            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 5000.0\n"
-            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 5110.0"
-        )
-        mock_result.stdout = ''
-        mock_run.return_value = mock_result
+        """Overlapping events cannot report more frozen time than the runtime"""
+        stderr = _freeze_stderr([(10.0, 240.0, 230.0), (20.0, 250.0, 230.0)])
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=stderr, probe_stdout=_packets(7.0, 250.0, step=0.5))
 
         checker = PixelProbe()
-        has_warnings, warning_details, scan_output = checker._check_video_freeze(
-            '/fake/gappy.mkv', duration=1000.0
+        _, _, has_warnings, warning_details, _ = checker._check_video_freeze(
+            '/fake/gappy.mkv', duration=200.0
         )
 
         assert has_warnings is True
-        assert '1000.0s frozen' in warning_details[0]
+        assert '200.0s frozen' in warning_details[0]
         assert '100.0% of video' in warning_details[0]
+
+    @patch('subprocess.run')
+    def test_event_past_the_end_of_file_is_missing_content(self, mock_run):
+        """An event outrunning the container means packets are absent, which is damage"""
+        stderr = _freeze_stderr([(100.0, 5100.0, 5000.0)])
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=stderr, probe_stdout=_packets(90.0, 1000.0, step=0.5))
+
+        checker = PixelProbe()
+        is_corrupted, corruption_details, _, _, _ = checker._check_video_freeze(
+            '/fake/gappy.mkv', duration=1000.0
+        )
+
+        assert is_corrupted is True
+        assert any('Missing content' in d for d in corruption_details)
 
 
 class TestSettingsReachTheScanner:
@@ -976,7 +864,11 @@ class TestSettingsReachTheScanner:
         checker = PixelProbe()
         with patch_settings(**overrides):
             checker._check_video_freeze('/fake/video.mkv', duration=duration)
-        return ' '.join(str(part) for part in mock_run.call_args[0][0])
+        for call in mock_run.call_args_list:
+            joined = ' '.join(str(part) for part in call[0][0])
+            if 'freezedetect' in joined:
+                return joined
+        raise AssertionError('freeze pass never ran')
 
     @patch('subprocess.run')
     def test_minimum_duration_drives_the_detector(self, mock_run):
@@ -998,28 +890,23 @@ class TestSettingsReachTheScanner:
         assert 'freezedetect=n=-60dB:d=7.0' in cmd
 
     @patch('subprocess.run')
-    def test_card_suppression_can_be_switched_off(self, mock_run):
-        """An edge window of zero reports title and end cards instead of discounting them"""
-        stderr = (
-            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 2.0\n"
-            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 8.0\n"
-            "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 10.0"
-        )
-        result = Mock()
-        result.returncode = 0
-        result.stdout = ''
-        result.stderr = stderr
-        mock_run.return_value = result
+    def test_uncorroborated_minimum_reaches_the_scanner(self, mock_run):
+        """The excuse threshold decides whether a clean long freeze warns"""
+        events = _freeze_stderr([(100.0, 145.0, 45.0)])
         checker = PixelProbe()
 
-        with patch_settings(**{'detection.static_card_edge_secs': 60.0}):
-            on, _, out = checker._check_video_freeze('/fake/v.mkv', duration=1290.0)
-        assert on is False
-        assert any('Discounted static card' in line for line in out)
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=events, probe_stdout=_packets(97.0, 148.0))
+        with patch_settings(**{'detection.freeze_uncorroborated_min_secs': 60.0}):
+            _, _, warned, _, out = checker._check_video_freeze('/fake/v.mkv', duration=1290.0)
+        assert warned is False
+        assert any('Discounted still segment' in line for line in out)
 
-        with patch_settings(**{'detection.static_card_edge_secs': 0.0}):
-            on, details, out = checker._check_video_freeze('/fake/v.mkv', duration=1290.0)
-        assert on is True
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=events, probe_stdout=_packets(97.0, 148.0))
+        with patch_settings(**{'detection.freeze_uncorroborated_min_secs': 30.0}):
+            _, _, warned, details, _ = checker._check_video_freeze('/fake/v.mkv', duration=1290.0)
+        assert warned is True
         assert '1 event(s)' in details[0]
 
     def test_data_integrity_threshold_is_a_setting(self, tmp_path):
