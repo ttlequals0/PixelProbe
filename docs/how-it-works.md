@@ -441,12 +441,13 @@ Each file is validated in `pixelprobe/media_checker.py` (`PixelProbe.scan_file`)
      - **Stage 3 - Multi-point sampling** (files > 5GB): decodes 10s samples at beginning, middle, and end; NEVER marks a file corrupted (seeking produces FFmpeg-version-dependent false positives), results are informational
      - **Stage 4 - Strict error detection** (warnings only): `-err_detect crccheck+bitstream+buffer+explode` over the first 30 seconds; findings are container/muxing warnings, never corruption verdicts
 
-6. **Freeze detection** (videos, separate pass): a full-decode pass through FFmpeg's `freezedetect` filter (with `blackdetect`) flags frozen-picture segments, then three filters run over the candidates:
-   - Segments overlapping a black section are dropped, because a real freeze sticks on picture rather than on a fade
-   - A solitary short freeze against either end of the file is discounted as a static title or end card. The bound is the smaller of 60 seconds and 10% of runtime, so on a short clip it cannot reach the middle of the file
-   - Each surviving candidate is re-checked over its own window at a noise tolerance only repeated frames can clear. The default tolerance compares a whole-frame mean, which limited animation scores below while every frame still differs; the confirmation pass drops those. If the pass cannot run, the candidate is kept, so a failure never erases a finding
+6. **Freeze detection** (videos, separate pass): a full-decode pass through FFmpeg's `freezedetect` filter (with `blackdetect`) finds stretches where the picture stops changing. Finding a freeze is not the verdict, because a held animation cel and a static title card also stop the picture. Each candidate is corroborated against the file itself:
+   - Segments overlapping a black section are dropped first, because a real freeze sticks on picture rather than on a fade
+   - A packet probe over the window (a handful of seeks, no decode): if the stream barely has packets where the clock kept running, the segment is **missing content** and the file is marked corrupted
+   - A decode of just the window: a flood of decoder errors means the picture held because no frames could be produced, which is a **decode failure** and also corruption
+   - A freeze with neither signal stopped on purpose and is discounted, with the reason in the transcript. The exception is a single event running past the uncorroborated minimum (default 60 seconds), which stays a warning so a source that recorded a genuinely stuck picture is not silent
 
-   What survives is a warning - it never marks a file corrupted - and the whole pass can be switched off under System > Tunables. Reported frozen time counts overlapping events once and is capped at the runtime.
+   Reported frozen time counts overlapping events once and is capped at the runtime. The whole pass can be switched off under System > Tunables.
 
 7. **Dynamic timeouts**: FFmpeg validation timeouts are computed from file size and duration (roughly 3 minutes per GB or ~2x realtime, capped at 2 hours), so large files are neither killed prematurely nor allowed to hang forever.
 

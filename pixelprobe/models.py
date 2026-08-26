@@ -42,6 +42,15 @@ class ScanResult(db.Model):
     corruption_details = db.Column(db.Text)
     scan_date = db.Column(db.DateTime, nullable=True, index=True)  # NULL = not scanned yet
     marked_as_good = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    # A mark-as-good is a judgement about one finding on one version of the
+    # file, not a permanent mute on the file. These record what was excused so
+    # the scan write path can retire the override when the content changes or
+    # a different class of finding appears. Date and verdict stay set after the
+    # override lapses, so "files that were excused" remains queryable (the
+    # bitrot columns follow the same keep-history pattern).
+    marked_good_hash = db.Column(db.String(64), nullable=True)
+    marked_good_date = db.Column(db.DateTime, nullable=True)
+    marked_good_verdict = db.Column(db.String(128), nullable=True)
     scan_status = db.Column(db.String(20), nullable=True, default='pending', index=True)  # pending, scanning, completed, error
     discovered_date = db.Column(db.DateTime, nullable=True, default=None, index=True)  # When file was discovered
     
@@ -112,6 +121,8 @@ class ScanResult(db.Model):
             'corruption_details': self.corruption_details,
             'scan_date': convert_to_tz(self.scan_date),
             'marked_as_good': self.marked_as_good,
+            'marked_good_date': convert_to_tz(self.marked_good_date),
+            'marked_good_verdict': self.marked_good_verdict,
             'scan_status': self.scan_status,
             'file_hash': self.file_hash,
             'last_modified': convert_to_tz(self.last_modified),

@@ -167,43 +167,17 @@ SCANNER_SETTINGS = [
         'unit': 'seconds',
     },
     {
-        'key': 'detection.static_card_edge_secs',
+        'key': 'detection.freeze_uncorroborated_min_secs',
         'group': SETTING_GROUP_DETECTION,
-        'label': 'Title and end card window',
-        'help': 'Seconds from either end of a file. A single short freeze inside this window is a '
-                'motionless title or end card and is not reported. Set to 0 to report them.',
+        'label': 'Longest freeze to excuse',
+        'help': 'Seconds. A frozen stretch with its packets present and its frames decodable '
+                'stopped on purpose, so it is not reported. Past this length it is reported '
+                'anyway, in case a source recorded a genuinely stuck picture.',
         'type': 'float',
         'default': 60.0,
-        'min': 0.0,
-        'max': 600.0,
+        'min': 10.0,
+        'max': 3600.0,
         'unit': 'seconds',
-        'legacy_env': 'STATIC_CARD_EDGE_SECS',
-    },
-    {
-        'key': 'detection.static_card_max_secs',
-        'group': SETTING_GROUP_DETECTION,
-        'label': 'Longest title or end card',
-        'help': 'Seconds. A freeze longer than this is reported even when it sits at the very '
-                'start or end of a file.',
-        'type': 'float',
-        'default': 15.0,
-        'min': 0.0,
-        'max': 600.0,
-        'unit': 'seconds',
-        'legacy_env': 'STATIC_CARD_MAX_SECS',
-    },
-    {
-        'key': 'detection.freeze_confirm_noise',
-        'group': SETTING_GROUP_DETECTION,
-        'label': 'Freeze confirmation tolerance',
-        'help': 'How different two frames may be and still count as identical, from 0 to 1. Every '
-                'candidate is re-checked at this tolerance, which separates a stuck picture from '
-                'a shot that is merely very still.',
-        'type': 'float',
-        'default': 0.0001,
-        'min': 0.0,
-        'max': 1.0,
-        'legacy_env': 'FREEZE_CONFIRM_NOISE',
     },
     {
         'key': 'detection.data_hole_alloc_ratio',
@@ -231,31 +205,6 @@ SCANNER_SETTINGS = [
         'legacy_env': 'DATA_HOLE_MIN_PCT',
     },
     {
-        'key': 'performance.freeze_confirm_max_windows',
-        'group': SETTING_GROUP_PERFORMANCE,
-        'label': 'Freeze checks per file',
-        'help': 'Each check is its own decode. Past this count the remaining freezes are reported '
-                'without being confirmed rather than dropped.',
-        'type': 'int',
-        'default': 20,
-        'min': 1,
-        'max': 500,
-        'legacy_env': 'FREEZE_CONFIRM_MAX_WINDOWS',
-    },
-    {
-        'key': 'performance.freeze_confirm_budget_secs',
-        'group': SETTING_GROUP_PERFORMANCE,
-        'label': 'Time budget for freeze checks',
-        'help': 'Seconds one file may spend confirming freezes. Once spent, the rest are reported '
-                'without being confirmed.',
-        'type': 'int',
-        'default': 600,
-        'min': 30,
-        'max': 7200,
-        'unit': 'seconds',
-        'legacy_env': 'FREEZE_CONFIRM_BUDGET_SECS',
-    },
-    {
         'key': 'performance.temporal_sample_secs',
         'group': SETTING_GROUP_PERFORMANCE,
         'label': 'Length of each sampled window',
@@ -279,18 +228,6 @@ SCANNER_SETTINGS = [
         'min': 1,
         'max': 10000,
         'legacy_env': 'TEMPORAL_MIN_FRAMES',
-    },
-    {
-        'key': 'timeouts.freeze_confirm_timeout_secs',
-        'group': SETTING_GROUP_TIMEOUTS,
-        'label': 'Single freeze check timeout',
-        'help': 'Seconds to wait on one freeze confirmation before keeping the freeze unchecked.',
-        'type': 'int',
-        'default': 300,
-        'min': 30,
-        'max': 7200,
-        'unit': 'seconds',
-        'legacy_env': 'FREEZE_CONFIRM_TIMEOUT_SECS',
     },
     {
         'key': 'timeouts.temporal_sample_timeout_secs',

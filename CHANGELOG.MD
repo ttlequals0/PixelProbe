@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.8] - 2026-08-26
+
+### Changed
+
+- **A frozen picture is now judged by why it stopped, not how it looks.** freezedetect finds where the picture stops changing, but a held animation drawing and a static title card stop the picture too, and no threshold separates them from damage: across 34 verified warnings, real findings started at 7 seconds while false positives reached 41. Each candidate is now corroborated against the file itself. A packet probe (a handful of seeks, no decode) asks whether the stream even has data where the clock kept running; a window decode asks whether the decoder can produce frames there. Absent packets become a **Missing content** corruption verdict, a flood of decoder errors becomes a **Decode failure** corruption verdict, and a freeze with neither signal stopped on purpose and is discounted. A single uncorroborated event past `detection.freeze_uncorroborated_min_secs` (default 60 seconds) still warns, so a source that recorded a genuinely stuck picture is not silent. In the verified sample this classifies all 34 correctly: 26 cels and cards discounted, 6 missing-content and 2 decode-failure files promoted from warnings to the corruption verdicts they deserved.
+- **Mark-as-good is now a judgement about a finding, not a permanent mute on a file.** Marking a file good records the file hash and the class of finding excused. On rescan the override lapses if the content changed (this is not the file that was reviewed) or if a different class of finding appears (excusing a freeze warning must not hide a later incomplete-file verdict). The date and excused class stay recorded after it lapses, following the bitrot flag's keep-history pattern. Existing marked files are backfilled once at startup, treating the upgrade as the review moment, and rows with no recorded details keep their old excuse-everything behaviour.
+
+### Removed
+
+- The static-card and freeze-confirmation filters and their six tunables (`static_card_edge_secs`, `static_card_max_secs`, `freeze_confirm_noise`, `freeze_confirm_max_windows`, `freeze_confirm_budget_secs`, `freeze_confirm_timeout_secs`). Corroboration subsumes both: a card and a cel are simply uncorroborated. This also removes one ffmpeg process per confirmed candidate; corroboration probes only events on files that already flagged, and the packet probe costs a fraction of a second. Stored values for the removed settings are ignored. The black-frame filter stays, since a long fade to black is uncorroborated but should not warn.
+
+### Fixed
+
+- **Review findings on the new code, before release.** The finding classifier now splits the stored '; '-joined details so an unrecognised finding cannot hide behind a recognised neighbour, and its markers match the strings the scanner actually emits. The excused-verdict column is wide enough for every reachable class combination, and the migration commits the new columns before backfilling so a bad legacy row cannot roll the schema back. Override retirement runs in the single-file rescan path as well as chunked scans. Marking a healthy file stores a sentinel that excuses nothing rather than the excuse-everything NULL. Missing-content corroboration requires a steady packet cadence around the window, so a variable-frame-rate source that legitimately stores nothing while the picture holds cannot be called corrupt, and expected packets come from the file's declared average rate. The backfill timestamp is UTC regardless of the database server's timezone.
+
+### Tests
+
+- 9 corroboration tests (discount, end-card shape without a special rule, absent packets, decoder errors, variable-rate stillness never corrupting, long uncorroborated warning, threshold as a setting, probe failure never promoting to corruption, per-file cap) and 15 override-scoping tests (classification, lapse on content change, lapse on class change, legacy NULL behaviour, recording at mark time).
+- The percentage-clamp test moved to events inside the container, because an event outrunning the container now correctly corroborates as missing content, which gets its own test.
+
 ## [2.8.7] - 2026-08-23
 
 ### Added

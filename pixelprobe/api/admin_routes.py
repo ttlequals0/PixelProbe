@@ -12,6 +12,7 @@ from pixelprobe.services.settings_service import (describe_settings, coerce_sett
                                                   invalidate_cache, plain_bound,
                                                   SettingValueError)
 from pixelprobe.scheduler import MediaScheduler
+from pixelprobe.utils.overrides import classify_findings, encode_verdict
 from pixelprobe.utils.security import validate_json_input, AuditLogger, validate_directory_path
 from pixelprobe.utils.validators import validate_time_budget
 from pixelprobe.utils.integrity import adopt_bitrot_baseline
@@ -115,6 +116,16 @@ def mark_as_good():
             if result:
                 result.marked_as_good = True
                 result.is_corrupted = False
+                # Record what this judgement actually excused: this file
+                # version, these finding classes. The scan write path retires
+                # the override when either stops matching.
+                result.marked_good_hash = result.file_hash
+                result.marked_good_date = datetime.now(timezone.utc)
+                # A mark on a file with no findings excuses nothing: store a
+                # sentinel rather than NULL, because NULL means excuse-everything
+                # and is reserved for legacy rows whose reason is unknown.
+                result.marked_good_verdict = encode_verdict(
+                    classify_findings(result.corruption_details, result.warning_details)) or 'none'
                 logger.info(f"Marked file as good (healthy): {result.file_path}")
                 AuditLogger.log_action('mark_as_good', {'file_id': file_id, 'file_path': result.file_path})
             
