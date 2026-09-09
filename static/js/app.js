@@ -293,10 +293,10 @@ class APIClient {
         });
     }
 
-    async cleanupOrphaned() {
+    async cleanupOrphaned(trustUnreadableDirs = false) {
         return this.request('/cleanup-orphaned', {
             method: 'POST',
-            body: JSON.stringify({})
+            body: JSON.stringify(trustUnreadableDirs ? { trust_unreadable_dirs: true } : {})
         });
     }
 
@@ -443,6 +443,8 @@ class ProgressManager {
         this.progressContainer = document.querySelector('.progress-container');
         this.checkInterval = null;
         this.operationType = 'scan'; // 'scan', 'cleanup', or 'file-changes'
+        this._keptRecords = 0;   // records the last cleanup could not confirm
+        this.startedHere = false;  // whether this person started the run
     }
 
     show() {
@@ -994,40 +996,63 @@ class ProgressManager {
     async complete(operationType = 'scan', status = null) {
         // Always show 100% when operation completes
         let completionMessage = '';
-        
+
         // Debug log the status on completion
-        
-        // Handle cancelled operations
-        if (status?.phase === 'cancelled') {
+
+        // Runs that stopped early. An aborted one reports phase 'error': it did
+        // no work, so reporting its orphaned_found as records removed told the
+        // operator the opposite of what happened, with the reason left unread in
+        // the status payload.
+        if (status?.phase === 'error' || status?.phase === 'cancelled') {
+            const failed = status.phase === 'error';
+            const cancelledText = {
+                'scan': 'Scan cancelled',
+                'cleanup': 'Cleanup cancelled',
+                'file-changes': 'Integrity scan cancelled'
+            }[operationType] || 'Operation cancelled';
+
             this.stopMonitoring();
             this.hide();
-            
+
             if (operationType === 'scan') {
                 this.updateScanButtons(false);
-                this.app.showNotification('Scan cancelled', 'info');
             } else if (operationType === 'cleanup') {
                 this.updateCleanupButton(false);
-                this.app.showNotification('Cleanup cancelled', 'info');
             } else if (operationType === 'file-changes') {
                 this.updateFileChangesButton(false);
-                this.app.showNotification('Integrity scan cancelled', 'info');
             }
-            
-            // Refresh stats to update UI
-            if (this.app) {
-                await this.app.stats.updateStats();
+
+            this.app.showNotification(
+                failed
+                    ? (status.error_message || status.progress_message ||
+                       'The operation stopped before finishing.')
+                    : cancelledText,
+                failed ? 'error' : 'info');
+
+            // A run can stop after deleting some rows, and a media scan may
+            // still be running underneath it, so refresh both and hand the
+            // progress view back rather than leaving it hidden.
+            await this.app.stats.updateStats();
+            if (operationType === 'cleanup') {
+                await this.app.table.loadData();
             }
+            await this.resumeScanMonitorIfRunning();
             return;
         }
-        
+
         // Handle completed operations
         if (operationType === 'scan') {
             completionMessage = 'Scan completed!';
             this.updateScanButtons(false); // Re-enable scan buttons
         } else if (operationType === 'cleanup') {
             const deletedCount = status?.orphaned_found || 0;
+            const keptCount = status?.records_kept || 0;
             completionMessage = `Cleanup completed! Removed ${deletedCount} orphaned records.`;
+            if (keptCount > 0) {
+                completionMessage += ` Kept ${keptCount} whose folder could not be read.`;
+            }
             this.updateCleanupButton(false); // Re-enable cleanup button
+            this._keptRecords = keptCount;
         } else if (operationType === 'file-changes') {
             const changesFound = status?.changes_found || 0;
             completionMessage = `Integrity scan completed! Found ${changesFound} changed files.`;
@@ -1064,25 +1089,61 @@ class ProgressManager {
                 // hijack it
                 if (this.checkInterval) return;
                 this.hide();
-                // A media scan may still be running (concurrent operations
-                // are allowed); resume its monitor so the UI returns to the
-                // scan progress view instead of stranding the user
-                try {
-                    const scanStatus = await this.api.getScanStatus();
-                    if (scanStatus.is_scanning) {
-                        this.startMonitoring('scan');
-                        return;
-                    }
-                } catch (error) {
-                    // Fall through and re-enable the buttons: a wrongly
-                    // enabled Start Scan is rejected server-side while a
-                    // wrongly disabled one strands the UI
+                const kept = this.startedHere ? this._keptRecords : 0;
+                this._keptRecords = 0;
+                await this.resumeScanMonitorIfRunning();
+                // Only ask when nothing else has taken the progress view: a
+                // scan resumed above owns it now.
+                if (operationType === 'cleanup' && kept > 0 && !this.checkInterval) {
+                    await this.offerToConfirmKeptRecords(kept);
                 }
-                this.updateScanButtons(false);
             }, 5000);
         }
     }
-    
+
+    async offerToConfirmKeptRecords(keptCount) {
+        // Whether a folder was deleted or went offline is a question only the
+        // operator can answer, so ask instead of guessing.
+        const confirmed = confirm(
+            `${keptCount.toLocaleString()} record(s) were kept because their folder is empty ` +
+            `or unreadable, which happens both when you delete a folder and when a drive is ` +
+            `offline.\n\nIf you deleted those files, click OK to remove their records. ` +
+            `If a drive is offline, click Cancel and run cleanup again once it is back.`);
+        if (!confirmed) return;
+
+        try {
+            await this.api.cleanupOrphaned(true);
+            this.startedHere = true;
+            this.startMonitoring('cleanup');
+        } catch (error) {
+            // Keep the count so the offer survives a cleanup that is already
+            // running (a schedule can start one in this window).
+            this._keptRecords = keptCount;
+            this.app.showNotification(
+                'Could not start cleanup, it may already be running. Try again shortly.',
+                'error');
+        }
+    }
+
+    async resumeScanMonitorIfRunning() {
+        // A media scan may still be running (concurrent operations are
+        // allowed); resume its monitor so the UI returns to the scan progress
+        // view instead of stranding the user
+        try {
+            const scanStatus = await this.api.getScanStatus();
+            if (scanStatus.is_scanning) {
+                this.startMonitoring('scan');
+                return;
+            }
+        } catch (error) {
+            // Fall through and re-enable the buttons: a wrongly enabled Start
+            // Scan is rejected server-side while a wrongly disabled one
+            // strands the UI
+        }
+        this.updateScanButtons(false);
+    }
+
+
     showFileChangesResults(result) {
         // Show file changes in a modal or alert
         const changedFiles = result.changed_files || [];
@@ -2055,6 +2116,9 @@ class PixelProbeApp {
             const cleanupStatus = await this.api.getCleanupStatus();
             if (cleanupStatus.is_running) {
                 this.progress.operationType = 'cleanup';
+                // Attaching to a run in progress: it may be a scheduled one,
+                // whose kept records are not this person's to confirm.
+                this.progress.startedHere = false;
                 this.progress.startMonitoring('cleanup');
                 return; // Only monitor one operation at a time
             }
@@ -2094,6 +2158,7 @@ class PixelProbeApp {
                 const cleanupStatus = await this.api.getCleanupStatus();
                 if (cleanupStatus.is_running) {
                     this.progress.operationType = 'cleanup';
+                    this.progress.startedHere = false;
                     this.progress.startMonitoring('cleanup');
                     return;
                 }
@@ -2175,11 +2240,14 @@ class PixelProbeApp {
 
         try {
             const result = await this.api.cleanupOrphaned();
-            
+
             if (result.status === 'started') {
                 this.showNotification('Cleanup started...', 'info');
                 // Start monitoring cleanup progress
                 this.progress.operationType = 'cleanup';
+                // Only a run this person started may ask them to confirm the
+                // records it keeps; a scheduled one is nobody's decision here.
+                this.progress.startedHere = true;
                 this.progress.startMonitoring('cleanup');
                 
                 // Also do a manual check after 1 second to debug
@@ -2370,6 +2438,7 @@ class PixelProbeApp {
 
                 if (orphanResponse.ok) {
                     this.showNotification('Cleanup started for file', 'success');
+                    this.progress.startedHere = false;
                     this.progress.startMonitoring('cleanup');
                 } else {
                     throw new Error('Failed to start cleanup');
@@ -4015,6 +4084,7 @@ class PixelProbeApp {
 
             if (response.ok) {
                 this.showNotification(`Cleanup started for ${fileIds.length} files`, 'success');
+                this.progress.startedHere = false;
                 this.progress.startMonitoring('cleanup');
             } else {
                 throw new Error('Cleanup failed');

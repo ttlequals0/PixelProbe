@@ -141,8 +141,12 @@ def get_cleanup_status():
                 'files_processed': cleanup_record.files_processed,
                 'total_files': cleanup_record.total_files,
                 'orphaned_found': cleanup_record.orphaned_found,
+                'records_kept': cleanup_record.records_kept or 0,
                 'current_file': cleanup_record.current_file,
-                'progress_message': cleanup_record.progress_message or ''
+                'progress_message': cleanup_record.progress_message or '',
+                # An aborted run reports phase 'error'; without the reason the
+                # UI can only say the run ended, not that it deleted nothing.
+                'error_message': cleanup_record.error_message or ''
             }
             
             if cleanup_record.start_time and cleanup_record.is_active:
@@ -436,6 +440,9 @@ def cleanup_orphaned_files():
     data = request.get_json(silent=True) or {}
     file_paths = data.get('file_paths', [])
     schedule_id = data.get('schedule_id')  # For healthcheck integration
+    # Only a person can tell a folder they deleted from one that went offline,
+    # so this is the operator saying which it was. Never set for a schedule.
+    trust_unreadable_dirs = bool(data.get('trust_unreadable_dirs')) and not schedule_id
 
     # Reset state
     with cleanup_state_lock:
@@ -464,7 +471,7 @@ def cleanup_orphaned_files():
     app = current_app._get_current_object()
     current_cleanup_thread = threading.Thread(
         target=cleanup_orphaned_async,
-        args=(app, cleanup_record.id, file_paths, schedule_id),
+        args=(app, cleanup_record.id, file_paths, schedule_id, trust_unreadable_dirs),
         name=f'cleanup_{cleanup_record.id}'
     )
     current_cleanup_thread.start()
@@ -582,7 +589,8 @@ def check_file_changes():
         'file_count': len(file_paths) if file_paths else None
     }
 
-def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
+def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None,
+                           trust_unreadable_dirs=False):
     """Async function to cleanup orphaned database entries
 
     Args:
@@ -590,6 +598,8 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
         cleanup_id: ID of the cleanup record
         file_paths: Optional list of specific file paths to check (if None, checks all files)
         schedule_id: Optional schedule ID for healthcheck integration
+        trust_unreadable_dirs: The operator has confirmed that records whose
+            directory can no longer be read belong to files they deleted
     """
     try:
         with app.app_context():
@@ -607,7 +617,9 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
                     maintenance_service = MaintenanceService(app.config['SQLALCHEMY_DATABASE_URI'])
 
                     # Run the cleanup using the maintenance service logic with optional file_paths filter
-                    maintenance_service._run_cleanup(cleanup_record.id, file_paths=file_paths, schedule_id=schedule_id)
+                    maintenance_service._run_cleanup(
+                        cleanup_record.id, file_paths=file_paths, schedule_id=schedule_id,
+                        trust_unreadable_dirs=trust_unreadable_dirs)
 
     except Exception as e:
         logger.error(f"Error in cleanup_orphaned_async: {str(e)}", exc_info=True)

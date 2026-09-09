@@ -653,17 +653,20 @@ class CleanupState(db.Model):
     files_processed = db.Column(db.Integer, nullable=False, default=0)
     total_files = db.Column(db.Integer, nullable=False, default=0)
     orphaned_found = db.Column(db.Integer, nullable=False, default=0)
+    # Flagged entries the run refused to delete because it could not confirm
+    # the file was deleted rather than unreachable
+    records_kept = db.Column(db.Integer, nullable=True, default=0)
     start_time = db.Column(db.DateTime(timezone=True), nullable=True)
     end_time = db.Column(db.DateTime(timezone=True), nullable=True)
     current_file = db.Column(db.String(500), nullable=True)
     progress_message = db.Column(db.String(1000), nullable=True)  # Increased from 200
     error_message = db.Column(db.String(1000), nullable=True)  # Increased from 500
     cancel_requested = db.Column(db.Boolean, nullable=True, default=False)
-    
+
     def to_dict(self):
         # Import here to avoid circular imports
         from pixelprobe.utils.helpers import create_state_dict
-        return create_state_dict(self, extra_fields=['orphaned_found'])
+        return create_state_dict(self, extra_fields=['orphaned_found', 'records_kept'])
 
 class FileChangesState(db.Model):
     __tablename__ = 'file_changes_state'

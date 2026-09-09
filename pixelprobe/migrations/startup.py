@@ -537,6 +537,24 @@ def create_performance_indexes(db):
         logger.debug("All performance indexes already exist")
 
 
+def run_v2_8_9_migrations(db):
+    """Record how many entries a cleanup kept because it could not confirm them.
+
+    A cleanup that holds records back has to be able to say so afterwards, and
+    the count is what the UI offers to act on.
+    """
+    try:
+        with migration_connection(db) as conn:
+            existing = {c['name'] for c in inspect(conn).get_columns('cleanup_states')}
+            if 'records_kept' not in existing:
+                conn.execute(text(
+                    'ALTER TABLE cleanup_states ADD COLUMN records_kept INTEGER DEFAULT 0'))
+                logger.info("Added cleanup_states.records_kept")
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Migration v2.8.9 failed: {e}")
+
+
 def _run_all_migrations(db):
     """Execute all database migrations. Called by migrate_database() after acquiring lock."""
     from tools.app_startup_migration import run_startup_migrations
@@ -547,6 +565,12 @@ def _run_all_migrations(db):
         logger.info("Startup migrations completed successfully")
     except Exception as e:
         logger.error(f"Startup migration failed: {e}")
+
+    logger.info("Recording cleanup records kept...")
+    try:
+        run_v2_8_9_migrations(db)
+    except Exception as e:
+        logger.error(f"v2.8.9 migration failed: {e}")
 
     logger.info("Scoping mark-as-good overrides...")
     try:

@@ -793,7 +793,10 @@ def get_scan_status():
         'phase_current': phase_current,
         'phase_total': phase_total,
         'progress_message': progress_message,
-        
+        # A scan that failed carries its reason here; without it the UI can only
+        # say the run stopped.
+        'error_message': state_dict.get('error_message') or '',
+
         # ETA fields - ensure we don't send None
         'eta': eta if eta else None,  # Let jsonify handle None properly
         'files_per_second': round(files_per_second, 2) if files_per_second > 0 else 0
