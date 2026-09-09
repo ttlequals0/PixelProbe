@@ -154,11 +154,17 @@ Rarely-changed knobs with sensible defaults.
 
 Orphan cleanup confirms each missing file before deleting its record, by reading
 the file's own directory and finding other files in it. Something is there, so
-this storage is present and the file is not. An empty directory proves nothing,
-since an unmounted mountpoint reads as an empty directory. Neither does a
-directory that is gone: a folder you deleted and a folder inside a drive that
-went offline are the same result. Those records are kept and counted, and files
-that have become readable again since the sweep are left alone.
+this storage is present and the file is not.
+
+A folder holding one film has nothing left to say once you delete it, so the
+question moves up a level: the parent has to list folders, and one of those has
+to hold a file PixelProbe recorded. That is the library answering. A listing
+alone proves nothing, since files written to a mountpoint while it was unmounted
+list just as well, but recorded files could not have come from them.
+
+Nothing above answers for a tree that has gone entirely, and those records are
+kept and counted. Files that have become readable again since the sweep are left
+alone.
 
 Confirming that kept records were deleted is your decision. The UI offers it
 after a run that kept records, and the API takes `trust_unreadable_dirs: true` on

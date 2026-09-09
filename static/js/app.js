@@ -1049,7 +1049,7 @@ class ProgressManager {
             const keptCount = status?.records_kept || 0;
             completionMessage = `Cleanup completed! Removed ${deletedCount} orphaned records.`;
             if (keptCount > 0) {
-                completionMessage += ` Kept ${keptCount} whose folder could not be read.`;
+                completionMessage += ` Kept ${keptCount} that could not be confirmed as deleted.`;
             }
             this.updateCleanupButton(false); // Re-enable cleanup button
             this._keptRecords = keptCount;
@@ -1105,10 +1105,11 @@ class ProgressManager {
         // Whether a folder was deleted or went offline is a question only the
         // operator can answer, so ask instead of guessing.
         const confirmed = confirm(
-            `${keptCount.toLocaleString()} record(s) were kept because their folder is empty ` +
-            `or unreadable, which happens both when you delete a folder and when a drive is ` +
-            `offline.\n\nIf you deleted those files, click OK to remove their records. ` +
-            `If a drive is offline, click Cancel and run cleanup again once it is back.`);
+            `${keptCount.toLocaleString()} record(s) could not be confirmed as deleted: ` +
+            `nothing readable is left where those files were, which is what a deleted folder ` +
+            `and an offline drive both look like.\n\nIf you deleted those files, click OK to ` +
+            `remove their records. If a drive is offline, click Cancel and run cleanup again ` +
+            `once it is back.`);
         if (!confirmed) return;
 
         try {

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.11] - 2026-09-08
+
+### Fixed
+
+- **A library with one file per folder could not clean up anything.** Deleting a film empties or removes its folder, so there was nothing left in it to read and every record was kept for confirmation: an ordinary deletion, held back as though the drive might be offline. On a real library that was 44 of 46 flagged files in one run. When a folder has nothing to say, the question now moves up a level, to whether the library above it is still the library. Its parent has to list folders, and one of those has to hold a file this scanner recorded. A listing alone proves nothing, since files written to a mountpoint while it was unmounted list just as well, but rows the scanner recorded could not have come from them. A tree that has gone entirely still has nothing above it to answer, and those records are still kept.
+- The cleanup's completion message called kept records ones "whose folder could not be read". A folder emptied by a deletion reads perfectly well; what could not be read is what was in it. The message and the confirmation dialog now say the records could not be confirmed as deleted, and why.
+
 ## [2.8.10] - 2026-09-08
 
 ### Fixed

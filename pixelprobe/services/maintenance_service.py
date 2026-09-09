@@ -3,6 +3,7 @@ Maintenance service for cleanup and file monitoring operations
 """
 
 import os
+import itertools
 import json
 import threading
 import time
@@ -58,6 +59,10 @@ CLEANUP_TASK_TIMEOUT_SECS = env_int('CLEANUP_TASK_TIMEOUT_SECS', 600, floor=60)
 # column and shown in a notification).
 _PROBE_STAT_TIMEOUT_SECS = 15
 _HOLD_REASON_DIRS = 3
+# How much of a parent directory to read when asking whether the library above a
+# vanished folder is still mounted, and how many of its files to look up.
+_PROBE_LISTING_ENTRIES = 50
+_PROBE_SAMPLE_FILES = 5
 
 # Consecutive stable-hash integrity checks (plus a clean rescan) required
 # before a bitrot flag auto-expires and the stable content becomes the new
@@ -878,12 +883,17 @@ class MaintenanceService:
         unreachable mount reports exactly the same thing, and deleting those
         rows is the one mistake this operation cannot take back. What settles it
         is reading the file's own directory and finding other files in it -
-        something is there, so this storage is present and the file is not. An
-        empty directory settles nothing, because an unmounted mountpoint reads
-        as an empty directory, and neither does a directory that is gone
-        entirely: a folder the operator deleted and a folder inside a mount that
-        came down are the same ENOENT. Those rows are kept and reported for the
-        operator to confirm with trust_unreadable_dirs.
+        something is there, so this storage is present and the file is not.
+
+        A library that keeps one file per folder leaves nothing there to read,
+        because deleting the film empties or removes its folder, so the question
+        moves up a level: is the library above it still the library? Its parent
+        answers that, and only when the database recognises a file inside one of
+        the folders listed there. Leftovers written to an unmounted mountpoint
+        would list too; rows the scanner recorded could not have come from them.
+
+        Nothing above answers for a tree that has gone entirely. Those rows are
+        kept and reported for the operator to confirm with trust_unreadable_dirs.
 
         Returns (deletable, unconfirmed, returned, reason): the entries to
         delete, the entries held back, the entries whose file is readable again,
@@ -905,7 +915,8 @@ class MaintenanceService:
 
             directory = os.path.dirname(path)
             if directory not in occupied:
-                occupied[directory] = self._has_entries(directory)
+                occupied[directory] = (self._has_entries(directory)
+                                       or self._library_answers(os.path.dirname(directory)))
             if occupied[directory] or trust_unreadable_dirs:
                 deletable.append(entry)
             else:
@@ -913,6 +924,53 @@ class MaintenanceService:
                 held_dirs.add(directory)
 
         return deletable, unconfirmed, returned, self._describe_holds(held_dirs)
+
+    def _library_answers(self, directory, _seen=None):
+        """Whether the library above a vanished folder is still mounted.
+
+        Deleting the only file in a folder leaves nothing in it to read, and
+        deleting the folder leaves nothing at all, so the evidence has to come
+        from the level above: the rest of the library, still where it was. A
+        listing alone will not do, since files written to a mountpoint while it
+        was unmounted list just as well. One of the folders listed there has to
+        hold a file this scanner recorded, which is the library answering rather
+        than whatever was left behind on the mountpoint.
+        """
+        if _seen is None:
+            _seen = {}
+        if directory in _seen:
+            return _seen[directory]
+        _seen[directory] = False
+
+        for candidate in self._sample_files_under(directory):
+            if ScanResult.query.with_entities(ScanResult.id).filter(
+                    ScanResult.file_path == candidate).first():
+                _seen[directory] = True
+                break
+        return _seen[directory]
+
+    def _sample_files_under(self, directory):
+        """A few file paths taken from a directory's own listing."""
+        def read():
+            found = []
+            with os.scandir(directory) as entries:
+                for entry in itertools.islice(entries, _PROBE_LISTING_ENTRIES):
+                    if entry.is_file(follow_symlinks=False):
+                        found.append(entry.path)
+                    elif entry.is_dir(follow_symlinks=False) and len(found) < _PROBE_SAMPLE_FILES:
+                        with os.scandir(entry.path) as inner:
+                            found.extend(child.path for child in
+                                         itertools.islice(inner, _PROBE_SAMPLE_FILES)
+                                         if child.is_file(follow_symlinks=False))
+                    if len(found) >= _PROBE_SAMPLE_FILES:
+                        break
+            return found[:_PROBE_SAMPLE_FILES]
+
+        try:
+            return _read_with_timeout(read, _PROBE_STAT_TIMEOUT_SECS, directory,
+                                      'cleanup library probe')
+        except (FileReadTimeoutError, OSError):
+            return []
 
     def _describe_holds(self, directories):
         """Name the directories rows were held for, bounded: the reason is

@@ -14,13 +14,30 @@ from unittest.mock import patch
 
 import pytest
 
-from pixelprobe.models import CleanupState, ScanReport
+from pixelprobe.models import CleanupState, ScanReport, ScanResult
 from pixelprobe.services.maintenance_service import MaintenanceService
 from pixelprobe.utils.helpers import PATH_UNKNOWN
 
 
 def _service():
     return MaintenanceService(':memory:')
+
+
+@pytest.fixture
+def clean_db(app, db):
+    with app.app_context():
+        ScanResult.query.delete()
+        db.session.commit()
+        yield db
+        ScanResult.query.delete()
+        db.session.commit()
+
+
+def _record(db, paths):
+    """Record scan results for the given paths."""
+    for path in paths:
+        db.session.add(ScanResult(file_path=path, scan_status='completed'))
+    db.session.commit()
 
 
 def _entries(*paths):
@@ -54,6 +71,35 @@ class TestConfirmOrphans:
         assert deletable == []
         assert len(unconfirmed) == 500
         assert 'empty or unreadable' in reason
+
+    def test_the_library_above_a_vanished_folder_answers_for_it(self, tmp_path, clean_db):
+        """One film per folder: deleting it empties or removes the folder, so
+        the evidence has to be the rest of the library, still where it was."""
+        movies = tmp_path / 'movies'
+        (movies / 'Arrival (2016)').mkdir(parents=True)
+        (movies / 'Arrival (2016)' / 'Arrival.mkv').write_text('x')
+        _record(clean_db, [str(movies / 'Arrival (2016)' / 'Arrival.mkv')])
+        emptied = movies / 'In Her Shoes (2005)'
+        emptied.mkdir()
+
+        deletable, unconfirmed, _returned, _reason = _service()._confirm_orphans(
+            _entries(emptied / 'In Her Shoes.mkv', movies / 'Gone (2001)' / 'Gone.mkv'))
+
+        assert len(deletable) == 2
+        assert unconfirmed == []
+
+    def test_leftovers_on_an_unmounted_mountpoint_do_not_answer(self, tmp_path, clean_db):
+        """A listing alone would pass here: files written to a mountpoint while
+        it was unmounted list just as well as the library does."""
+        movies = tmp_path / 'movies'
+        (movies / 'stray').mkdir(parents=True)
+        (movies / 'stray' / 'leftover.txt').write_text('x')
+
+        deletable, unconfirmed, _returned, _reason = _service()._confirm_orphans(
+            _entries(*[movies / f'Film {i} (2001)' / f'film{i}.mkv' for i in range(20)]))
+
+        assert deletable == []
+        assert len(unconfirmed) == 20
 
     def test_a_missing_folder_is_kept(self, tmp_path):
         gone_folder = tmp_path / 'movies' / 'Show'
