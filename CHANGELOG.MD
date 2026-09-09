@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.8.10] - 2026-09-08
+
+### Fixed
+
+- **The 2.8.9 migration named a table that does not exist, so cleanup status broke on every poll.** The new `records_kept` column was added to `cleanup_states`; the table is `cleanup_state`. The ALTER failed, the failure was logged and swallowed as migrations here are written to be, and the column never arrived, while the model went on selecting it: `/api/cleanup-status` returned 500 on every poll of a deployed 2.8.9. The migration now takes the table name from the model, and a test rejects any migration naming a table the models do not define.
+
 ## [2.8.9] - 2026-09-08
 
 ### Fixed
