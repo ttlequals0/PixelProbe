@@ -45,7 +45,10 @@ def _try_acquire_start_lock(key):
     the existing is_active check and single-threaded execution suffice.
     """
     try:
-        if db.session.bind.dialect.name != 'postgresql':
+        # get_bind(), not .bind: the latter is None unless the session was bound
+        # explicitly, so every call raised and the guard silently let all
+        # comers through - which is the opposite of what a lock is for.
+        if db.session.get_bind().dialect.name != 'postgresql':
             return True
         return bool(db.session.execute(
             text("SELECT pg_try_advisory_xact_lock(:k)"), {'k': key}

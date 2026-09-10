@@ -10,7 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A library with one file per folder could not clean up anything.** Deleting a film empties or removes its folder, so there was nothing left in it to read and every record was kept for confirmation: an ordinary deletion, held back as though the drive might be offline. On a real library that was 44 of 46 flagged files in one run. When a folder has nothing to say, the question now moves up a level, to whether the library above it is still the library. Its parent has to list folders, and one of those has to hold a file this scanner recorded. A listing alone proves nothing, since files written to a mountpoint while it was unmounted list just as well, but rows the scanner recorded could not have come from them. A tree that has gone entirely still has nothing above it to answer, and those records are still kept.
+- **The cross-worker start lock had never once been taken.** It reads the session's dialect to decide whether PostgreSQL advisory locks are available, through `db.session.bind`, which is `None` unless a session was bound explicitly. Every call raised, and the handler logs and returns True, so the guard against two workers starting the same operation waved through every caller it ever saw. Reading the bind the way the rest of the file does fixes it.
+- **A schedule waiting on a long scan was abandoned for waiting.** A skipped cron fire queues a retry, ten minutes apart, up to 144 of them, and a scan of a large library runs well past that day: live, a 27-hour scan with 15 hours still to go had one schedule at retry 106 of 144 and another at 87. Retries now only spend that budget on conflicts that are failures. Queueing behind a scan that is reporting progress costs nothing, while a scan that has gone quiet for half an hour spends the budget as before, so a wedged scan still cannot hold a schedule in a retry loop forever.
+- **Two log lines were 42 percent of everything the application logged.** `/api/scan-status` recorded the state it was about to return, twice, at INFO, on an endpoint every open tab polls every few seconds: measured at roughly 4,000 lines per 86 seconds against a `log_entries` table already holding a million rows. Both are DEBUG now.
 - The cleanup's completion message called kept records ones "whose folder could not be read". A folder emptied by a deletion reads perfectly well; what could not be read is what was in it. The message and the confirmation dialog now say the records could not be confirmed as deleted, and why.
+
+### Tests
+
+- 2 cleanup tests: the library above a vanished folder answering for it, and leftovers on an unmounted mountpoint failing to.
+- 7 scheduler tests: a recently updated scan reading as progressing and a long quiet one not, missing timestamps, a naive timestamp read as UTC, waiting on a working scan costing nothing across 500 retries, a real conflict still giving up at the cap, and a stuck scan still spending the budget.
 
 ## [2.8.10] - 2026-09-08
 

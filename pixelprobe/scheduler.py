@@ -59,6 +59,9 @@ class MediaScheduler:
     # DELAY_MINUTES apart; after that we give up until the next cron fire.
     DEFAULT_RETRY_DELAY_MINUTES = 10
     DEFAULT_RETRY_MAX_COUNT = 144
+    # A scan quiet for longer than this is not working, it is stuck, and a
+    # schedule waiting on it goes back to spending its retry budget.
+    PROGRESS_STALE_AFTER = timedelta(minutes=30)
 
     def __init__(self, app=None):
         self.scheduler = BackgroundScheduler()
@@ -101,12 +104,33 @@ class MediaScheduler:
             return default
         return max(min_value, value)
 
-    def _queue_conflict_retry(self, retry_key: str, retry_func, retry_args, reason: str):
+    def _scan_is_progressing(self, scan_state):
+        """Whether the scan blocking a schedule is alive and moving.
+
+        A scan of a large library legitimately runs for days, well past the
+        budget's 24 hours. Spending that budget while the scan works abandons
+        the schedule for waiting its turn, which is what the retry exists to
+        prevent. A scan that has stopped reporting progress still spends the
+        budget, so a wedged one cannot hold a schedule in a retry loop forever.
+        """
+        last_update = scan_state.last_update or scan_state.start_time
+        if not last_update:
+            return False
+        if last_update.tzinfo is None:
+            last_update = last_update.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last_update) < self.PROGRESS_STALE_AFTER
+
+    def _queue_conflict_retry(self, retry_key: str, retry_func, retry_args, reason: str,
+                              consume_budget: bool = True):
         """Queue a one-shot retry when a scheduled scan's cron fire is skipped.
 
         APScheduler consumes the original cron fire when the guard trips, so
         without a retry the schedule is silently dropped until its next regular
         fire (e.g. a weekly cleanup would go missing for an entire week).
+
+        consume_budget=False keeps waiting without counting, for a conflict that
+        is not a failure: the schedule is queued behind work that is running
+        normally and will get its turn when that finishes.
         """
         run_date = datetime.now(timezone.utc) + timedelta(minutes=self.retry_delay_minutes)
         # Hold the lock across add_job so the counter can't drift if two callers
@@ -114,14 +138,15 @@ class MediaScheduler:
         # in-process and cheap, so the critical section stays short.
         with self._retry_lock:
             count = self.pending_retries.get(retry_key, 0)
-            if count >= self.retry_max_count:
+            if consume_budget and count >= self.retry_max_count:
                 logger.warning(
                     f"{retry_key} skipped ({reason}); already retried "
                     f"{count} times, giving up until next cron fire"
                 )
                 self.pending_retries.pop(retry_key, None)
                 return
-            count += 1
+            if consume_budget:
+                count += 1
             job_id = f"{retry_key}_retry_{count}"
             try:
                 self.scheduler.add_job(
@@ -140,9 +165,11 @@ class MediaScheduler:
                 return
             self.pending_retries[retry_key] = count
 
+        budget = (f"#{count}/{self.retry_max_count}" if consume_budget
+                  else "waiting on work in progress, not counted")
         logger.warning(
             f"{retry_key} skipped ({reason}); queued retry "
-            f"#{count}/{self.retry_max_count} at {run_date.isoformat()}"
+            f"{budget} at {run_date.isoformat()}"
         )
 
     def _clear_pending_retry(self, retry_key: str):
@@ -502,7 +529,8 @@ class MediaScheduler:
                 if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
                     self._queue_conflict_retry(
                         'periodic', self._run_periodic_scan, (),
-                        f"phase={scan_state.phase}"
+                        f"phase={scan_state.phase}",
+                        consume_budget=not self._scan_is_progressing(scan_state)
                     )
                     return
 
@@ -555,7 +583,8 @@ class MediaScheduler:
                 if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
                     self._queue_conflict_retry(
                         retry_key, self._run_scheduled_scan, (schedule_id,),
-                        f"phase={scan_state.phase}"
+                        f"phase={scan_state.phase}",
+                        consume_budget=not self._scan_is_progressing(scan_state)
                     )
                     return
 
