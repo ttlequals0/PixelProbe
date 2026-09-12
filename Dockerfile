@@ -24,7 +24,6 @@ RUN apt-get update && \
     apt-get install -y \
     # Python 3.12 (deadsnakes)
     python3.12 \
-    python3.12-dev \
     python3.12-venv \
     # Core utilities \
     ffmpeg \
@@ -38,36 +37,23 @@ RUN apt-get update && \
     libmagickwand-7.q16-10 \
     # Image format libraries \
     libjpeg-turbo8 \
-    libjpeg-dev \
     libpng16-16t64 \
-    libpng-dev \
     libtiff6 \
-    libtiff-dev \
     libwebp7 \
-    libwebp-dev \
     libwebpmux3 \
     libwebpdemux2 \
     webp \
     libopenjp2-7 \
-    libopenjp2-7-dev \
     librsvg2-2 \
-    librsvg2-dev \
     libraw23 \
-    libraw-dev \
     libheif1 \
-    libheif-dev \
     ghostscript \
     # Additional libraries for better support \
     libexif12 \
-    libexif-dev \
     liblcms2-2 \
-    liblcms2-dev \
     libfftw3-double3 \
-    libfftw3-dev \
     libfreetype6 \
-    libfreetype6-dev \
     libfontconfig1 \
-    libfontconfig1-dev \
     && rm -rf /var/lib/apt/lists/* \
     # pebble ships in the ubuntu:26.04 OCI rootfs (not dpkg-owned); unused
     # here and its embedded Go deps carry unfixed HIGH CVEs, so drop it
@@ -77,6 +63,7 @@ RUN apt-get update && \
 # A venv avoids pip 26+ conflicts with the system 3.14 dist-packages.
 RUN python3.12 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip==26.2.1
 
 # Configure ImageMagick 7: raise resource limits for large media. The 26.04
 # default policy only sets disk=2GiB (no PDF/HEIC coder blocks to lift).
@@ -147,10 +134,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && (pip uninstall -y chardet 2>/dev/null || true)
 
-# Build headers were only needed for pip C-extension builds above; linux-libc-dev
-# otherwise ships a stream of unfixed kernel-header CVEs the runtime never touches.
-RUN apt-get purge -y linux-libc-dev python3.12-dev 2>/dev/null; \
-    apt-get autoremove -y 2>/dev/null; \
+# Keep build headers out of the runtime image. All Python dependencies above use
+# wheels, so the runtime does not need libc6-dev or linux-libc-dev.
+RUN set -eux; \
+    for package in linux-libc-dev libc6-dev; do \
+        if dpkg -s "$package" >/dev/null 2>&1; then \
+            echo "Unexpected build header package: $package" >&2; \
+            exit 1; \
+        fi; \
+    done; \
     rm -rf /var/lib/apt/lists/* /root/.cache
 
 COPY . .

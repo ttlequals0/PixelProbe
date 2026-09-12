@@ -38,10 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reports no longer label pending, scanning, unreadable, cancelled, or unknown observations as healthy. Legacy state alone no longer proves immutable history; a run member or root record is required.
 - Scheduled-scan healthchecks now snapshot a durable target with the configured success or failure mode. Target delivery retries under its lease, and an older target cannot mark a later reconfigured URL as delivered.
 - Maintenance root preflight now uses the authorized directory validator before filesystem access. Invalid-root responses no longer expose filesystem exception details.
+- Repository ignore rules now cover `.env.*`; the committed `.env.example` and `.env.test` remain sample configuration files.
 - Configured scan roots can now opt into an administrator-approved required-mount baseline. A later filesystem type, source, or mount-root mismatch blocks discovery, cleanup, and integrity work before it reads an underlying mountpoint; ordinary directories keep their existing behavior. Replacing a baseline requires an explicit administrator request.
 - Login, setup, logout, schedule changes, log purges, and notification provider actions now retain durable audit actor, target, and outcome evidence. Session-establishing and session-ending routes require CSRF even when a Bearer header is present.
 - Notification rule conditions now reject unsupported keys and invalid values. Rule and provider changes record audit evidence without logging provider secrets.
 - Compose rejects a missing media bind source, gives the runtime tmpfs the app UID/GID and restrictive mode, passes shared output settings to workers, and keeps local runtime and diagnostic artifacts out of the image context.
+- The runtime image no longer installs unused C development headers, avoiding kernel-header CVEs. Its bundled pip is updated to 26.2.1.
 
 ### Testing
 

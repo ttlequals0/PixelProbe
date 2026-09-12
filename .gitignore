@@ -151,6 +151,7 @@ static/dist/
 
 # Sensitive files
 .env
+.env.*
 .env.local
 .env.production
 *.key
