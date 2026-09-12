@@ -188,7 +188,7 @@ const AuthManager = {
             if (response.ok) {
                 form.reset();
                 await this.loadUsers();
-                this.showNotification('User created successfully', 'success');
+                this.showNotification('User created', 'success');
             } else {
                 const error = await response.json();
                 this.showNotification(error.error || 'Failed to create user', 'error');
@@ -202,7 +202,7 @@ const AuthManager = {
      * Delete a user
      */
     async deleteUser(userId) {
-        if (!confirm('Are you sure you want to delete this user?')) {
+        if (!confirm('Delete this user?')) {
             return;
         }
 
@@ -213,7 +213,7 @@ const AuthManager = {
 
             if (response.ok) {
                 await this.loadUsers();
-                this.showNotification('User deleted successfully', 'success');
+                this.showNotification('User deleted', 'success');
             } else {
                 const error = await response.json();
                 this.showNotification(error.error || 'Failed to delete user', 'error');
@@ -318,7 +318,7 @@ const AuthManager = {
      * Delete an API token
      */
     async deleteToken(tokenId) {
-        if (!confirm('Are you sure you want to delete this token?')) {
+        if (!confirm('Delete this token?')) {
             return;
         }
 
@@ -329,7 +329,7 @@ const AuthManager = {
 
             if (response.ok) {
                 await this.loadApiTokens();
-                this.showNotification('Token deleted successfully', 'success');
+                this.showNotification('Token deleted', 'success');
             } else {
                 const error = await response.json();
                 this.showNotification(error.error || 'Failed to delete token', 'error');
@@ -381,7 +381,7 @@ const AuthManager = {
             if (response.ok) {
                 form.reset();
                 document.getElementById('changePasswordModal').style.display = 'none';
-                this.showNotification('Password changed successfully', 'success');
+                this.showNotification('Password changed', 'success');
             } else {
                 const error = await response.json();
                 this.showNotification(error.error || 'Failed to change password', 'error');
@@ -418,7 +418,7 @@ const AuthManager = {
                 <div class="modal-body">
                     <div class="exclusions-section">
                         <div style="padding: 1rem 0; color: var(--text-primary);">
-                            <p style="margin-bottom: 1rem;"><strong>Important:</strong> Copy this token now. You won't be able to see it again!</p>
+                            <p style="margin-bottom: 1rem;"><strong>Copy this token now.</strong> It will not be shown again.</p>
                             <div class="exclusion-input-group">
                                 <input type="text" readonly id="tokenValue" class="form-control" style="font-family: monospace;">
                                 <button class="btn btn-primary" type="button">

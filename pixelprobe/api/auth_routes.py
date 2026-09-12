@@ -66,7 +66,7 @@ def first_run_setup():
 
     return jsonify({
         'success': True,
-        'message': 'Admin user created successfully',
+        'message': 'Admin user created',
         'user': admin.to_dict()
     })
 
@@ -104,7 +104,7 @@ def api_logout():
     """API endpoint for user logout"""
     AuditLogger.log_action('logout', target=f'user:{current_user.id}')
     logout_user()
-    return jsonify({'success': True, 'message': 'Logged out successfully'})
+    return jsonify({'success': True, 'message': 'Logged out'})
 
 
 @auth_api_bp.route('/users', methods=['GET'])
@@ -186,7 +186,7 @@ def delete_user(user_id):
         db.session.delete(user_to_delete)
         db.session.commit()
         AuditLogger.log_action('user_deleted', target=f'user:{user_id}')
-        return jsonify({'success': True, 'message': 'User deleted successfully'})
+        return jsonify({'success': True, 'message': 'User deleted'})
     except Exception as e:
         db.session.rollback()
         logger.error(f"Failed to delete user: {e}")
@@ -229,7 +229,7 @@ def change_password(user_id):
             login_user(target_user, remember=False)
             session['session_generation'] = target_user.session_generation
         AuditLogger.log_action('password_changed', target=f'user:{target_user.id}')
-        return jsonify({'success': True, 'message': 'Password updated successfully'})
+        return jsonify({'success': True, 'message': 'Password updated'})
     except Exception as e:
         db.session.rollback()
         logger.error(f"Failed to update password: {e}")
@@ -294,7 +294,7 @@ def delete_token(token_id):
         db.session.delete(token)
         db.session.commit()
         AuditLogger.log_action('api_token_deleted', target=f'token:{token_id}')
-        return jsonify({'success': True, 'message': 'Token deleted successfully'})
+        return jsonify({'success': True, 'message': 'Token deleted'})
     except Exception as e:
         db.session.rollback()
         logger.error(f"Failed to delete token: {e}")

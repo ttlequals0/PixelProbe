@@ -40,8 +40,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements-test.txt
 ```
 
-`requirements-test.txt` includes the base `requirements.txt`, so this one
-command installs both runtime and test dependencies.
+`requirements-test.txt` includes the base `requirements.txt`, so this one command installs both runtime and test dependencies.
 
 4. **Install system dependencies:**
 
@@ -61,8 +60,7 @@ brew install ffmpeg imagemagick libmagic
 npm ci && npm run build
 ```
 
-The templates load webpack-built bundles from `static/dist/`; the app will
-not render correctly without this step.
+The templates load webpack-built bundles from `static/dist/`; the app will not render correctly without this step.
 
 6. **Set up environment variables:**
 ```bash
@@ -75,16 +73,13 @@ cp .env.example .env
 python app.py
 ```
 
-There is no separate database initialization step: `app.py` runs
-`create_tables()` and any pending migrations automatically at import time.
+There is no separate database initialization step: `app.py` runs `create_tables()` and any pending migrations automatically at import time.
 
 The application will be available at `http://localhost:5000`
 
 ### Docker development
 
-The container needs PostgreSQL and Redis/Valkey to start, so use the compose
-stack described in [docker-setup.md](docker-setup.md) rather than a bare
-`docker run`. To build a local image:
+The container needs PostgreSQL and Redis/Valkey to start, so use the compose stack described in [docker-setup.md](docker-setup.md) rather than a bare `docker run`. To build a local image:
 
 ```bash
 docker build --platform=linux/amd64 -t pixelprobe:dev .
@@ -141,9 +136,7 @@ docker build --platform=linux/amd64 -t pixelprobe:dev .
 
 ## Code structure
 
-The full, maintained directory tree lives in
-[project-structure.md](project-structure.md). This guide does not duplicate
-it; when the layout changes, update that document only.
+The full, maintained directory tree lives in [project-structure.md](project-structure.md). This guide does not duplicate it; when the layout changes, update that document only.
 
 ## Development workflow
 
@@ -156,8 +149,7 @@ it; when the layout changes, update that document only.
 
 ### Git workflow
 
-Never commit directly to `main`. All changes go through a feature or fix
-branch and a pull request:
+Never commit directly to `main`. All changes go through a feature or fix branch and a pull request:
 
 1. **Create a feature branch off main:**
 ```bash
@@ -232,8 +224,7 @@ class YourService:
 
 ### Database migrations
 
-Migrations live in `pixelprobe/migrations/startup.py` and run automatically
-at startup, not in `app.py`. To add a schema change:
+Migrations live in `pixelprobe/migrations/startup.py` and run automatically at startup, not in `app.py`. To add a schema change:
 
 1. **Update the model:**
 ```python
@@ -249,15 +240,13 @@ class YourModel(db.Model):
 3. **Register it** in the `_run_all_migrations(db)` registry in the same
    file so it runs at startup.
 
-A PostgreSQL advisory lock coordinates migrations across multiple gunicorn
-workers and containers, so each migration runs exactly once per deployment.
+A PostgreSQL advisory lock coordinates migrations across multiple gunicorn workers and containers, so each migration runs exactly once per deployment.
 
 ## Testing
 
 ### Running tests
 
-Install the test dependencies and build the frontend assets first (some tests
-and the app itself expect the built static files):
+Install the test dependencies and build the frontend assets first (some tests and the app itself expect the built static files):
 
 ```bash
 pip install -r requirements-test.txt
@@ -275,9 +264,7 @@ pytest -m "not real_media" --cov=pixelprobe
 pytest tests/unit/test_scan_service.py
 ```
 
-The `real_media` tests run in CI inside the Docker image, where the exact
-FFmpeg and ImageMagick versions match production. See
-[testing-guide.md](testing-guide.md) for the full testing reference.
+The `real_media` tests run in CI inside the Docker image, where the exact FFmpeg and ImageMagick versions match production. See [testing-guide.md](testing-guide.md) for the full testing reference.
 
 ### Writing tests
 
@@ -312,12 +299,9 @@ def test_scan_endpoint(client):
 
 ### Test data
 
-Real media fixtures (valid and corrupted samples per format) live in
-`tests/fixtures/media_samples/` and are wired up by the `test_data_dir`
-fixture in `tests/conftest.py`.
+Real media fixtures (valid and corrupted samples per format) live in `tests/fixtures/media_samples/` and are wired up by the `test_data_dir` fixture in `tests/conftest.py`.
 
-Note: `scripts/create_test_database.py` is a legacy script from the SQLite
-era and does not work with the PostgreSQL-only application. Do not use it.
+Note: `scripts/create_test_database.py` is a legacy script from the SQLite era and does not work with the PostgreSQL-only application. Do not use it.
 
 ## Security guidelines
 
@@ -401,10 +385,7 @@ SCAN_PATHS=/media/photos,/media/videos
 TZ=UTC
 ```
 
-The database is configured via the individual `POSTGRES_*` variables;
-`DATABASE_URL` is deprecated since v2.2.0. Scan directories are set with
-`SCAN_PATHS` (comma-separated). See [configuration.md](configuration.md)
-for the full variable reference.
+The database is configured via the individual `POSTGRES_*` variables; `DATABASE_URL` is deprecated since v2.2.0. Scan directories are set with `SCAN_PATHS` (comma-separated). See [configuration.md](configuration.md) for the full variable reference.
 
 2. **Gunicorn configuration:**
 
@@ -432,9 +413,7 @@ Build the production image for linux/amd64:
 docker build --platform=linux/amd64 -t pixelprobe:latest .
 ```
 
-A bare `docker run` will not start: the application requires PostgreSQL and
-Redis/Valkey. Deploy with the compose stack documented in
-[docker-setup.md](docker-setup.md).
+A bare `docker run` will not start: the application requires PostgreSQL and Redis/Valkey. Deploy with the compose stack documented in [docker-setup.md](docker-setup.md).
 
 ### Monitoring
 

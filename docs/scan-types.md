@@ -72,7 +72,7 @@ POST /api/force-scan-pending
 
 **How it works**:
 1. Pulls files from a rolling queue ordered stalest-first by `last_integrity_check_date`; files flagged as suspected bitrot jump the queue
-2. Re-hashes each file and classifies the result: hash match = unchanged; hash and mtime both changed = modified (queued for rescan); hash changed while mtime did not = suspected bitrot (flagged and notified, stored baseline preserved)
+2. Re-hashes each file and classifies the result. A hash match means unchanged. A changed hash and mtime means modified and queues a rescan. A changed hash with an unchanged mtime means suspected bitrot, which is flagged and notified while preserving the stored baseline.
 3. Stamps every processed file, so interrupted or budget-limited runs resume where they left off
 
 **Features**:

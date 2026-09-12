@@ -2,9 +2,7 @@
 
 ## Overview
 
-PixelProbe uses pytest with unit, integration, and top-level feature tests.
-`pytest.ini` sets `testpaths = tests scripts`, so test files under `scripts/`
-(currently `scripts/test_database.py`) are collected too.
+PixelProbe uses pytest with unit, integration, and top-level feature tests. `pytest.ini` sets `testpaths = tests scripts`, so test files under `scripts/` (currently `scripts/test_database.py`) are collected too.
 
 ## Test structure
 
@@ -117,8 +115,7 @@ Markers are declared in `pytest.ini`:
 | `integration` | Integration tests |
 | `timeout` | Sets a per-test execution timeout |
 
-There is no `benchmark` marker and no dedicated benchmark suite;
-`test_performance.py` contains ordinary tests with timing assertions.
+There is no `benchmark` marker and no dedicated benchmark suite; `test_performance.py` contains ordinary tests with timing assertions.
 
 ### Test coverage
 
@@ -131,8 +128,7 @@ pytest -m "not real_media" --cov=pixelprobe --cov-report=html
 # Open htmlcov/index.html in browser
 ```
 
-Coverage targets (aspirational - nothing enforces them; there is no
-`--cov-fail-under` and Codecov runs with `fail_ci_if_error: false`):
+Coverage targets (aspirational - nothing enforces them; there is no `--cov-fail-under` and Codecov runs with `fail_ci_if_error: false`):
 
 - Overall: 80%
 - Core modules (scan_service, media_checker): 90%
@@ -143,11 +139,7 @@ Coverage targets (aspirational - nothing enforces them; there is no
 
 ### Unit tests
 
-Unit tests validate individual components in isolation using mocks and
-fixtures: services (business logic without database/filesystem
-dependencies), repositories against a mocked database, utilities (helper
-functions, validators, decorators), and database model methods and
-properties.
+Unit tests validate components in isolation with mocks and fixtures. They cover services without database or filesystem dependencies, repositories against a mocked database, utilities, and database model methods and properties.
 
 Example:
 ```python
@@ -161,10 +153,7 @@ def test_scan_service_discovery(scan_service, mock_media_files):
 
 ### Integration tests
 
-Integration tests validate API endpoints and full request/response
-cycles: all routes with various input scenarios, access control and
-permissions, real database operations, and 4xx/5xx responses and error
-messages.
+Integration tests validate API endpoints and full request/response cycles: all routes with various input scenarios, access control and permissions, real database operations, and 4xx/5xx responses and error messages.
 
 Example:
 ```python
@@ -182,12 +171,7 @@ def test_scan_endpoint(client, db):
 
 ## Test fixtures
 
-All shared fixtures live in `tests/conftest.py`. There is no `create_app`
-factory in the codebase; the conftest builds its own test application with
-`create_test_app()`, which registers the real blueprints against an
-in-memory SQLite database, disables CSRF, and replicates the `/healthz`,
-`/health`, and `/api/version` routes from `app.py`. This avoids importing
-`app.py` itself (and its PostgreSQL startup) during tests.
+All shared fixtures live in `tests/conftest.py`. There is no `create_app` factory in the codebase. The conftest builds its own test application with `create_test_app()`. It registers the real blueprints against an in-memory SQLite database, disables CSRF, and replicates the `/healthz`, `/health`, and `/api/version` routes from `app.py`. This avoids importing `app.py` and its PostgreSQL startup during tests.
 
 Key fixtures:
 
@@ -202,13 +186,7 @@ Key fixtures:
 | `mock_scan_result` | function | Single ScanResult row with canned values |
 | `tasks_parallel_mod` | function | Imports `pixelprobe.tasks_parallel` with the app/celery circular import stubbed out |
 
-The in-memory SQLite database is shared across the whole session (the `app`
-fixture is session-scoped); the function-scoped `db` fixture creates and
-drops tables around each test. Production runs PostgreSQL only, so
-PostgreSQL-specific behavior (advisory locks, dialect differences) is not
-covered by the local suite; the CI image job runs tests inside the
-production Docker image to catch environment-specific regressions such as
-tool-version changes.
+The in-memory SQLite database is shared across the whole session because the `app` fixture is session-scoped. The function-scoped `db` fixture creates and drops tables around each test. Production runs PostgreSQL only, so the local suite does not cover advisory locks or dialect differences. The CI image job runs tests inside the production Docker image to catch environment-specific regressions such as tool-version changes.
 
 ## Testing best practices
 
@@ -275,16 +253,14 @@ ffmpeg -f lavfi -i testsrc=duration=1:size=320x240:rate=30 \
 
 ### Test database
 
-Tests use an in-memory SQLite database (`sqlite:///:memory:`) created by the
-session-scoped `app` fixture in `tests/conftest.py`:
+Tests use an in-memory SQLite database (`sqlite:///:memory:`) created by the session-scoped `app` fixture in `tests/conftest.py`:
 - Shared across the session; the `db` fixture resets tables per test
 - Same SQLAlchemy models as production
 - No external database or environment variable required
 
 ## Continuous integration
 
-CI is defined in
-[.github/workflows/test.yml](../.github/workflows/test.yml) with two jobs:
+CI is defined in [.github/workflows/test.yml](../.github/workflows/test.yml) with two jobs:
 
 - `test`: runs on every push and pull request across a Python matrix of
   3.10, 3.11, and 3.12 (`actions/checkout@v4`, `actions/setup-python@v5`).
@@ -300,8 +276,7 @@ CI is defined in
   fail soft (zero events rather than exceptions), so this is the job that
   catches regressions from a base-image bump.
 
-CodeQL analysis runs via GitHub's default setup; there is no `codeql.yml`
-workflow file in the repository.
+CodeQL analysis runs via GitHub's default setup; there is no `codeql.yml` workflow file in the repository.
 
 ## Debugging tests
 

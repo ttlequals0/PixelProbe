@@ -198,7 +198,7 @@ def _start_retry_thread(redis_client, lock_key, lock_value,
 
 
 def initialize_scheduler_with_lock(app, scheduler):
-    """Initialize the scheduler using a Redis distributed lock (or file lock fallback).
+    """Initialize the scheduler using a Redis distributed lock.
 
     Returns True if the scheduler was initialized in this process.
     """

@@ -48,9 +48,7 @@ sudo apt-get install -y \
     git curl wget
 ```
 
-PixelProbe supports PostgreSQL 15 through 18; the distro default is fine. For
-PostgreSQL 18 on releases that ship an older version, use the
-[PGDG apt repository](https://www.postgresql.org/download/linux/ubuntu/).
+PixelProbe supports PostgreSQL 15 through 18; the distro default is fine. For PostgreSQL 18 on releases that ship an older version, use the [PGDG apt repository](https://www.postgresql.org/download/linux/ubuntu/).
 
 **macOS:**
 ```bash
@@ -135,20 +133,14 @@ This will:
 4. Start PixelProbe web application
 5. Start Celery worker for background processing
 
-The web and worker containers run as the non-root `pixelprobe` user (UID/GID
-`10001:10001` in the image). Media is mounted read-only. The `./instance`
-bind mount is writable, so create it and assign ownership to the configured
-container UID/GID before starting a fresh deployment:
+The web and worker containers run as the non-root `pixelprobe` user (UID/GID `10001:10001` in the image). Media is mounted read-only. The `./instance` bind mount is writable, so create it and assign ownership to the configured container UID/GID before starting a fresh deployment:
 
 ```bash
 mkdir -p instance
 sudo chown -R 10001:10001 instance
 ```
 
-The Compose file also drops Linux capabilities, enables `no-new-privileges`,
-and applies CPU, memory, and PID limits. Override those limits with the
-`APP_CPUS`, `APP_MEMORY`, `APP_PIDS_LIMIT`, `WORKER_CPUS`, `WORKER_MEMORY`, and
-`WORKER_PIDS_LIMIT` variables when the host has a different capacity.
+The Compose file also drops Linux capabilities, enables `no-new-privileges`, and applies CPU, memory, and PID limits. Override those limits with the `APP_CPUS`, `APP_MEMORY`, `APP_PIDS_LIMIT`, `WORKER_CPUS`, `WORKER_MEMORY`, and `WORKER_PIDS_LIMIT` variables when the host has a different capacity.
 
 ### 4. Verify containers are running
 
@@ -288,9 +280,7 @@ Or for production with Gunicorn:
 gunicorn -c gunicorn.conf.py app:app
 ```
 
-Use the bundled `gunicorn.conf.py` rather than bare flags like `-w 4` - the
-config file also sets the 300-second worker timeout that long scan requests
-need.
+Use the bundled `gunicorn.conf.py` rather than bare flags like `-w 4` - the config file also sets the 300-second worker timeout that long scan requests need.
 
 ## First-time setup
 
@@ -338,8 +328,7 @@ Should return:
 {"status": "ok", "version": "<running version>"}
 ```
 
-Note: `/health` also exists but requires authentication; `/healthz` is the
-unauthenticated liveness probe used by the container healthcheck.
+Note: `/health` also exists but requires authentication; `/healthz` is the unauthenticated liveness probe used by the container healthcheck.
 
 ### 3. Check Celery worker
 

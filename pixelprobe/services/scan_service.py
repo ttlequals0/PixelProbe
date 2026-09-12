@@ -851,7 +851,7 @@ class ScanService:
         # Skip retry for large pending sets -- they'll be picked up on the next scan.
         # Loading 90K+ ORM objects blocks completion for hours.
         if pending_count > 1000:
-            logger.info(f"{pending_count} files still pending after scan -- will be processed on next scheduled run")
+            logger.info(f"{pending_count} files remain pending for a later scan")
             return pending_count
 
         pending_files = pending_query.limit(1000).all()

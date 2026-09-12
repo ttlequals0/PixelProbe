@@ -1245,7 +1245,7 @@ def delete_scan_report(report_id):
     try:
         db.session.delete(report)
         db.session.commit()
-        return jsonify({'message': 'Report deleted successfully', 'report_id': report_id})
+        return jsonify({'message': 'Report deleted', 'report_id': report_id})
     except Exception as e:
         logger.error(f"Failed to delete report: {e}", exc_info=True)
         db.session.rollback()

@@ -8,6 +8,7 @@ Tests for security fixes in v2.5.64+:
 import os
 import sys
 import hashlib
+import logging
 import pytest
 import shutil
 import threading
@@ -519,6 +520,21 @@ class TestMediaServingBoundaries:
 
 
 class TestSecurityAuditPersistence:
+    def test_routine_audit_log_omits_sensitive_details(self, app, caplog):
+        from pixelprobe.models import db
+        from pixelprobe.utils.security import AuditLogger
+        secret = 'capability-secret-must-not-log'
+        with app.app_context():
+            db.create_all()
+            with caplog.at_level(logging.INFO, logger='security_audit'):
+                AuditLogger.log_action(
+                    'notification_provider_updated',
+                    details={'token': secret, 'webhook_url': f'https://example.test/{secret}'},
+                )
+        assert secret not in caplog.text
+        assert 'notification_provider_updated' in caplog.text
+
+
     def test_actor_event_survives_routine_log_purge(self, app):
         from pixelprobe.models import db, LogEntry, SecurityAuditEvent, User
         from pixelprobe.utils.security import AuditLogger
@@ -561,6 +577,19 @@ class TestSecurityAuditPersistence:
 
             event = SecurityAuditEvent.query.filter_by(actor_id=actor_id).one()
             assert event.action == 'login_failed'
+
+
+class TestDirectoryValidation:
+    def test_fails_closed_without_active_roots(self, tmp_path, monkeypatch):
+        from pixelprobe.utils.security import (
+            PathTraversalError,
+            validate_admin_root_registration,
+            validate_directory_path,
+        )
+        monkeypatch.setattr('pixelprobe.utils.security.get_allowed_scan_paths', lambda: [])
+        with pytest.raises(PathTraversalError, match='No allowed scan paths'):
+            validate_directory_path(str(tmp_path))
+        assert validate_admin_root_registration(str(tmp_path)) == str(tmp_path.resolve())
 
 
 class TestCapabilityUrlLogRedaction:

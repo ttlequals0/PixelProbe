@@ -70,7 +70,8 @@ def _validate_scan_roots(data):
     try:
         return validate_maintenance_scan_roots(data['scan_roots']), None
     except (PathTraversalError, ValueError) as exc:
-        return None, str(exc)
+        logger.info('Rejected maintenance scan roots: %s', type(exc).__name__)
+        return None, 'Invalid scan roots'
 
 
 def _required_mounts_available(paths):

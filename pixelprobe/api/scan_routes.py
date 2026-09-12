@@ -388,7 +388,7 @@ def scan_file():
             from pixelprobe.tasks_parallel import dispatch_scan_task_intent
             if not dispatch_scan_task_intent(intent):
                 return {'status': 'pending_dispatch', 'scan_id': scan_id, 'task_id': task_id,
-                        'message': 'Scan intent is saved and will be retried automatically'}, 202
+                        'message': 'Scan request saved. Dispatch will retry automatically.'}, 202
 
             logger.info(f"Queued single file scan task {task_id} for {validated_path}")
 
@@ -397,7 +397,7 @@ def scan_file():
                 'scan_id': scan_id,
                 'task_id': task_id,
                 'file_path': validated_path,
-                'message': 'Single file scan queued successfully using Celery task queue',
+                'message': 'Single-file scan queued',
                 'celery_enabled': True
             }
         else:
@@ -980,7 +980,7 @@ def scan_files_parallel():
                 from pixelprobe.tasks_parallel import dispatch_scan_task_intent
                 if not dispatch_scan_task_intent(intent):
                     return {'status': 'pending_dispatch', 'scan_id': scan_id, 'task_id': task_id,
-                            'message': 'Scan intent is saved and will be retried automatically'}, 202
+                            'message': 'Scan request saved. Dispatch will retry automatically.'}, 202
 
                 logger.info(f"Queued file scan task {task_id} for {len(file_paths)} files with {num_workers} workers")
                 
@@ -989,7 +989,7 @@ def scan_files_parallel():
                     'scan_id': scan_id,
                     'task_id': task_id,
                     'file_count': len(file_paths),
-                    'message': 'File scan queued successfully using Celery task queue',
+                    'message': 'File scan queued',
                     'celery_enabled': True
                 }
             else:

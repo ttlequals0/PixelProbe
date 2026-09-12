@@ -1,12 +1,8 @@
 # Database schema
 
-PixelProbe uses PostgreSQL exclusively (since v2.2.0; SQLite is not supported).
-Models live in `pixelprobe/models.py`. Tables are created by
-`db.create_all()` at startup and evolved by idempotent migrations in
-`pixelprobe/migrations/startup.py` (see Migration notes below).
+PixelProbe uses PostgreSQL exclusively (since v2.2.0; SQLite is not supported). Models live in `pixelprobe/models.py`. Tables are created by `db.create_all()` at startup and evolved by idempotent migrations in `pixelprobe/migrations/startup.py` (see Migration notes below).
 
-This page summarizes durable contracts used by operators. Consult the models
-and startup migrations for the complete current schema.
+This page summarizes durable contracts used by operators. Consult the models and startup migrations for the complete current schema.
 
 Type notes:
 
@@ -80,8 +76,7 @@ Other important loose references include:
 
 ### ScanResult (`scan_results`)
 
-One row per discovered media file; the largest table (millions of rows on big
-libraries).
+One row per discovered media file; the largest table (millions of rows on big libraries).
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -116,15 +111,11 @@ libraries).
 | deep_scan | Boolean | yes | Legacy, kept for backward compatibility |
 | output_rotation_enabled | Boolean | yes | Per-record rotation override |
 
-Composite indexes declared in the model (`__table_args__`):
-`idx_status_corrupted (scan_status, is_corrupted)`,
-`idx_scan_date_corrupted (scan_date, is_corrupted)`,
-`idx_exists_status (file_exists, scan_status)`.
+Composite indexes declared in the model (`__table_args__`): `idx_status_corrupted (scan_status, is_corrupted)`, `idx_scan_date_corrupted (scan_date, is_corrupted)`, `idx_exists_status (file_exists, scan_status)`.
 
 ### ScanState (`scan_state`)
 
-Progress and lifecycle of a scan run. One row per scan; the active scan has
-`is_active = TRUE`.
+Progress and lifecycle of a scan run. One row per scan; the active scan has `is_active = TRUE`.
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -155,17 +146,11 @@ Progress and lifecycle of a scan run. One row per scan; the active scan has
 | files_added | Integer | no | Default 0 |
 | files_updated | Integer | no | Default 0 |
 
-`last_update` semantics changed in v2.7.3: chunk tasks now heartbeat it
-periodically while working, so it is a liveness signal, not the time the last
-file finished. Stuck-scan detection and stale-scan cleanup
-(`create_new_scan()` deactivates active scans only when `last_update` is older
-than 30 minutes) rely on this.
+`last_update` semantics changed in v2.7.3: chunk tasks now heartbeat it periodically while working, so it is a liveness signal, not the time the last file finished. Stuck-scan detection and stale-scan cleanup (`create_new_scan()` deactivates active scans only when `last_update` is older than 30 minutes) rely on this.
 
 ### ScanChunk (`scan_chunks`)
 
-Unit of work for the chunked scan engine. Chunk tasks outlive the
-orchestrator task; `ScanChunk.has_active()` is the source of truth for
-"scan still running".
+Unit of work for the chunked scan engine. Chunk tasks outlive the orchestrator task; `ScanChunk.has_active()` is the source of truth for "scan still running".
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -264,8 +249,7 @@ Unique constraint: `_type_value_uc (exclusion_type, value)`.
 
 ### ScanSchedule (`scan_schedules`)
 
-Schedules are cron-only (`cron_expression`); there are no interval/period
-columns.
+Schedules are cron-only (`cron_expression`); there are no interval/period columns.
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -284,8 +268,7 @@ columns.
 
 ### HealthcheckConfig (`healthcheck_configs`)
 
-1:1 with a schedule (unique FK, ON DELETE CASCADE). Pings a healthcheck URL
-around scheduled runs.
+1:1 with a schedule (unique FK, ON DELETE CASCADE). Pings a healthcheck URL around scheduled runs.
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -317,8 +300,7 @@ Application-level key/value settings stored in the database.
 
 ## State tables
 
-Both use an integer PK plus a separate UUID string column for external
-reference (the UUID is not the primary key).
+Both use an integer PK plus a separate UUID string column for external reference (the UUID is not the primary key).
 
 ### CleanupState (`cleanup_state`)
 
@@ -409,16 +391,9 @@ reference (the UUID is not the primary key).
 
 ## Immutable run and delivery records
 
-`scan_run_roots` records each requested root and its observed status.
-`scan_run_files` records immutable per-run membership and observed outcomes;
-an absent member list is valid only when root evidence exists. `scan_tasks`
-stores the Celery task identifier, generation, status, dispatch attempts, and
-lease time for one run-owned task.
+`scan_run_roots` records each requested root and its observed status. `scan_run_files` records immutable per-run membership and observed outcomes; an absent member list is valid only when root evidence exists. `scan_tasks` stores the Celery task identifier, generation, status, dispatch attempts, and lease time for one run-owned task.
 
-`scan_notification_outbox` stores one durable terminal-scan event. Its
-`scan_notification_deliveries` rows snapshot a rule and provider destination,
-then retain independent attempts, leases, outcome, error, and delivery time.
-Deleting a provider or rule does not erase an already-snapshotted delivery.
+`scan_notification_outbox` stores one durable terminal-scan event. Its `scan_notification_deliveries` rows snapshot a rule and provider destination, then retain independent attempts, leases, outcome, error, and delivery time. Deleting a provider or rule does not erase an already-snapshotted delivery.
 
 ## Notification tables
 
@@ -453,8 +428,7 @@ Deleting a provider or rule does not erase an already-snapshotted delivery.
 
 ### LogEntry (`log_entries`)
 
-Persistent log storage for the View Logs feature. Indexes are created by
-migration, not by the model.
+Persistent log storage for the View Logs feature. Indexes are created by migration, not by the model.
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -469,9 +443,7 @@ migration, not by the model.
 
 ## Indexes
 
-Single-column indexes declared with `index=True` in the models use
-SQLAlchemy's default naming (`ix_<table>_<column>`). In addition, the
-migrations in `pixelprobe/migrations/startup.py` create these named indexes:
+Single-column indexes declared with `index=True` in the models use SQLAlchemy's default naming (`ix_<table>_<column>`). In addition, the migrations in `pixelprobe/migrations/startup.py` create these named indexes:
 
 `create_performance_indexes()` on `scan_results`:
 
@@ -509,8 +481,7 @@ Other migration-created indexes:
 
 ## Example queries (PostgreSQL)
 
-`is_corrupted` is tri-state, so always decide how NULL (never scanned) should
-be treated.
+`is_corrupted` is tri-state, so always decide how NULL (never scanned) should be treated.
 
 ```sql
 -- Corrupted files not marked as good
@@ -548,8 +519,7 @@ WHERE is_active = TRUE;
 
 ## Migration notes
 
-There is no Alembic. Schema changes are hand-written, idempotent migrations in
-`pixelprobe/migrations/startup.py`, executed at every startup.
+There is no Alembic. Schema changes are hand-written, idempotent migrations in `pixelprobe/migrations/startup.py`, executed at every startup.
 
 To add a column:
 
@@ -584,9 +554,6 @@ Engine options from `pixelprobe/config.py` (`SQLALCHEMY_ENGINE_OPTIONS`):
 | pool_recycle | 3600 s | Recycles idle connections hourly |
 | pool_timeout | 30 s | Wait for a pooled connection |
 
-Pool math must stay under PostgreSQL `max_connections` (default 100):
-4 gunicorn workers x (5 + 10) = 60 maximum for the web app, plus Celery
-prefork children and checker connections. The session timezone is pinned to
-UTC via `connect_args` so naive `TIMESTAMP` columns always hold UTC wall time.
+Pool math must stay under PostgreSQL `max_connections` (default 100): 4 gunicorn workers x (5 + 10) = 60 maximum for the web app, plus Celery prefork children and checker connections. The session timezone is pinned to UTC via `connect_args` so naive `TIMESTAMP` columns always hold UTC wall time.
 
 [< Documentation index](README.md)

@@ -421,7 +421,7 @@ docker exec pixelprobe-redis valkey-cli FLUSHDB
 A sweeper job runs every 5 minutes and handles stalled scans automatically. Its branches, in order:
 
 1. **Backstop finalize:** if all chunks completed but the finalize step died, the sweeper finishes the scan.
-2. **Revival:** if the heartbeat is older than `CHUNK_REVIVE_STALENESS_SECS` (default 600 seconds) and the scan still has active chunk rows, the sweeper re-dispatches the orphaned chunks instead of crashing the scan (up to 3 attempts per scan). Discovery-phase scans are not revivable.
+2. **Revival:** if the heartbeat is older than `CHUNK_REVIVE_STALENESS_SECS` (default 600 seconds) and the scan still has active chunk rows, the sweeper re-dispatches orphaned chunks. It does not crash the scan. It makes up to 3 attempts per scan. Discovery-phase scans are not revivable.
 3. **Crash:** the scan is marked crashed when any of these hold:
    - no update for more than 30 minutes, or
    - no update for more than 5 minutes and the Celery task is gone, or
@@ -434,7 +434,7 @@ Log lines to grep for:
 docker-compose logs celery-worker pixelprobe | grep -E "Revived scan|Marking stuck scan|Reclaimed"
 ```
 
-At startup, active scans are given `STUCK_SCAN_STARTUP_GRACE_SECS` (default 1800 seconds) before being marked crashed, so a scan that was healthy just before a restart is left running for the sweeper to revive.
+At startup, active scans get `STUCK_SCAN_STARTUP_GRACE_SECS`, 1800 seconds by default, before being marked crashed. A scan healthy just before a restart is left running for the sweeper to revive.
 
 ### High false positive rate
 
@@ -592,10 +592,7 @@ volumes:
 
 4. **Check the active worker settings:**
 
-`BATCH_SIZE` affects only the legacy media-checker discovery lookup. It does
-not tune parallel discovery inserts or scan chunk commits. `MAX_OUTPUT_SIZE`
-and `OUTPUT_ROTATION_ENABLED` must be set on the `celery-worker` service to
-bound stored scan output.
+`BATCH_SIZE` affects only the legacy media-checker discovery lookup. It does not tune parallel discovery inserts or scan chunk commits. `MAX_OUTPUT_SIZE` and `OUTPUT_ROTATION_ENABLED` must be set on the `celery-worker` service to bound stored scan output.
 
 5. **Allocate more resources:**
 ```yaml
@@ -705,8 +702,7 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c \
 
 2. **Reset admin password** (if locked out):
 
-First-run setup only works before any user exists. If a user already exists,
-generate a bcrypt hash and update the users table directly:
+First-run setup only works before any user exists. If a user already exists, generate a bcrypt hash and update the users table directly:
 ```bash
 # Generate a bcrypt hash for the new password
 docker exec pixelprobe-app python -c \

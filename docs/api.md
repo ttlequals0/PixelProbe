@@ -61,27 +61,17 @@ response = requests.get('http://localhost:5000/api/scan-status', headers=headers
 
 ### Session and token revocation
 
-Changing a password increments the user's session generation, invalidates earlier
-login and remember cookies, and starts a new non-remembered session in the
-current browser. It does not revoke API tokens. Revoke a token through `DELETE
-/api/tokens/{id}`, let it expire, or deactivate its owner. Shared token
-validation also rejects tokens whose owner is inactive.
+Changing a password increments the user's session generation, invalidates earlier login and remember cookies, and starts a new non-remembered session in the current browser. It does not revoke API tokens. Revoke a token through `DELETE /api/tokens/{id}`, let it expire, or deactivate its owner. Shared token validation also rejects tokens whose owner is inactive.
 
-The token migration hashes existing raw token values before removing the
-plaintext column. Existing client token values remain valid after that upgrade;
-they are not rotated automatically. Treat token revocation as an independent
-operator action and audit requirement.
+The token migration hashes existing raw token values before removing the plaintext column. Existing client token values remain valid after that upgrade; they are not rotated automatically. Treat token revocation as an independent operator action and audit requirement.
 
 ### Internal header (not for integrations)
 
-An `X-Internal-Secret` request header exists solely for the scheduler's HTTP
-self-call inside the container. The secret is generated at startup and never
-exposed; do not build integrations against it - use API tokens instead.
+An `X-Internal-Secret` request header exists solely for the scheduler's HTTP self-call inside the container. The secret is generated at startup and never exposed; do not build integrations against it - use API tokens instead.
 
 ## Rate limiting
 
-Only individually decorated endpoints are rate limited; there are
-**no default/global limits**. The decorated limits are:
+Only individually decorated endpoints are rate limited; there are **no default/global limits**. The decorated limits are:
 
 | Endpoints | Limit |
 |-----------|-------|
@@ -216,7 +206,7 @@ Get paginated scan results with optional filters.
 - `bitrot_suspected` (string): Filter by suspected bitrot: `all`, `true`, `false`
 - `search` (string): Case-insensitive substring match on file path
 - `path` (string): Restrict results to one configured scan path (must exactly match a configured path)
-- `sort_field` (string): Field to sort by (default: `scan_date`). Valid values: `scan_date`, `file_path`, `file_size`, `file_type`, `scan_status`, `status`, `is_corrupted`, `marked_as_good`, `scan_tool`, `corruption_details`, `discovered_date`, `last_modified` (`status` sorts by corruption status; unknown values fall back to `scan_date` descending)
+- `sort_field` (string): Field to sort by (default: `scan_date`). Valid values: `scan_date`, `file_path`, `file_size`, `file_type`, `scan_status`, `status`, `is_corrupted`, `marked_as_good`, `scan_tool`, `corruption_details`, `discovered_date`, `last_modified`. `status` sorts by corruption status. Unknown values fall back to `scan_date` descending.
 - `sort_order` (string): `asc` or `desc` (default: `desc`)
 
 `per_page=-1` returns every matching row in a single response (no pagination).
@@ -891,11 +881,7 @@ The endpoints below are not documented in detail above; methods and one-line pur
 | PUT | `/api/settings` | Save one or more settings. Send a JSON object of keys and values |
 | DELETE | `/api/settings/{key}` | Restore one setting to its default |
 
-Values are validated against the type and range declared for each setting. A `PUT`
-carrying a bad value is rejected whole, with a message naming the setting, and
-nothing is written. Settings take effect on the next file scanned, including in a
-scan that is already running. Every key and default is listed in
-[Configuration](configuration.md#scanner-settings).
+Values are validated against the type and range declared for each setting. A `PUT` carrying a bad value is rejected whole, with a message naming the setting, and nothing is written. Settings take effect on the next file scanned, including in a scan that is already running. Every key and default is listed in [Configuration](configuration.md#scanner-settings).
 
 ```bash
 # Report only freezes of 10 seconds or longer

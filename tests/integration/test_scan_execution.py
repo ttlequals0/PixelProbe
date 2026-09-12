@@ -13,7 +13,7 @@ from uuid import uuid4
 from flask import Flask
 from sqlalchemy import create_engine, text
 
-from pixelprobe.models import db, ScanState, ScanResult, ScanTask
+from pixelprobe.models import db, ScanConfiguration, ScanState, ScanResult, ScanTask
 from pixelprobe.services.scan_engine import claim_scan_slot
 from pixelprobe.services.scan_service import ScanService
 
@@ -64,6 +64,7 @@ class TestScanExecution:
     def test_scan_prevents_concurrent_execution(self, authenticated_client, app, db, test_data_dir):
         """Test that only one scan can run at a time"""
         with app.app_context():
+            db.session.add(ScanConfiguration(path=test_data_dir['test_dir'], is_active=True))
             # Create an active scan
             active_scan = ScanState(
                 scan_id='test-scan-1',
@@ -166,6 +167,7 @@ class TestScanExecution:
     def test_scan_parallel_endpoint_execution(self, authenticated_client, app, db, test_data_dir):
         """Test the parallel scan endpoint can actually execute"""
         with app.app_context():
+            db.session.add(ScanConfiguration(path=test_data_dir['test_dir'], is_active=True))
             # Ensure no active scans
             ScanState.query.update({'is_active': False})
             db.session.commit()
@@ -184,6 +186,7 @@ class TestScanExecution:
     def test_scan_parallel_v2_endpoint_execution(self, authenticated_client, app, db, test_data_dir):
         """Test the enhanced parallel scan v2 endpoint"""
         with app.app_context():
+            db.session.add(ScanConfiguration(path=test_data_dir['test_dir'], is_active=True))
             # Ensure no active scans
             ScanState.query.update({'is_active': False})
             db.session.commit()

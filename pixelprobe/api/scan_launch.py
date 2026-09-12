@@ -67,13 +67,13 @@ def launch_directory_scan(validated_dirs, force_rescan=False, source=None, scan_
     from pixelprobe.tasks_parallel import dispatch_scan_task_intent
     if not dispatch_scan_task_intent(intent):
         return {'status': 'pending_dispatch', 'scan_id': scan_id, 'task_id': task_id,
-                'message': 'Scan intent is saved and will be retried automatically'}, 202
+                'message': 'Scan request saved. Dispatch will retry automatically.'}, 202
 
     logger.info(f"Queued scan orchestrator {task_id} for scan_id {scan_id}")
     return {
         'status': 'queued',
         'scan_id': scan_id,
         'task_id': task_id,
-        'message': 'Scan queued successfully using Celery task queue',
+        'message': 'Scan queued',
         'celery_enabled': True
     }, 200

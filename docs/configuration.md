@@ -140,7 +140,7 @@ CLEANUP_SCHEDULE=interval:days:7             # Every 7 days
 **Data retention notes:**
 - Automated cleanup runs daily via the built-in MediaScheduler (APScheduler): data retention at 04:00, log retention at 03:00
 - `SCAN_OUTPUT_RETENTION_DAYS` is currently not used (scan results kept forever)
-- Log retention days is not an environment variable: it is stored in the `app_configs` database table (default 30) and changed via the UI (System > View Logs) or API (`PUT /api/logs/retention`)
+- Log retention days are stored in the `app_configs` database table, not an environment variable. The default is 30 days. Change it through System > View Logs or `PUT /api/logs/retention`.
 
 ### Advanced variables
 
@@ -165,27 +165,13 @@ Rarely-changed knobs with sensible defaults.
 | `ORPHAN_CLEANUP_ABORT_FLOOR` | `100` | Minimum count of kept records before the run's message calls out a possible storage outage |
 | `ORPHAN_CLEANUP_MAX_DELETE_FRACTION` | `0.5` | Call out a possible outage when this fraction of the files checked could not be confirmed as deleted |
 
-Orphan cleanup confirms each missing file before deleting its record, by reading
-the file's own directory and finding other files in it. Something is there, so
-this storage is present and the file is not.
+Orphan cleanup confirms each missing file before deleting its record, by reading the file's own directory and finding other files in it. A nonempty listing is evidence that the directory is available and supports treating the file as absent.
 
-A folder holding one film has nothing left to say once you delete it, so the
-question moves up a level: the parent has to list folders, and one of those has
-to hold a file PixelProbe recorded. That is the library answering. A listing
-alone proves nothing, since files written to a mountpoint while it was unmounted
-list just as well, but recorded files could not have come from them.
+A folder holding one film has nothing left to say once you delete it. The question moves up a level: the parent lists folders, and one must hold a file PixelProbe recorded. That is evidence that the library is available, not proof of mount identity. Enable `require_mount=true` to compare the filesystem type, source, and mount root with the administrator-approved baseline.
 
-Nothing above answers for a tree that has gone entirely, and those records are
-kept and counted. Files that have become readable again since the sweep are left
-alone.
+Nothing above answers for a tree that has gone entirely, and those records are kept and counted. Files that have become readable again since the sweep are left alone.
 
-Confirming that kept records were deleted is your decision. The UI offers it
-after a run that kept records, and the API takes `trust_unreadable_dirs: true` on
-`POST /api/cleanup-orphaned`; it is never set for a scheduled cleanup. A
-confirmed run that finds more unreadable records than the previous run kept
-stops without deleting, since your answer cannot cover storage that went offline
-in between. The two variables above only decide when a run's message calls the
-kept records a likely outage.
+Confirming that kept records were deleted is your decision. The UI offers it after a run that kept records, and the API takes `trust_unreadable_dirs: true` on `POST /api/cleanup-orphaned`; it is never set for a scheduled cleanup. A confirmed run that finds more unreadable records than the previous run kept stops without deleting, since your answer cannot cover storage that went offline in between. The two variables above only decide when a run's message calls the kept records a likely outage.
 
 **Startup and migrations:**
 
@@ -204,9 +190,7 @@ kept records a likely outage.
 
 **Image processing:**
 
-`PILLOW_BLOCKS_MAX` (set to `256` in the bundled compose file) is a
-Pillow-internal memory allocator tuning knob read by the Pillow library
-itself, not by PixelProbe code.
+`PILLOW_BLOCKS_MAX` (set to `256` in the bundled compose file) is a Pillow-internal memory allocator tuning knob read by the Pillow library itself, not by PixelProbe code.
 
 ### Monitoring variables (future)
 
@@ -217,14 +201,9 @@ itself, not by PixelProbe code.
 
 ### Basic configuration
 
-The root [`docker-compose.yml`](../docker-compose.yml) is the authoritative
-deployment configuration. It supplies the current image tag, exact web and
-worker environment forwarding, non-root identity, read-only bind behavior,
-resource limits, and scheduler ownership. Do not copy a second full Compose
-file from documentation.
+The root [`docker-compose.yml`](../docker-compose.yml) is the authoritative deployment configuration. It supplies the current image tag, exact web and worker environment forwarding, non-root identity, read-only bind behavior, resource limits, and scheduler ownership. Do not copy a second full Compose file from documentation.
 
-For a local override, retain the root file's `PUID`, `PGID`, mount mode, and
-service names. For example:
+For a local override, retain the root file's `PUID`, `PGID`, mount mode, and service names. For example:
 
 ```yaml
 services:
@@ -307,7 +286,7 @@ SQLALCHEMY_ENGINE_OPTIONS = {
 }
 ```
 
-**Total connections (worst case):** web app 4 gunicorn workers x (5 base + 10 overflow) = 60, plus CELERY_CONCURRENCY x (5 + 10) from the Celery prefork children, plus ~MAX_WORKERS checker connections
+**Total connections (worst case):** Four Gunicorn workers use 60 connections: 4 x (5 base + 10 overflow). Add `CELERY_CONCURRENCY` x (5 + 10) for Celery prefork children, plus about `MAX_WORKERS` checker connections.
 
 **PostgreSQL max_connections:**
 - Default: 100 connections
@@ -329,24 +308,15 @@ ALTER SYSTEM SET work_mem = '16MB';
 ALTER SYSTEM SET max_parallel_workers_per_gather = 4;
 ```
 
-`work_mem` and `max_parallel_workers_per_gather` take effect after
-`SELECT pg_reload_conf();`, but `shared_buffers` and `max_connections`
-require a full PostgreSQL restart
-(`docker compose restart postgres`) - a reload is not enough. The same
-settings can instead be passed as `command:` flags on the postgres service;
-see [docker-setup.md](docker-setup.md).
+`work_mem` and `max_parallel_workers_per_gather` take effect after `SELECT pg_reload_conf();`. `shared_buffers` and `max_connections` require a full PostgreSQL restart with `docker compose restart postgres`. A reload is not enough. The same settings can instead be passed as `command:` flags on the postgres service. See [docker-setup.md](docker-setup.md).
 
 ## Performance tuning
 
-The values in this section are operator starting points, not benchmark results.
-Measure CPU, memory, database connections, and media storage behavior on the
-library that will run the deployment before increasing concurrency.
+The values in this section are operator starting points, not benchmark results. Measure CPU, memory, database connections, and media storage behavior on the library that will run the deployment before increasing concurrency.
 
 ### Recommended settings by system size
 
-`BATCH_SIZE` is omitted from these profiles because it does not tune parallel
-discovery inserts or scan chunk commits. Leave its legacy lookup default at
-`100` unless investigating that specific code path.
+`BATCH_SIZE` is omitted from these profiles because it does not tune parallel discovery inserts or scan chunk commits. Leave its legacy lookup default at `100` unless investigating that specific code path.
 
 #### Small library (< 10,000 files)
 ```bash
@@ -516,9 +486,7 @@ reports and scan states immediately.
 
 ## Notification providers
 
-Notifications are configured through the API, not environment variables. A
-*provider* is where messages go; a *rule* maps an event to a provider. Provider
-types are `pushover`, `ntfy`, `webhook`, and `email`.
+Notifications are configured through the API, not environment variables. A *provider* is where messages go; a *rule* maps an event to a provider. Provider types are `pushover`, `ntfy`, `webhook`, and `email`.
 
 Event types available to rules are `scan_completed` and `bitrot_suspected`.
 
@@ -584,7 +552,7 @@ curl -X POST http://localhost:5000/api/notifications/rules \
 
 PixelProbe includes SSRF protection that blocks outbound requests to private/reserved IP ranges. If you use internal services for healthchecks, notifications (ntfy, webhooks), or similar integrations that resolve to private IPs, you can allowlist them:
 
-Email (SMTP) notification providers are the one exception and need no allowlist entry: a self-hosted relay is normally on localhost, a Docker network or the LAN, so private, LAN and loopback SMTP hosts are permitted by default. Cloud-metadata and link-local addresses are still refused for SMTP.
+Email (SMTP) notification providers are the one exception and need no allowlist entry. A self-hosted relay is normally on localhost, a Docker network, or the LAN. Private, LAN, and loopback SMTP hosts are permitted by default. Cloud-metadata and link-local addresses are still refused for SMTP.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -716,14 +684,9 @@ See [troubleshooting.md](troubleshooting.md) for solutions to common configurati
 
 ## Scanner settings
 
-These are edited under **System > Tunables** in the web interface, or through
-`GET`, `PUT` and `DELETE` on `/api/settings`. They are stored in the database, so a
-change reaches a running scan without a restart and survives a container rebuild.
+These are edited under **System > Tunables** in the web interface, or through `GET`, `PUT` and `DELETE` on `/api/settings`. They are stored in the database, so a change reaches a running scan without a restart and survives a container rebuild.
 
-Each one used to be an environment variable. On first start after upgrading, any of
-those variables still set in your environment is copied into the database once, so
-nothing changes under you. After that the stored value wins and the variable is
-ignored. Removing a setting through the API restores its default.
+Each one used to be an environment variable. On first start after upgrading, any of those variables still set in your environment is copied into the database once, so nothing changes under you. After that the stored value wins and the variable is ignored. Removing a setting through the API restores its default.
 
 ### Detection
 

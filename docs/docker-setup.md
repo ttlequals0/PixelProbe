@@ -13,18 +13,13 @@ PixelProbe uses 4 main containers:
 | **pixelprobe** | Web UI & API | 5000 | postgres, redis |
 | **celery-worker** | Background processing | None | postgres, redis |
 
-Only the web container publishes a port to the host. postgres and redis are
-reachable solely on the internal compose network.
+Only the web container publishes a port to the host. postgres and redis are reachable solely on the internal compose network.
 
 ## Effective Docker Compose file
 
-[`docker-compose.yml`](../docker-compose.yml) in the repository root is the
-only supported deployment file. It defines the current image tag, non-root
-identity, read-only media bind, writable runtime paths, resource limits,
-cookie settings, and scheduler ownership. Do not copy older Compose examples.
+[`docker-compose.yml`](../docker-compose.yml) in the repository root is the only supported deployment file. It defines the current image tag, non-root identity, read-only media bind, writable runtime paths, resource limits, cookie settings, and scheduler ownership. Do not copy older Compose examples.
 
-Use a small override file only for local changes. It must preserve the same
-`PUID:PGID` and read-only media mount for both application services.
+Use a small override file only for local changes. It must preserve the same `PUID:PGID` and read-only media mount for both application services.
 
 ```yaml
 services:
@@ -84,9 +79,7 @@ celery-worker:
     replicas: 3  # Run 3 worker containers
 ```
 
-Note: remove the `container_name:` line from the service before using
-`replicas` or `docker compose up --scale` - container names must be unique,
-so a fixed name prevents starting more than one instance.
+Note: remove the `container_name:` line before using `replicas` or `docker compose up --scale`. Container names must be unique, so a fixed name prevents more than one instance from starting.
 
 Or increase concurrency in a single container:
 
@@ -97,9 +90,7 @@ environment:
 
 ### Performance tuning
 
-Adjust these settings based on your system. They are operator starting points,
-not measured throughput or memory guarantees. Validate them against the media,
-storage, and database used by the deployment.
+Adjust these settings based on your system. They are operator starting points, not measured throughput or memory guarantees. Validate them against the media, storage, and database used by the deployment.
 
 | Setting | Default | Description | Recommendation |
 |---------|---------|-------------|----------------|
@@ -110,8 +101,7 @@ storage, and database used by the deployment.
 
 ### PostgreSQL tuning
 
-There is no PixelProbe environment variable for PostgreSQL memory; tune the
-database on the `postgres` service itself, for example:
+There is no PixelProbe environment variable for PostgreSQL memory; tune the database on the `postgres` service itself, for example:
 
 ```yaml
 postgres:
@@ -123,10 +113,7 @@ postgres:
         memory: 4G
 ```
 
-Rule of thumb: `shared_buffers` about 25% of the container's memory limit,
-`effective_cache_size` about 75%. [configuration.md](configuration.md) shows
-an `ALTER SYSTEM` variant that changes the same settings on a running
-database.
+Rule of thumb: set `shared_buffers` to about 25% of the container's memory limit and `effective_cache_size` to about 75%. [configuration.md](configuration.md) shows an `ALTER SYSTEM` variant for a running database.
 
 ## Volume mounts
 
@@ -171,7 +158,7 @@ Or use environment variables:
 user: "${PUID:-10001}:${PGID:-10001}"
 ```
 
-If the web app and Celery worker run as different users, the worker gets "No valid files provided" errors even though files exist, because it can't read the mounted media directories.
+If the web app and Celery worker run as different users, the worker may not read the mounted media directories. It then reports "No valid files provided" even when the files exist.
 
 ### Database persistence
 
@@ -292,24 +279,11 @@ tar -czf pixelprobe_config_$(date +%Y%m%d).tar.gz docker-compose.yml .env
 
 ## PostgreSQL 15 to 18 migration (required for v2.7.0+)
 
-Starting with v2.7.0 the compose file defaults to `postgres:18-alpine`.
-PostgreSQL data directories are NOT portable across major versions: an
-existing `postgres_data` volume created by PostgreSQL 15 will refuse to start
-on the 18 image (the container crash-loops with a version mismatch error).
-Migrate BEFORE switching to the new compose file. If you are not ready to
-migrate, pin `image: postgres:15-alpine` in your compose file - the app works
-with both versions.
+Starting with v2.7.0 the compose file defaults to `postgres:18-alpine`. PostgreSQL data directories are not portable across major versions. A `postgres_data` volume created by PostgreSQL 15 will refuse to start on the 18 image and the container will crash-loop with a version mismatch error. Migrate before switching to the new compose file. If you are not ready to migrate, pin `image: postgres:15-alpine`; the app works with both versions.
 
-Also note: the postgres:18+ Docker images changed the expected volume mount
-point from `/var/lib/postgresql/data` to `/var/lib/postgresql` (data now lives
-in a major-version subdirectory so future upgrades can use `pg_upgrade
---link`). The 18 image refuses to start with a volume mounted at the old
-`/data` path. The bundled docker-compose.yml already uses the new mount; if
-you maintain your own compose file, update the postgres volume line to
-`- postgres_data:/var/lib/postgresql`.
+The postgres:18+ Docker images changed the expected volume mount from `/var/lib/postgresql/data` to `/var/lib/postgresql`. Data now lives in a major-version subdirectory so future upgrades can use `pg_upgrade --link`. The 18 image refuses a volume mounted at the old `/data` path. The bundled docker-compose.yml already uses the new mount. If you maintain your own compose file, update the postgres volume line to `- postgres_data:/var/lib/postgresql`.
 
-Downtime for the migration is roughly the dump plus restore time (a few
-minutes for typical libraries).
+Downtime for the migration is roughly the dump plus restore time (a few minutes for typical libraries).
 
 ```bash
 # 1. Dump while the OLD stack is still running
@@ -344,7 +318,4 @@ docker-compose up -d
 docker exec pixelprobe-postgres psql -U pixelprobe -d pixelprobe -c "SELECT COUNT(*) FROM scan_results;"
 ```
 
-Note: your compose project name may prefix the volume (e.g.
-`pixelprobe_postgres_data`); check with `docker volume ls`. Once you have
-verified the app against PostgreSQL 18, the `_pg15_backup` volume and the
-dump file can be deleted.
+Note: your compose project name may prefix the volume (e.g. `pixelprobe_postgres_data`); check with `docker volume ls`. Once you have verified the app against PostgreSQL 18, the `_pg15_backup` volume and the dump file can be deleted.

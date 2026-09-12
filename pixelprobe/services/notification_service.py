@@ -763,7 +763,7 @@ class NotificationService:
             Tuple of (success: bool, error_message: Optional[str])
         """
         test_title = "PixelProbe Test Notification"
-        test_message = "This is a test notification from PixelProbe. If you receive this, your notification provider is configured correctly."
+        test_message = "PixelProbe test notification. Receiving it confirms this provider is configured."
 
         return self.send_notification(
             provider_type=provider_type,

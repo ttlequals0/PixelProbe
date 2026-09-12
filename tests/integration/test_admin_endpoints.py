@@ -245,7 +245,7 @@ class TestExclusionEndpoints:
             response = authenticated_client.post('/api/exclusions/path',
                 json={'item': '/test/excluded/path'})
             assert response.status_code == 200
-            assert 'Path added successfully' in response.get_json()['message']
+            assert 'Path added' in response.get_json()['message']
             
             # Verify exclusion was created in database
             exclusion = Exclusion.query.filter_by(
@@ -263,7 +263,7 @@ class TestExclusionEndpoints:
             response = authenticated_client.post('/api/exclusions/extension',
                 json={'item': '.tmp'})
             assert response.status_code == 200
-            assert 'Extension added successfully' in response.get_json()['message']
+            assert 'Extension added' in response.get_json()['message']
             
             # Verify exclusion was created in database
             exclusion = Exclusion.query.filter_by(
@@ -311,7 +311,7 @@ class TestExclusionEndpoints:
             response = authenticated_client.delete('/api/exclusions/path',
                 json={'item': '/test/path'})
             assert response.status_code == 200
-            assert 'Path removed successfully' in response.get_json()['message']
+            assert 'Path removed' in response.get_json()['message']
             
             # Verify it was soft deleted
             exclusion = Exclusion.query.filter_by(
@@ -391,7 +391,7 @@ class TestIgnoredPatternsEndpoints:
             # Delete pattern
             response = authenticated_client.delete(f'/api/ignored-patterns/{pattern_id}')
             assert response.status_code == 200
-            assert 'deleted successfully' in response.get_json()['message']
+            assert 'Pattern deleted' in response.get_json()['message']
             
             # Verify soft deleted
             pattern = db.session.get(IgnoredErrorPattern, pattern_id)

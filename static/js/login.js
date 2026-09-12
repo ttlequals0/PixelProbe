@@ -110,7 +110,7 @@
                 const data = await response.json();
 
                 if (response.ok) {
-                    successDiv.textContent = data.message || 'Login successful!';
+                    successDiv.textContent = data.message || 'Signed in.';
                     successDiv.style.display = 'block';
 
                     // Redirect to main page after a short delay
@@ -123,9 +123,8 @@
                         setupMode = true;
                         document.getElementById('firstRunNotice').style.display = 'block';
                         document.getElementById('firstRunNotice').innerHTML =
-                            '<strong>First-Time Setup</strong><br>' +
-                            'The admin account exists but needs a password. ' +
-                            'Please enter a new password (minimum 8 characters).';
+                            '<strong>First-time setup</strong><br>' +
+                            'Set an admin password with at least 8 characters.';
                         document.getElementById('passwordRequirements').style.display = 'block';
                         document.getElementById('confirmPasswordGroup').style.display = 'block';
                         document.getElementById('confirmPassword').setAttribute('required', 'required');
@@ -140,7 +139,7 @@
                     }
                 }
             } catch (error) {
-                errorDiv.textContent = 'Connection failed. Please try again.';
+                errorDiv.textContent = 'Could not connect. Try again.';
                 errorDiv.style.display = 'block';
                 console.error('Login error:', error);
             } finally {

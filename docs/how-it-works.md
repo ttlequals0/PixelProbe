@@ -272,7 +272,7 @@ api/
   - Process file discovery operations
   - Handle cleanup operations
   - Report progress to Redis
-  - Run APScheduler for scheduled tasks (leader election via a Redis lock: `SET NX` with a per-process uuid value, 60s TTL, refreshed by a heartbeat that atomically compares the value before extending the expiry)
+  - Run APScheduler for scheduled tasks. A Redis `SET NX` lock uses a per-process UUID and a 60-second TTL. A heartbeat extends the lease only after atomically confirming ownership.
 - **Configuration**:
   - Started via `python celery_worker.py`, which consumes the `pixelprobe` queue with `--max-tasks-per-child 1000`, a 2GB `--max-memory-per-child` limit, and `--without-gossip/--without-mingle/--without-heartbeat`
   - Default: 4 concurrent workers
@@ -367,9 +367,9 @@ A directory scan moves through the following steps:
 | <= 10,000           | 500 files    |
 | larger              | 1,000 files  |
 
-**Step 3: Fan-out** (phase `scanning`). Celery task ids for every chunk are pre-assigned and committed to the database BEFORE dispatch, so a fast worker can never observe a not-yet-written owner id, and cancellation/ownership checks always have the authoritative id.
+**Step 3: Fan-out** (phase `scanning`). Celery task IDs for every chunk are pre-assigned and committed before dispatch. A fast worker cannot observe an unwritten owner ID, and cancellation checks always have the authoritative ID.
 
-**Step 4: Chunk execution.** Each `process_chunk_task` bulk-claims its chunk's pending rows in one race-free statement (ranges are disjoint by construction), then validates files and commits progress in batches of 100 files.
+**Step 4: Chunk execution.** Each `process_chunk_task` bulk-claims pending rows in one race-free statement. Ranges are disjoint by construction. The task validates files and commits progress in batches of 100 files.
 
 **Step 5: Heartbeat.** Each chunk task (and each discovery task) runs a daemon heartbeat thread that bumps `ScanState.last_update` every `CHUNK_HEARTBEAT_INTERVAL_SECS` (default 120s). This keeps a scan busy on one large file (30-60+ minutes on a single movie) from being mistaken for a dead one by the stuck-scan sweeper.
 
@@ -407,7 +407,7 @@ Chunk task -> PostgreSQL (scan_state + scan_chunks, every 100 files or 60s)
    Redis (scan_progress:{id}) -> API Poll -> Web UI
 ```
 
-PostgreSQL is the source of truth for progress. Chunk tasks commit progress at batch boundaries (every 100 files) or at least every 60 seconds, and mirror each write to Redis as a plain `SET` on the `scan_progress:{id}` key. The scan-status API reads that key with a `GET` (Redis first, database fallback) and the web UI polls the API; there is no pub/sub channel.
+PostgreSQL is the source of truth for progress. Chunk tasks commit progress at batch boundaries, every 100 files, or at least every 60 seconds. They mirror each write to the `scan_progress:{id}` Redis hash with `HSET`. The scan-status API reads Redis first and falls back to the database. The web UI polls the API; there is no pub/sub channel.
 
 ### Result storage flow
 ```
@@ -420,7 +420,7 @@ Media File -> FFmpeg/ImageMagick -> Analysis Result -> PostgreSQL
 
 Each file is validated in `pixelprobe/media_checker.py` (`PixelProbe.scan_file`):
 
-1. **Format detection**: file metadata and MIME type are read via libmagic (with a read timeout so an unreadable file is skipped instead of hanging the scan), and the file is routed by type to the matching checker.
+1. **Format detection**: libmagic reads file metadata and MIME type with a read timeout. An unreadable file is skipped instead of hanging the scan. The file is routed to the matching checker.
 
 2. **Data integrity** (all media types, before any decode): an interrupted download or copy leaves a file at its correct length with regions inside it that were never written. Two steps, and only the second decides:
    - Allocated blocks are compared against nominal size. This is a gate, not a verdict: filesystems with compression or dedup under-allocate healthy files too, so it only decides which files are worth opening
@@ -438,20 +438,20 @@ Each file is validated in `pixelprobe/media_checker.py` (`PixelProbe.scan_file`)
    - ffprobe metadata probe (stream presence, codec, duration)
    - Full remux validation: FFmpeg reads the ENTIRE file with `-map 0 -c copy -f null -` and aggressive error detection to validate container integrity across all streams
    - Enhanced corruption analysis, run for every video:
-     - **Stage 1 - Frame integrity** (always, warning-only): the packet count from a demux-only `ffprobe -count_packets` pass is compared against duration and framerate; a mismatch above 5% is confirmed with a full `-count_frames` decode before a warning is recorded. Never a corruption verdict - container framerate metadata lies on sparse-video and VFR files
+     - **Stage 1 - Frame integrity** (always, warning-only): a demux-only `ffprobe -count_packets` pass is compared against duration and framerate. A mismatch above 5% is confirmed with a full `-count_frames` decode before recording a warning. It is never a corruption verdict because container framerate metadata is unreliable on sparse-video and VFR files.
      - **Stage 2 - Temporal outlier detection** (files > 1GB): sampled decode windows checked for timing anomalies; can mark corrupt or warn
      - **Stage 3 - Multi-point sampling** (files > 5GB): decodes 10s samples at beginning, middle, and end; NEVER marks a file corrupted (seeking produces FFmpeg-version-dependent false positives), results are informational
      - **Stage 4 - Strict error detection** (warnings only): `-err_detect crccheck+bitstream+buffer+explode` over the first 30 seconds; findings are container/muxing warnings, never corruption verdicts
 
 6. **Freeze detection** (videos, separate pass): a full-decode pass through FFmpeg's `freezedetect` filter (with `blackdetect`) finds stretches where the picture stops changing. Finding a freeze is not the verdict, because a held animation cel and a static title card also stop the picture. Each candidate is corroborated against the file itself:
    - Segments overlapping a black section are dropped first, because a real freeze sticks on picture rather than on a fade
-   - A packet probe over the window (a handful of seeks, no decode): if the stream barely has packets where the clock kept running, the segment is **missing content** and the file is marked corrupted
+   - A packet probe over the window (a handful of seeks, no decode): if the stream barely has packets where the clock kept running, the segment is **missing content**. The file is marked corrupted.
    - A decode of just the window: a flood of decoder errors means the picture held because no frames could be produced, which is a **decode failure** and also corruption
    - A freeze with neither signal stopped on purpose and is discounted, with the reason in the transcript. The exception is a single event running past the uncorroborated minimum (default 60 seconds), which stays a warning so a source that recorded a genuinely stuck picture is not silent
 
    Reported frozen time counts overlapping events once and is capped at the runtime. The whole pass can be switched off under System > Tunables.
 
-7. **Dynamic timeouts**: FFmpeg validation timeouts are computed from file size and duration (roughly 3 minutes per GB or ~2x realtime, capped at 2 hours), so large files are neither killed prematurely nor allowed to hang forever.
+7. **Dynamic timeouts**: FFmpeg validation timeouts use file size and duration, roughly 3 minutes per GB or about twice real time, capped at 2 hours. This avoids killing large files early or letting them hang indefinitely.
 
 ## Container interactions
 
@@ -495,7 +495,7 @@ Each file is validated in `pixelprobe/media_checker.py` (`PixelProbe.scan_file`)
 
 ### Scheduler lock
 
-Exactly one process across all containers may run APScheduler. Ownership is claimed via Redis `SET NX` on `pixelprobe:scheduler:lock` with a 60-second TTL. The lock value carries a per-process uuid (hostname/pid are not reliable identity across containers), and a heartbeat thread refreshes the TTL every 30 seconds with an atomic compare-and-expire script that only extends the TTL while this process still holds the lock. A dead holder is recovered by TTL expiry, which standby processes pick up in their retry loop. When Redis is unavailable, a file-based lock is the fallback. `SCHEDULER_ENABLED=false` keeps a process out of the election entirely (used for the web container in multi-container deployments).
+Exactly one process across all containers may run APScheduler. Ownership is claimed via Redis `SET NX` on `pixelprobe:scheduler:lock` with a 60-second TTL. The lock value carries a per-process UUID because hostname and PID are not reliable identities across containers. A heartbeat refreshes the TTL every 30 seconds with an atomic compare-and-expire script. It extends the TTL only while this process still holds the lock. A dead holder is recovered by TTL expiry, which standby processes pick up in their retry loop. Redis is required for scheduler ownership. If the lease is unavailable, dispatch remains paused until it is reacquired. `SCHEDULER_ENABLED=false` keeps a process out of the election entirely, as used for the web container in multi-container deployments.
 
 ### Scheduler jobs
 
@@ -510,7 +510,7 @@ The process holding the lock runs these jobs (plus any user-defined scan schedul
 
 ### Startup migration coordination
 
-Database migrations run at startup under a PostgreSQL advisory lock (`pg_try_advisory_lock`), so with multiple gunicorn workers and containers starting concurrently, exactly one process runs the migrations while the others wait.
+Database migrations run at startup under a PostgreSQL advisory lock (`pg_try_advisory_lock`). When Gunicorn workers and containers start together, one process runs the migrations while the others wait.
 
 ## Logging and observability
 
@@ -549,7 +549,7 @@ If a worker dies mid-scan (container restart, queue loss), the stuck-scan sweepe
 - Chunk rows are still active for the scan
 - Fewer than 3 revival attempts have been made for this scan
 
-`redispatch_orphaned_chunks()` then reclaims each orphaned chunk's unscanned rows back to `pending`, commits a NEW Celery task id BEFORE dispatch (so any ghost delivery of the old task is superseded instead of racing the revival), and re-queues the chunk.
+`redispatch_orphaned_chunks()` reclaims each orphaned chunk's unscanned rows back to `pending` and re-queues the chunk. It commits a new Celery task ID before dispatch. A ghost delivery of the old task is then superseded instead of racing the revival.
 
 ### Stuck scan detection
 
@@ -563,7 +563,7 @@ The sweeper also finalizes scans whose winning chunk died between chunk-complete
 
 ### Duplicate delivery guards
 
-`task_acks_late` means a task lost to a worker crash is redelivered - so chunk tasks guard against duplicates: a delivery against a chunk that is already finished returns `ALREADY_TERMINAL`, and a delivery whose task id no longer matches the chunk's recorded owner (e.g. after a revival re-dispatch) returns `SUPERSEDED`. Either way the stale delivery is a no-op.
+`task_acks_late` means a task lost to a worker crash is redelivered. Chunk tasks therefore guard against duplicates. A delivery against a finished chunk returns `ALREADY_TERMINAL`. A delivery whose task ID no longer matches the recorded owner, such as after a revival re-dispatch, returns `SUPERSEDED`. Either way, the stale delivery is a no-op.
 
 ### Worker crash recovery
 
@@ -681,10 +681,7 @@ deploy:
 
 ## Environment variables
 
-Scanner detection, performance and timeout values are no longer environment
-variables. They are stored in the database and edited under System > Tunables or
-through `/api/settings`, so a change reaches a running scan without a restart.
-See [Configuration](configuration.md#scanner-settings).
+Scanner detection, performance and timeout values are no longer environment variables. They are stored in the database and edited under System > Tunables or through `/api/settings`, so a change reaches a running scan without a restart. See [Configuration](configuration.md#scanner-settings).
 
 
 ### Required

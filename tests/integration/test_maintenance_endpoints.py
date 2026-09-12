@@ -1,5 +1,6 @@
 import pytest
 from pixelprobe.models import db, CleanupState, FileChangesState, ScanConfiguration
+from pixelprobe.utils.security import PathTraversalError
 import time
 
 class TestMaintenanceCancelEndpoints:
@@ -151,6 +152,21 @@ class TestMaintenanceOperationEndpoints:
         assert response.status_code == 400
         with app.app_context():
             assert CleanupState.query.filter_by(is_active=True).count() == 1
+
+    @pytest.mark.parametrize('route', ('/api/cleanup-orphaned', '/api/file-changes'))
+    def test_maintenance_root_validation_does_not_expose_exception_details(
+            self, authenticated_client, monkeypatch, route):
+        def reject_roots(_roots):
+            raise PathTraversalError('/operator/private/media')
+
+        monkeypatch.setattr(
+            'pixelprobe.api.maintenance_routes.validate_maintenance_scan_roots',
+            reject_roots,
+        )
+        response = authenticated_client.post(route, json={'scan_roots': ['/media']})
+
+        assert response.status_code == 400
+        assert response.get_json() == {'error': 'Invalid scan roots'}
     
     def test_cleanup_already_running(self, authenticated_client, app, db, monkeypatch):
         """Test starting cleanup when already running"""

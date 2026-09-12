@@ -24,7 +24,7 @@ All tools and scripts available in PixelProbe v2.8.0+.
 ```bash
 python3 tools/fix_database_schema.py
 ```
-**When to use:** When tables are missing after a failed initialization. Note: it only repairs missing tables; its attempt to re-run migrations silently no-ops (the functions it imports from `app` no longer exist), which is harmless because migrations already run at every startup.
+**When to use:** When tables are missing after a failed initialization. It only repairs missing tables. Its migration call silently no-ops because the imported `app` functions no longer exist. That is harmless because migrations already run at startup.
 
 #### `scripts/fix_database_schema.py`
 **Purpose:** Legacy emergency schema fix script (v2.2.46-era column additions)
@@ -300,7 +300,7 @@ Tools that import the application (everything under `tools/` plus most of `scrip
 - `POSTGRES_PASSWORD` - Database password
 - `SECRET_KEY` - Flask secret key
 
-Legacy exception: `scripts/check_db_integrity.py`, `scripts/create_indexes.py`, and `scripts/test_database.py` are SQLite-era scripts that read a SQLite path from the environment (`DATABASE_PATH`, or `DATABASE_URL` for `create_indexes.py`). They do not work against PostgreSQL.
+Legacy exception: `scripts/check_db_integrity.py`, `scripts/create_indexes.py`, and `scripts/test_database.py` are SQLite-era scripts. They read a SQLite path from `DATABASE_PATH`, or `DATABASE_URL` for `create_indexes.py`. They do not work against PostgreSQL.
 
 ### Script categories
 
@@ -323,5 +323,5 @@ Legacy exception: `scripts/check_db_integrity.py`, `scripts/create_indexes.py`, 
 For issues with any script:
 1. Check the script's docstring for usage
 2. Run with `--help` flag if available
-3. Check application logs via the web UI or `GET /api/logs` (logs are stored in the LogEntry database table); `GET /api/logs/runs` lists scan runs and `GET /api/logs/download` exports logs
+3. Check application logs in the web UI or through `GET /api/logs`. Logs are stored in the `LogEntry` database table. `GET /api/logs/runs` lists scan runs, and `GET /api/logs/download` exports logs.
 4. Report issues at https://github.com/ttlequals0/PixelProbe/issues

@@ -283,7 +283,7 @@ def delete_healthcheck_config(config_id):
 
         logger.info(f"Deleted healthcheck config {config_id} for schedule {schedule_id}")
 
-        return jsonify({'message': 'Healthcheck configuration deleted successfully'}), 200
+        return jsonify({'message': 'Healthcheck configuration deleted'}), 200
 
     except Exception as e:
         db.session.rollback()
@@ -322,14 +322,14 @@ def test_healthcheck(config_id):
             logger.info(f"Test ping successful for healthcheck config {config_id}")
             return jsonify({
                 'success': True,
-                'message': 'Test ping sent successfully',
+                'message': 'Test ping sent',
                 'last_ping_time': config.last_ping_time.isoformat()
             }), 200
         else:
             logger.warning(f"Test ping failed for healthcheck config {config_id}")
             return jsonify({
                 'success': False,
-                'message': 'Test ping failed - check URL and network connectivity',
+                'message': 'Test ping failed. Check the URL and network connection.',
                 'last_ping_time': config.last_ping_time.isoformat()
             }), 200
 

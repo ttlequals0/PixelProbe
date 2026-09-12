@@ -1210,7 +1210,7 @@ class ProgressManager {
             // running (a schedule can start one in this window).
             this._keptRecords = keptCount;
             this.app.showNotification(
-                'Could not start cleanup, it may already be running. Try again shortly.',
+                'Could not start cleanup. It may already be running. Try again shortly.',
                 'error');
         }
     }
@@ -2237,7 +2237,7 @@ class PixelProbeApp {
 
     async recoverStuckScan() {
         try {
-            this.showNotification('Attempting to recover stuck scan...', 'info');
+            this.showNotification('Recovering stuck scan.', 'info');
             const response = await fetch('/api/scan/recovery', {
                 method: 'POST',
                 headers: {
@@ -2250,7 +2250,7 @@ class PixelProbeApp {
             }
 
             const result = await response.json();
-            this.showNotification(result.message || 'Scan recovered successfully', 'success');
+            this.showNotification(result.message || 'Scan recovered', 'success');
 
             // Reload the page to reset the UI
             setTimeout(() => {
@@ -2281,7 +2281,7 @@ class PixelProbeApp {
             const result = await this.api.cleanupOrphaned();
 
             if (result.status === 'started') {
-                this.showNotification('Cleanup started...', 'info');
+                this.showNotification('Cleanup started', 'info');
                 // Start monitoring cleanup progress
                 this.progress.operationType = 'cleanup';
                 // Only a run this person started may ask them to confirm the
@@ -2312,7 +2312,7 @@ class PixelProbeApp {
             const result = await this.api.checkFileChanges();
             
             if (result.status === 'started') {
-                this.showNotification('Integrity scan started...', 'info');
+                this.showNotification('Integrity scan started', 'info');
                 // Start monitoring file changes progress
                 this.progress.operationType = 'file-changes';
                 this.progress.startMonitoring('file-changes');
@@ -3398,8 +3398,8 @@ class PixelProbeApp {
 
         const hasFilter = purgeBody.scan_id || purgeBody.before || purgeBody.level;
         const confirmMsg = hasFilter
-            ? 'Are you sure you want to purge the currently filtered logs? This cannot be undone.'
-            : 'No filters are active. This will purge ALL logs. Are you sure?';
+            ? 'Purge the filtered logs? This cannot be undone.'
+            : 'Purge all logs? This cannot be undone.';
 
         // If no filters, require explicit "purge all" intent
         if (!hasFilter) {
@@ -3757,7 +3757,7 @@ class PixelProbeApp {
         }
     }
     async deleteScanReport(reportId) {
-        if (!confirm('Are you sure you want to delete this report? This action cannot be undone.')) {
+        if (!confirm('Delete this report? This cannot be undone.')) {
             return;
         }
         
@@ -3772,7 +3772,7 @@ class PixelProbeApp {
             if (!response.ok) throw new Error('Failed to delete report');
             
             const result = await response.json();
-            this.showNotification('Report deleted successfully', 'success');
+            this.showNotification('Report deleted', 'success');
             
             // Reload the reports list
             await this.loadScanReports();
@@ -3888,7 +3888,7 @@ class PixelProbeApp {
             return;
         }
 
-        if (!confirm(`Are you sure you want to delete ${this.selectedReports.size} report(s)?`)) {
+        if (!confirm(`Delete ${this.selectedReports.size} report(s)?`)) {
             return;
         }
 
@@ -4024,7 +4024,7 @@ class PixelProbeApp {
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
                 
-                this.showNotification(`${formatUpper} export completed successfully`, 'success');
+                this.showNotification(`${formatUpper} export complete`, 'success');
             } else {
                 throw new Error('Export failed');
             }
@@ -4045,7 +4045,7 @@ class PixelProbeApp {
         }
 
         if (this.table.selectedFiles.size > 10) {
-            if (!confirm(`Are you sure you want to download ${this.table.selectedFiles.size} files?`)) {
+            if (!confirm(`Download ${this.table.selectedFiles.size} files?`)) {
                 return;
             }
         }
@@ -4572,7 +4572,7 @@ class PixelProbeApp {
             });
 
             if (response.ok) {
-                this.showNotification('Schedule updated successfully', 'success');
+                this.showNotification('Schedule updated', 'success');
                 this.closeModal('edit-schedule-modal');
                 await this.loadSchedules();
             } else {
@@ -4604,7 +4604,7 @@ class PixelProbeApp {
     }
 
     async deleteSchedule(scheduleId) {
-        if (!confirm('Are you sure you want to delete this schedule?')) return;
+        if (!confirm('Delete this schedule?')) return;
 
         try {
             const response = await fetch(`/api/schedules/${scheduleId}`, {
@@ -4739,7 +4739,7 @@ class PixelProbeApp {
     }
 
     async deleteHealthcheckConfig(configId) {
-        if (!confirm('Are you sure you want to delete this healthcheck configuration?')) return;
+        if (!confirm('Delete this healthcheck configuration?')) return;
 
         try {
             const response = await fetch(`/api/healthcheck/${configId}`, {
@@ -4765,7 +4765,7 @@ class PixelProbeApp {
             // First check if config exists
             const checkResponse = await fetch(`/api/healthcheck/schedule/${scheduleId}`);
             if (!checkResponse.ok) {
-                this.showNotification('Please save the configuration before testing', 'warning');
+                this.showNotification('Save the configuration before testing.', 'warning');
                 return;
             }
 
@@ -4777,7 +4777,7 @@ class PixelProbeApp {
             const result = await response.json();
 
             if (result.success) {
-                this.showNotification('Test ping sent successfully!', 'success');
+                this.showNotification('Test ping sent.', 'success');
 
                 // Reload config to show updated ping status
                 await this.loadHealthcheckConfig(scheduleId);
@@ -4999,7 +4999,7 @@ class PixelProbeApp {
             if (response.ok) {
                 input.value = '';
                 await this.loadExclusions();
-                this.showNotification(`${type === 'path' ? 'Path' : 'Extension'} excluded successfully`, 'success');
+                this.showNotification(`${type === 'path' ? 'Path' : 'Extension'} excluded`, 'success');
             } else {
                 throw new Error('Failed to add exclusion');
             }
@@ -5151,7 +5151,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 
                 if (response.ok) {
-                    app.showNotification('Schedule created successfully', 'success');
+                    app.showNotification('Schedule created', 'success');
                     app.closeModal('add-schedule-modal');
                     await app.loadSchedules();
                 } else {

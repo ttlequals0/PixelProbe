@@ -264,7 +264,7 @@ def test_provider(provider_id):
         )
 
         if success:
-            return jsonify({'success': True, 'message': 'Test notification sent successfully'}), 200
+            return jsonify({'success': True, 'message': 'Test notification sent'}), 200
         logger.warning("Notification provider %s test failed: %s", provider_id, error)
         return jsonify({'success': False, 'error': 'Test notification failed'}), 400
 

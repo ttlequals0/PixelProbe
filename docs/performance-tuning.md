@@ -1,8 +1,6 @@
 # Performance tuning guide
 
-Configuration values in this guide are operator starting points, not measured
-performance guarantees. Validate memory, CPU, database connections, and media
-storage behavior on the target library before increasing concurrency.
+Configuration values in this guide are operator starting points, not measured performance guarantees. Validate memory, CPU, database connections, and media storage behavior on the target library before increasing concurrency.
 
 ## Environment variables for performance
 
@@ -68,26 +66,18 @@ docker logs pixelprobe-celery-worker | grep -i "scan completed"
 
 ### Worker recycling
 
-Two limits dominate the worker's memory behavior, and both are recycling
-thresholds rather than caps on live usage:
+Two limits dominate the worker's memory behavior, and both are recycling thresholds rather than caps on live usage:
 
 - `CELERY_MAX_TASKS_PER_CHILD` (default 1000): a prefork child is replaced
   after processing this many tasks.
 - `--max-memory-per-child` (about 1.9 GiB, set in `celery_worker.py`): a
   child that exceeds this resident size is replaced after its current task.
 
-This is why each `CELERY_CONCURRENCY` slot should be budgeted roughly 2 GB
-of RAM.
+This is why each `CELERY_CONCURRENCY` slot should be budgeted roughly 2 GB of RAM.
 
 ## CPU sizing for video scanning
 
-Freeze detection fully decodes every video, and that decode is the dominant
-cost, often more than 90% of per-file scan time. Aggregate scan throughput
-is therefore bounded by the host's total decode rate: match
-`CELERY_CONCURRENCY` to physical cores rather than oversubscribing. On a
-saturated host, raise the sampled window timeout (default 30s) to 60-90
-to avoid Stage 2 sample-window timeouts caused by CPU contention rather
-than bad files.
+Freeze detection fully decodes every video, and that decode is the dominant cost, often more than 90% of per-file scan time. Aggregate scan throughput is therefore bounded by the host's total decode rate: match `CELERY_CONCURRENCY` to physical cores rather than oversubscribing. On a saturated host, raise the sampled window timeout (default 30s) to 60-90 to avoid Stage 2 sample-window timeouts caused by CPU contention rather than bad files.
 
 ## Recommendations for large datasets
 

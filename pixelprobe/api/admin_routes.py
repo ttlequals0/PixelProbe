@@ -13,7 +13,8 @@ from pixelprobe.services.settings_service import (describe_settings, coerce_sett
                                                   SettingValueError)
 from pixelprobe.scheduler import MediaScheduler
 from pixelprobe.utils.overrides import classify_findings, encode_verdict
-from pixelprobe.utils.security import (validate_json_input, AuditLogger,
+from pixelprobe.utils.security import (validate_admin_root_registration,
+                                      validate_json_input, AuditLogger,
                                       validate_directory_path, PathTraversalError)
 from pixelprobe.utils.validators import validate_time_budget
 from pixelprobe.utils.integrity import adopt_bitrot_baseline
@@ -137,7 +138,7 @@ def mark_as_good():
         logger.info(f"Successfully marked {len(file_ids)} files as good")
         
         return {
-            'message': f'Successfully marked {len(file_ids)} files as good',
+            'message': f'Marked {len(file_ids)} files as good',
             'marked_files': len(file_ids)
         }
         
@@ -258,7 +259,7 @@ def add_ignored_pattern():
             'id': new_pattern.id,
             'pattern': new_pattern.pattern,
             'description': new_pattern.description,
-            'message': 'Pattern added successfully'
+            'message': 'Pattern added'
         }, 201
     except Exception as e:
         logger.error(f"Error adding ignored pattern: {e}", exc_info=True)
@@ -280,7 +281,7 @@ def delete_ignored_pattern(pattern_id):
         
         AuditLogger.log_action('delete_ignored_pattern', {'pattern_id': pattern_id, 'pattern': pattern_text})
         
-        return {'message': 'Pattern deleted successfully'}
+        return {'message': 'Pattern deleted'}
     except Exception as e:
         logger.error(f"Error deleting ignored pattern: {e}", exc_info=True)
         db.session.rollback()
@@ -315,10 +316,8 @@ def add_configuration():
             not isinstance(refresh_mount_baseline, bool)):
         return {'error': 'require_mount and refresh_mount_baseline must be true or false'}, 400
     
-    # Admin is defining a new allowlist entry, so skip the allowlist check.
-    # Traversal tokens and symlink resolution still run.
     try:
-        path = validate_directory_path(path, allowed_paths=[])
+        path = validate_admin_root_registration(path)
     except Exception as e:
         AuditLogger.log_security_event('invalid_directory_path', str(e), 'warning')
         return {'error': 'Invalid directory path'}, 400
@@ -364,7 +363,7 @@ def add_configuration():
                 mount_root=mount['root'] if mount else None,
             )
             db.session.add(new_config)
-            message = 'Configuration added successfully'
+            message = 'Configuration added'
         
         db.session.commit()
         AuditLogger.log_action('add_configuration', {'path': path})
@@ -659,7 +658,7 @@ def update_exclusions():
             db.session.add(exclusion)
         
         db.session.commit()
-        return {'message': 'Exclusions updated successfully'}
+        return {'message': 'Exclusions updated'}
     except Exception as e:
         logger.error(f"Error updating exclusions: {e}", exc_info=True)
         db.session.rollback()
@@ -703,7 +702,7 @@ def add_exclusion(exclusion_type):
 
         AuditLogger.log_action('add_exclusion', {'type': exclusion_type, 'value': value})
 
-        return {'message': f'{exclusion_type.capitalize()} added successfully'}
+        return {'message': f'{exclusion_type.capitalize()} added'}
             
     except Exception as e:
         logger.error(f"Error adding exclusion: {e}", exc_info=True)
@@ -743,7 +742,7 @@ def remove_exclusion(exclusion_type):
 
         AuditLogger.log_action('remove_exclusion', {'type': exclusion_type, 'value': value})
 
-        return {'message': f'{exclusion_type.capitalize()} removed successfully'}
+        return {'message': f'{exclusion_type.capitalize()} removed'}
             
     except Exception as e:
         logger.error(f"Error removing exclusion: {e}", exc_info=True)

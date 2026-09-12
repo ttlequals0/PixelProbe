@@ -249,9 +249,7 @@ def validate_maintenance_scan_roots(scan_roots):
     for root in scan_roots:
         if not isinstance(root, str):
             raise ValueError('scan_roots must contain only directory paths')
-        canonical = os.path.realpath(validate_directory_path(root))
-        if not os.path.isdir(canonical) or not os.access(canonical, os.R_OK):
-            raise PathTraversalError(f'Scan root is not a readable directory: {root}')
+        canonical = validate_directory_path(root)
         if any(is_path_under(canonical, os.path.realpath(os.path.abspath(excluded)))
                for excluded in excluded_paths):
             raise PathTraversalError(f'Scan root is excluded: {root}')

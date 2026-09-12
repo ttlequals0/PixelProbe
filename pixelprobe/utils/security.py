@@ -238,12 +238,12 @@ def resolve_authorized_media_file(file_path, allowed_paths=None, required_paths=
     if os.path.splitext(canonical)[1].lower() not in SUPPORTED_EXTENSIONS:
         raise PathTraversalError("Unsupported media file type")
     try:
-        file_stat = os.stat(canonical, follow_symlinks=False)
+        file_stat = os.stat(safe_path, follow_symlinks=False)
     except OSError as exc:
         raise PathTraversalError("File not available") from exc
-    if not stat.S_ISREG(file_stat.st_mode) or not os.access(canonical, os.R_OK):
+    if not stat.S_ISREG(file_stat.st_mode) or not os.access(safe_path, os.R_OK):
         raise PathTraversalError("File is not a readable regular file")
-    return canonical
+    return safe_path
 
 
 def open_authorized_media_file(file_path, allowed_paths=None, required_paths=None):
@@ -320,29 +320,57 @@ def rewind_authorized_fd_path(path):
     if match:
         os.lseek(int(match.group(1)), 0, os.SEEK_SET)
 
+def _validate_readable_directory(safe_path):
+    """Confirm a sanitized directory is readable without a TOCTOU access check."""
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+    if hasattr(os, 'O_DIRECTORY'):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    try:
+        directory_fd = os.open(safe_path, flags)
+    except OSError as exc:
+        raise PathTraversalError("Directory is not readable") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+            raise PathTraversalError("Path is not a directory")
+    finally:
+        os.close(directory_fd)
+    return safe_path
+
+
+def validate_admin_root_registration(dir_path):
+    """Validate an existing root an administrator is explicitly registering."""
+    if not isinstance(dir_path, str) or not dir_path:
+        raise PathTraversalError("Empty directory path")
+    if '..' in dir_path or '~' in dir_path:
+        raise PathTraversalError("Directory path contains suspicious patterns")
+    resolved = os.path.realpath(os.path.abspath(dir_path))
+    safe_path = safe_join(os.path.sep, resolved.lstrip(os.path.sep))
+    if safe_path is None:
+        raise PathTraversalError("Directory path is invalid")
+    return _validate_readable_directory(safe_path)
+
+
 def validate_directory_path(dir_path, allowed_paths=None):
     """
     Validate that a directory path is safe.
 
-    When ``allowed_paths`` is ``None`` (default), the configured scan paths
-    are used as the allowlist and the resolved real path must sit within one
-    of them. Callers that need to register a new allowlist entry (e.g. the
-    admin add-configuration endpoint) pass ``allowed_paths=[]`` to skip the
-    allowlist check. The suspicious-pattern check and symlink resolution
-    always run.
+    Configured scan paths are the allowlist and an empty allowlist fails
+    closed. Administrators registering a root use
+    ``validate_admin_root_registration`` instead.
 
     Args:
         dir_path: The directory path to validate
-        allowed_paths: Explicit allowlist; ``[]`` disables the allowlist check,
-            ``None`` uses ``get_allowed_scan_paths()``.
+        allowed_paths: Explicit allowlist, or ``None`` for active scan roots.
 
     Returns:
-        Normalized absolute path if valid
+        Sanitized canonical path if valid
 
     Raises:
         PathTraversalError: If the path is unsafe or outside the allowlist.
     """
-    if not dir_path:
+    if not isinstance(dir_path, str) or not dir_path:
         raise PathTraversalError("Empty directory path")
 
     # Reject traversal/home-expansion tokens before touching the filesystem.
@@ -354,23 +382,14 @@ def validate_directory_path(dir_path, allowed_paths=None):
     if allowed_paths is None:
         allowed_paths = get_allowed_scan_paths()
 
-    # An administrator may register a new root, but it must already resolve to
-    # a real readable directory. No empty allowlist can become a bypass for a
-    # nonexistent or special filesystem object.
     if not allowed_paths:
-        real_path = os.path.realpath(normalized)
-        if not os.path.isdir(real_path) or not os.access(real_path, os.R_OK):
-            raise PathTraversalError("Directory is not readable")
-        return real_path
+        raise PathTraversalError("No allowed scan paths configured")
 
     real_input = os.path.realpath(normalized)
     safe_path = _safe_join_under_any(real_input, allowed_paths)
     if safe_path is None:
         raise PathTraversalError(f"Path outside allowed directories: {dir_path}")
-    if os.path.exists(safe_path) and not os.path.isdir(safe_path):
-        raise PathTraversalError("Path is not a directory")
-
-    return normalized
+    return _validate_readable_directory(safe_path)
 
 def sanitize_filename(filename):
     """
@@ -525,17 +544,9 @@ class AuditLogger:
         elif hasattr(user, 'id'):
             actor_id = user.id
             user = getattr(user, 'username', str(actor_id))
-        log_entry = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'action': action,
-            'user': user,
-            'ip_address': ip_address,
-            'details': safe_details
-        }
-        
-        # Log to security logger
+        # Keep arbitrary audit values out of routine logs.
         security_logger = logging.getLogger('security_audit')
-        security_logger.info("AUDIT: %s", log_entry)
+        security_logger.info("AUDIT action=%s outcome=%s", action, outcome)
         AuditLogger._persist(actor_id, action, target, outcome, safe_details, ip_address)
 
     @staticmethod

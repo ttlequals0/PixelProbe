@@ -13,23 +13,15 @@ Examples for integrating PixelProbe into your applications and workflows.
 
 ## Authentication
 
-All API endpoints require authentication. For programmatic access, create an API token
-(via the web UI under Account -> API Tokens, or `POST /api/tokens` with an authenticated
-session) and send it as a Bearer token on every request:
+All API endpoints require authentication. For programmatic access, create an API token through Account -> API Tokens or `POST /api/tokens` with an authenticated session. Send it as a Bearer token on every request:
 
 ```
 Authorization: Bearer your-api-token
 ```
 
-All examples below assume a valid API token. The only endpoints that do not require
-authentication are `GET /healthz` (liveness probe), `GET /api/auth/status`,
-`POST /api/auth/setup` (first-run only), `POST /api/auth/login`, and
-`GET /api/openapi.yaml` / `GET /api/openapi.json`.
+All examples below assume a valid API token. The unauthenticated endpoints are `GET /healthz` (liveness probe), `GET /api/auth/status`, `POST /api/auth/setup` (first-run only), and `POST /api/auth/login`. `GET /api/openapi.yaml` and `GET /api/openapi.json` are also unauthenticated.
 
-Note: `/api/scan-status` never reports `error` or `cancelled` in its `status`
-field - finished scans surface as `completed` or `idle`. Wait loops must treat
-`idle` as terminal and read the `phase` field (`error`, `cancelled`, `crashed`)
-to classify failures. The wait loops below do this.
+Note: `/api/scan-status` never reports `error` or `cancelled` in its `status` field - finished scans surface as `completed` or `idle`. Wait loops must treat `idle` as terminal and read the `phase` field (`error`, `cancelled`, `crashed`) to classify failures. The wait loops below do this.
 
 ## Basic integration
 
@@ -802,8 +794,7 @@ volumes:
 
 ## Webhook integration
 
-PixelProbe can push notifications to your own HTTP endpoint through its
-notification system. Configure a webhook provider and an event rule:
+PixelProbe can push notifications to your own HTTP endpoint through its notification system. Configure a webhook provider and an event rule:
 
 ```bash
 # 1. Create a webhook provider
@@ -819,10 +810,7 @@ curl -X POST http://localhost:5000/api/notifications/rules \
   -d '{"event_type": "bitrot_suspected", "provider_id": 1}'
 ```
 
-Supported events are `scan_completed` and `bitrot_suspected`. The latter is
-sent when a file-changes scan finds a content hash change without a matching
-modification-time change. A completion rule receives the terminal scan
-summary; status polling remains useful for progress before completion.
+Supported events are `scan_completed` and `bitrot_suspected`. The latter is sent when a file-changes scan finds a content hash change without a matching modification-time change. A completion rule receives the terminal scan summary; status polling remains useful for progress before completion.
 
 The generic webhook payload looks like:
 
