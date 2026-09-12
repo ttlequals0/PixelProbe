@@ -4,8 +4,8 @@
 # IMPORTANT: User Permissions
 # - The pixelprobe app and celery-worker MUST run as the same user
 # - This ensures both services can access mounted media files
-# - Add 'user: "1000:1000"' (or your host user's UID:GID) to both services
-# - Example: user: "${PUID:-1000}:${PGID:-1000}"
+# - Both services use user: "${PUID:-10001}:${PGID:-10001}" by default
+# - Set PUID and PGID to a host identity that can read media and write instance
 #
 # Key Performance Settings:
 # - CELERY_CONCURRENCY: Number of concurrent Celery tasks (default: 4)
@@ -71,11 +71,21 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.9.0}
     container_name: pixelprobe-app
     environment:
       # Security
       SECRET_KEY: ${SECRET_KEY}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      SESSION_COOKIE_HTTPONLY: ${SESSION_COOKIE_HTTPONLY:-true}
+      SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
+      REMEMBER_COOKIE_DURATION_DAYS: ${REMEMBER_COOKIE_DURATION_DAYS:-30}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      GUNICORN_BIND: ${GUNICORN_BIND:-0.0.0.0:5000}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-300}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      TZ: ${TZ:-UTC}
 
       # Scheduler runs in celery-worker; keep the web container out of the
       # scheduler lock entirely (set to "true" only in single-container setups)
@@ -103,7 +113,6 @@ services:
       OUTPUT_ROTATION_ENABLED: ${OUTPUT_ROTATION_ENABLED:-true}
       FREEZE_DETECTION_ENABLED: ${FREEZE_DETECTION_ENABLED:-true}
       PILLOW_BLOCKS_MAX: 256
-      TZ: America/New_York
 
 
       # Scheduled scans
@@ -115,10 +124,25 @@ services:
 
     volumes:
       # Media files to scan
-      - ${MEDIA_PATH:-./media}:/media:ro
+      - type: bind
+        source: ${MEDIA_PATH:-./media}
+        target: /media
+        read_only: true
+        bind:
+          create_host_path: false
       
       # Instance folder for configs (no database files with PostgreSQL)
       - ./instance:/app/instance
+    user: "${PUID:-10001}:${PGID:-10001}"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+      - /app/runtime:rw,noexec,nosuid,size=128m,uid=${PUID:-10001},gid=${PGID:-10001},mode=0750
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    cpus: ${APP_CPUS:-4}
+    mem_limit: ${APP_MEMORY:-4g}
+    pids_limit: ${APP_PIDS_LIMIT:-256}
       
     ports:
       - "${PORT:-5000}:5000"
@@ -143,7 +167,7 @@ services:
 
   # P1 Celery Worker for distributed task processing
   celery-worker:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.9.0}
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:
@@ -152,6 +176,8 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       CELERY_LOG_LEVEL: ${CELERY_LOG_LEVEL:-INFO}
       CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      TZ: ${TZ:-UTC}
       
       # Database connection (worker needs database access)
       POSTGRES_HOST: postgres
@@ -164,6 +190,9 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       FLASK_ENV: ${FLASK_ENV:-production}
       MAX_WORKERS: ${MAX_WORKERS:-10}  # Parallel file scanning workers per task
+      BATCH_SIZE: ${BATCH_SIZE:-100}
+      MAX_OUTPUT_SIZE: ${MAX_OUTPUT_SIZE:-10000}
+      OUTPUT_ROTATION_ENABLED: ${OUTPUT_ROTATION_ENABLED:-true}
       FREEZE_DETECTION_ENABLED: ${FREEZE_DETECTION_ENABLED:-true}
       PILLOW_BLOCKS_MAX: 256
 
@@ -179,11 +208,25 @@ services:
       # SSRF trusted hosts (hostnames/CIDRs that bypass private-IP blocking)
       TRUSTED_INTERNAL_HOSTS: ${TRUSTED_INTERNAL_HOSTS:-}
 
-      TZ: America/New_York
 
     volumes:
       # Media files access (read-only for scanning)
-      - ${MEDIA_PATH:-./media}:/media:ro
+      - type: bind
+        source: ${MEDIA_PATH:-./media}
+        target: /media
+        read_only: true
+        bind:
+          create_host_path: false
+    user: "${PUID:-10001}:${PGID:-10001}"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+      - /app/runtime:rw,noexec,nosuid,size=128m,uid=${PUID:-10001},gid=${PGID:-10001},mode=0750
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    cpus: ${WORKER_CPUS:-4}
+    mem_limit: ${WORKER_MEMORY:-4g}
+    pids_limit: ${WORKER_PIDS_LIMIT:-256}
       
     depends_on:
       postgres:

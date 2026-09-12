@@ -23,17 +23,15 @@ PixelProbe supports two authentication methods:
 
 ### 1. Session-based authentication (web UI)
 - Used automatically when logged in through the web interface
-- Managed via secure HTTP-only cookies
-- Best for browser-based access
+- Managed by secure HTTP-only cookies
 - Sessions expire after 30 minutes of inactivity; an expired session receives
   `401 {"error": "Session expired due to inactivity"}` and must log in again
+- State-changing session requests require the CSRF protection configured by the application. Bearer-token requests do not use cookie CSRF.
 
 ### 2. API token authentication (programmatic access)
 - Generate tokens through the web UI under Account -> API Tokens
 - Include in requests using the Authorization header
-- Two formats are supported:
-  - Standard: `Authorization: Bearer <your-token>`
-  - Direct: `Authorization: <your-token>` (for Swagger UI compatibility)
+- Use the standard form: `Authorization: Bearer <your-token>`
 
 #### Example with curl
 ```bash
@@ -41,9 +39,6 @@ PixelProbe supports two authentication methods:
 curl -H "Authorization: Bearer your-api-token-here" \
      http://localhost:5000/api/scan-status
 
-# Using direct format (Swagger UI style)
-curl -H "Authorization: your-api-token-here" \
-     http://localhost:5000/api/scan-status
 ```
 
 #### Example with Python
@@ -63,6 +58,19 @@ response = requests.get('http://localhost:5000/api/scan-status', headers=headers
 3. Click "Create New Token"
 4. Provide a description
 5. Copy the generated token (it won't be shown again)
+
+### Session and token revocation
+
+Changing a password increments the user's session generation, invalidates earlier
+login and remember cookies, and starts a new non-remembered session in the
+current browser. It does not revoke API tokens. Revoke a token through `DELETE
+/api/tokens/{id}`, let it expire, or deactivate its owner. Shared token
+validation also rejects tokens whose owner is inactive.
+
+The token migration hashes existing raw token values before removing the
+plaintext column. Existing client token values remain valid after that upgrade;
+they are not rotated automatically. Treat token revocation as an independent
+operator action and audit requirement.
 
 ### Internal header (not for integrations)
 
@@ -94,6 +102,17 @@ Rate limit headers are included in responses:
 - `X-RateLimit-Limit`: Maximum requests allowed
 - `X-RateLimit-Remaining`: Requests remaining
 - `X-RateLimit-Reset`: Time when the limit resets
+
+## Permission matrix
+
+| Access | Routes |
+|---|---|
+| Unauthenticated | `GET /healthz`, `GET /api/auth/status`, first-run `POST /api/auth/setup`, `POST /api/auth/login`, and the served OpenAPI document |
+| Authenticated session or Bearer token | Scan status, results, reports, exports, logs, and account-token routes according to the route's documented method |
+| Administrator session or Bearer token | Scan launch and recovery, maintenance, schedules, exclusions, settings, users, notification providers and rules, healthchecks, retention, and destructive operations |
+| Internal scheduler header | Container-local scheduler callbacks only. It is not an integration API. |
+
+All browser session routes remain CSRF-protected. `SESSION_COOKIE_SECURE=true` is the production default. Set it to `false` only for a deliberate local or LAN HTTP deployment. `REMEMBER_COOKIE_DURATION_DAYS` defaults to 30 and accepts 1 through 365 days.
 
 ## Request/response format
 
@@ -1014,7 +1033,7 @@ Future versions will include WebSocket support for real-time updates:
 - File paths are validated against the configured allowed directories.
 - Inputs are validated for type and length.
 - Rate limiting protects against abuse and DoS attacks.
-- CSRF protection is enabled for the web interface (API endpoints are currently exempt).
+- Cookie-authenticated writes require CSRF protection. Use a Bearer token for non-browser API clients.
 - Subprocess calls use validated arguments to prevent command injection.
 
 ## Troubleshooting

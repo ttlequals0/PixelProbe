@@ -131,7 +131,6 @@ api/
 +-- stats_routes.py         # Statistics and reports
 +-- admin_routes.py         # Administrative functions
 +-- auth_routes.py          # Login, users, API tokens
-+-- auth_decorator.py       # Authentication decorator
 +-- export_routes.py        # Data export
 +-- healthcheck_routes.py   # Healthcheck integration
 +-- log_routes.py           # Log viewing and download
@@ -153,7 +152,6 @@ api/
 **Key Services**:
 - `ScanService`: Orchestrates media scanning
 - `StatsService`: Calculates statistics
-- `ExportService`: Handles data exports
 - `MaintenanceService`: Database maintenance
 - `NotificationService`: Notification provider dispatch and rule evaluation
 - `HealthcheckService`: Outbound healthcheck pings for scheduled scans
@@ -201,7 +199,7 @@ api/
 
 **Technology**: PostgreSQL (required since v2.2.0)
 
-**Models** (all in `pixelprobe/models.py`, 17 total):
+**Models** (all in `pixelprobe/models.py`):
 - `ScanResult`: File scan results
 - `ScanConfiguration`: Directory configurations
 - `IgnoredErrorPattern`: False positive patterns
@@ -209,11 +207,15 @@ api/
 - `ScanSchedule`: Scheduled scan configurations
 - `ScanState`: Current scan status
 - `ScanChunk`: Per-chunk progress for parallel scans
+- `ScanRunRoot` / `ScanRunFile`: Immutable scan-run evidence
+- `ScanTask`: Durable task ownership and dispatch intent
 - `ScanReport`: Completed scan reports
 - `CleanupState` / `FileChangesState`: Maintenance operation state
 - `HealthcheckConfig`: Healthcheck ping configuration
 - `User` / `APIToken`: Authentication
 - `NotificationProvider` / `NotificationRule`: Notifications
+- `ScanNotificationOutbox` / `ScanNotificationDelivery`: Durable notification delivery
+- `SecurityAuditEvent`: Append-only security trail
 - `LogEntry`: Persistent log storage with scan tagging
 - `AppConfig`: Application-level key-value configuration
 
@@ -606,7 +608,7 @@ The sweeper also finalizes scans whose winning chunk died between chunk-complete
 5. **API Security**:
    - Authentication required (session login or Bearer API token)
    - Rate limiting per endpoint
-   - CSRF protection covers the UI forms (login/logout pages); every API blueprint is exempted in `app.py` because API clients authenticate with tokens, not cookies
+   - Cookie-authenticated writes require CSRF protection, including session login, logout, and setup routes. Bearer-authenticated and internal scheduler requests do not carry a browser cookie and are not subject to cookie CSRF checks.
 
 6. **Network and Resource Isolation**:
    - Internal Docker network; no direct external access to Redis/PostgreSQL
@@ -713,7 +715,7 @@ Only one variable is truly required - the app refuses to start without it:
 | `EXCLUDED_PATHS`                | (empty)                    | Comma-separated excluded paths                      |
 | `EXCLUDED_EXTENSIONS`           | `.txt,.log,.md`            | Comma-separated excluded extensions                 |
 | `MAX_WORKERS`                   | `10`                       | Thread pool size for selected-file rescans          |
-| `BATCH_SIZE`                    | `100`                      | Batch size for bulk operations                      |
+| `BATCH_SIZE`                    | `100`                      | Legacy media-checker discovery lookup batch; not parallel discovery inserts or scan chunk commits |
 | `SCHEDULER_ENABLED`             | `true`                     | Whether this process may compete for the scheduler lock |
 | `REDIS_MAX_MEMORY`              | `2gb` (compose)            | Valkey maxmemory for the task queue                 |
 | `TRUSTED_INTERNAL_HOSTS`        | (empty)                    | Hosts/CIDRs that bypass SSRF private-IP blocking    |
@@ -825,7 +827,7 @@ volumes:
 Notes:
 - Postgres and Redis ports are NOT published to the host: the broker has no auth, and app/worker reach both on the compose network
 - Valkey runs with `noeviction` so queued tasks are never silently dropped; size it with `REDIS_MAX_MEMORY` (default 2gb)
-- The app and celery-worker MUST run as the same user so both can read mounted media files (`user: "${PUID:-1000}:${PGID:-1000}"`)
+- The app and celery-worker MUST run as the same user so both can read mounted media files (`user: "${PUID:-10001}:${PGID:-10001}"` by default)
 - The container healthcheck hits the unauthenticated `/healthz` liveness endpoint, with a 120s `start_period` because startup migrations run before workers serve requests
 
 ## Technology stack
@@ -870,7 +872,7 @@ Notes:
 
 1. Create new route module in `pixelprobe/api/`
 2. Add service layer logic
-3. Register blueprint (and CSRF-exempt it in `app.py` if it is a token-authenticated API)
+3. Register the blueprint and apply the route's authorization decorator. Cookie-authenticated writes are CSRF-protected centrally.
 4. Update documentation
 
 [< Documentation index](README.md)

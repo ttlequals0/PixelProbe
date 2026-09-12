@@ -9,22 +9,29 @@ import threading
 import time
 import logging
 import hashlib
+from collections import deque
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 import uuid
 
 from celery import states
 from celery.exceptions import TimeoutError as CeleryTimeoutError
-from sqlalchemy import text, or_
-from pixelprobe.media_checker import (PixelProbe, load_exclusions, load_exclusions_with_patterns,
+from sqlalchemy import text, or_, func, false
+from pixelprobe.media_checker import (PixelProbe, load_exclusions_with_patterns,
                                       _read_with_timeout, FileReadTimeoutError)
-from pixelprobe.models import db, ScanResult, ScanSchedule, CleanupState, FileChangesState, ScanReport, LogEntry, AppConfig
+from pixelprobe.models import (db, ScanResult, ScanSchedule, CleanupState,
+                               CleanupFileDecision, FileChangesState, ScanReport,
+                               LogEntry, AppConfig, ScanConfiguration)
 from pixelprobe.services.notification_service import dispatch_event
+from pixelprobe.services.scan_engine import finalize_scan
 from pixelprobe.utils.helpers import (ProgressTracker, env_int, env_float,
                                       classify_path_existence, mark_operation_error,
                                       PATH_ABSENT, PATH_UNKNOWN)
 from pixelprobe.utils.integrity import adopt_bitrot_baseline
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
+from pixelprobe.utils.paths import is_path_under, like_prefix
+from pixelprobe.utils.mounts import mount_matches_baseline
+from pixelprobe.utils.security import PathTraversalError, validate_directory_path
 from pixelprobe.progress_utils import (
     update_file_changes_progress_redis,
     clear_file_changes_progress_redis,
@@ -63,6 +70,7 @@ _HOLD_REASON_DIRS = 3
 # vanished folder is still mounted, and how many of its files to look up.
 _PROBE_LISTING_ENTRIES = 50
 _PROBE_SAMPLE_FILES = 5
+_CLEANUP_REPORT_PREVIEW = 100
 
 # Consecutive stable-hash integrity checks (plus a clean rescan) required
 # before a bitrot flag auto-expires and the stable content becomes the new
@@ -207,8 +215,116 @@ def safe_task_get(task, timeout=1, max_retries=5, base_delay=1.0):
                 raise
 
 
+def _path_scope_conditions(scan_roots):
+    """SQL conditions matching only rows inside the supplied directory roots."""
+    return [or_(ScanResult.file_path == root,
+                ScanResult.file_path.like(like_prefix(root), escape='\\'))
+            for root in scan_roots]
+
+
+def _filename_pattern_like(pattern):
+    """Translate the portable fnmatch subset used for excluded filenames."""
+    pieces = []
+    for character in pattern:
+        if character == '*':
+            pieces.append('%')
+        elif character == '?':
+            pieces.append('_')
+        elif character in ('%', '_', '\\'):
+            pieces.append('\\' + character)
+        elif character in ('[', ']'):
+            return None
+        else:
+            pieces.append(character)
+    return ''.join(pieces)
+
+
+def validate_maintenance_scan_roots(scan_roots):
+    """Canonicalize roots and reject inaccessible or excluded directories."""
+    if not isinstance(scan_roots, list) or not scan_roots:
+        raise ValueError('scan_roots must be a non-empty list of directories')
+
+    excluded_paths, _extensions, _patterns = load_exclusions_with_patterns()
+    validated_roots = []
+    for root in scan_roots:
+        if not isinstance(root, str):
+            raise ValueError('scan_roots must contain only directory paths')
+        canonical = os.path.realpath(validate_directory_path(root))
+        if not os.path.isdir(canonical) or not os.access(canonical, os.R_OK):
+            raise PathTraversalError(f'Scan root is not a readable directory: {root}')
+        if any(is_path_under(canonical, os.path.realpath(os.path.abspath(excluded)))
+               for excluded in excluded_paths):
+            raise PathTraversalError(f'Scan root is excluded: {root}')
+        if canonical not in validated_roots:
+            validated_roots.append(canonical)
+    return validated_roots
+
+
+def required_mounts_available(paths=None):
+    """Check approved mount baselines for the requested maintenance scope."""
+    configs = ScanConfiguration.query.filter_by(is_active=True, require_mount=True).all()
+    targets = [os.path.realpath(path) for path in paths] if paths else None
+    for config in configs:
+        config_path = os.path.realpath(config.path)
+        if targets and not any(is_path_under(target, config_path) for target in targets):
+            continue
+        matched, _ = mount_matches_baseline(
+            config_path, config.mount_filesystem_type, config.mount_source, config.mount_root)
+        if not matched:
+            return False
+    return True
+
+
+def _apply_maintenance_scope(query, file_paths=None, scan_roots=None,
+                             excluded_paths=None, excluded_extensions=None,
+                             excluded_patterns=None):
+    """Apply exact-file or directory-root scope without sibling overmatching."""
+    if file_paths:
+        return query.filter(ScanResult.file_path.in_(file_paths))
+    if scan_roots is None:
+        return query
+    if not scan_roots:
+        return query.filter(false())
+
+    query = query.filter(or_(*_path_scope_conditions(scan_roots)))
+    if excluded_paths:
+        query = query.filter(~or_(*_path_scope_conditions(excluded_paths)))
+    if excluded_extensions:
+        for extension in excluded_extensions:
+            escaped_extension = (extension.lower().replace('\\', '\\\\')
+                                 .replace('%', '\\%').replace('_', '\\_'))
+            query = query.filter(~func.lower(ScanResult.file_path).like(
+                '%' + escaped_extension, escape='\\'))
+    if excluded_patterns:
+        for pattern in excluded_patterns:
+            like_pattern = _filename_pattern_like(pattern)
+            if like_pattern is not None:
+                query = query.filter(~ScanResult.file_path.like(
+                    '%/' + like_pattern, escape='\\'))
+    return query
+
+
+def fetch_cleanup_batch(file_paths, scan_roots, excluded_paths, after_id,
+                        batch_size, max_id=None, excluded_extensions=None,
+                        excluded_patterns=None):
+    """Fetch one bounded, keyset-paged cleanup candidate batch."""
+    query = _apply_maintenance_scope(
+        ScanResult.query.with_entities(ScanResult.id, ScanResult.file_path),
+        file_paths=file_paths, scan_roots=scan_roots,
+        excluded_paths=excluded_paths, excluded_extensions=excluded_extensions,
+        excluded_patterns=excluded_patterns,
+    )
+    if after_id is not None:
+        query = query.filter(ScanResult.id > after_id)
+    if max_id is not None:
+        query = query.filter(ScanResult.id <= max_id)
+    return query.order_by(ScanResult.id.asc()).limit(batch_size).all()
+
+
 def fetch_integrity_batch(file_paths, run_watermark, excluded_ids, batch_size,
-                          largest_first=False):
+                          largest_first=False, scan_roots=None,
+                          excluded_paths=None, excluded_extensions=None,
+                          excluded_patterns=None):
     """Fetch the stalest slice of the integrity queue as plain dicts.
 
     Queue order: never-checked files first (NULL last_integrity_check_date),
@@ -237,19 +353,25 @@ def fetch_integrity_batch(file_paths, run_watermark, excluded_ids, batch_size,
         ScanResult.bitrot_candidate_hash
     ).filter(
         or_(
-            ScanResult.last_integrity_attempt_at.is_(None),
-            ScanResult.last_integrity_attempt_at < run_watermark
+            func.coalesce(ScanResult.last_integrity_attempt_at,
+                          ScanResult.last_integrity_check_date).is_(None),
+            func.coalesce(ScanResult.last_integrity_attempt_at,
+                          ScanResult.last_integrity_check_date) < run_watermark
         )
     )
-    if file_paths:
-        query = query.filter(ScanResult.file_path.in_(file_paths))
+    query = _apply_maintenance_scope(
+        query, file_paths=file_paths, scan_roots=scan_roots,
+        excluded_paths=excluded_paths, excluded_extensions=excluded_extensions,
+        excluded_patterns=excluded_patterns,
+    )
     if excluded_ids:
         query = query.filter(ScanResult.id.notin_(excluded_ids))
     rows = query.order_by(
         # Flagged files jump the queue so auto-expire resolves in a few runs
         # instead of a few full sweep cycles.
         ScanResult.bitrot_suspected.desc(),
-        ScanResult.last_integrity_attempt_at.asc().nullsfirst(),
+        func.coalesce(ScanResult.last_integrity_attempt_at,
+                      ScanResult.last_integrity_check_date).asc().nullsfirst(),
         ScanResult.id.asc()
     ).limit(batch_size).all()
     batch = [
@@ -490,13 +612,15 @@ class MaintenanceService:
         with app.app_context():
             self._run_file_changes_check(check_id)
 
-    def _run_cleanup(self, cleanup_id, file_paths=None, schedule_id=None,
-                     trust_unreadable_dirs=False):
+    def _run_cleanup(self, cleanup_id, file_paths=None, scan_roots=None,
+                     schedule_id=None, trust_unreadable_dirs=False):
         """Run the cleanup operation
 
         Args:
             cleanup_id: ID of the cleanup record
             file_paths: Optional list of specific file paths to check (if None, checks all files)
+            scan_roots: Optional directory roots to check recursively. Unlike
+                file_paths, roots include only records below their boundary.
             schedule_id: Optional schedule ID for healthcheck integration
             trust_unreadable_dirs: Delete records whose directory can no longer
                 be read. Only an operator can tell a deleted folder from an
@@ -506,40 +630,46 @@ class MaintenanceService:
         # Store schedule_id for report creation
         self._cleanup_schedule_id = schedule_id
         try:
+            if scan_roots is not None:
+                scan_roots = validate_maintenance_scan_roots(scan_roots)
             cleanup_record = db.session.get(CleanupState, cleanup_id)
             if not cleanup_record:
                 logger.error(f"Cleanup record not found: {cleanup_id}")
                 return
-
-            # Keep track of orphaned files for the report
-            self.orphaned_files_list = []
+            if not required_mounts_available(scan_roots if scan_roots is not None else file_paths):
+                self._handle_cleanup_error(
+                    cleanup_id, 'Required storage mount is unavailable or does not match its approved baseline')
+                return
 
             # Phase 1: Scanning database
             cleanup_record.phase = 'scanning_database'
             cleanup_record.phase_number = 1
 
-            # Get database entries - either all or filtered by file_paths
+            # Count first, then keyset-page candidates below. Loading every
+            # path in a library before dispatching work made a large cleanup
+            # consume GBs of worker memory.
+            excluded_paths = excluded_extensions = excluded_patterns = None
+            if scan_roots is not None:
+                paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
+                excluded_paths = [os.path.realpath(os.path.abspath(path)) for path in paths]
+            scoped_query = _apply_maintenance_scope(
+                ScanResult.query, file_paths=file_paths, scan_roots=scan_roots,
+                excluded_paths=excluded_paths, excluded_extensions=excluded_extensions,
+                excluded_patterns=excluded_patterns,
+            )
             if file_paths:
                 cleanup_record.progress_message = f'Phase 1 of 3: Scanning {len(file_paths)} specific file(s) in database...'
-                db.session.commit()
-                # Filter to only the specified file paths
-                all_results = ScanResult.query.filter(
-                    ScanResult.file_path.in_(file_paths)
-                ).with_entities(ScanResult.id, ScanResult.file_path).all()
-                logger.info(f"Cleanup scoped to {len(file_paths)} specific file(s), found {len(all_results)} in database")
+                logger.info("Cleanup scoped to %s specific file(s)", len(file_paths))
+            elif scan_roots is not None:
+                cleanup_record.progress_message = f'Phase 1 of 3: Scanning records under {len(scan_roots)} scan root(s)...'
+                logger.info("Cleanup scoped to %s scan root(s)", len(scan_roots))
             else:
                 cleanup_record.progress_message = 'Phase 1 of 3: Scanning database entries...'
-                db.session.commit()
-                # Get all database entries
-                # (id, file_path) tuples only: full ORM objects for 1.18M rows
-                # cost multiple GB inside the gunicorn worker hosting this
-                # thread, and the loop below reads exactly these two fields
-                all_results = ScanResult.query.with_entities(
-                    ScanResult.id, ScanResult.file_path
-                ).all()
-                logger.info(f"Cleanup scanning all {len(all_results)} files in database")
+                logger.info("Cleanup scanning all database entries")
+            db.session.commit()
 
-            total_files = len(all_results)
+            total_files = scoped_query.count()
+            max_candidate_id = scoped_query.with_entities(func.max(ScanResult.id)).scalar()
             
             cleanup_record.total_files = total_files
             cleanup_record.phase_total = total_files
@@ -563,13 +693,25 @@ class MaintenanceService:
             # Parallel checking with throttling (similar to file changes check)
             max_active_tasks = 5000  # Limit concurrent tasks
             active_tasks = []  # [{'task', 'path', 'submitted_at'}]
-            file_index = 0
+            candidate_batch_size = env_int('CLEANUP_BATCH_SIZE', 5000, floor=100)
+            pending_results = deque()
+            last_candidate_id = None
+            candidates_exhausted = False
             total_files_processed = 0
-            orphaned_files = []  # Collect orphaned file info (status == 'absent' only)
+            orphaned_found = 0
+            pending_decisions = []
             unknown_count = 0  # Files we could not verify (mount down, IO error, etc.)
             files_abandoned = 0
             phase2_start_time = time.time()  # Track start time for ETA calculation
             last_heartbeat_time = time.time()
+
+            def flush_pending_decisions():
+                nonlocal pending_decisions
+                if not pending_decisions:
+                    return
+                db.session.bulk_insert_mappings(CleanupFileDecision, pending_decisions)
+                db.session.commit()
+                pending_decisions = []
 
             def write_cleanup_progress():
                 pct = int((total_files_processed / total_files * 100)) if total_files > 0 else 0
@@ -591,18 +733,18 @@ class MaintenanceService:
 
                 cleanup_record.files_processed = total_files_processed
                 cleanup_record.phase_current = total_files_processed
-                cleanup_record.orphaned_found = len(orphaned_files)
+                cleanup_record.orphaned_found = orphaned_found
                 cleanup_record.progress_message = (
                     f'Phase 2 of 3: Checking {total_files_processed:,} / {total_files:,} files ({pct}%) - '
-                    f'{len(orphaned_files)} orphaned found, {len(active_tasks)} active tasks, ETA: {eta_str}'
+                    f'{orphaned_found} orphaned found, {len(active_tasks)} active tasks, ETA: {eta_str}'
                 )
                 db.session.commit()
 
                 with self.cleanup_lock:
                     self.cleanup_state['files_processed'] = total_files_processed
-                    self.cleanup_state['orphaned_found'] = len(orphaned_files)
+                    self.cleanup_state['orphaned_found'] = orphaned_found
 
-            while file_index < len(all_results) or len(active_tasks) > 0:
+            while pending_results or not candidates_exhausted or active_tasks:
                 if self._is_cancelled(cleanup_record):
                     logger.info("Cleanup cancelled during file checking")
                     break
@@ -615,14 +757,26 @@ class MaintenanceService:
                     write_cleanup_progress()
                     logger.info(
                         f"Cleanup progress: {total_files_processed}/{total_files} processed, "
-                        f"{len(active_tasks)} active, {len(all_results) - file_index} remaining, "
+                        f"{len(active_tasks)} active, {len(pending_results)} pending, "
                         f"{files_abandoned} abandoned"
                     )
                     last_heartbeat_time = current_time
 
-                # Submit new tasks while under the limit
-                while len(active_tasks) < max_active_tasks and file_index < len(all_results):
-                    result = all_results[file_index]
+                if not pending_results and not candidates_exhausted:
+                    pending_results.extend(fetch_cleanup_batch(
+                        file_paths, scan_roots, excluded_paths, last_candidate_id,
+                        candidate_batch_size, max_id=max_candidate_id,
+                        excluded_extensions=excluded_extensions,
+                        excluded_patterns=excluded_patterns,
+                    ))
+                    if pending_results:
+                        last_candidate_id = pending_results[-1].id
+                    else:
+                        candidates_exhausted = True
+
+                # Submit new tasks while under the limit.
+                while len(active_tasks) < max_active_tasks and pending_results:
+                    result = pending_results.popleft()
 
                     # Submit file existence check task
                     task = check_file_exists_task.apply_async(
@@ -634,7 +788,6 @@ class MaintenanceService:
                         'path': result.file_path,
                         'submitted_at': time.monotonic(),
                     })
-                    file_index += 1
 
                 # Collect completed tasks and free up slots
                 still_active = []
@@ -652,10 +805,16 @@ class MaintenanceService:
                             # intact even if the result shape is unexpected.
                             status = check_result.get('status')
                             if status == 'absent':
-                                orphaned_files.append({
-                                    'file_id': check_result['file_id'],
-                                    'file_path': check_result['file_path']
+                                pending_decisions.append({
+                                    'cleanup_run_id': cleanup_record.cleanup_id,
+                                    'scan_result_id': check_result['file_id'],
+                                    'file_path': check_result['file_path'],
+                                    'decision': 'pending',
+                                    'created_at': datetime.now(timezone.utc),
                                 })
+                                orphaned_found += 1
+                                if len(pending_decisions) >= candidate_batch_size:
+                                    flush_pending_decisions()
                                 logger.info(f"Found orphaned entry: {check_result['file_path']}")
                             elif status != 'exists':
                                 unknown_count += 1
@@ -675,63 +834,66 @@ class MaintenanceService:
 
                 active_tasks = still_active
 
-                # If no new tasks submitted and active tasks exist, wait a bit
-                if file_index < len(all_results) and len(active_tasks) > 0:
+                # Always wait while work remains. The final submitted tasks used
+                # to busy-poll because no undispatched rows remained.
+                if active_tasks:
                     time.sleep(0.1)  # Brief sleep to avoid busy waiting
+
+            flush_pending_decisions()
 
             # Final update
             cleanup_record.files_processed = total_files_processed
-            cleanup_record.orphaned_found = len(orphaned_files)
+            cleanup_record.orphaned_found = orphaned_found
             db.session.commit()
 
             logger.info(f"Phase 2 complete: Checked {total_files_processed} files, "
-                        f"found {len(orphaned_files)} orphaned, {unknown_count} unverifiable (skipped), "
+                        f"found {orphaned_found} orphaned, {unknown_count} unverifiable (skipped), "
                         f"{files_abandoned} abandoned")
+
+            if not required_mounts_available(scan_roots if scan_roots is not None else file_paths):
+                self._handle_cleanup_error(
+                    cleanup_id, 'Required storage mount is unavailable or does not match its approved baseline')
+                self._create_cleanup_report(cleanup_record)
+                return
 
             # Only rows whose absence could be confirmed may be deleted. A
             # trusted run is the operator answering for the rows the run before
             # it held; more unreadable rows than that means something else
             # changed, and their confirmation does not cover it.
             ceiling = self._trust_ceiling(cleanup_id) if trust_unreadable_dirs else None
-            orphaned_files, unconfirmed, returned, hold_reason = self._confirm_orphans(
-                orphaned_files, trust_unreadable_dirs=trust_unreadable_dirs)
-            if trust_unreadable_dirs and len(orphaned_files) > ceiling:
-                msg = (f'Aborted: {len(orphaned_files):,} records are missing a readable '
+            (eligible_count, unconfirmed_count, returned_count,
+             hold_reason) = self._confirm_cleanup_decisions(
+                 cleanup_record.cleanup_id, trust_unreadable_dirs=trust_unreadable_dirs,
+                 batch_size=candidate_batch_size)
+            if trust_unreadable_dirs and eligible_count > ceiling:
+                msg = (f'Aborted: {eligible_count:,} records are missing a readable '
                        f'directory, more than the {ceiling:,} you confirmed, so storage may '
                        f'have gone offline since. No entries were deleted.')
                 logger.error(msg)
+                self._hold_eligible_cleanup_decisions(
+                    cleanup_record.cleanup_id, 'trust_ceiling_exceeded')
                 mark_operation_error(cleanup_record, msg)
                 cleanup_record.progress_message = msg
-                cleanup_record.records_kept = len(orphaned_files)
+                cleanup_record.records_kept = eligible_count + unconfirmed_count
                 db.session.commit()
                 # A run that deleted nothing still has to leave a record.
-                self._create_cleanup_report(
-                    cleanup_record, [f['file_path'] for f in orphaned_files])
+                self._create_cleanup_report(cleanup_record)
                 with self.cleanup_lock:
                     self.cleanup_state['is_running'] = False
                     self.cleanup_state['phase'] = 'error'
                 return
 
-            orphaned_ids = [f['file_id'] for f in orphaned_files]
-            orphaned_paths = [f['file_path'] for f in orphaned_files]
-            orphaned_count = len(orphaned_files)
-            held_paths = [f['file_path'] for f in unconfirmed]
-
-            # Store for report: the deleted paths, plus the held ones, since a
-            # run that kept records has to be able to say which.
-            self.orphaned_files_list = orphaned_paths + held_paths
-
             # The count now means what the run will act on, so the completion
             # message and the report cannot claim the phase 2 figure.
-            cleanup_record.orphaned_found = orphaned_count
-            cleanup_record.records_kept = len(unconfirmed)
+            cleanup_record.orphaned_found = eligible_count
+            cleanup_record.records_kept = unconfirmed_count
             db.session.commit()
 
-            if returned:
-                logger.warning(f"{len(returned):,} flagged file(s) are readable again since "
+            if returned_count:
+                logger.warning(f"{returned_count:,} flagged file(s) are readable again since "
                                f"phase 2 and were left alone; storage may have flapped mid-run")
-            if unconfirmed:
-                logger.warning(f"Holding back {len(unconfirmed):,} flagged file(s): {hold_reason}")
+            if unconfirmed_count:
+                logger.warning(f"Holding back {unconfirmed_count:,} flagged file(s): {hold_reason}")
 
             # Check if cancelled before proceeding to deletion phase
             if self._is_cancelled(cleanup_record):
@@ -745,51 +907,67 @@ class MaintenanceService:
                 with self.cleanup_lock:
                     self.cleanup_state['is_running'] = False
                     self.cleanup_state['phase'] = 'cancelled'
+                self._create_cleanup_report(cleanup_record)
                 return
             
             # Phase 3: Delete orphaned entries from database
-            if orphaned_ids:
+            if eligible_count:
                 cleanup_record.phase = 'deleting_entries'
                 cleanup_record.phase_number = 3
-                cleanup_record.progress_message = f'Phase 3 of 3: Removing {orphaned_count} orphaned entries from database...'
-                cleanup_record.total_files = len(orphaned_ids)
-                cleanup_record.phase_total = len(orphaned_ids)
+                cleanup_record.progress_message = f'Phase 3 of 3: Removing {eligible_count} orphaned entries from database...'
+                cleanup_record.total_files = eligible_count
+                cleanup_record.phase_total = eligible_count
                 cleanup_record.files_processed = 0
                 cleanup_record.phase_current = 0
                 db.session.commit()
 
-                # Delete orphaned entries in batches for performance
                 deleted_count = 0
                 batch_size = 50
+                last_decision_id = 0
 
-                for i in range(0, len(orphaned_ids), batch_size):
+                while True:
                     if self._is_cancelled(cleanup_record):
                         break
 
-                    batch_ids = orphaned_ids[i:i + batch_size]
-                    batch_paths = orphaned_paths[i:i + batch_size]
+                    decisions = (CleanupFileDecision.query.filter(
+                        CleanupFileDecision.cleanup_run_id == cleanup_record.cleanup_id,
+                        CleanupFileDecision.decision == 'eligible',
+                        CleanupFileDecision.id > last_decision_id,
+                    ).order_by(CleanupFileDecision.id).limit(batch_size).all())
+                    if not decisions:
+                        break
+                    last_decision_id = decisions[-1].id
+                    decision_by_result = {decision.scan_result_id: decision for decision in decisions}
+                    existing_ids = {row[0] for row in ScanResult.query.with_entities(ScanResult.id).filter(
+                        ScanResult.id.in_(decision_by_result)).all()}
+                    if existing_ids:
+                        ScanResult.query.filter(ScanResult.id.in_(existing_ids)).delete(
+                            synchronize_session=False)
+                    now = datetime.now(timezone.utc)
+                    for result_id, decision in decision_by_result.items():
+                        if result_id in existing_ids:
+                            decision.decision = 'deleted'
+                            decision.reason = 'media_absent_confirmed'
+                            deleted_count += 1
+                            logger.info(f"Removed orphaned inventory entry: {decision.file_path}")
+                        else:
+                            decision.decision = 'held'
+                            decision.reason = 'inventory_changed'
+                        decision.decided_at = now
 
-                    # Delete by IDs to avoid detached instance issues
-                    ScanResult.query.filter(ScanResult.id.in_(batch_ids)).delete(synchronize_session=False)
-
-                    # Log the deletions
-                    for path in batch_paths:
-                        deleted_count += 1
-                        logger.info(f"Deleted orphaned entry: {path}")
-
-                    # Commit batch
+                    # Inventory deletion and its terminal decision share this commit.
                     db.session.commit()
                     
                     # Update progress
                     cleanup_record.files_processed = deleted_count
                     cleanup_record.phase_current = deleted_count
-                    cleanup_record.current_file = f"Deleted {deleted_count}/{orphaned_count} entries"
+                    cleanup_record.current_file = f"Removed {deleted_count}/{eligible_count} inventory entries"
                     db.session.commit()
                     
                     with self.cleanup_lock:
                         self.cleanup_state['files_processed'] = deleted_count
                 
-                logger.info(f"Successfully deleted {deleted_count} orphaned database entries")
+                logger.info(f"Successfully removed {deleted_count} orphaned inventory entries")
             
             # Final commit
             db.session.commit()
@@ -802,17 +980,16 @@ class MaintenanceService:
                 cleanup_record.phase = 'complete'
                 # Rows held back are the operator's business: without them the
                 # message reads as "nothing to do" for files still on the books.
-                held = ((f' {len(unconfirmed):,} record(s) were kept because {hold_reason}.'
-                         + self._outage_note(len(unconfirmed), total_files_processed))
-                        if unconfirmed else '')
-                returned_note = (f' {len(returned):,} flagged file(s) are readable again and '
-                                 f'were left alone.') if returned else ''
-                if orphaned_count > 0:
-                    deleted_count = len(orphaned_ids) if orphaned_ids else orphaned_count
+                held = ((f' {unconfirmed_count:,} record(s) were kept because {hold_reason}.'
+                         + self._outage_note(unconfirmed_count, total_files_processed))
+                        if unconfirmed_count else '')
+                returned_note = (f' {returned_count:,} flagged file(s) are readable again and '
+                                 f'were left alone.') if returned_count else ''
+                if eligible_count > 0:
                     cleanup_record.progress_message = (
-                        f'Cleanup complete. Deleted {deleted_count} orphaned database '
+                        f'Cleanup complete. Removed {deleted_count} orphaned inventory '
                         f'entries.{held}{returned_note}')
-                elif unconfirmed or returned:
+                elif unconfirmed_count or returned_count:
                     cleanup_record.progress_message = (
                         f'Cleanup complete. No entries could be confirmed as '
                         f'deleted.{held}{returned_note}')
@@ -827,7 +1004,7 @@ class MaintenanceService:
             # too: cancelling during phase 3 leaves rows already deleted, and
             # that has to be on the record.
             if cleanup_record.phase in ('complete', 'error', 'cancelled'):
-                self._create_cleanup_report(cleanup_record, getattr(self, 'orphaned_files_list', []))
+                self._create_cleanup_report(cleanup_record)
             
             with self.cleanup_lock:
                 self.cleanup_state['is_running'] = False
@@ -841,7 +1018,7 @@ class MaintenanceService:
             try:
                 cleanup_record = db.session.get(CleanupState, cleanup_id)
                 if cleanup_record:
-                    self._create_cleanup_report(cleanup_record, getattr(self, 'orphaned_files_list', []))
+                    self._create_cleanup_report(cleanup_record)
             except Exception as report_error:
                 logger.error(f"Failed to create error report: {report_error}")
     
@@ -875,6 +1052,68 @@ class MaintenanceService:
                     .filter(CleanupState.id != cleanup_id)
                     .order_by(CleanupState.id.desc()).first())
         return (previous.records_kept or 0) if previous else 0
+
+    def _confirm_cleanup_decisions(self, cleanup_run_id, trust_unreadable_dirs, batch_size):
+        """Confirm absent candidates in keyset pages and retain every outcome."""
+        eligible_count = unconfirmed_count = returned_count = 0
+        held_dirs = set()
+        occupied = {}
+        last_id = 0
+        while True:
+            decisions = (CleanupFileDecision.query.filter(
+                CleanupFileDecision.cleanup_run_id == cleanup_run_id,
+                CleanupFileDecision.decision == 'pending',
+                CleanupFileDecision.id > last_id,
+            ).order_by(CleanupFileDecision.id).limit(batch_size).all())
+            if not decisions:
+                break
+            last_id = decisions[-1].id
+            now = datetime.now(timezone.utc)
+            for decision in decisions:
+                path = decision.file_path
+                if self._classify(path) != PATH_ABSENT:
+                    decision.decision = 'returned'
+                    decision.reason = 'media_readable'
+                    decision.decided_at = now
+                    returned_count += 1
+                    continue
+
+                directory = os.path.dirname(path)
+                if directory not in occupied:
+                    occupied[directory] = (self._has_entries(directory)
+                                           or self._library_answers(os.path.dirname(directory)))
+                if occupied[directory] or trust_unreadable_dirs:
+                    decision.decision = 'eligible'
+                    decision.reason = ('operator_trusted_unreadable_directory'
+                                       if trust_unreadable_dirs and not occupied[directory]
+                                       else 'media_absent_confirmed')
+                    eligible_count += 1
+                else:
+                    decision.decision = 'held'
+                    decision.reason = 'directory_unreadable_or_empty'
+                    held_dirs.add(directory)
+                    unconfirmed_count += 1
+                decision.decided_at = now
+            db.session.commit()
+        return (eligible_count, unconfirmed_count, returned_count,
+                self._describe_holds(held_dirs))
+
+    def _hold_eligible_cleanup_decisions(self, cleanup_run_id, reason):
+        """Turn a failed trusted confirmation into a durable held outcome."""
+        (CleanupFileDecision.query.filter_by(cleanup_run_id=cleanup_run_id,
+                                             decision='eligible')
+         .update({'decision': 'held', 'reason': reason,
+                  'decided_at': datetime.now(timezone.utc)},
+                 synchronize_session=False))
+        db.session.commit()
+
+    def _cleanup_report_preview(self, cleanup_run_id):
+        """Return a bounded report preview and the full durable decision count."""
+        query = CleanupFileDecision.query.filter_by(cleanup_run_id=cleanup_run_id)
+        total = query.count()
+        preview = [row.file_path for row in query.order_by(CleanupFileDecision.id)
+                   .limit(_CLEANUP_REPORT_PREVIEW).all()]
+        return preview, total
 
     def _confirm_orphans(self, orphaned_files, trust_unreadable_dirs=False):
         """Split flagged rows into the ones safe to delete and the rest.
@@ -1024,10 +1263,18 @@ class MaintenanceService:
             deleted_count = ((cleanup_record.files_processed or 0)
                              if cleanup_record.phase_number == 3 else 0)
 
+            preview, decision_total = self._cleanup_report_preview(cleanup_record.cleanup_id)
+            if not decision_total and orphaned_files_list:
+                preview = list(orphaned_files_list)[:_CLEANUP_REPORT_PREVIEW]
+                decision_total = len(orphaned_files_list)
+
             # Create the report
             report = ScanReport(
                 scan_type='cleanup',
                 scan_id=f'scheduled_{schedule_id}' if schedule_id else None,
+                cleanup_run_id=cleanup_record.cleanup_id,
+                cleanup_details_total=decision_total,
+                cleanup_details_truncated=decision_total > len(preview),
                 start_time=cleanup_record.start_time,
                 end_time=cleanup_record.end_time,
                 duration_seconds=duration_seconds,
@@ -1044,10 +1291,10 @@ class MaintenanceService:
                 created_at=datetime.now(timezone.utc)
             )
 
-            # Store the list of orphaned files in directories_scanned field as JSON
-            # This field is repurposed for cleanup reports to store the orphaned files list
-            if orphaned_files_list:
-                report.directories_scanned = json.dumps(orphaned_files_list)
+            # Legacy report consumers read this field. Keep only a bounded
+            # preview: CleanupFileDecision is the complete audit trail.
+            if preview:
+                report.directories_scanned = json.dumps(preview)
 
             db.session.add(report)
             db.session.commit()
@@ -1069,13 +1316,16 @@ class MaintenanceService:
             # Don't fail the cleanup operation if report creation fails
             return None
     
-    def _run_file_changes_check(self, check_id: str, file_paths=None, schedule_id=None,
+    def _run_file_changes_check(self, check_id: str, file_paths=None,
+                                scan_roots=None, schedule_id=None,
                                 time_budget_minutes=None):
         """Run the file changes check operation
 
         Args:
             check_id: Unique ID for this check
             file_paths: Optional list of specific file paths to check (if None, checks all files)
+            scan_roots: Optional directory roots to check recursively. Unlike
+                file_paths, roots include only records below their boundary.
             schedule_id: Optional schedule ID for healthcheck integration
             time_budget_minutes: Optional soft deadline. When it expires, no
                 new hash tasks are dispatched; in-flight tasks drain (still
@@ -1095,6 +1345,8 @@ class MaintenanceService:
                 logger.info(f"Using schedule {schedule_id} time budget: {time_budget_minutes} minutes")
 
         try:
+            if scan_roots is not None:
+                scan_roots = validate_maintenance_scan_roots(scan_roots)
             # Use READ COMMITTED isolation level to reduce lock contention
             # This allows reads to see committed data without holding locks
             db.session.execute(text("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED"))
@@ -1103,6 +1355,10 @@ class MaintenanceService:
             file_changes_record = FileChangesState.query.filter_by(check_id=check_id).first()
             if not file_changes_record:
                 logger.error(f"File changes record not found: {check_id}")
+                return
+            if not required_mounts_available(scan_roots if scan_roots is not None else file_paths):
+                self._handle_file_changes_error(
+                    check_id, 'Required storage mount is unavailable or does not match its approved baseline')
                 return
 
             # Keep track of changed files for the report
@@ -1113,13 +1369,31 @@ class MaintenanceService:
             file_changes_record.phase_number = 1
             file_changes_record.phase_total = 1
             file_changes_record.phase_current = 0
+            file_changes_record.integrity_attempted = 0
+            file_changes_record.integrity_successful = 0
+            file_changes_record.integrity_errors = 0
+            file_changes_record.integrity_unavailable = 0
 
-            # Get total count - either all files or filtered by file_paths
+            excluded_paths = excluded_extensions = excluded_patterns = None
+            if scan_roots is not None:
+                paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
+                excluded_paths = [os.path.realpath(os.path.abspath(path)) for path in paths]
+            scoped_query = _apply_maintenance_scope(
+                ScanResult.query, file_paths=file_paths, scan_roots=scan_roots,
+                excluded_paths=excluded_paths, excluded_extensions=excluded_extensions,
+                excluded_patterns=excluded_patterns,
+            )
+            # Get total count - either all files, exact paths, or roots.
             if file_paths:
                 file_changes_record.progress_message = f'Phase 1 of 3: Starting file changes check for {len(file_paths)} specific file(s)...'
                 db.session.commit()
-                total_files = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).count()
+                total_files = scoped_query.count()
                 logger.info(f"File changes check scoped to {len(file_paths)} specific file(s), found {total_files} in database")
+            elif scan_roots is not None:
+                file_changes_record.progress_message = f'Phase 1 of 3: Starting file changes check under {len(scan_roots)} scan root(s)...'
+                db.session.commit()
+                total_files = scoped_query.count()
+                logger.info(f"File changes check scoped to {len(scan_roots)} scan root(s), found {total_files} in database")
             else:
                 file_changes_record.progress_message = 'Phase 1 of 3: Starting file changes check...'
                 db.session.commit()
@@ -1223,6 +1497,10 @@ class MaintenanceService:
             total_files_processed = 0
             files_queued = 0
             files_abandoned = 0
+            integrity_attempted = 0
+            integrity_successful = 0
+            integrity_errors = 0
+            integrity_unavailable = 0
             last_progress_update = 0
             last_heartbeat_time = time.time()
 
@@ -1241,12 +1519,17 @@ class MaintenanceService:
                 pct = int((total_files_processed / total_files * 100)) if total_files > 0 else 0
                 msg = (
                     f'Processing files: {total_files_processed:,}/{total_files:,} ({pct}%) - '
-                    f'{len(changed_files)} changes found, {len(active_tasks)} active tasks'
+                    f'{integrity_successful:,} verified, {integrity_errors:,} errors, '
+                    f'{integrity_unavailable:,} unavailable, {len(active_tasks)} active tasks'
                 )
                 if set_heartbeat:
                     file_changes_record.last_heartbeat = datetime.now(timezone.utc)
                 file_changes_record.phase_current = total_files_processed
                 file_changes_record.files_processed = total_files_processed
+                file_changes_record.integrity_attempted = integrity_attempted
+                file_changes_record.integrity_successful = integrity_successful
+                file_changes_record.integrity_errors = integrity_errors
+                file_changes_record.integrity_unavailable = integrity_unavailable
                 file_changes_record.progress_message = msg
                 db.session.commit()
                 update_file_changes_progress_redis(
@@ -1263,6 +1546,8 @@ class MaintenanceService:
             # chatter at 1M-file scale).
             stamp_ids = []    # attempted: rotate to the back of the queue
             success_ids = []  # only successful reads count as verified
+            error_ids = []
+            unavailable_ids = []
             seen_ids = []     # file was readable again -> restore file_exists
             rebaseline = []   # (id, mtime_iso): first check after the UTC fix
 
@@ -1270,14 +1555,14 @@ class MaintenanceService:
                 # A row whose stamp fails would re-queue at the front forever,
                 # so failed ids are excluded from further fetches and counted.
                 nonlocal timestamp_write_failures
-                if not (stamp_ids or success_ids or seen_ids or rebaseline):
+                if not (stamp_ids or success_ids or error_ids or unavailable_ids
+                        or seen_ids or rebaseline):
                     return
                 try:
                     if stamp_ids:
                         db.session.query(ScanResult).filter(
                             ScanResult.id.in_(stamp_ids)
-                        ).update({'last_integrity_attempt_at': datetime.now(timezone.utc),
-                                   'last_integrity_outcome': 'error'},
+                        ).update({'last_integrity_attempt_at': datetime.now(timezone.utc)},
                                  synchronize_session=False)
                     if success_ids:
                         db.session.query(ScanResult).filter(ScanResult.id.in_(success_ids)).update(
@@ -1285,6 +1570,14 @@ class MaintenanceService:
                              # Compatibility value is successful only.
                              'last_integrity_check_date': datetime.now(timezone.utc),
                              'last_integrity_outcome': 'success'}, synchronize_session=False)
+                    if error_ids:
+                        db.session.query(ScanResult).filter(ScanResult.id.in_(error_ids)).update(
+                            {'last_integrity_outcome': 'error'}, synchronize_session=False)
+                    if unavailable_ids:
+                        db.session.query(ScanResult).filter(
+                            ScanResult.id.in_(unavailable_ids)).update(
+                                {'last_integrity_outcome': 'unreadable'},
+                                synchronize_session=False)
                     if seen_ids:
                         # A file we just hashed exists, whatever a past run
                         # recorded (recovers rows stranded by a mount outage)
@@ -1309,6 +1602,8 @@ class MaintenanceService:
                 finally:
                     stamp_ids.clear()
                     success_ids.clear()
+                    error_ids.clear()
+                    unavailable_ids.clear()
                     seen_ids.clear()
                     rebaseline.clear()
 
@@ -1321,7 +1616,10 @@ class MaintenanceService:
                 return fetch_integrity_batch(
                     file_paths, run_watermark,
                     in_flight | failed_stamp_ids, batch_size,
-                    largest_first=budget_deadline is not None
+                    largest_first=budget_deadline is not None,
+                    scan_roots=scan_roots, excluded_paths=excluded_paths,
+                    excluded_extensions=excluded_extensions,
+                    excluded_patterns=excluded_patterns,
                 )
 
             pending = []
@@ -1384,6 +1682,7 @@ class MaintenanceService:
                         try:
                             result = safe_task_get(task, timeout=1)
                             total_files_processed += 1
+                            integrity_attempted += 1
                             refill_allowed = True
 
                             # Terminal outcome: rotate to the back of the queue
@@ -1391,10 +1690,18 @@ class MaintenanceService:
                             if result.get('current_hash'):
                                 success_ids.append(result['file_id'])
                                 seen_ids.append(result['file_id'])
+                                integrity_successful += 1
                                 if (result['change_type'] == 'unchanged'
                                         and not task_info.get('mtime_trusted')
                                         and result.get('current_modified')):
                                     rebaseline.append((result['file_id'], result['current_modified']))
+                            elif (result.get('outcome') == 'error'
+                                  or result.get('change_type') == 'error'):
+                                error_ids.append(result['file_id'])
+                                integrity_errors += 1
+                            else:
+                                unavailable_ids.append(result['file_id'])
+                                integrity_unavailable += 1
 
                             # For single file scans, update progress immediately so UI can see it
                             if total_files == 1:
@@ -1437,6 +1744,10 @@ class MaintenanceService:
                             # this run - stamp it or it re-queues at the front.
                             if task_info.get('id') is not None:
                                 stamp_ids.append(task_info['id'])
+                                error_ids.append(task_info['id'])
+                            total_files_processed += 1
+                            integrity_attempted += 1
+                            integrity_errors += 1
                             refill_allowed = True
                         finally:
                             forget_task_result(task)
@@ -1444,6 +1755,10 @@ class MaintenanceService:
                         files_abandoned += 1
                         if task_info.get('id') is not None:
                             stamp_ids.append(task_info['id'])
+                            unavailable_ids.append(task_info['id'])
+                        total_files_processed += 1
+                        integrity_attempted += 1
+                        integrity_unavailable += 1
                         refill_allowed = True
                     else:
                         still_active.append(task_info)
@@ -1565,9 +1880,14 @@ class MaintenanceService:
             # Final update
             file_changes_record.phase_current = total_files_processed
             file_changes_record.phase_total = total_files
+            file_changes_record.integrity_attempted = integrity_attempted
+            file_changes_record.integrity_successful = integrity_successful
+            file_changes_record.integrity_errors = integrity_errors
+            file_changes_record.integrity_unavailable = integrity_unavailable
             file_changes_record.progress_message = (
-                f'Completed: {total_files_processed:,}/{total_files:,} files - '
-                f'{len(changed_files)} changes found'
+                f'Completed: {integrity_attempted:,} attempted, '
+                f'{integrity_successful:,} verified, {integrity_errors:,} errors, '
+                f'{integrity_unavailable:,} unavailable - {len(changed_files)} changes found'
             )
             db.session.commit()
 
@@ -1677,13 +1997,16 @@ class MaintenanceService:
                 file_changes_record.phase = 'complete'
                 if budget_expired:
                     file_changes_record.progress_message = (
-                        f'Budget reached: {total_files_processed:,} of {total_files:,} files '
-                        f'verified this run ({len(changed_files)} changed, {modified_count} modified, '
+                        f'Budget reached: {integrity_attempted:,} of {total_files:,} files attempted '
+                        f'this run ({integrity_successful:,} verified, {integrity_errors:,} errors, '
+                        f'{integrity_unavailable:,} unavailable, {len(changed_files)} changed, {modified_count} modified, '
                         f'{deleted_count} deleted). Queue resumes at next run.'
                     )
                 else:
                     file_changes_record.progress_message = (
-                        f'Check complete. Found {len(changed_files)} changed files '
+                        f'Check complete. {integrity_attempted:,} files attempted: '
+                        f'{integrity_successful:,} verified, {integrity_errors:,} errors, '
+                        f'{integrity_unavailable:,} unavailable. Found {len(changed_files)} changed files '
                         f'({modified_count} modified, {deleted_count} deleted), '
                         f'{file_changes_record.corrupted_found} newly corrupted.'
                     )
@@ -1711,8 +2034,9 @@ class MaintenanceService:
             try:
                 from pixelprobe.models import ScanState
                 scan_state = ScanState.query.filter_by(scan_id=check_id).first()
-                if scan_state:
-                    scan_state.complete_scan()
+                if (scan_state and scan_state.is_active
+                        and file_changes_record.phase == 'complete'):
+                    finalize_scan(scan_state)
                     logger.info(f"Completed ScanState for single file integrity check")
             except Exception as e:
                 logger.warning(f"Failed to complete ScanState for single file integrity check: {e}")
@@ -1930,6 +2254,7 @@ class MaintenanceService:
                 cleanup_record.phase = 'error'
                 cleanup_record.is_active = False
                 cleanup_record.end_time = datetime.now(timezone.utc)
+                cleanup_record.error_message = error_msg
                 cleanup_record.progress_message = f'Error: {error_msg}'
                 db.session.commit()
         except:
@@ -1947,6 +2272,7 @@ class MaintenanceService:
                 record.phase = 'error'
                 record.is_active = False
                 record.end_time = datetime.now(timezone.utc)
+                record.error_message = error_msg
                 record.progress_message = f'Error: {error_msg}'
                 db.session.commit()
         except:

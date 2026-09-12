@@ -15,7 +15,7 @@ tests/
 |-- test_authentication.py         # Auth and API token tests
 |-- test_bulk_reports.py           # Bulk report generation
 |-- test_concurrency.py            # Concurrent operation behavior
-|-- test_frontend_build.py         # Runs npm install / npm run build
+|-- test_frontend_build.py         # Runs npm ci / npm run build
 |-- test_gunicorn_conf.py          # gunicorn.conf.py env handling
 |-- test_jpeg_pixel.py             # JPEG pixel-level validation
 |-- test_logs.py                   # Log endpoints and log capture
@@ -66,7 +66,7 @@ Two files deserve a call-out:
   the default local run; CI runs them on the Python 3.12 matrix leg.
   Committed synthesized fixtures are regenerated with
   `tests/fixtures/media_samples/generate_corrupted_fixtures.py`.
-- `test_frontend_build.py` actually runs `npm install` and `npm run build`,
+- `test_frontend_build.py` actually runs `npm ci` and `npm run build`,
   so it needs Node.js 20 and npm available.
 
 ## Running tests
@@ -78,7 +78,7 @@ Two files deserve a call-out:
 pip install -r requirements-test.txt
 
 # Build the frontend once (test_frontend_build.py and the app expect it)
-npm install && npm run build
+npm ci && npm run build
 
 # Default local run: everything except the real_media tests
 pytest -m "not real_media"
@@ -289,7 +289,7 @@ CI is defined in
 - `test`: runs on every push and pull request across a Python matrix of
   3.10, 3.11, and 3.12 (`actions/checkout@v4`, `actions/setup-python@v5`).
   It sets up Node.js 20, installs `ffmpeg imagemagick libmagic1` via apt,
-  installs `requirements-test.txt`, runs `npm install && npm run build`,
+  installs `requirements-test.txt`, runs `npm ci && npm run build`,
   then executes `pytest -m "not real_media" --cov=pixelprobe`. Coverage is
   uploaded to Codecov (`codecov/codecov-action@v5`) with
   `fail_ci_if_error: false`, so a Codecov outage cannot fail the build.
@@ -321,7 +321,7 @@ pytest -l
 
 - Import errors: ensure PYTHONPATH includes project root
 - Database errors: check fixtures are properly scoped
-- Frontend errors: run `npm install && npm run build` first
+- Frontend errors: run `npm ci && npm run build` first
 - File not found: use absolute paths in fixtures
 
 ## Adding new tests

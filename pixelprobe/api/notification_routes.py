@@ -3,17 +3,28 @@ Notification configuration API routes for PixelProbe
 P3 audit fix: Add API endpoints for notification provider management
 """
 
-from flask import Blueprint, request, jsonify
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from pixelprobe.models import db, NotificationProvider, NotificationRule
-from pixelprobe.auth import auth_required
+from flask import Blueprint, jsonify, request
+
+from pixelprobe.auth import admin_required
+from pixelprobe.models import NotificationProvider, NotificationRule, db
 from pixelprobe.services.notification_service import (
-    NotificationService, VALID_EMAIL_SECURITY, parse_recipients, resolve_smtp_port
+    NOTIFICATION_EVENT_CONDITIONS,
+    SUPPORTED_NOTIFICATION_EVENTS,
+    VALID_EMAIL_SECURITY,
+    NotificationService,
+    parse_recipients,
+    resolve_smtp_port,
 )
-from pixelprobe.utils.security import validate_safe_url, validate_outbound_host
+from pixelprobe.utils.security import (
+    AuditLogger,
+    validate_outbound_host,
+    validate_safe_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,18 +32,14 @@ notification_bp = Blueprint('notifications', __name__, url_prefix='/api/notifica
 
 # Valid provider types and event types
 VALID_PROVIDER_TYPES = ['pushover', 'ntfy', 'webhook', 'email']
-VALID_EVENT_TYPES = [
-    'scan_start', 'scan_complete', 'scan_failed', 'scan_missed',
-    'corruption_found', 'bitrot_suspected', 'user_added', 'user_deleted',
-    'api_key_added', 'api_key_deleted', 'auth_failed'
-]
+VALID_EVENT_TYPES = sorted(SUPPORTED_NOTIFICATION_EVENTS)
 VALID_PRIORITIES = ['low', 'normal', 'high']
 
 
 # ==================== Provider Endpoints ====================
 
 @notification_bp.route('/providers', methods=['GET'])
-@auth_required
+@admin_required
 def get_providers():
     """Get all notification providers
 
@@ -49,7 +56,7 @@ def get_providers():
 
 
 @notification_bp.route('/providers/<int:provider_id>', methods=['GET'])
-@auth_required
+@admin_required
 def get_provider(provider_id):
     """Get a specific notification provider
 
@@ -72,7 +79,7 @@ def get_provider(provider_id):
 
 
 @notification_bp.route('/providers', methods=['POST'])
-@auth_required
+@admin_required
 def create_provider():
     """Create a new notification provider
 
@@ -118,18 +125,23 @@ def create_provider():
 
         db.session.add(provider)
         db.session.commit()
+        AuditLogger.log_action(
+            'notification_provider_created',
+            {'provider_type': provider.provider_type, 'is_active': provider.is_active},
+            target=f'notification_provider:{provider.id}',
+        )
 
         logger.info(f"Created notification provider: {name} ({provider_type})")
         return jsonify(provider.to_dict(include_config=True)), 201
 
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Error creating notification provider: {e}")
+        logger.error('Failed to create notification provider')
         return jsonify({'error': 'Failed to create provider'}), 500
 
 
 @notification_bp.route('/providers/<int:provider_id>', methods=['PUT'])
-@auth_required
+@admin_required
 def update_provider(provider_id):
     """Update a notification provider
 
@@ -168,18 +180,23 @@ def update_provider(provider_id):
             provider.is_active = data['is_active']
 
         db.session.commit()
+        AuditLogger.log_action(
+            'notification_provider_updated',
+            {'provider_type': provider.provider_type, 'is_active': provider.is_active},
+            target=f'notification_provider:{provider.id}',
+        )
 
         logger.info(f"Updated notification provider: {provider.name}")
         return jsonify(provider.to_dict(include_config=True)), 200
 
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Error updating provider {provider_id}: {e}")
+        logger.error('Failed to update notification provider')
         return jsonify({'error': 'Failed to update provider'}), 500
 
 
 @notification_bp.route('/providers/<int:provider_id>', methods=['DELETE'])
-@auth_required
+@admin_required
 def delete_provider(provider_id):
     """Delete a notification provider
 
@@ -195,20 +212,26 @@ def delete_provider(provider_id):
             return jsonify({'error': 'Provider not found'}), 404
 
         provider_name = provider.name
+        provider_type = provider.provider_type
         db.session.delete(provider)
         db.session.commit()
+        AuditLogger.log_action(
+            'notification_provider_deleted',
+            {'provider_type': provider_type},
+            target=f'notification_provider:{provider_id}',
+        )
 
         logger.info(f"Deleted notification provider: {provider_name}")
         return '', 204
 
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Error deleting provider {provider_id}: {e}")
+        logger.error('Failed to delete notification provider')
         return jsonify({'error': 'Failed to delete provider'}), 500
 
 
 @notification_bp.route('/providers/<int:provider_id>/test', methods=['POST'])
-@auth_required
+@admin_required
 def test_provider(provider_id):
     """Test a notification provider by sending a test notification
 
@@ -233,6 +256,12 @@ def test_provider(provider_id):
         provider.last_notification_status = 'success' if success else 'failure'
         provider.last_notification_time = datetime.now(timezone.utc)
         db.session.commit()
+        AuditLogger.log_action(
+            'notification_provider_tested',
+            {'provider_type': provider.provider_type},
+            target=f'notification_provider:{provider.id}',
+            outcome='success' if success else 'failure',
+        )
 
         if success:
             return jsonify({'success': True, 'message': 'Test notification sent successfully'}), 200
@@ -240,14 +269,14 @@ def test_provider(provider_id):
         return jsonify({'success': False, 'error': 'Test notification failed'}), 400
 
     except Exception as e:
-        logger.error(f"Error testing provider {provider_id}: {e}", exc_info=True)
+        logger.error('Failed to test notification provider')
         return jsonify({'error': 'Failed to test provider'}), 500
 
 
 # ==================== Rule Endpoints ====================
 
 @notification_bp.route('/rules', methods=['GET'])
-@auth_required
+@admin_required
 def get_rules():
     """Get all notification rules
 
@@ -263,7 +292,7 @@ def get_rules():
 
 
 @notification_bp.route('/rules/<int:rule_id>', methods=['GET'])
-@auth_required
+@admin_required
 def get_rule(rule_id):
     """Get a specific notification rule
 
@@ -284,7 +313,7 @@ def get_rule(rule_id):
 
 
 @notification_bp.route('/rules', methods=['POST'])
-@auth_required
+@admin_required
 def create_rule():
     """Create a new notification rule
 
@@ -324,16 +353,31 @@ def create_rule():
         if priority not in VALID_PRIORITIES:
             return jsonify({'error': f'Invalid priority. Must be one of: {VALID_PRIORITIES}'}), 400
 
+        conditions, condition_error = _validate_conditions(event_type, data.get('conditions'))
+        if condition_error:
+            return jsonify({'error': condition_error}), 400
         rule = NotificationRule(
             provider_id=provider_id,
             event_type=event_type,
             is_active=data.get('is_active', True),
             priority=priority,
-            conditions=data.get('conditions')
+            conditions=conditions
         )
 
         db.session.add(rule)
         db.session.commit()
+        AuditLogger.log_action(
+            'notification_rule_created',
+            {
+                'provider_id': rule.provider_id,
+                'event_type': rule.event_type,
+                'is_active': rule.is_active,
+                'priority': rule.priority,
+                'condition_keys': sorted((rule.conditions or {}).keys()),
+            },
+            target=f'notification_rule:{rule.id}',
+            outcome='success',
+        )
 
         logger.info(f"Created notification rule: {event_type} for provider {provider.name}")
         return jsonify(rule.to_dict()), 201
@@ -345,7 +389,7 @@ def create_rule():
 
 
 @notification_bp.route('/rules/<int:rule_id>', methods=['PUT'])
-@auth_required
+@admin_required
 def update_rule(rule_id):
     """Update a notification rule
 
@@ -371,10 +415,11 @@ def update_rule(rule_id):
             return jsonify({'error': 'Request body is required'}), 400
 
         # Update fields if provided
+        previous_event_type = rule.event_type
+        event_type = data.get('event_type', previous_event_type)
         if 'event_type' in data:
             if data['event_type'] not in VALID_EVENT_TYPES:
                 return jsonify({'error': f'Invalid event type. Must be one of: {VALID_EVENT_TYPES}'}), 400
-            rule.event_type = data['event_type']
 
         if 'is_active' in data:
             rule.is_active = data['is_active']
@@ -384,10 +429,28 @@ def update_rule(rule_id):
                 return jsonify({'error': f'Invalid priority. Must be one of: {VALID_PRIORITIES}'}), 400
             rule.priority = data['priority']
 
-        if 'conditions' in data:
-            rule.conditions = data['conditions']
+        if 'conditions' in data or event_type != previous_event_type:
+            conditions, condition_error = _validate_conditions(
+                event_type, data.get('conditions', rule.conditions))
+            if condition_error:
+                return jsonify({'error': condition_error}), 400
+            rule.conditions = conditions
+
+        rule.event_type = event_type
 
         db.session.commit()
+        AuditLogger.log_action(
+            'notification_rule_updated',
+            {
+                'provider_id': rule.provider_id,
+                'event_type': rule.event_type,
+                'is_active': rule.is_active,
+                'priority': rule.priority,
+                'condition_keys': sorted((rule.conditions or {}).keys()),
+            },
+            target=f'notification_rule:{rule.id}',
+            outcome='success',
+        )
 
         logger.info(f"Updated notification rule {rule_id}")
         return jsonify(rule.to_dict()), 200
@@ -399,7 +462,7 @@ def update_rule(rule_id):
 
 
 @notification_bp.route('/rules/<int:rule_id>', methods=['DELETE'])
-@auth_required
+@admin_required
 def delete_rule(rule_id):
     """Delete a notification rule
 
@@ -414,8 +477,16 @@ def delete_rule(rule_id):
         if not rule:
             return jsonify({'error': 'Rule not found'}), 404
 
+        provider_id = rule.provider_id
+        event_type = rule.event_type
         db.session.delete(rule)
         db.session.commit()
+        AuditLogger.log_action(
+            'notification_rule_deleted',
+            {'provider_id': provider_id, 'event_type': event_type},
+            target=f'notification_rule:{rule_id}',
+            outcome='success',
+        )
 
         logger.info(f"Deleted notification rule {rule_id}")
         return '', 204
@@ -427,6 +498,37 @@ def delete_rule(rule_id):
 
 
 # ==================== Helper Functions ====================
+
+def _validate_conditions(event_type, conditions):
+    if conditions is None:
+        return None, None
+    if not isinstance(conditions, dict):
+        return None, 'conditions must be a JSON object'
+    capabilities = NOTIFICATION_EVENT_CONDITIONS.get(event_type, {})
+    for key, expression in conditions.items():
+        value_type = capabilities.get(key) if isinstance(key, str) else None
+        if not value_type:
+            return None, f'condition key is not supported for {event_type}'
+        if isinstance(expression, dict):
+            if set(expression) != {'operator', 'value'}:
+                return None, 'condition objects require operator and value'
+            if expression['operator'] not in {'eq', 'gt', 'gte', 'lt', 'lte'}:
+                return None, 'condition operator is invalid'
+            if ((expression['operator'] != 'eq' or value_type == 'number') and
+                    (not isinstance(expression['value'], (int, float)) or
+                     isinstance(expression['value'], bool))):
+                return None, 'numeric condition operators require numeric values'
+            if value_type == 'string' and not isinstance(expression['value'], str):
+                return None, 'string equality conditions require a string value'
+        elif value_type == 'number':
+            if isinstance(expression, str):
+                if not re.fullmatch(r'(?:>=|<=|>|<)\s*[-+]?\d+(?:\.\d+)?', expression):
+                    return None, 'numeric string conditions must use >, >=, <, or <='
+            elif not isinstance(expression, (int, float)) or isinstance(expression, bool):
+                return None, 'numeric conditions require a number or comparison string'
+        elif not isinstance(expression, str):
+            return None, 'string conditions require a string value'
+    return conditions, None
 
 def _preserve_masked_secrets(stored: dict, incoming: dict) -> dict:
     """Keep the stored secret when the caller sends the mask back unchanged.

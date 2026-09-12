@@ -1,3 +1,11 @@
+FROM node:22.22.2-bookworm-slim AS frontend
+
+WORKDIR /frontend
+COPY package.json package-lock.json webpack.config.js ./
+RUN npm ci
+COPY static ./static
+RUN npm run build
+
 FROM ubuntu:26.04
 
 # Prevent interactive prompts during package installation
@@ -18,9 +26,6 @@ RUN apt-get update && \
     python3.12 \
     python3.12-dev \
     python3.12-venv \
-    # Node.js for frontend build \
-    nodejs \
-    npm \
     # Core utilities \
     ffmpeg \
     libmagic1 \
@@ -107,6 +112,11 @@ ENV FFMPEG_HTTP_TIMEOUT=30000000
 
 WORKDIR /app
 
+ARG APP_UID=10001
+ARG APP_GID=10001
+RUN groupadd --gid "${APP_GID}" pixelprobe && \
+    useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --shell /usr/sbin/nologin pixelprobe
+
 # Verify FFmpeg and ImageMagick installations
 RUN ffmpeg -version && \
     ffmpeg -decoders 2>/dev/null | grep -E "(hevc|h264|h265|av1|vp9)" && \
@@ -135,7 +145,7 @@ COPY requirements.txt .
 # After install, remove chardet (pulled in by reportlab) -- its 7.x version fails
 # requests' version check (requires <6.0.0). Our app uses charset_normalizer instead.
 RUN pip install --no-cache-dir -r requirements.txt \
-    && pip uninstall -y chardet 2>/dev/null; true
+    && (pip uninstall -y chardet 2>/dev/null || true)
 
 # Build headers were only needed for pip C-extension builds above; linux-libc-dev
 # otherwise ships a stream of unfixed kernel-header CVEs the runtime never touches.
@@ -143,21 +153,15 @@ RUN apt-get purge -y linux-libc-dev python3.12-dev 2>/dev/null; \
     apt-get autoremove -y 2>/dev/null; \
     rm -rf /var/lib/apt/lists/* /root/.cache
 
-COPY package.json webpack.config.js ./
-RUN npm install
-
 COPY . .
-
-# Build frontend assets, then drop the node toolchain. Webpack and its
-# transitive dev-only dependencies (picomatch, serialize-javascript, svgo,
-# etc.) are not needed at runtime and otherwise ship as CVEs in the image.
-RUN npm run build && \
-    rm -rf node_modules package-lock.json
+COPY --from=frontend /frontend/static/dist ./static/dist
 
 # Ensure the pixelprobe package is properly installed
 RUN mkdir -p /app/instance && \
     chmod -R 755 /app && \
-    find /app -type f -name "*.py" -exec chmod 644 {} \;
+    find /app -type f -name "*.py" -exec chmod 644 {} \; && \
+    mkdir -p /app/instance /app/runtime /app/logs && \
+    chown -R "${APP_UID}:${APP_GID}" /app/instance /app/runtime /app/logs /tmp
 
 # Set Python path to include the app directory
 ENV PYTHONPATH=/app
@@ -168,6 +172,8 @@ EXPOSE 5000
 
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
+
+USER pixelprobe
 
 # Don't set APP_VERSION here - let version.py be the single source of truth
 # The app will read the version from version.py directly

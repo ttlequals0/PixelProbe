@@ -9,12 +9,15 @@ operator deleted and a folder inside a mount that came down are the same ENOENT.
 Those records are kept for the operator to confirm.
 """
 
+import json
+import sys
+import types
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 
-from pixelprobe.models import CleanupState, ScanReport, ScanResult
+from pixelprobe.models import CleanupFileDecision, CleanupState, ScanReport, ScanResult
 from pixelprobe.services.maintenance_service import MaintenanceService
 from pixelprobe.utils.helpers import PATH_UNKNOWN
 
@@ -250,3 +253,100 @@ class TestReports:
 
             assert report.status == 'cancelled'
             assert report.orphaned_records_deleted == 50
+
+    def test_report_caps_preview_but_retains_durable_decisions(self, app, db):
+        with app.app_context():
+            record = self._state(db, phase='complete', phase_number=3,
+                                 total_files=101, files_processed=101,
+                                 orphaned_found=101)
+            db.session.add_all([
+                CleanupFileDecision(cleanup_run_id=record.cleanup_id,
+                                    scan_result_id=index + 1,
+                                    file_path=f'/movies/gone-{index}.mkv',
+                                    decision='deleted', reason='media_absent_confirmed')
+                for index in range(101)
+            ])
+            db.session.commit()
+
+            report = _service()._create_cleanup_report(record)
+
+            assert report.cleanup_details_total == 101
+            assert report.cleanup_details_truncated is True
+            assert len(json.loads(report.directories_scanned)) == 100
+            assert CleanupFileDecision.query.filter_by(
+                cleanup_run_id=record.cleanup_id, decision='deleted').count() == 101
+
+
+def test_cleanup_persists_terminal_decisions_with_inventory_removal(app, db, tmp_path,
+                                                                    monkeypatch):
+    class CompletedTask:
+        def __init__(self, result):
+            self.result = result
+            self.state = 'SUCCESS'
+            self.id = 'cleanup-test-task'
+
+        def ready(self):
+            return True
+
+        def get(self, timeout=None):
+            return self.result
+
+        def forget(self):
+            return None
+
+    class ExistenceTask:
+        def apply_async(self, args, priority):
+            return CompletedTask({
+                'status': 'absent', 'file_id': args[0], 'file_path': args[1],
+            })
+
+    folder = tmp_path / 'library'
+    folder.mkdir()
+    (folder / 'still-here.mkv').write_text('x')
+    gone_paths = [str(folder / 'gone-a.mkv'), str(folder / 'gone-b.mkv')]
+    tasks_module = types.ModuleType('pixelprobe.tasks')
+    tasks_module.check_file_exists_task = ExistenceTask()
+    monkeypatch.setitem(sys.modules, 'pixelprobe.tasks', tasks_module)
+
+    with app.app_context():
+        ScanResult.query.delete()
+        record = CleanupState(start_time=datetime.now(timezone.utc), is_active=True,
+                              phase='starting')
+        db.session.add(record)
+        db.session.add_all([ScanResult(file_path=path, scan_status='completed')
+                            for path in gone_paths])
+        db.session.commit()
+
+        _service()._run_cleanup(record.id, file_paths=gone_paths)
+
+        assert ScanResult.query.filter(ScanResult.file_path.in_(gone_paths)).count() == 0
+        decisions = CleanupFileDecision.query.filter_by(
+            cleanup_run_id=record.cleanup_id).order_by(CleanupFileDecision.id).all()
+        assert [decision.decision for decision in decisions] == ['deleted', 'deleted']
+        assert all(decision.reason == 'media_absent_confirmed' for decision in decisions)
+        report = ScanReport.query.filter_by(cleanup_run_id=record.cleanup_id).one()
+        assert report.orphaned_records_deleted == 2
+
+
+def test_cleanup_worker_rechecks_required_mount_before_reading(app, db, tmp_path, monkeypatch):
+    root = tmp_path / 'library'
+    root.mkdir()
+    target = root / 'gone.mkv'
+    with app.app_context():
+        record = CleanupState(start_time=datetime.now(timezone.utc), is_active=True,
+                              phase='starting')
+        db.session.add_all([
+            record,
+            ScanResult(file_path=str(target), scan_status='completed'),
+        ])
+        db.session.commit()
+        monkeypatch.setattr('pixelprobe.services.maintenance_service.required_mounts_available',
+                            lambda _paths: False)
+
+        _service()._run_cleanup(record.id, file_paths=[str(target)])
+
+        db.session.refresh(record)
+        assert record.phase == 'error'
+        assert record.is_active is False
+        assert 'Required storage mount' in record.error_message
+        assert ScanResult.query.filter_by(file_path=str(target)).count() == 1

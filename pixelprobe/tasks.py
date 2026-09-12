@@ -14,13 +14,27 @@ from datetime import datetime, timezone
 from pixelprobe.celery_config import celery_app
 from pixelprobe.constants import SCAN_PHASES
 from pixelprobe.services.scan_service import ScanService
-from pixelprobe.models import db, ScanState, ScanResult, ScanReport
+from pixelprobe.models import db, ScanState, ScanResult, ScanReport, ScanTask
+from pixelprobe.services.notification_outbox import deliver_notification_outbox
 from pixelprobe.utils.celery_utils import is_db_connection_corruption
 from pixelprobe.utils.integrity import classify_file_change
 from pixelprobe.utils.log_context import current_scan_id, current_celery_task_id
 
 
 logger = logging.getLogger(__name__)
+
+@celery_app.task(bind=True, max_retries=5, default_retry_delay=60)
+def deliver_scan_notification_outbox(self, outbox_id):
+    """Deliver a durable scan notification at least once per saved target.
+
+    A process can die after an external provider accepts a request and before
+    this worker records that acknowledgement. Lease recovery deliberately
+    retries that target, so external notifications cannot be exactly once.
+    """
+    result = deliver_notification_outbox(outbox_id)
+    if result['status'] == 'RETRY':
+        raise self.retry(exc=RuntimeError('Notification targets remain retryable'))
+    return result
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60,
@@ -44,6 +58,14 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
     # The ContextTask wrapper handles session management properly
 
     logger.info(f"Starting Celery scan task {self.request.id} for scan_id: {scan_id}")
+    owned_task = ScanTask.query.filter_by(scan_id=scan_id,
+                                          celery_task_id=self.request.id).first()
+    if owned_task and owned_task.status == 'processing':
+        return {'status': 'SUPERSEDED', 'scan_id': scan_id, 'task_id': self.request.id}
+    if owned_task and owned_task.status in ('queued', 'dispatched'):
+        owned_task.status = 'processing'
+        owned_task.dispatch_lease_expires_at = None
+        db.session.commit()
 
     # Check if this scan_id already completed (e.g., on retry after DetachedInstanceError)
     # This prevents duplicate work when Celery retries a task that actually succeeded
@@ -94,6 +116,10 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
             )
             logger.info(f"scan_media_task shim redirected {scan_type} scan {scan_id} "
                         f"to orchestrator task {task.id}")
+            if owned_task and owned_task.status != 'cancelled':
+                owned_task.status = 'completed'
+                owned_task.completed_at = datetime.now(timezone.utc)
+                db.session.commit()
             return {
                 'status': 'REDIRECTED',
                 'scan_id': scan_id,
@@ -109,14 +135,15 @@ def scan_media_task(self, scan_id, paths, scan_type='full', force_rescan=False):
         if scan_type == 'single':
             # Single file scan
             if paths and len(paths) == 1:
-                # Pass scan_id so scan_service reuses the ScanState row this task
-                # is already tracking, instead of creating a second one. Otherwise
-                # the UI's progress monitor sees a brief gap between rows and
-                # flips to "done" before the real scan starts.
-                result = scan_service.scan_single_file(
-                    file_path=paths[0],
+                # Run synchronously in this worker. scan_single_file starts a
+                # second thread and would acknowledge the owned Celery task
+                # before the immutable run member has a terminal outcome.
+                result = scan_service.scan_files(
+                    file_paths=paths,
                     force_rescan=force_rescan,
-                    scan_id=scan_id
+                    num_workers=1,
+                    async_mode=False,
+                    scan_id=scan_id,
                 )
                 
                 # CRITICAL: Commit Flask-SQLAlchemy session to ensure ScanService changes are visible
@@ -241,6 +268,20 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
     # The ContextTask wrapper handles session management properly
 
     logger.info(f"Starting Celery file scan task {self.request.id} for scan_id: {scan_id}")
+    owned_task = ScanTask.query.filter_by(scan_id=scan_id,
+                                          celery_task_id=self.request.id).first()
+    state = ScanState.query.filter_by(scan_id=scan_id).first()
+    if state and state.phase == 'cancelled':
+        if owned_task:
+            owned_task.status = 'cancelled'
+            owned_task.completed_at = datetime.now(timezone.utc)
+            db.session.commit()
+        return {'status': 'CANCELLED', 'scan_id': scan_id, 'task_id': self.request.id}
+    if owned_task and owned_task.status == 'processing':
+        return {'status': 'SUPERSEDED', 'scan_id': scan_id, 'task_id': self.request.id}
+    if owned_task:
+        owned_task.status = 'processing'
+        db.session.commit()
 
     # Tag logs with scan context
     _scan_token = current_scan_id.set(scan_id)
@@ -279,7 +320,8 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
             file_paths=file_paths,
             force_rescan=force_rescan,
             num_workers=num_workers,  # Enable parallel scanning
-            async_mode=False  # Run synchronously in Celery task
+            async_mode=False,  # Run synchronously in Celery task
+            scan_id=scan_id
         )
         
         # Update Celery task state based on result
@@ -295,6 +337,12 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
         
         logger.info(f"Celery file scan task {self.request.id} completed successfully")
         
+        if result.get('status') not in ('completed', 'success'):
+            raise RuntimeError(f"Selected-file scan did not complete: {result}")
+        if owned_task:
+            owned_task.status = 'completed'
+            owned_task.completed_at = datetime.now(timezone.utc)
+            db.session.commit()
         return {
             'status': 'SUCCESS',
             'scan_id': scan_id,
@@ -307,6 +355,11 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
         
     except Exception as exc:
         logger.error(f"Celery file scan task {self.request.id} failed: {str(exc)}")
+        if owned_task:
+            owned_task.status = 'failed'
+            owned_task.error_message = str(exc)[:1000]
+            owned_task.completed_at = datetime.now(timezone.utc)
+            db.session.commit()
         
         # Retry with delay
         if self.request.retries < self.max_retries:

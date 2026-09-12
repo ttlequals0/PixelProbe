@@ -29,16 +29,16 @@ class TestWebpackBuild:
         webpack_config = Path(__file__).parent.parent / 'webpack.config.js'
         assert webpack_config.exists(), "webpack.config.js should exist"
 
-    def test_npm_install_succeeds(self):
-        """Test that npm install completes successfully"""
+    def test_npm_ci_succeeds(self):
+        """Test that the locked frontend install completes successfully"""
         project_root = Path(__file__).parent.parent
         result = subprocess.run(
-            ['npm', 'install'],
+            ['npm', 'ci'],
             cwd=project_root,
             capture_output=True,
             text=True
         )
-        assert result.returncode == 0, f"npm install failed: {result.stderr}"
+        assert result.returncode == 0, f"npm ci failed: {result.stderr}"
 
     def test_webpack_build_succeeds(self):
         """Test that webpack build completes successfully"""
@@ -149,29 +149,29 @@ class TestWebpackBuild:
 class TestAssetUrlHelper:
     """Test asset_url() template helper function"""
 
-    def test_asset_url_function_exists(self, app):
-        """Test that asset_url function is available in template context"""
-        # Note: This test is skipped because the test app in conftest.py
-        # doesn't include the asset_url context processor from the main app
-        pytest.skip("Test app doesn't include asset_url context processor")
+    def test_asset_url_function_exists(self):
+        project_root = Path(__file__).parent.parent
+        source = (project_root / 'app.py').read_text()
+        assert '@app.context_processor\ndef inject_assets()' in source
+        assert 'def asset_url(filename):' in source
 
-    def test_asset_url_returns_hashed_path(self, app):
-        """Test that asset_url returns hashed path from manifest"""
-        # Note: This test is skipped because the test app in conftest.py
-        # doesn't include the asset_url context processor from the main app
-        pytest.skip("Test app doesn't include asset_url context processor")
+    def test_asset_url_returns_hashed_path(self):
+        project_root = Path(__file__).parent.parent
+        manifest = json.loads((project_root / 'static' / 'dist' / 'manifest.json').read_text())
+        assert manifest['app.js'].startswith('/static/dist/')
+        assert (project_root / manifest['app.js'].lstrip('/')).is_file()
 
-    def test_asset_url_fallback_without_manifest(self, app):
-        """Test that asset_url falls back to version query param without manifest"""
-        # Note: This test is skipped because the test app in conftest.py
-        # doesn't include the asset_url context processor from the main app
-        pytest.skip("Test app doesn't include asset_url context processor")
+    def test_asset_url_fallback_without_manifest(self):
+        project_root = Path(__file__).parent.parent
+        source = (project_root / 'app.py').read_text()
+        assert "'login.js': 'js/login.js'" in source
+        assert "'api_docs.js': 'js/api_docs.js'" in source
+        assert "No built asset or development fallback" in source
 
-    def test_version_and_github_url_in_context(self, app):
-        """Test that version and github_url are available in template context"""
-        # Note: This test is skipped because the test app in conftest.py
-        # doesn't include the asset_url context processor from the main app
-        pytest.skip("Test app doesn't include asset_url context processor")
+    def test_version_and_github_url_in_context(self):
+        project_root = Path(__file__).parent.parent
+        source = (project_root / 'app.py').read_text()
+        assert 'version=__version__, github_url=__github_url__' in source
 
 
 class TestTemplateIntegration:

@@ -590,11 +590,12 @@ volumes:
   - /mnt/ssd/postgres_data:/var/lib/postgresql/data
 ```
 
-4. **Increase batch size:**
-```bash
-BATCH_SIZE=200  # Increase from 100
-```
-Note: `BATCH_SIZE`, `MAX_OUTPUT_SIZE`, and `OUTPUT_ROTATION_ENABLED` must be set on the celery-worker service to affect scans; setting them only on the pixelprobe service has no effect on scanning.
+4. **Check the active worker settings:**
+
+`BATCH_SIZE` affects only the legacy media-checker discovery lookup. It does
+not tune parallel discovery inserts or scan chunk commits. `MAX_OUTPUT_SIZE`
+and `OUTPUT_ROTATION_ENABLED` must be set on the `celery-worker` service to
+bound stored scan output.
 
 5. **Allocate more resources:**
 ```yaml
@@ -806,16 +807,16 @@ docker system df
 1. **Set user in docker-compose.yml:**
 ```yaml
 pixelprobe:
-  user: "${PUID:-1000}:${PGID:-1000}"
+  user: "${PUID:-10001}:${PGID:-10001}"
 
 celery-worker:
-  user: "${PUID:-1000}:${PGID:-1000}"
+  user: "${PUID:-10001}:${PGID:-10001}"
 ```
 
 2. **Check file permissions on host:**
 ```bash
 ls -la /path/to/media
-# Files should be readable by user 1000
+# Files should be readable by the configured PUID and PGID
 ```
 
 3. **Fix ownership if needed:**

@@ -1,11 +1,15 @@
 # Performance tuning guide
 
+Configuration values in this guide are operator starting points, not measured
+performance guarantees. Validate memory, CPU, database connections, and media
+storage behavior on the target library before increasing concurrency.
+
 ## Environment variables for performance
 
 ### Scanning performance
 - `CELERY_CONCURRENCY=4` - Number of Celery worker processes (default: 4). This is the main scan-throughput knob: scans are split into chunks that fan out across these workers.
 - `MAX_WORKERS=10` - ThreadPoolExecutor threads for parallel file validation within a scan task (default: 10). Distinct from Celery concurrency.
-- `BATCH_SIZE=100` - Paths per database lookup batch during file discovery (default: 100). Leave at 100; it does not control scan chunk size, which is automatic (see the chunk table below).
+- `BATCH_SIZE=100` - Legacy media-checker discovery lookup batch. Leave at 100; it does not control parallel discovery inserts or scan chunk commits.
 - Freeze detection, its confirmation limits, and the scan timeouts are settings rather than environment variables. Edit them under System > Tunables or through `/api/settings`; a change reaches a running scan without a restart. See [Configuration](configuration.md#scanner-settings).
 - The data integrity check is close to free. The allocation gate reuses the block count from the `stat` the scanner already performs, and files that fail it are queried with `SEEK_HOLE`, which reads no file data. A file it marks incomplete skips decoding entirely, which on a large damaged file saves a full-length pass.
 - Freeze corroboration runs only on files that already produced a candidate. Each event costs one packet probe (a fraction of a second, no decode) and, when the packets are present, one decode of just that window. At most 12 events per file are probed; the rest fall through to the uncorroborated path.

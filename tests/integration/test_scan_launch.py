@@ -1,6 +1,13 @@
 """Integration tests for scan launch claim/release and liveness endpoints"""
 
-from pixelprobe.models import ScanState
+import sys
+import types
+from datetime import datetime, timezone
+
+import pytest
+
+from pixelprobe.models import ScanResult, ScanState, ScanTask, User, db
+from pixelprobe.utils.security import PathTraversalError
 
 
 class TestHealthEndpoints:
@@ -63,6 +70,35 @@ class TestScanClaimRelease:
             state.phase = 'completed'
             db.session.commit()
 
+    def test_periodic_runs_keep_unique_ids_with_a_frozen_clock(self, app, db, monkeypatch, tmp_path):
+        from pixelprobe.api import scan_launch
+
+        class FrozenDateTime:
+            @staticmethod
+            def now(_timezone):
+                return datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        fake_tasks = types.ModuleType('pixelprobe.tasks_parallel')
+        fake_tasks.dispatch_scan_task_intent = lambda _intent: True
+        monkeypatch.setitem(sys.modules, 'pixelprobe.tasks_parallel', fake_tasks)
+        monkeypatch.setattr(scan_launch, 'datetime', FrozenDateTime)
+        monkeypatch.setattr(scan_launch, 'check_celery_available', lambda: True)
+        with app.app_context():
+            first, status = scan_launch.launch_directory_scan(
+                [str(tmp_path)], source='scheduled_periodic')
+            assert status == 200
+            first_id = first['scan_id']
+            state = ScanState.query.filter_by(scan_id=first_id).one()
+            state.phase = 'completed'
+            state.is_active = False
+            db.session.commit()
+
+            second, status = scan_launch.launch_directory_scan(
+                [str(tmp_path)], source='scheduled_periodic')
+            assert status == 200
+            assert second['scan_id'] != first_id
+            assert second['scan_id'].startswith('scheduled_periodic_20260101_000000_')
+
 
 class TestScanLaunchResponseShape:
     """CodeQL py/reflective-xss: launch responses must not echo caller-supplied
@@ -107,6 +143,8 @@ class TestNumWorkersCap:
             monkeypatch.setattr(app.scan_service, 'scan_files', fake_scan_files)
             monkeypatch.setattr('pixelprobe.api.scan_routes.check_celery_available',
                                 lambda: False)
+            monkeypatch.setattr('pixelprobe.api.scan_routes.resolve_authorized_media_file',
+                                lambda path: path)
             media = tmp_path / 'clip.mp4'
             media.write_bytes(b'\x00' * 128)
 
@@ -117,3 +155,66 @@ class TestNumWorkersCap:
             assert response.status_code == 200
             assert captured['num_workers'] <= app.config.get('MAX_WORKERS', 10)
             assert captured['num_workers'] >= 1
+
+
+class TestSelectedScanAuthorization:
+
+    def test_existing_outside_result_cannot_authorize_single_rescan(
+            self, authenticated_client, app, db, monkeypatch):
+        with app.app_context():
+            path = '/outside/stale.mp4'
+            db.session.add(ScanResult(file_path=path, scan_status='completed'))
+            db.session.commit()
+            called = []
+
+            def reject(candidate):
+                called.append(candidate)
+                raise PathTraversalError('outside active scan roots')
+
+            monkeypatch.setattr('pixelprobe.api.scan_routes.resolve_authorized_media_file', reject)
+            response = authenticated_client.post('/api/scan-file', json={'file_path': path})
+
+            assert response.status_code == 400
+            assert called == [path]
+            assert ScanState.query.filter_by(is_active=True).count() == 0
+
+    def test_selected_list_rejects_invalid_member_before_dispatch(
+            self, authenticated_client, app, db, monkeypatch):
+        dispatched = []
+        with app.app_context():
+            ScanState.query.filter_by(is_active=True).update({'is_active': False})
+            db.session.commit()
+            task_count = ScanTask.query.count()
+        monkeypatch.setattr('pixelprobe.api.scan_routes.resolve_authorized_media_file',
+                            lambda path: (_ for _ in ()).throw(PathTraversalError('outside')))
+        monkeypatch.setattr('pixelprobe.api.scan_routes.check_celery_available', lambda: True)
+
+        response = authenticated_client.post('/api/scan-files-parallel', json={
+            'file_paths': ['/outside/stale.mp4'],
+        })
+
+        assert response.status_code == 400
+        assert dispatched == []
+        with app.app_context():
+            assert ScanTask.query.count() == task_count
+
+
+class TestGlobalScanMutationsRequireAdmin:
+
+    @pytest.mark.parametrize('endpoint', [
+        '/api/scan/recovery',
+        '/api/reset-for-rescan',
+        '/api/force-scan-pending',
+        '/api/reset-files-by-path',
+        '/api/reset-incomplete-scans',
+    ])
+    def test_non_admin_is_forbidden(self, app, db, endpoint):
+        with app.app_context():
+            user = User(username='operator', email='operator@test.com', is_admin=False)
+            user.set_password('testpass123')
+            db.session.add(user)
+            db.session.commit()
+        client = app.test_client()
+        client.post('/api/auth/login', json={'username': 'operator', 'password': 'testpass123'})
+        response = client.post(endpoint, json={})
+        assert response.status_code == 403

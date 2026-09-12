@@ -6,8 +6,12 @@ import hashlib
 import os
 import threading
 import time
+from datetime import datetime, timezone
 
 import pytest
+from PIL import Image
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 import pixelprobe.media_checker as media_checker
 from pixelprobe.media_checker import (
@@ -15,6 +19,7 @@ from pixelprobe.media_checker import (
     FileReadTimeoutError,
     _read_with_timeout,
 )
+from pixelprobe.models import ScanResult, db
 
 
 class TestReadWithTimeout:
@@ -120,6 +125,52 @@ class TestScanFileSkipsUnreadableFile:
 
         monkeypatch.setattr(checker, 'calculate_file_hash', stalled_hash)
         result = checker.scan_file(str(f))
-        assert result['is_corrupted'] is True
+        assert result['is_corrupted'] is None
         assert 'stalled' in result['corruption_details']
         assert result['scan_tool'] == 'error'
+        assert result['outcome'] == 'unreadable'
+
+    def test_unreadable_rescan_preserves_baseline_until_a_stable_read(self, tmp_path, monkeypatch):
+        path = tmp_path / 'known.png'
+        Image.new('RGB', (8, 8), 'blue').save(path)
+        uri = f"sqlite:///{tmp_path / 'results.db'}"
+        engine = create_engine(uri)
+        db.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        try:
+            original_hash = 'a' * 64
+            original_size = 12345
+            original_mtime = datetime.now(timezone.utc)
+            session.add(ScanResult(file_path=str(path), file_hash=original_hash,
+                                   file_size=original_size,
+                                   last_modified=original_mtime,
+                                   scan_status='completed', is_corrupted=False))
+            session.commit()
+
+            checker = PixelProbe(database_path=uri)
+            monkeypatch.setattr(checker, 'calculate_file_hash',
+                                lambda *args, **kwargs: None)
+            failed = checker.scan_file(str(path), force_rescan=True)
+            session.expire_all()
+            row = session.query(ScanResult).filter_by(file_path=str(path)).one()
+            assert failed['outcome'] == 'unreadable'
+            assert row.scan_status == 'unreadable'
+            assert row.is_corrupted is None
+            assert row.file_hash == original_hash
+            assert row.file_size == original_size
+            assert row.last_modified == original_mtime.replace(tzinfo=None)
+
+            monkeypatch.undo()
+            monkeypatch.setattr(checker, '_check_image_corruption',
+                                lambda _path, **_kwargs: (False, [], 'pil', [], []))
+            restored = checker.scan_file(str(path), force_rescan=True)
+            session.expire_all()
+            row = session.query(ScanResult).filter_by(file_path=str(path)).one()
+            assert restored['outcome'] == 'completed'
+            assert row.scan_status == 'completed'
+            assert row.file_hash == restored['file_hash']
+            assert row.file_size == path.stat().st_size
+        finally:
+            session.close()
+            engine.dispose()

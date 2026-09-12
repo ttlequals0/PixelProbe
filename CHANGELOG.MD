@@ -10,15 +10,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Audit remediation is in progress. New scans retain durable root evidence, file membership, task ownership, and result snapshots so scope, cancellation, and reports can be verified independently of mutable library rows.
+- Docker Compose now defaults to the 2.9.0 image, runs application containers as non-root, keeps media read-only, and documents writable instance ownership and resource limits.
+- The CSV deletion helper now uses `csv.DictReader`, canonical allowed-root checks, and an explicit `--apply` flag; dry-run is the default.
+- Project onboarding now includes the MIT license, contributor workflow, and operational evidence limits.
+- Frontend build dependencies now use audited releases pinned by a committed lockfile and require Node 22.22.2 or later, consistently across local setup, CI, and the container frontend stage.
 
 ### Fixed
 
+- Scan workers now hold an authorized no-follow file descriptor from validation through metadata, hashing, image decoding, and ffmpeg-family subprocesses. Replacing an ancestor or final pathname cannot redirect a scan to different bytes, while results retain the original pathname.
+- The CSV deletion helper now traverses configured roots by no-follow directory descriptors and deletes only regular entries relative to those descriptors. It preserves whitespace in explicit roots and renders control-character paths unambiguously.
+- Routine cache and hash lifecycle logs are DEBUG-level; scan summaries, warnings, corruption findings, errors, and audit events remain visible at INFO or above.
+- File status, exports, and dashboard statistics now keep unreadable, failed, unknown, attempted, successful, and unavailable outcomes distinct. Development CSS fallback loads the same three source stylesheets as the production bundle.
 - Integrity accounting now distinguishes attempts from successful verification, and scan baseline writes require a complete successful read with a hash and modification time.
 - Scan cancellation records intent before revoking only tasks owned by that run. Global queue purge and unrelated task termination are no longer part of normal cancellation.
+- Post-decode writes now re-check the active run, immutable member, and chunk owner under a short persistence fence. A cancelled or superseded worker cannot overwrite a newer observation after its decoder returns; selected-file cache writes use the same fence.
+- Scan dispatch now records roots, chunks, and task intents before publication, recovers stale non-chunk worker claims, and revalidates current exclusions plus immutable roots before chunk decoding. Cancellation includes queued, dispatched, and processing owned intents only.
+- Selected-file scans now retain immutable per-run result evidence and reject stale database rows as authorization for paths outside active media roots.
+- Scan completion now fails when requested roots, run members, or verification coverage are incomplete instead of reporting a successful terminal chunk as a successful scan.
+- Scan-completion notifications now persist one target per evaluated rule, including terminal skips for inactive rules and unmet conditions. Provider failures retry only their own target under a lease and stop after a bounded attempt count; recovery can duplicate a request accepted just before a worker crash, so delivery is explicitly at least once rather than falsely exactly once.
+- Scheduled orphan cleanup and file-change checks now carry validated directory roots through the API and query only records below those roots. Root boundaries plus path, extension, and filename exclusions are honored, while selected exact file paths retain their existing behavior. Background work validates roots again before it touches records.
+- Orphan cleanup now counts and keyset-pages bounded candidate batches instead of loading an entire library before dispatching checks. A starting high-watermark keeps newly discovered records out of the current run, and final active tasks still pause between polls, avoiding a busy loop at the tail of a run.
+- Orphan cleanup now persists each candidate's pending, held, returned, eligible, or removed-inventory decision in bounded batches. Cleanup reports keep a 100-path preview with explicit totals and truncation, while complete JSON export streams the durable decision ledger without retaining the library in worker memory. Removing an inventory record never removes media.
+- Application startup now creates and migrates schema only while holding the PostgreSQL advisory lock, then verifies every modeled table and column on the active search path before serving or releasing a waiting worker. Scheduler lease loss fences queued callbacks as well as pausing APScheduler, and shutdown stops lease renewal before executor shutdown.
+- Security audit actor identifiers now retain historical account IDs without a live-user foreign key, so deleting an account cannot delete audit evidence or be blocked by it. The database default for newly created users is non-admin.
+- Startup repairs legacy rows whose completed status conflicts with the known `error` or `unsupported` scanner marker, without inventing a hash or successful integrity timestamp. Integrity status now distinguishes each run's attempted, verified, error, and unavailable outcomes, and coverage reports latest errors and unreadable outcomes independently of cumulative attempts.
+- Streaming inventory exports now freeze an initial maximum ID and release the request read transaction before yielding. Report CSV and JSON exports stream immutable evidence, while generic, per-report, and combined PDFs use bounded detail and avoid loading scanner output that they do not render.
+- Reports no longer label pending, scanning, unreadable, cancelled, or unknown observations as healthy. Legacy state alone no longer proves immutable history; a run member or root record is required.
+- Scheduled-scan healthchecks now snapshot a durable target with the configured success or failure mode. Target delivery retries under its lease, and an older target cannot mark a later reconfigured URL as delivered.
+- Configured scan roots can now opt into an administrator-approved required-mount baseline. A later filesystem type, source, or mount-root mismatch blocks discovery, cleanup, and integrity work before it reads an underlying mountpoint; ordinary directories keep their existing behavior. Replacing a baseline requires an explicit administrator request.
+- Login, setup, logout, schedule changes, log purges, and notification provider actions now retain durable audit actor, target, and outcome evidence. Session-establishing and session-ending routes require CSRF even when a Bearer header is present.
+- Notification rule conditions now reject unsupported keys and invalid values. Rule and provider changes record audit evidence without logging provider secrets.
+- Compose rejects a missing media bind source, gives the runtime tmpfs the app UID/GID and restrictive mode, passes shared output settings to workers, and keeps local runtime and diagnostic artifacts out of the image context.
 
 ### Testing
 
+- Descriptor-bound scanner coverage verifies final and ancestor symlink replacement, supported-media success, and timed-out reader descriptor lifetime. CSV deletion coverage verifies final and ancestor symlink rejection.
 - PostgreSQL and live Celery recovery coverage remains required before this release is considered verified.
+- PostgreSQL regressions cover concurrent intent claims, stale intent replay, cancellation isolation, and a blocked old decode released after cancellation. Linux prefork validation uses one worker slot and confirms directory completion, unrelated maintenance after cancellation, forced worker loss, durable chunk replay, 100 completed members, and one report.
+- Maintenance coverage verifies root-only scheduling, sibling-boundary protection, exclusions, exact selected paths, API root validation, and cleanup keyset paging.
+- Cleanup-report coverage verifies bounded previews and complete streaming decision export for runs larger than the visible report limit.
+- PostgreSQL coverage verifies concurrent startup locking and lock release after an injected migration failure, while scheduler tests cover lease fencing and orderly shutdown.
+- PostgreSQL migration coverage verifies legacy scanner-marker repair and confirms it does not manufacture successful verification history.
 
 ## [2.8.11] - 2026-09-08
 

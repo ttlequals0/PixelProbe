@@ -7,6 +7,8 @@ import json
 from datetime import datetime
 from unittest.mock import Mock, patch
 
+from pixelprobe.models import ScanResult, db
+
 class TestScanEndpoints:
     """Test scan-related API endpoints"""
     
@@ -79,6 +81,39 @@ class TestStatsEndpoints:
         
         # Should count our mock data
         assert data['total_files'] >= 1
+
+    def test_completed_marked_good_warning_is_healthy(self, authenticated_client, db):
+        result = ScanResult(
+            file_path='/test/marked-good-warning.mp4', file_size=1,
+            scan_status='completed', is_corrupted=False, has_warnings=True,
+            marked_as_good=True,
+        )
+        db.session.add(result)
+        db.session.commit()
+
+        response = authenticated_client.get('/api/stats')
+
+        assert response.status_code == 200
+        assert response.get_json()['healthy_files'] >= 1
+
+    def test_completed_null_corruption_warning_is_a_warning(self, authenticated_client, db):
+        result = ScanResult(
+            file_path='/test/legacy-null-warning.mp4', file_size=1,
+            scan_status='completed', is_corrupted=None, has_warnings=True,
+            marked_as_good=False,
+        )
+        db.session.add(result)
+        db.session.commit()
+
+        stats = authenticated_client.get('/api/stats')
+        exported = authenticated_client.post('/api/export', json={
+            'format': 'json', 'filter': 'warning',
+        })
+
+        assert stats.status_code == 200
+        assert stats.get_json()['warning_files'] >= 1
+        assert exported.status_code == 200
+        assert any(row['file_path'] == result.file_path for row in exported.get_json())
     
     def test_get_system_info(self, authenticated_client, db):
         """Test GET /api/system-info endpoint"""

@@ -99,14 +99,14 @@ POST /api/file-changes
 
 **How it works**:
 1. **Phase 1 - identify orphans**: Checks each database entry against filesystem
-2. **Phase 2 - cleanup**: Removes entries for non-existent files
-3. Reports number of orphaned entries removed
+2. **Phase 2 - confirmation**: Checks directory and parent evidence before deciding whether a missing file is proven deleted
+3. **Phase 3 - cleanup**: Removes only database entries that the run can prove are orphaned
 
 **Features**:
 - Database cleanup without scanning
 - Batch processing for efficiency
 - Progress tracking
-- Safe operation (only removes, doesn't modify existing)
+- Unconfirmed entries are kept and reported for operator review
 
 **Example**:
 ```json
@@ -123,12 +123,12 @@ POST /api/cleanup-orphaned
 
 **How it works**:
 1. Validates file exists and is a media file
-2. Performs corruption detection
-3. Updates or creates database record
-4. Returns immediate results
+2. Saves a run and task intent, then queues validation
+3. Returns `scan_id` and `task_id` when the request is accepted
+4. Polls scan status or the completed report for the terminal observation
 
 **Features**:
-- Immediate results
+- Asynchronous completion
 - Detailed corruption information
 - Updates existing records
 - No discovery phase needed
@@ -217,6 +217,10 @@ Files can have the following scan statuses:
 - `completed`: Scan finished successfully
 - `error`: Scan failed with error
 - `skipped`: File skipped - rare; only set by the scan recovery path, not by normal scans
+
+## Scan reports
+
+New reports keep immutable `ScanRunFile` membership and the observed file outcome for that run. This prevents a later rescan from changing the contents of an older report. Legacy reports without a run snapshot cannot reconstruct historical membership; their export identifies the file results as unavailable rather than selecting current `ScanResult` rows by date. Report JSON and PDF exports are bounded to 1,000 snapshot rows.
 
 ## Corruption detection
 

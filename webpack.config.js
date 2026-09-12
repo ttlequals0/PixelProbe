@@ -12,6 +12,8 @@ module.exports = (env, argv) => {
       app: './static/js/app.js',
       csrf: './static/js/csrf.js',
       auth: './static/js/auth.js',
+      login: './static/js/login.js',
+      api_docs: './static/js/api_docs.js',
       styles: [
         './static/css/desktop.css',
         './static/css/mobile.css',

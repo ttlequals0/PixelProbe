@@ -19,6 +19,19 @@ Reference for PixelProbe environment variables and performance tuning.
 
 All configuration is done via environment variables, either in `.env` file or directly in `docker-compose.yml`.
 
+## Effective Compose deployment
+
+The root `docker-compose.yml` is the deployment source of truth. It starts PostgreSQL 18, Valkey 9, the `pixelprobe` web service, and `celery-worker`.
+
+| Service | Scheduler | Media mount | Identity | Writable paths |
+|---|---|---|---|---|
+| `pixelprobe` | Disabled by default | `${MEDIA_PATH}:/media:ro` | `${PUID:-10001}:${PGID:-10001}` | `./instance`, `/app/runtime`, `/tmp`, `/app/logs` |
+| `celery-worker` | Enabled by default | `${MEDIA_PATH}:/media:ro` | `${PUID:-10001}:${PGID:-10001}` | `/app/runtime`, `/tmp` |
+
+The services share the same UID/GID and read-only media view. Do not change only one service identity or mount path. Create the host `instance` directory before startup and give it to the configured identity, for example `sudo chown 10001:10001 instance` when using defaults.
+
+The web service publishes `${PORT:-5000}:5000`. PostgreSQL and Valkey are internal to the Compose network. The scheduler lease prevents duplicate ownership, but the normal deployment deliberately enables scheduler work only in `celery-worker`.
+
 ### Required variables
 
 | Variable | Description | Example |
@@ -59,9 +72,9 @@ All configuration is done via environment variables, either in `.env` file or di
 | Variable | Default | Description | Recommendations |
 |----------|---------|-------------|-----------------|
 | `MAX_WORKERS` | `10` | Parallel file scanning workers per task | 10-24 for most systems |
-| `BATCH_SIZE` | `100` | Files per batch during discovery | 50-200 based on file sizes |
-| `MAX_OUTPUT_SIZE` | `10000` | Max output characters before rotation | 10000-50000 |
-| `OUTPUT_ROTATION_ENABLED` | `true` | Enable output truncation | `true` for large scans |
+| `BATCH_SIZE` | `100` | Legacy media-checker discovery lookup batch. It does not set parallel discovery inserts or scan chunk commits. | Leave at `100` unless diagnosing that legacy path. |
+| `MAX_OUTPUT_SIZE` | `10000` | Maximum stored scan-output characters before model-level rotation truncates the stored text. | Keep the default unless operators accept less retained diagnostic output. |
+| `OUTPUT_ROTATION_ENABLED` | `true` | Enable model-level stored-output rotation. | Keep `true` for bounded stored output. |
 | `CHUNK_HEARTBEAT_INTERVAL_SECS` | `120` | How often a running chunk task bumps the scan's liveness timestamp. Keeps a scan busy on one long movie from being falsely marked crashed by the 30-minute stuck-scan rule | Leave at default unless debugging |
 | `CHUNK_REVIVE_STALENESS_SECS` | `600` | How stale the scan liveness timestamp must be before the stuck-scan sweeper treats the chunk workers as gone and re-queues their chunks (recovers scans interrupted by container restarts) | Must exceed several heartbeat intervals |
 
@@ -199,86 +212,28 @@ itself, not by PixelProbe code.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENABLE_MONITORING` | `false` | Enable Prometheus metrics endpoint |
-| `METRICS_PORT` | `9090` | Metrics endpoint port |
 
 ## Docker Compose configuration
 
 ### Basic configuration
 
-Minimal `docker-compose.yml` for production:
+The root [`docker-compose.yml`](../docker-compose.yml) is the authoritative
+deployment configuration. It supplies the current image tag, exact web and
+worker environment forwarding, non-root identity, read-only bind behavior,
+resource limits, and scheduler ownership. Do not copy a second full Compose
+file from documentation.
+
+For a local override, retain the root file's `PUID`, `PGID`, mount mode, and
+service names. For example:
 
 ```yaml
 services:
-  postgres:
-    image: postgres:18-alpine
-    container_name: pixelprobe-postgres
-    environment:
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: valkey/valkey:9-alpine
-    container_name: pixelprobe-redis
-    command: valkey-server --maxmemory ${REDIS_MAX_MEMORY:-2gb} --maxmemory-policy noeviction
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   pixelprobe:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
-    container_name: pixelprobe-app
     environment:
-      SECRET_KEY: ${SECRET_KEY}
-      POSTGRES_HOST: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      SCAN_PATHS: ${SCAN_PATHS:-/media}
-      MAX_WORKERS: ${MAX_WORKERS:-10}
-      TZ: ${TZ:-UTC}
-    volumes:
-      - ${MEDIA_PATH}:/media:ro
-    ports:
-      - "${PORT:-5000}:5000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
+      GUNICORN_WORKERS: 2
   celery-worker:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
-    container_name: pixelprobe-celery-worker
-    command: python celery_worker.py
     environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      POSTGRES_HOST: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      SECRET_KEY: ${SECRET_KEY}
-      MAX_WORKERS: ${MAX_WORKERS:-10}
-      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
-    volumes:
-      - ${MEDIA_PATH}:/media:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-volumes:
-  postgres_data:
+      CELERY_CONCURRENCY: 2
 ```
 
 ### Multiple scan paths
@@ -319,12 +274,12 @@ Both `pixelprobe` and `celery-worker` MUST run as the same user to access media 
 
 ```yaml
 pixelprobe:
-  user: "${PUID:-1000}:${PGID:-1000}"
+  user: "${PUID:-10001}:${PGID:-10001}"
   volumes:
     - ${MEDIA_PATH}:/media:ro
 
 celery-worker:
-  user: "${PUID:-1000}:${PGID:-1000}"  # MUST match pixelprobe
+  user: "${PUID:-10001}:${PGID:-10001}"  # MUST match pixelprobe
   volumes:
     - ${MEDIA_PATH}:/media:ro
 ```
@@ -383,13 +338,20 @@ see [docker-setup.md](docker-setup.md).
 
 ## Performance tuning
 
+The values in this section are operator starting points, not benchmark results.
+Measure CPU, memory, database connections, and media storage behavior on the
+library that will run the deployment before increasing concurrency.
+
 ### Recommended settings by system size
+
+`BATCH_SIZE` is omitted from these profiles because it does not tune parallel
+discovery inserts or scan chunk commits. Leave its legacy lookup default at
+`100` unless investigating that specific code path.
 
 #### Small library (< 10,000 files)
 ```bash
 MAX_WORKERS=4
 CELERY_CONCURRENCY=2
-BATCH_SIZE=50
 REDIS_MAX_MEMORY=512mb
 ```
 
@@ -397,7 +359,6 @@ REDIS_MAX_MEMORY=512mb
 ```bash
 MAX_WORKERS=10
 CELERY_CONCURRENCY=4
-BATCH_SIZE=100
 REDIS_MAX_MEMORY=1gb
 ```
 
@@ -405,7 +366,6 @@ REDIS_MAX_MEMORY=1gb
 ```bash
 MAX_WORKERS=16
 CELERY_CONCURRENCY=6
-BATCH_SIZE=200
 REDIS_MAX_MEMORY=2gb
 ```
 
@@ -413,7 +373,6 @@ REDIS_MAX_MEMORY=2gb
 ```bash
 MAX_WORKERS=24
 CELERY_CONCURRENCY=8
-BATCH_SIZE=200
 REDIS_MAX_MEMORY=4gb
 ```
 
@@ -561,9 +520,7 @@ Notifications are configured through the API, not environment variables. A
 *provider* is where messages go; a *rule* maps an event to a provider. Provider
 types are `pushover`, `ntfy`, `webhook`, and `email`.
 
-Event types available to rules: `scan_start`, `scan_complete`, `scan_failed`,
-`scan_missed`, `corruption_found`, `bitrot_suspected`, `user_added`,
-`user_deleted`, `api_key_added`, `api_key_deleted`, `auth_failed`.
+Event types available to rules are `scan_completed` and `bitrot_suspected`.
 
 ### Email (SMTP)
 
@@ -607,7 +564,7 @@ curl -X POST http://localhost:5000/api/notifications/providers/1/test \
 curl -X POST http://localhost:5000/api/notifications/rules \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"provider_id": 1, "event_type": "corruption_found", "priority": "high"}'
+  -d '{"provider_id": 1, "event_type": "scan_completed", "priority": "high"}'
 ```
 
 **Notes:**
@@ -728,7 +685,6 @@ Start with the defaults and raise `MAX_WORKERS` and `CELERY_CONCURRENCY` gradual
 ```bash
 MAX_WORKERS=8
 CELERY_CONCURRENCY=3
-BATCH_SIZE=100
 REDIS_MAX_MEMORY=1gb
 POSTGRES_PASSWORD=strong-password-here
 SCAN_PATHS=/movies,/tv
@@ -738,7 +694,6 @@ SCAN_PATHS=/movies,/tv
 ```bash
 MAX_WORKERS=20
 CELERY_CONCURRENCY=6
-BATCH_SIZE=200
 REDIS_MAX_MEMORY=4gb
 POSTGRES_PASSWORD=very-strong-password
 SCAN_PATHS=/archive/video,/archive/images
@@ -750,7 +705,6 @@ MAX_OUTPUT_SIZE=50000
 ```bash
 MAX_WORKERS=24
 CELERY_CONCURRENCY=8
-BATCH_SIZE=200
 REDIS_MAX_MEMORY=8gb
 POSTGRES_PASSWORD=enterprise-strength-password
 SCAN_PATHS=/storage/media1,/storage/media2,/storage/media3

@@ -1,5 +1,5 @@
 import pytest
-from pixelprobe.models import db, CleanupState, FileChangesState
+from pixelprobe.models import db, CleanupState, FileChangesState, ScanConfiguration
 import time
 
 class TestMaintenanceCancelEndpoints:
@@ -122,6 +122,35 @@ class TestMaintenanceOperationEndpoints:
             cleanup = CleanupState.query.filter_by(is_active=True).first()
             assert cleanup is not None
             assert cleanup.phase == 'starting'
+
+    def test_maintenance_roots_are_canonical_and_required_to_be_readable(
+            self, authenticated_client, app, db, monkeypatch, tmp_path):
+        root = tmp_path / 'media'
+        root.mkdir()
+        with app.app_context():
+            db.session.add(ScanConfiguration(path=str(root), is_active=True))
+            db.session.commit()
+
+        received = []
+        monkeypatch.setattr(
+            'pixelprobe.api.maintenance_routes.cleanup_orphaned_async',
+            lambda *args: received.append(args),
+        )
+        response = authenticated_client.post(
+            '/api/cleanup-orphaned', json={'scan_roots': [str(root)]},
+        )
+
+        assert response.status_code == 200
+        assert received[0][3] == [str(root.resolve())]
+
+        missing = tmp_path / 'missing'
+        response = authenticated_client.post(
+            '/api/cleanup-orphaned', json={'scan_roots': [str(missing)]},
+        )
+
+        assert response.status_code == 400
+        with app.app_context():
+            assert CleanupState.query.filter_by(is_active=True).count() == 1
     
     def test_cleanup_already_running(self, authenticated_client, app, db, monkeypatch):
         """Test starting cleanup when already running"""

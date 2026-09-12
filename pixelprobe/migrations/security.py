@@ -5,18 +5,24 @@ import hashlib
 from sqlalchemy import inspect, text
 
 
-def migrate_security_schema(db):
+def migrate_security_schema(db, connection=None):
     """Atomically replace plaintext API tokens with SHA-256 digests.
 
     The caller must run this under the application's migration lock before any
     request handlers can authenticate tokens.
     """
-    inspector = inspect(db.engine)
+    inspector = inspect(connection or db.engine)
     tables = set(inspector.get_table_names())
     if not {'users', 'api_tokens'} <= tables:
         return
 
-    with db.engine.begin() as conn:
+    if connection is not None:
+        conn = connection
+        close_transaction = False
+    else:
+        conn = db.engine.connect()
+        close_transaction = True
+    try:
         columns = {column['name'] for column in inspect(conn).get_columns('users')}
         if 'session_generation' not in columns:
             conn.execute(text(
@@ -53,3 +59,8 @@ def migrate_security_schema(db):
             'CREATE UNIQUE INDEX IF NOT EXISTS idx_api_tokens_token_digest '
             'ON api_tokens(token_digest)'
         ))
+        if close_transaction:
+            conn.commit()
+    finally:
+        if close_transaction:
+            conn.close()

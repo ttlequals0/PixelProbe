@@ -13,9 +13,11 @@ from pixelprobe.services.settings_service import (describe_settings, coerce_sett
                                                   SettingValueError)
 from pixelprobe.scheduler import MediaScheduler
 from pixelprobe.utils.overrides import classify_findings, encode_verdict
-from pixelprobe.utils.security import validate_json_input, AuditLogger, validate_directory_path
+from pixelprobe.utils.security import (validate_json_input, AuditLogger,
+                                      validate_directory_path, PathTraversalError)
 from pixelprobe.utils.validators import validate_time_budget
 from pixelprobe.utils.integrity import adopt_bitrot_baseline
+from pixelprobe.utils.mounts import observe_mount
 from pixelprobe.auth import admin_required
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,8 @@ from pixelprobe.utils.rate_limiting import rate_limit
 
 # Get scheduler instance (will be initialized in app context)
 scheduler = None
+
+SCHEDULE_SCAN_TYPES = frozenset({'normal', 'full', 'full_scan', 'orphan', 'file_changes'})
 
 def set_scheduler(sched):
     """Set the scheduler instance"""
@@ -291,6 +295,7 @@ def get_configurations():
         'id': c.id,
         'path': c.path,
         'is_active': c.is_active,
+        'require_mount': c.require_mount,
         'created_at': c.created_at.isoformat() if c.created_at else None
     } for c in configs]
 
@@ -303,12 +308,17 @@ def add_configuration():
     """Add or update a scan configuration"""
     data = request.get_json()
     path = data.get('path')
+    require_mount_provided = 'require_mount' in data
+    require_mount = data.get('require_mount')
+    refresh_mount_baseline = data.get('refresh_mount_baseline', False)
+    if ((require_mount_provided and not isinstance(require_mount, bool)) or
+            not isinstance(refresh_mount_baseline, bool)):
+        return {'error': 'require_mount and refresh_mount_baseline must be true or false'}, 400
     
     # Admin is defining a new allowlist entry, so skip the allowlist check.
     # Traversal tokens and symlink resolution still run.
     try:
         path = validate_directory_path(path, allowed_paths=[])
-        AuditLogger.log_action('add_configuration', {'path': path})
     except Exception as e:
         AuditLogger.log_security_event('invalid_directory_path', str(e), 'warning')
         return {'error': 'Invalid directory path'}, 400
@@ -316,10 +326,27 @@ def add_configuration():
     try:
         # Check if configuration already exists
         existing_config = ScanConfiguration.query.filter_by(path=path).first()
+        require_mount = (require_mount if require_mount_provided else
+                         existing_config.require_mount if existing_config else False)
+        if refresh_mount_baseline and not require_mount:
+            return {'error': 'refresh_mount_baseline requires require_mount'}, 400
+        mount = observe_mount(path) if require_mount else None
+        if require_mount and (mount is None or mount['mount_point'] == os.path.sep):
+            return {'error': 'A required mount must be observable at this scan root'}, 400
         
         if existing_config:
             # Reactivate if it was deactivated
             existing_config.is_active = True
+            if require_mount:
+                if refresh_mount_baseline:
+                    existing_config.mount_filesystem_type = mount['filesystem_type']
+                    existing_config.mount_source = mount['source']
+                    existing_config.mount_root = mount['root']
+                elif not existing_config.require_mount:
+                    existing_config.mount_filesystem_type = mount['filesystem_type']
+                    existing_config.mount_source = mount['source']
+                    existing_config.mount_root = mount['root']
+            existing_config.require_mount = require_mount
             message = 'Configuration reactivated'
         else:
             # Create new configuration with backward compatibility
@@ -330,12 +357,17 @@ def add_configuration():
                 # Add legacy fields to satisfy old schema
                 key=f'scan_dir_{len(ScanConfiguration.query.all()) + 1}',
                 value=path,
-                description=f'Scan directory: {path}'
+                description=f'Scan directory: {path}',
+                require_mount=require_mount,
+                mount_filesystem_type=mount['filesystem_type'] if mount else None,
+                mount_source=mount['source'] if mount else None,
+                mount_root=mount['root'] if mount else None,
             )
             db.session.add(new_config)
             message = 'Configuration added successfully'
         
         db.session.commit()
+        AuditLogger.log_action('add_configuration', {'path': path})
         
         return {
             'path': path,
@@ -370,6 +402,50 @@ def _validate_time_budget(data, scan_type):
     return value, None
 
 
+def _validate_schedule_scan_type(scan_type):
+    if not isinstance(scan_type, str) or scan_type not in SCHEDULE_SCAN_TYPES:
+        return {'error': 'scan_type must be normal, full, full_scan, orphan, or file_changes'}
+    return None
+
+
+def _validate_next_run(cron_expression, last_run=None):
+    try:
+        next_run = calculate_next_run(cron_expression, last_run)
+    except (OverflowError, TypeError, ValueError):
+        return None, {'error': 'cron_expression cannot produce a next run'}
+    if next_run is None:
+        return None, {'error': 'cron_expression cannot produce a next run'}
+    return next_run, None
+
+
+def _validate_schedule_payload(data):
+    if not isinstance(data, dict):
+        return None, {'error': 'Request body must be a JSON object'}
+    cron_expression = data.get('cron_expression')
+    if not isinstance(cron_expression, str) or len(cron_expression) > 100:
+        return None, {'error': 'cron_expression is required'}
+    try:
+        if cron_expression.startswith('interval:'):
+            parts = cron_expression.split(':')
+            if len(parts) != 3 or parts[1] not in {'minutes', 'hours', 'days'} or int(parts[2]) < 1:
+                raise ValueError
+        else:
+            fields = cron_expression.split()
+            if len(fields) != 5:
+                raise ValueError
+            CronTrigger(minute=fields[0], hour=fields[1], day=fields[2],
+                        month=fields[3], day_of_week=fields[4], timezone='UTC')
+    except (TypeError, ValueError):
+        return None, {'error': 'Invalid schedule expression'}
+    paths = data.get('scan_paths', [])
+    if not isinstance(paths, list) or len(paths) > 100 or not all(isinstance(path, str) for path in paths):
+        return None, {'error': 'scan_paths must be a list of at most 100 paths'}
+    try:
+        return [validate_directory_path(path) for path in paths], None
+    except PathTraversalError:
+        return None, {'error': 'Schedule path is outside configured scan roots'}
+
+
 @admin_bp.route('/schedules', methods=['POST'])
 @admin_required
 def create_schedule():
@@ -377,6 +453,9 @@ def create_schedule():
     data = request.get_json()
 
     try:
+        scan_paths, payload_error = _validate_schedule_payload(data)
+        if payload_error:
+            return payload_error, 400
         # Check for duplicate name
         name = data.get('name', 'Unnamed Schedule')
         existing = ScanSchedule.query.filter_by(name=name, is_active=True).first()
@@ -386,14 +465,20 @@ def create_schedule():
             return {'error': 'A schedule with that name already exists'}, 400
 
         scan_type = data.get('scan_type', 'full')
+        scan_type_error = _validate_schedule_scan_type(scan_type)
+        if scan_type_error:
+            return scan_type_error, 400
         time_budget, budget_error = _validate_time_budget(data, scan_type)
         if budget_error:
             return budget_error
+        next_run, next_run_error = _validate_next_run(data['cron_expression'])
+        if next_run_error:
+            return next_run_error, 400
 
         schedule = ScanSchedule(
             name=name,
             cron_expression=data['cron_expression'],
-            scan_paths=json.dumps(data.get('scan_paths', [])),
+            scan_paths=json.dumps(scan_paths),
             scan_type=scan_type,
             force_rescan=data.get('force_rescan', False),
             time_budget_minutes=time_budget,
@@ -402,13 +487,11 @@ def create_schedule():
         )
         # Populate next_run immediately so the UI shows it before the first
         # fire (the scheduler's db-sync job registers the actual APScheduler
-        # job within a minute)
-        try:
-            schedule.next_run = calculate_next_run(schedule.cron_expression)
-        except Exception as e:
-            logger.warning(f"Could not calculate next_run for new schedule: {e}")
+        # job within a minute).
+        schedule.next_run = next_run
         db.session.add(schedule)
         db.session.commit()
+        AuditLogger.log_action('schedule_created', target=f'schedule:{schedule.id}')
 
         # Trigger schedule reload in Celery worker (where scheduler runs)
         # Import lazily to avoid circular import (tasks.py -> app.py -> admin_routes.py)
@@ -433,31 +516,46 @@ def update_schedule(schedule_id):
     data = request.get_json()
 
     try:
+        if not isinstance(data, dict):
+            return {'error': 'Request body must be a JSON object'}, 400
         # Track if schedule is being re-enabled or cron changed
         was_inactive = not schedule.is_active
         new_is_active = data.get('is_active', schedule.is_active)
         being_reactivated = was_inactive and new_is_active
 
         new_cron = data.get('cron_expression', schedule.cron_expression)
+        validation_data = dict(data)
+        validation_data['cron_expression'] = new_cron
+        validation_data['scan_paths'] = data.get('scan_paths', [])
+        scan_paths, payload_error = _validate_schedule_payload(validation_data)
+        if payload_error:
+            return payload_error, 400
         cron_changed = new_cron != schedule.cron_expression
 
         new_scan_type = data.get('scan_type', schedule.scan_type)
+        scan_type_error = _validate_schedule_scan_type(new_scan_type)
+        if scan_type_error:
+            return scan_type_error, 400
         if 'time_budget_minutes' in data:
             time_budget, budget_error = _validate_time_budget(data, new_scan_type)
             if budget_error:
                 return budget_error
-            schedule.time_budget_minutes = time_budget
         elif new_scan_type != 'file_changes' and schedule.time_budget_minutes is not None:
-            # Type changed away from file_changes: the budget no longer applies
-            logger.info(f"Clearing time_budget_minutes on schedule {schedule_id} (scan_type now {new_scan_type})")
-            schedule.time_budget_minutes = None
+            time_budget = None
+        else:
+            time_budget = schedule.time_budget_minutes
+
+        next_run, next_run_error = _validate_next_run(new_cron, schedule.last_run)
+        if next_run_error:
+            return next_run_error, 400
 
         # Update fields
         schedule.name = data.get('name', schedule.name)
         schedule.cron_expression = new_cron
         if 'scan_paths' in data:
-            schedule.scan_paths = json.dumps(data['scan_paths'])
+            schedule.scan_paths = json.dumps(scan_paths)
         schedule.scan_type = new_scan_type
+        schedule.time_budget_minutes = time_budget
         schedule.force_rescan = data.get('force_rescan', schedule.force_rescan)
         schedule.is_active = new_is_active
 
@@ -465,13 +563,11 @@ def update_schedule(schedule_id):
         # 1. Schedule is being re-enabled, OR
         # 2. Cron expression changed while schedule is active
         if being_reactivated or (cron_changed and new_is_active):
-            try:
-                schedule.next_run = calculate_next_run(schedule.cron_expression, schedule.last_run)
-                logger.info(f"Recalculated next_run for schedule {schedule_id}: {schedule.next_run}")
-            except Exception as e:
-                logger.warning(f"Could not calculate next_run for schedule {schedule_id}: {e}")
+            schedule.next_run = next_run
+            logger.info(f"Recalculated next_run for schedule {schedule_id}: {schedule.next_run}")
 
         db.session.commit()
+        AuditLogger.log_action('schedule_updated', target=f'schedule:{schedule_id}')
 
         # Trigger schedule reload in Celery worker (where scheduler runs)
         try:
@@ -496,6 +592,7 @@ def delete_schedule(schedule_id):
         # Actually delete the schedule from database instead of soft delete
         db.session.delete(schedule)
         db.session.commit()
+        AuditLogger.log_action('schedule_deleted', target=f'schedule:{schedule_id}')
 
         # Trigger schedule reload in Celery worker (where scheduler runs)
         try:

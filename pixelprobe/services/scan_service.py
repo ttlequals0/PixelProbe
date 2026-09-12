@@ -13,8 +13,9 @@ from typing import List, Dict, Optional
 from flask import current_app
 from pixelprobe.constants import SCAN_PHASES
 from pixelprobe.media_checker import PixelProbe, load_exclusions_with_patterns
-from pixelprobe.models import db, ScanResult, ScanState, ScanChunk
+from pixelprobe.models import db, ScanResult, ScanState, ScanChunk, ScanRunFile
 from pixelprobe.utils.helpers import ProgressTracker
+from pixelprobe.utils.security import get_allowed_scan_paths
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 import hashlib
@@ -39,6 +40,17 @@ class ScanService:
         # Get chunk size from environment or use default
         import os
         self.chunk_size = int(os.environ.get('CHUNK_SIZE', '10000'))  # Files per chunk
+
+    def _selected_result_persistence_guard(self, scan_id):
+        """Fence checker cache writes after decode, using its cache session."""
+        def guard(session, result):
+            state = (session.query(ScanState).filter_by(scan_id=scan_id)
+                     .with_for_update().first())
+            member = (session.query(ScanRunFile).filter_by(
+                scan_id=scan_id, scan_result_id=result.id).with_for_update().first())
+            return bool(state and state.is_active and state.phase == SCAN_PHASES['SCANNING']
+                        and member and member.status in ('pending', 'processing'))
+        return guard
         
     def is_scan_running(self) -> bool:
         """Check if a scan is currently running"""
@@ -86,8 +98,8 @@ class ScanService:
         ScanState is created here and the UI's progress monitor briefly sees
         no active scan and flips to "done" before the new row appears.
         """
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
+        from pixelprobe.utils.security import resolve_authorized_media_file
+        file_path = resolve_authorized_media_file(file_path)
 
         # Single file rescans are allowed to run independently
         # They don't check for other running scans since they're quick operations
@@ -121,6 +133,20 @@ class ScanService:
         scan_state.end_time = None
         db.session.commit()
 
+        result_row = ScanResult.query.filter_by(file_path=file_path).first()
+        if result_row is None:
+            result_row = ScanResult(file_path=file_path, scan_status='pending',
+                                    discovered_date=datetime.now(timezone.utc),
+                                    is_corrupted=None)
+            db.session.add(result_row)
+            db.session.flush()
+        if not ScanRunFile.query.filter_by(scan_id=scan_state.scan_id,
+                                           file_path=file_path).first():
+            db.session.add(ScanRunFile(scan_id=scan_state.scan_id,
+                                       scan_result_id=result_row.id,
+                                       file_path=file_path, status='pending'))
+        db.session.commit()
+
         # Capture scan ID for UI progress tracking
         scan_state_id = scan_state.id
         scan_id = scan_state.scan_id
@@ -150,16 +176,15 @@ class ScanService:
                         database_path=self.database_uri,
                         excluded_paths=excluded_paths,
                         excluded_extensions=excluded_extensions,
-                        excluded_patterns=excluded_patterns
+                        excluded_patterns=excluded_patterns,
+                        allowed_paths=get_allowed_scan_paths(),
+                        result_persistence_guard=self._selected_result_persistence_guard(
+                            scan_state.scan_id),
                     )
                     result = checker.scan_file(file_path, force_rescan=force_rescan)
+                    self._snapshot_run_member(scan_state.scan_id, file_path, result)
 
-                    # Update scan state to completed
-                    scan_state.files_processed = 1
-                    scan_state.phase = 'completed'
-                    scan_state.progress_message = 'Single file scan completed'
-                    scan_state.is_active = False
-                    db.session.commit()
+                    self._mark_scan_completed(scan_state_id, 1, 1)
 
                     self.update_progress(1, 1, file_path, 'completed')
                     return result
@@ -193,10 +218,13 @@ class ScanService:
         return {'status': 'started', 'message': 'Scan started', 'file_path': file_path, 'scan_id': scan_id}
     
     def scan_files(self, file_paths: List[str], force_rescan: bool = False,
-                   num_workers: int = 1, async_mode: bool = True) -> Dict:
+                   num_workers: int = 1, async_mode: bool = True,
+                   scan_id: Optional[str] = None) -> Dict:
         """Scan specific files only"""
         if self.is_scan_running():
-            raise RuntimeError("Another scan is already in progress")
+            own_run = ScanState.query.filter_by(scan_id=scan_id, is_active=True).first() if scan_id else None
+            if not own_run:
+                raise RuntimeError("Another scan is already in progress")
 
         # Validate files exist - with comprehensive debugging
         import pwd
@@ -225,13 +253,20 @@ class ScanService:
                 except Exception as e:
                     logger.warning(f"  - Could not stat: {e}")
 
-        valid_files = [f for f in file_paths if os.path.exists(f)]
-        invalid_count = len(file_paths) - len(valid_files)
+        from pixelprobe.utils.security import resolve_authorized_media_file
+        valid_files = []
+        invalid_paths = []
+        for path in file_paths:
+            try:
+                valid_files.append(resolve_authorized_media_file(path))
+            except Exception:
+                invalid_paths.append(path)
+        invalid_count = len(invalid_paths)
 
         if invalid_count > 0:
             logger.error(f"{invalid_count}/{len(file_paths)} files failed existence check")
             # Log first 3 invalid paths
-            invalid_samples = [f for f in file_paths if not os.path.exists(f)][:3]
+            invalid_samples = invalid_paths[:3]
             for inv_path in invalid_samples:
                 logger.error(f"  Invalid path: {inv_path}")
 
@@ -246,11 +281,30 @@ class ScanService:
         self.scan_cancelled = False
         
         # Save scan state
-        scan_state = ScanState.get_or_create()
+        scan_state = (ScanState.query.filter_by(scan_id=scan_id).first()
+                      if scan_id else None)
+        if scan_state is None:
+            scan_state = ScanState.create_new_scan(scan_id=scan_id)
         scan_state.start_scan(["selected_files"], force_rescan)
+        scan_state.scan_type = 'selected'
         # Safely set num_workers if column exists
         if hasattr(scan_state, 'num_workers'):
             scan_state.num_workers = num_workers  # Track the number of workers used
+        db.session.commit()
+        from pixelprobe.models import ScanResult, ScanRunFile
+        for path in valid_files:
+            result = ScanResult.query.filter_by(file_path=path).first()
+            if result is None:
+                result = ScanResult(file_path=path, scan_status='pending',
+                                    discovered_date=datetime.now(timezone.utc),
+                                    is_corrupted=None)
+                db.session.add(result)
+                db.session.flush()
+            if result and not ScanRunFile.query.filter_by(scan_id=scan_state.scan_id,
+                                                          file_path=path).first():
+                db.session.add(ScanRunFile(scan_id=scan_state.scan_id,
+                                           scan_result_id=result.id, file_path=path,
+                                           status='pending'))
         db.session.commit()
         
         # Capture scan ID
@@ -276,7 +330,10 @@ class ScanService:
                         max_workers=num_workers,  # sizes the checker's DB connection pool
                         excluded_paths=excluded_paths,
                         excluded_extensions=excluded_extensions,
-                        excluded_patterns=excluded_patterns
+                        excluded_patterns=excluded_patterns,
+                        allowed_paths=get_allowed_scan_paths(),
+                        result_persistence_guard=self._selected_result_persistence_guard(
+                            scan_state.scan_id),
                     )
 
                     # Skip discovery phase - we already have the files
@@ -345,6 +402,10 @@ class ScanService:
                             self._parallel_scan(checker, valid_files, force_rescan, num_workers, scan_state, scan_state_id)
                         else:
                             self._sequential_scan(checker, valid_files, force_rescan, scan_state, scan_state_id)
+
+                    scan_state = db.session.get(ScanState, scan_state_id)
+                    if scan_state and scan_state.is_active:
+                        self._mark_scan_completed(scan_state_id, total_files, total_files)
                         
                 except Exception as e:
                     logger.error(f"Error during file scan: {e}")
@@ -378,36 +439,18 @@ class ScanService:
             try:
                 run_scan()
                 # Get final scan state for results
-                final_scan_state = db.session.get(ScanState, scan_state_id)
+                db.session.expire_all()
+                final_scan_state = db.session.get(
+                    ScanState, scan_state_id, populate_existing=True)
                 if final_scan_state:
-                    # Get corrupted file count from ScanResult table with retry logic
-                    # Note: ScanResult doesn't have scan_id, so we query all corrupted files
-                    from pixelprobe.models import ScanResult
-
-                    # Retry logic for database connection issues
-                    max_retries = 3
-                    retry_delay = 1  # seconds
-                    corrupted_found = 0
-
-                    for attempt in range(max_retries):
-                        try:
-                            corrupted_found = db.session.query(ScanResult).filter_by(
-                                is_corrupted=True
-                            ).count()
-                            break  # Success, exit retry loop
-                        except OperationalError as e:
-                            if attempt < max_retries - 1:
-                                logger.warning(f"Database connection lost (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s: {e}")
-                                time.sleep(retry_delay)
-                                db.session.rollback()
-                                db.session.close()
-                                retry_delay *= 2  # Exponential backoff
-                            else:
-                                logger.error(f"Database connection failed after {max_retries} attempts: {e}")
-                                corrupted_found = 0
+                    corrupted_found = ScanRunFile.query.filter_by(
+                        scan_id=final_scan_state.scan_id, is_corrupted=True).count()
+                    phase = final_scan_state.phase
+                    completed = phase == SCAN_PHASES['COMPLETED']
                     return {
-                        'status': 'completed',
-                        'message': f'Scan completed for {len(valid_files)} files',
+                        'status': 'completed' if completed else phase,
+                        'message': (f'Scan completed for {len(valid_files)} files' if completed
+                                    else f'Scan finished with {phase} state'),
                         'files': len(valid_files),
                         'force_rescan': force_rescan,
                         'num_workers': num_workers,
@@ -419,21 +462,31 @@ class ScanService:
                     }
                 else:
                     return {
-                        'status': 'completed',
-                        'message': f'Scan completed for {len(valid_files)} files',
+                        'status': 'error',
+                        'message': 'Scan result evidence was not persisted',
                         'files': len(valid_files),
                         'force_rescan': force_rescan,
-                                'num_workers': num_workers
+                        'num_workers': num_workers,
                     }
             finally:
                 # Ensure thread reference is cleared even in sync mode
                 self.current_scan_thread = None
     
-    def cancel_scan(self) -> Dict:
+    def cancel_scan(self, expected_scan_id: Optional[str] = None) -> Dict:
         """Cancel only work durably owned by the active scan."""
         
-        # Get current scan state
-        scan_state = ScanState.get_or_create()
+        active_phases = ['initializing', 'discovering', 'adding', 'scanning']
+        query = ScanState.query.filter(
+            ScanState.is_active == True,
+            ScanState.phase.in_(active_phases),
+        )
+        if expected_scan_id:
+            query = query.filter(ScanState.scan_id == expected_scan_id)
+        scan_state = query.order_by(ScanState.id.desc()).with_for_update().first()
+        if not scan_state:
+            return {'message': 'No matching active scan is running', 'cancelled': False,
+                    'tasks_killed': 0, 'owned_task_count': 0, 'revoked_task_count': 0,
+                    'failures': ['no matching active scan']}
         
         logger.info(f"Cancel scan - scan_id: {scan_state.scan_id}, phase: {scan_state.phase}")
         
@@ -462,9 +515,9 @@ class ScanService:
                     {'scan_status': 'pending'}, synchronize_session=False)
             task_ids = [row[0] for row in db.session.query(ScanTask.celery_task_id).filter(
                 ScanTask.scan_id == scan_state.scan_id,
-                ScanTask.status.in_(['queued', 'processing'])).all()]
+                ScanTask.status.in_(['queued', 'dispatched', 'processing'])).all()]
             ScanTask.query.filter(ScanTask.scan_id == scan_state.scan_id,
-                                  ScanTask.status.in_(['queued', 'processing'])).update(
+                                  ScanTask.status.in_(['queued', 'dispatched', 'processing'])).update(
                 {'status': 'cancelled', 'completed_at': now}, synchronize_session=False)
             db.session.commit()
         except Exception as e:
@@ -474,13 +527,21 @@ class ScanService:
 
         # Revoke exactly the persisted task owners. No inspect(), terminate(),
         # or purge: those APIs affect unrelated maintenance work.
+        revoked_task_ids = []
         try:
             from pixelprobe.celery_config import celery_app
-            for task_id in task_ids:
-                celery_app.control.revoke(task_id, terminate=False)
         except Exception as e:
-            logger.error(f"Failed revoking owned scan tasks: {e}")
-            failures.append(str(e))
+            celery_app = None
+            failures.append(f'broker control unavailable: {e}')
+        for task_id in task_ids:
+            try:
+                if celery_app is None:
+                    continue
+                celery_app.control.revoke(task_id, terminate=False)
+                revoked_task_ids.append(task_id)
+            except Exception as e:
+                logger.error(f"Failed revoking owned scan task {task_id}: {e}")
+                failures.append(f'{task_id}: {e}')
         
         # Step 3: Set cancellation flag and update progress
         self.scan_cancelled = True
@@ -500,9 +561,13 @@ class ScanService:
             self.current_scan_thread = None
         
         return {
-            'message': 'Scan cancellation recorded',
+            'message': (f'Cancellation intent recorded; revoke requested for '
+                        f'{len(revoked_task_ids)} of {len(task_ids)} owned task(s)'),
             'cancelled': True,
-            'revoked_task_count': len(task_ids),
+            'tasks_killed': 0,
+            'owned_task_count': len(task_ids),
+            'revoked_task_count': len(revoked_task_ids),
+            'revoke_failures': failures,
             'failures': failures,
         }
     
@@ -534,7 +599,8 @@ class ScanService:
             self.update_progress(i, total_files, file_path, 'scanning')
             
             try:
-                checker.scan_file(file_path, force_rescan=force_rescan)
+                result = checker.scan_file(file_path, force_rescan=force_rescan)
+                self._snapshot_run_member(scan_state.scan_id, file_path, result)
             except Exception as e:
                 logger.error(f"Error scanning file {file_path}: {e}")
             
@@ -572,7 +638,7 @@ class ScanService:
             self._handle_scan_cancellation(scan_state)
         else:
             # Retry any files that are still pending before marking complete
-            remaining_pending = self._retry_pending_files(checker, force_rescan)
+            remaining_pending = self._retry_pending_files(checker, force_rescan, scan_state.scan_id)
 
             self.update_progress(total_files, total_files, '', 'completed')
 
@@ -629,6 +695,14 @@ class ScanService:
                 file_path = future_to_file[future]
                 completed += 1
 
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.error(f"Error scanning {file_path}: {e}")
+                    result = None
+                with db_lock:
+                    self._snapshot_run_member(scan_state.scan_id, file_path, result)
+
                 self.update_progress(completed, total_files, file_path, 'scanning')
 
                 # Update scan state progress with thread-safe database access
@@ -666,7 +740,7 @@ class ScanService:
             self._handle_scan_cancellation(scan_state)
         else:
             # Retry any files that are still pending before marking complete
-            remaining_pending = self._retry_pending_files(checker, force_rescan)
+            remaining_pending = self._retry_pending_files(checker, force_rescan, scan_state.scan_id)
 
             self.update_progress(total_files, total_files, '', 'completed')
 
@@ -687,31 +761,67 @@ class ScanService:
                 logger.info(f"=== END SCAN ===")
 
     def _mark_scan_completed(self, scan_state_id, files_processed, estimated_total):
-        """Thread-safe scan completion using direct SQL update."""
-        db.session.execute(
-            text("""UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time,
-                    files_processed = :files_processed, estimated_total = :estimated_total,
-                    progress_message = 'Scan completed'
-                WHERE id = :id"""),
-            {
-                'end_time': datetime.now(timezone.utc),
-                'id': scan_state_id,
-                'files_processed': files_processed,
-                'estimated_total': estimated_total,
-            }
-        )
-        db.session.commit()
-        # Expire all cached ORM objects so subsequent queries/commits
-        # read the updated state from PostgreSQL instead of writing
-        # stale is_active=True back from the identity map
+        """Finalize against this run's immutable member outcomes."""
+        from pixelprobe.services.scan_engine import finalize_scan
+
+        scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).with_for_update().first()
+        if not scan_state:
+            raise RuntimeError('Scan state disappeared before completion')
+        scan_state.files_processed = files_processed
+        scan_state.estimated_total = estimated_total
+        scan_state.phase_total = estimated_total
+        finalize_scan(scan_state)
         db.session.expire_all()
+
+    def _snapshot_run_member(self, scan_id: str, file_path: str, observed=None):
+        """Copy the one observed result into the selected run's immutable row."""
+        state = (ScanState.query.filter_by(scan_id=scan_id)
+                 .with_for_update().first())
+        member = (ScanRunFile.query.filter_by(scan_id=scan_id, file_path=file_path)
+                  .with_for_update().first())
+        if (not state or not member or not state.is_active
+                or state.phase != SCAN_PHASES['SCANNING']
+                or member.status not in ('pending', 'processing')):
+            db.session.commit()
+            return False
+        row = (ScanResult.query.filter_by(file_path=file_path)
+               .populate_existing().first())
+        if not row:
+            member.status = 'error'
+            member.outcome = 'no_result'
+            member.error_message = 'Scanner did not persist a result'
+        else:
+            outcome = (observed or {}).get('outcome') or row.scan_status or 'error'
+            if outcome == 'completed' and not (observed or {}).get('file_hash', row.file_hash):
+                outcome = 'error'
+            source = observed or row
+            member.scan_result_id = row.id
+            member.status = outcome
+            member.outcome = outcome
+            get_value = source.get if isinstance(source, dict) else lambda name, default=None: getattr(source, name, default)
+            member.file_hash = get_value('file_hash')
+            member.file_size = get_value('file_size')
+            member.last_modified = get_value('last_modified')
+            member.is_corrupted = get_value('is_corrupted')
+            member.has_warnings = get_value('has_warnings', False)
+            member.corruption_details = get_value('corruption_details')
+            member.warning_details = get_value('warning_details')
+            member.file_type = get_value('file_type')
+            member.scan_tool = get_value('scan_tool')
+            member.scan_output = get_value('scan_output')
+            member.marked_as_good = row.marked_as_good
+            member.error_message = row.error_message
+        member.completed_at = datetime.now(timezone.utc)
+        db.session.commit()
+        return True
 
     def _create_scan_report(self, scan_state: ScanState, scan_type: str = 'full_scan'):
         """Create a scan report (delegates to shared scan_reporting module)"""
         from pixelprobe.services.scan_reporting import create_scan_report
         create_scan_report(scan_state, scan_type)
 
-    def _retry_pending_files(self, checker: PixelProbe, force_rescan: bool) -> int:
+    def _retry_pending_files(self, checker: PixelProbe, force_rescan: bool,
+                             scan_id: str) -> int:
         """Retry scanning files that are still in 'pending' status.
 
         This ensures all files get processed in the current scan run before
@@ -724,14 +834,16 @@ class ScanService:
         Returns:
             int: Number of files that remain pending after retries
         """
-        from pixelprobe.models import ScanResult
+        from pixelprobe.models import ScanResult, ScanRunFile
 
         max_retries = 2
 
         # Count pending files first (cheap) before deciding to load them
-        pending_count = db.session.query(ScanResult).filter(
-            ScanResult.scan_status == 'pending'
-        ).count()
+        pending_query = (db.session.query(ScanResult)
+                         .join(ScanRunFile, ScanRunFile.scan_result_id == ScanResult.id)
+                         .filter(ScanRunFile.scan_id == scan_id,
+                                 ScanRunFile.status == 'pending'))
+        pending_count = pending_query.count()
 
         if pending_count == 0:
             return 0
@@ -742,9 +854,7 @@ class ScanService:
             logger.info(f"{pending_count} files still pending after scan -- will be processed on next scheduled run")
             return pending_count
 
-        pending_files = db.session.query(ScanResult).filter(
-            ScanResult.scan_status == 'pending'
-        ).limit(1000).all()
+        pending_files = pending_query.limit(1000).all()
 
         initial_pending = len(pending_files)
         logger.warning(f"Found {initial_pending} files still pending after initial scan pass - starting retry")
@@ -762,9 +872,12 @@ class ScanService:
                         pending_file.scan_status = 'error'
                         pending_file.scan_output = 'File not found during retry'
                         pending_file.file_exists = False
+                        pending_file.error_message = 'File not found during retry'
+                        self._snapshot_run_member(scan_id, pending_file.file_path)
                         continue
 
-                    checker.scan_file(pending_file.file_path, force_rescan=True)
+                    result = checker.scan_file(pending_file.file_path, force_rescan=True)
+                    self._snapshot_run_member(scan_id, pending_file.file_path, result)
                     files_retried += 1
                 except Exception as e:
                     logger.error(f"Retry failed for {pending_file.file_path}: {e}")
@@ -773,9 +886,10 @@ class ScanService:
             logger.info(f"Retry {retry + 1}: Attempted to rescan {files_retried} files")
 
             # Re-check for pending files
-            pending_files = db.session.query(ScanResult).filter(
-                ScanResult.scan_status == 'pending'
-            ).all()
+            pending_files = (db.session.query(ScanResult)
+                             .join(ScanRunFile, ScanRunFile.scan_result_id == ScanResult.id)
+                             .filter(ScanRunFile.scan_id == scan_id,
+                                     ScanRunFile.status == 'pending').all())
 
             if not pending_files:
                 logger.info(f"All pending files successfully scanned on retry {retry + 1}")
@@ -850,7 +964,8 @@ class ScanService:
                 # Check if file belongs to this chunk's directory
                 if file_path.startswith(chunk.directory_path + os.sep) or os.path.dirname(file_path) == chunk.directory_path:
                     try:
-                        checker.scan_file(file_path, force_rescan=force_rescan)
+                        result = checker.scan_file(file_path, force_rescan=force_rescan)
+                        self._snapshot_run_member(scan_state.scan_id, file_path, result)
                         chunk_scanned += 1
                         files_scanned += 1
                         
@@ -894,7 +1009,7 @@ class ScanService:
             self._handle_scan_cancellation(scan_state)
         else:
             # Retry any files that are still pending before marking complete
-            remaining_pending = self._retry_pending_files(checker, force_rescan)
+            remaining_pending = self._retry_pending_files(checker, force_rescan, scan_state.scan_id)
 
             self.update_progress(len(selected_files), len(selected_files), '', 'completed')
 
@@ -951,7 +1066,9 @@ class ScanService:
                 # Check if file belongs to this chunk
                 if file_path.startswith(chunk.directory_path + os.sep) or os.path.dirname(file_path) == chunk.directory_path:
                     try:
-                        checker.scan_file(file_path, force_rescan=force_rescan)
+                        result = checker.scan_file(file_path, force_rescan=force_rescan)
+                        with db_lock:
+                            self._snapshot_run_member(scan_state.scan_id, file_path, result)
                         chunk_scanned += 1
 
                         with files_scanned_lock:
@@ -1013,7 +1130,7 @@ class ScanService:
             self._handle_scan_cancellation(scan_state)
         else:
             # Retry any files that are still pending before marking complete
-            remaining_pending = self._retry_pending_files(checker, force_rescan)
+            remaining_pending = self._retry_pending_files(checker, force_rescan, scan_state.scan_id)
 
             self.update_progress(len(selected_files), len(selected_files), '', 'completed')
 

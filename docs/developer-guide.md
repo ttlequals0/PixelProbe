@@ -58,7 +58,7 @@ brew install ffmpeg imagemagick libmagic
 
 5. **Build the frontend assets (required):**
 ```bash
-npm install && npm run build
+npm ci && npm run build
 ```
 
 The templates load webpack-built bundles from `static/dist/`; the app will
@@ -261,7 +261,7 @@ and the app itself expect the built static files):
 
 ```bash
 pip install -r requirements-test.txt
-npm install && npm run build
+npm ci && npm run build
 ```
 
 ```bash

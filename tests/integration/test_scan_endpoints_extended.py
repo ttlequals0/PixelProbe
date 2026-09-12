@@ -121,7 +121,7 @@ class TestScanCancellationEndpoint:
                 return True
             
             def cancel_scan(self):
-                return {'message': 'Scan cancelled successfully'}
+                return {'cancelled': True, 'message': 'Scan cancelled successfully'}
         
         # Store original service
         original_service = getattr(app, 'scan_service', None)

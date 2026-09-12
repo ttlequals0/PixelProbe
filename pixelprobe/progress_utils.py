@@ -60,7 +60,7 @@ def get_redis_client(retry_count=3, retry_delay=1.0):
 
     # Parse redis://host:port/db format
     if not broker_url.startswith('redis://'):
-        logger.error(f"Invalid Redis URL format: {broker_url}")
+        logger.error("Invalid Redis URL format")
         return None
 
     url = broker_url.replace('redis://', '')

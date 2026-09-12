@@ -16,166 +16,24 @@ PixelProbe uses 4 main containers:
 Only the web container publishes a port to the host. postgres and redis are
 reachable solely on the internal compose network.
 
-## Complete Docker Compose file
+## Effective Docker Compose file
 
-This example is abridged - see `docker-compose.yml` in the repo root for the
-full set of environment variables and comments.
+[`docker-compose.yml`](../docker-compose.yml) in the repository root is the
+only supported deployment file. It defines the current image tag, non-root
+identity, read-only media bind, writable runtime paths, resource limits,
+cookie settings, and scheduler ownership. Do not copy older Compose examples.
+
+Use a small override file only for local changes. It must preserve the same
+`PUID:PGID` and read-only media mount for both application services.
 
 ```yaml
 services:
-  # PostgreSQL Database - Stores all scan results and metadata
-  postgres:
-    image: postgres:18-alpine
-    container_name: pixelprobe-postgres
-    environment:
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-    volumes:
-      - postgres_data:/var/lib/postgresql
-    # Not published to the host: app and worker reach it on the compose
-    # network. For local debugging use: - "127.0.0.1:5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # Valkey (Redis-compatible) - Message broker for Celery task queue.
-  # noeviction is required: an eviction policy like allkeys-lru could
-  # silently drop queued task messages under memory pressure.
-  redis:
-    image: valkey/valkey:9-alpine
-    container_name: pixelprobe-redis
-    command: >
-      valkey-server
-      --maxmemory ${REDIS_MAX_MEMORY:-2gb}
-      --maxmemory-policy noeviction
-    # Not published to the host: the broker has no auth. For local
-    # debugging use: - "127.0.0.1:6379:6379"
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # Main Web Application - Serves UI and API
   pixelprobe:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
-    container_name: pixelprobe-app
-    ports:
-      - "5000:5000"  # Required: web interface access
     environment:
-      # Security
-      SECRET_KEY: ${SECRET_KEY}
-
-      # Scheduler runs in celery-worker; keep the web container out of the
-      # scheduler lock entirely (set to "true" only in single-container setups)
-      SCHEDULER_ENABLED: "false"
-
-      # Database Configuration
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      
-      # Celery Configuration
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      
-      # Application Settings
-      SCAN_PATHS: /media,/photos,/videos
-      EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
-      EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
-      MAX_WORKERS: 10
-      BATCH_SIZE: 100
-      OUTPUT_ROTATION_ENABLED: true
-      
-      # Timezone (optional)
-      TZ: America/New_York
-    volumes:
-      # Media directories (read-only for safety)
-      - /path/to/media:/media:ro
-      - /path/to/photos:/photos:ro
-      - /path/to/videos:/videos:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s  # migrations run before workers serve requests
-    restart: unless-stopped
-
-  # Celery Worker - Processes scan tasks in parallel
+      GUNICORN_WORKERS: 2
   celery-worker:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
-    container_name: pixelprobe-celery-worker
-    command: python celery_worker.py
     environment:
-      # Security (config.py refuses to start without SECRET_KEY)
-      SECRET_KEY: ${SECRET_KEY}
-
-      # Database Configuration
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      
-      # Celery Configuration
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      CELERY_LOG_LEVEL: ${CELERY_LOG_LEVEL:-INFO}
-      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}  # Concurrent Celery tasks
-      
-      # Worker Settings
-      MAX_WORKERS: 10
-      
-      # Scan configuration (required for the scheduler, which runs here)
-      SCAN_PATHS: /media,/photos,/videos
-      EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
-      EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
-      
-      # Timezone (optional)
-      TZ: America/New_York
-    volumes:
-      # Same media directories as web container
-      - /path/to/media:/media:ro
-      - /path/to/photos:/photos:ro
-      - /path/to/videos:/videos:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    deploy:
-      # Budget roughly 1 CPU and 2 GB RAM per CELERY_CONCURRENCY slot.
-      # With the default CELERY_CONCURRENCY=4 that means cpus 4, memory 8G.
-      resources:
-        limits:
-          cpus: '4'
-          memory: 8G
-        reservations:
-          cpus: '2'
-          memory: 4G
-    restart: unless-stopped
-
-volumes:
-  postgres_data:
-    driver: local
-
-networks:
-  default:
-    name: pixelprobe-network
-    driver: bridge
+      CELERY_CONCURRENCY: 2
 ```
 
 ## Environment variables (.env file)
@@ -239,13 +97,15 @@ environment:
 
 ### Performance tuning
 
-Adjust these settings based on your system:
+Adjust these settings based on your system. They are operator starting points,
+not measured throughput or memory guarantees. Validate them against the media,
+storage, and database used by the deployment.
 
 | Setting | Default | Description | Recommendation |
 |---------|---------|-------------|----------------|
 | CELERY_CONCURRENCY | 4 | Concurrent Celery tasks per container | Budget roughly 1 CPU and 2 GB RAM per slot (the worker recycles children at --max-memory-per-child, about 1.9 GiB); raise only if the container has matching cpus/memory limits |
 | MAX_WORKERS | 10 | Threads for selected-file rescans only (Scan Selected); does not affect directory scans, which scale with CELERY_CONCURRENCY | Each thread holds one PostgreSQL connection. Leave at 10; raise toward 16-24 only for large hand-picked rescans with max_connections headroom. Not a function of CPU cores |
-| BATCH_SIZE | 100 | Paths per database lookup batch during file discovery | Leave at 100; does not control scan chunk size, which is automatic (see the chunk table in [performance-tuning.md](performance-tuning.md)) |
+| BATCH_SIZE | 100 | Legacy media-checker discovery lookup batch | Leave at 100. It does not control parallel discovery inserts or scan chunk commits. |
 | REDIS_MAX_MEMORY | 2gb | Task queue memory | 1-4gb for large libraries |
 
 ### PostgreSQL tuning
@@ -282,19 +142,20 @@ volumes:
   - /media/music:/music:ro
 ```
 
-**Important:** both the `pixelprobe` (web app) and `celery-worker` containers must run as the same user to access mounted media files. Add the `user:` directive to both services:
+**Important:** the root Compose file already runs both application services as
+the same configured user. Keep that setting in any override:
 
 ```yaml
 services:
   pixelprobe:
     # ... other settings ...
-    user: "1000:1000"  # Use your host user's UID:GID
+    user: "${PUID:-10001}:${PGID:-10001}"
     volumes:
       - /media/movies:/movies:ro
 
   celery-worker:
     # ... other settings ...
-    user: "1000:1000"  # MUST match pixelprobe user
+    user: "${PUID:-10001}:${PGID:-10001}"  # MUST match pixelprobe user
     volumes:
       - /media/movies:/movies:ro
 ```
@@ -307,7 +168,7 @@ id -g  # Shows GID (typically 1000)
 
 Or use environment variables:
 ```yaml
-user: "${PUID:-1000}:${PGID:-1000}"
+user: "${PUID:-10001}:${PGID:-10001}"
 ```
 
 If the web app and Celery worker run as different users, the worker gets "No valid files provided" errors even though files exist, because it can't read the mounted media directories.

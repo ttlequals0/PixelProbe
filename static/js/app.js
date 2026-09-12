@@ -18,16 +18,21 @@ function fileStatus(file) {
     switch (file.scan_status) {
         case 'pending': return { cls: 'neutral', text: 'Pending' };
         case 'scanning': return { cls: 'info', text: 'Scanning' };
+        case 'unreadable': return { cls: 'danger', text: 'Unreadable' };
         case 'error':
         case 'failed': return { cls: 'danger', text: 'Scan Error' };
         case 'unsupported':
         case 'skipped': return { cls: 'neutral', text: 'Skipped' };
+        case 'completed':
+            if (file.scan_tool === 'error') return { cls: 'danger', text: 'Scan Error' };
+            if (file.scan_tool === 'unsupported') return { cls: 'neutral', text: 'Skipped' };
+            if (file.marked_as_good) return { cls: 'success', text: 'Healthy' };
+            if (file.bitrot_suspected) return { cls: 'bitrot', text: 'Bitrot?' };
+            if (file.is_corrupted) return { cls: 'danger', text: 'Corrupted' };
+            if (file.has_warnings) return { cls: 'warning', text: 'Warning' };
+            return { cls: 'success', text: 'Healthy' };
+        default: return { cls: 'neutral', text: 'Unknown' };
     }
-    if (file.marked_as_good) return { cls: 'success', text: 'Healthy' };
-    if (file.bitrot_suspected) return { cls: 'bitrot', text: 'Bitrot?' };
-    if (file.is_corrupted) return { cls: 'danger', text: 'Corrupted' };
-    if (file.has_warnings) return { cls: 'warning', text: 'Warning' };
-    return { cls: 'success', text: 'Healthy' };
 }
 
 // Single source of truth for a file's detail sections, most useful first:
@@ -376,10 +381,17 @@ class StatsDashboard {
     constructor(apiClient) {
         this.api = apiClient;
         this.refreshInterval = null;
+        this.lastIntegrity = null;
+        this.lastSuccessfulRefresh = null;
     }
 
     async init() {
-        await this.updateStats();
+        try {
+            await this.updateStats();
+        } catch (error) {
+            this.renderIntegrityCoverage(null, true);
+            this.renderRefreshStatus(error);
+        }
         this.startAutoRefresh();
     }
 
@@ -388,9 +400,11 @@ class StatsDashboard {
             const stats = await this.api.getStats();
             if (stats) {
                 this.renderStats(stats);
+                this.lastSuccessfulRefresh = new Date();
+                this.renderRefreshStatus();
             }
         } catch (error) {
-            // Silently handle stats update failures (likely during server restart)
+            throw error;
         }
     }
 
@@ -404,25 +418,58 @@ class StatsDashboard {
         this.updateStatCard('bitrot-files', (stats.integrity && stats.integrity.bitrot_suspected) || 0);
         this.updateStatCard('pending-files', stats.pending_files);
         this.updateStatCard('scanning-files', stats.scanning_files);
+        this.lastIntegrity = stats.integrity || null;
         this.renderIntegrityCoverage(stats.integrity);
     }
 
-    renderIntegrityCoverage(integrity) {
+    renderIntegrityCoverage(integrity, stale = false) {
         const element = document.querySelector('#integrity-checked');
-        if (!element || !integrity || !integrity.total_files) return;
-        element.textContent = `${integrity.checked_percent}%`;
-        let title = `${integrity.checked_files.toLocaleString()} of ` +
-            `${integrity.total_files.toLocaleString()} files integrity-checked`;
-        if (integrity.never_checked > 0) {
-            title += `; ${integrity.never_checked.toLocaleString()} never checked`;
+        if (!element) return;
+        if (!integrity || !integrity.total_files) {
+            element.textContent = '-';
+            element.title = stale ? 'Integrity coverage is unavailable while the dashboard refresh is stale.' :
+                'No files are available for integrity coverage.';
+            const details = document.querySelector('#integrity-details');
+            if (details) details.textContent = '';
+            return;
         }
+        element.textContent = `${integrity.checked_percent}%`;
+        const attempted = integrity.attempted_files || 0;
+        const successful = integrity.checked_files || 0;
+        const errors = integrity.integrity_error_files || 0;
+        const unavailable = integrity.integrity_unavailable_files || 0;
+        let title = `${attempted.toLocaleString()} ever attempted; ${successful.toLocaleString()} ever successfully verified; ` +
+            `${errors.toLocaleString()} latest errors; ${unavailable.toLocaleString()} latest unavailable; ` +
+            `${(integrity.never_attempted || 0).toLocaleString()} never attempted`;
         if (integrity.oldest_check_date) {
-            title += `; every checked file verified since ${new Date(integrity.oldest_check_date).toLocaleString()}`;
+            title += `; oldest successful verification ${new Date(integrity.oldest_check_date).toLocaleString()}`;
         }
         if (integrity.bitrot_suspected > 0) {
             title += `; ${integrity.bitrot_suspected.toLocaleString()} bitrot suspected`;
         }
         element.title = title;
+        const details = document.querySelector('#integrity-details');
+        if (details) {
+            details.textContent = `Attempted ${attempted.toLocaleString()}, successful ${successful.toLocaleString()}, ` +
+                `errors ${errors.toLocaleString()}, unavailable ${unavailable.toLocaleString()}, ` +
+                `never attempted ${(integrity.never_attempted || 0).toLocaleString()}`;
+        }
+    }
+
+    renderRefreshStatus(error = null) {
+        const element = document.querySelector('#integrity-refresh-status');
+        if (!element) return;
+        element.classList.toggle('is-stale', Boolean(error));
+        if (error) {
+            this.renderIntegrityCoverage(this.lastIntegrity, true);
+            const previous = this.lastSuccessfulRefresh ?
+                ` Showing data from ${this.lastSuccessfulRefresh.toLocaleString()}.` :
+                ' No current data is available.';
+            element.textContent = `Refresh failed.${previous}`;
+            return;
+        }
+        element.textContent = this.lastSuccessfulRefresh ?
+            `Last refreshed ${this.lastSuccessfulRefresh.toLocaleString()}.` : '';
     }
 
     updateStatCard(id, value) {
@@ -433,13 +480,40 @@ class StatsDashboard {
     }
 
     startAutoRefresh() {
-        // Refresh every 30 seconds instead of 5 seconds to reduce server load
-        this.refreshInterval = setInterval(() => this.updateStats(), 30000);
+        this.stopAutoRefresh();
+        this._statsPollGeneration = (this._statsPollGeneration || 0) + 1;
+        const generation = this._statsPollGeneration;
+        this.statsPollDelay = 30000;
+        const poll = async () => {
+            if (generation !== this._statsPollGeneration) return;
+            this.refreshInterval = null;
+            if (document.hidden) {
+                this.refreshInterval = setTimeout(poll, 30000);
+                return;
+            }
+            try {
+                await this.updateStats();
+                this.statsPollDelay = 30000;
+            } catch (error) {
+                this.statsPollDelay = Math.min(this.statsPollDelay * 2, 300000);
+                this.renderRefreshStatus(error);
+            }
+            if (generation === this._statsPollGeneration) {
+                this.refreshInterval = setTimeout(poll, this.statsPollDelay);
+            }
+        };
+        this._statsPoll = poll;
+        if (!this._statsVisibilityListener) this._statsVisibilityListener = () => {
+            if (!document.hidden && !this.refreshInterval) this._statsPoll();
+        };
+        document.addEventListener('visibilitychange', this._statsVisibilityListener);
+        this.refreshInterval = setTimeout(poll, this.statsPollDelay);
     }
 
     stopAutoRefresh() {
+        this._statsPollGeneration = (this._statsPollGeneration || 0) + 1;
         if (this.refreshInterval) {
-            clearInterval(this.refreshInterval);
+            clearTimeout(this.refreshInterval);
             this.refreshInterval = null;
         }
     }
@@ -515,14 +589,17 @@ class ProgressManager {
             
             // Add recovery button if scan is stuck
             if (isStuck && this.operationType === 'scan') {
-                progressDetails.innerHTML = `
-                    <div>${escapeHtml(detailsText)}</div>
-                    <div style="margin-top: 10px;">
-                        <button class="btn btn-warning" onclick="app.recoverStuckScan()">
-                            <i class="fas fa-wrench"></i> Recover Stuck Scan
-                        </button>
-                    </div>
-                `;
+                progressDetails.replaceChildren();
+                const message = document.createElement('div');
+                message.textContent = detailsText;
+                const action = document.createElement('div');
+                action.style.marginTop = '10px';
+                const button = document.createElement('button');
+                button.className = 'btn btn-warning';
+                button.textContent = 'Recover Stuck Scan';
+                button.addEventListener('click', () => app.recoverStuckScan());
+                action.appendChild(button);
+                progressDetails.append(message, action);
             } else {
                 progressDetails.textContent = detailsText;
             }
@@ -772,7 +849,7 @@ class ProgressManager {
     }
     
     updateCleanupButton(isRunning) {
-        const cleanupButton = document.querySelector('[onclick*="cleanupOrphaned"]');
+        const cleanupButton = document.querySelector('[data-action="cleanupOrphaned"]');
         if (cleanupButton) {
             cleanupButton.disabled = isRunning;
             cleanupButton.innerHTML = isRunning ?
@@ -782,7 +859,7 @@ class ProgressManager {
     }
     
     updateFileChangesButton(isRunning) {
-        const fileChangesButton = document.querySelector('[onclick*="checkFileChanges"]');
+        const fileChangesButton = document.querySelector('[data-action="checkFileChanges"]');
         if (fileChangesButton) {
             fileChangesButton.disabled = isRunning;
             fileChangesButton.innerHTML = isRunning ?
@@ -793,7 +870,7 @@ class ProgressManager {
     
     updateScanButtons(isScanning) {
         // Update all Start Scan buttons
-        const scanButtons = document.querySelectorAll('[onclick*="startScan"]');
+        const scanButtons = document.querySelectorAll('[data-action="startScan"]');
         scanButtons.forEach(button => {
             button.disabled = isScanning;
             if (isScanning) {
@@ -1374,7 +1451,7 @@ class TableManager {
             const tbody = document.querySelector('#results-tbody');
             if (!tbody) return;
 
-            tbody.innerHTML = data.results.map(file => this.renderRow(file)).join('');
+            tbody.replaceChildren(...data.results.map(file => this.renderRow(file)));
 
             // Re-bind checkbox events with shift-select support
             tbody.querySelectorAll('.file-checkbox').forEach(cb => {
@@ -1398,7 +1475,7 @@ class TableManager {
             container = mobileContainer;
         }
 
-        container.innerHTML = data.results.map(file => this.renderMobileCard(file)).join('');
+        container.replaceChildren(...data.results.map(file => this.renderMobileCard(file)));
 
         // Re-bind checkbox events for mobile with shift-select support
         container.querySelectorAll('.file-checkbox').forEach(cb => {
@@ -1409,132 +1486,81 @@ class TableManager {
     }
 
     renderMobileCard(file) {
-        const status = fileStatus(file);
-        const statusClass = status.cls;
-        const statusText = status.text.toUpperCase();
-        const details = fileDetails(file);
-        
-        return `
-            <div class="result-card">
-                <div class="badge badge-${statusClass}">${statusText}</div>
-                <div class="file-path">${this.escapeHtml(file.file_path)}</div>
-                <div class="file-info">
-                    <span>${this.formatFileSize(file.file_size)}</span>
-                    <span>${this.escapeHtml(file.file_type || 'Unknown')}</span>
-                </div>
-                <div class="file-details">
-                    <span class="label">Tool:</span>
-                    <span class="value">${this.escapeHtml(file.scan_tool || 'N/A')}</span>
-                    <span class="label">Scanned:</span>
-                    <span class="value">${this.formatDate(file.scan_date)}</span>
-                    ${file.last_integrity_check_date ? `
-                        <span class="label">Last Integrity Check:</span>
-                        <span class="value">${this.formatDate(file.last_integrity_check_date)}</span>
-                    ` : ''}
-                    ${details ? `
-                        <span class="label">Details:</span>
-                        <span class="value">${this.escapeHtml(details)}</span>
-                    ` : ''}
-                </div>
-                <div class="action-buttons">
-                    <button class="btn btn-secondary" onclick="app.viewFile(${file.id})" title="View File">
-                        <i class="fas fa-eye"></i><span class="btn-text"> View</span>
-                    </button>
-                    <!-- Individual File Actions Dropdown for Mobile -->
-                    <div class="action-dropdown">
-                        <button class="btn btn-secondary" type="button"
-                                onclick="app.toggleActionDropdown(event, 'mobile-file-action-menu-${file.id}')" title="Actions">
-                            <i class="fas fa-tasks"></i><span class="btn-text"> Actions</span> <i class="fas fa-caret-down"></i>
-                        </button>
-                        <ul class="dropdown-menu" id="mobile-file-action-menu-${file.id}" style="display: none;">
-                            <li><a class="dropdown-item" href="#" onclick="app.rescanFile(${file.id}); return false;">
-                                <i class="fas fa-sync"></i> Rescan
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
-                                <i class="fas fa-search"></i> Cleanup
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
-                                <i class="fas fa-shield-alt"></i> Integrity Check
-                            </a></li>
-                            ${file.bitrot_suspected ? `
-                            <li><a class="dropdown-item" href="#" onclick="app.acceptBitrot(${file.id}); return false;">
-                                <i class="fas fa-check-double"></i> Accept Current State
-                            </a></li>
-                            ` : ''}
-                        </ul>
-                    </div>
-                    ${details ? `
-                        <button class="btn btn-secondary" onclick="app.viewScanOutput(${file.id})" title="View Details">
-                            <i class="fas fa-file-alt"></i><span class="btn-text"> Details</span>
-                        </button>
-                    ` : ''}
-                    <button class="btn btn-secondary" onclick="app.downloadFile(${file.id})" title="Download">
-                        <i class="fas fa-download"></i><span class="btn-text"> Download</span>
-                    </button>
-                    <button class="btn btn-primary" onclick="app.markFileAsGood(${file.id})" title="Mark as Good">
-                        <i class="fas fa-check"></i><span class="btn-text"> Mark Good</span>
-                    </button>
-                </div>
-                <input type="checkbox" class="file-checkbox" value="${file.id}" ${this.selectedFiles.has(file.id) ? 'checked' : ''}>
-            </div>
-        `;
+        const card = document.createElement('div');
+        card.className = 'result-card';
+        const status = document.createElement('div');
+        const verdict = fileStatus(file);
+        status.className = `badge badge-${verdict.cls}`;
+        status.textContent = verdict.text.toUpperCase();
+        const path = document.createElement('div');
+        path.className = 'file-path';
+        path.textContent = file.file_path;
+        path.title = file.file_path;
+        const info = document.createElement('div');
+        info.className = 'file-info';
+        for (const value of [this.formatFileSize(file.file_size), file.file_type || 'Unknown']) {
+            const span = document.createElement('span'); span.textContent = value; info.appendChild(span);
+        }
+        const details = document.createElement('div');
+        details.className = 'file-details';
+        this.appendFileDetails(details, file);
+        card.append(status, path, info, details, this.createFileActions(file, false), this.createFileCheckbox(file));
+        return card;
     }
 
     renderRow(file) {
-        const { cls: statusClass, text: statusText } = fileStatus(file);
-        const details = fileDetails(file);
-        
-        return `
-            <tr>
-                <td><input type="checkbox" class="file-checkbox" value="${file.id}" ${this.selectedFiles.has(file.id) ? 'checked' : ''}></td>
-                <td><span class="badge badge-${statusClass}">${statusText}</span></td>
-                <td class="file-path-cell" title="${escapeAttribute(file.file_path)}">${this.escapeHtml(file.file_path)}</td>
-                <td>${this.formatFileSize(file.file_size)}</td>
-                <td>${this.escapeHtml(file.file_type || 'N/A')}</td>
-                <td>${this.escapeHtml(file.scan_tool || 'N/A')}</td>
-                <td class="text-truncate" title="${escapeAttribute(details)}">${this.escapeHtml(details)}</td>
-                <td>${this.formatDate(file.scan_date)}</td>
-                <td class="action-buttons">
-                    <button class="btn btn-sm btn-secondary" onclick="app.viewFile(${file.id})">
-                        <i class="fas fa-eye"></i> View
-                    </button>
-                    <!-- Individual File Actions Dropdown -->
-                    <div class="action-dropdown">
-                        <button class="btn btn-sm btn-secondary" type="button"
-                                onclick="app.toggleActionDropdown(event, 'file-action-menu-${file.id}')">
-                            <i class="fas fa-tasks"></i> Actions <i class="fas fa-caret-down"></i>
-                        </button>
-                        <ul class="dropdown-menu" id="file-action-menu-${file.id}" style="display: none;">
-                            <li><a class="dropdown-item" href="#" onclick="app.rescanFile(${file.id}); return false;">
-                                <i class="fas fa-sync"></i> Rescan
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
-                                <i class="fas fa-search"></i> Cleanup
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
-                                <i class="fas fa-shield-alt"></i> Integrity Check
-                            </a></li>
-                            ${file.bitrot_suspected ? `
-                            <li><a class="dropdown-item" href="#" onclick="app.acceptBitrot(${file.id}); return false;">
-                                <i class="fas fa-check-double"></i> Accept Current State
-                            </a></li>
-                            ` : ''}
-                        </ul>
-                    </div>
-                    ${details ? `
-                        <button class="btn btn-sm btn-secondary" onclick="app.viewScanOutput(${file.id})">
-                            <i class="fas fa-file-alt"></i> Details
-                        </button>
-                    ` : ''}
-                    <button class="btn btn-sm btn-secondary" onclick="app.downloadFile(${file.id})">
-                        <i class="fas fa-download"></i> Download
-                    </button>
-                    <button class="btn btn-sm btn-primary" onclick="app.markFileAsGood(${file.id})">
-                        <i class="fas fa-check"></i> Mark Good
-                    </button>
-                </td>
-            </tr>
-        `;
+        const row = document.createElement('tr');
+        const values = [this.createFileCheckbox(file), fileStatus(file).text, file.file_path, this.formatFileSize(file.file_size), file.file_type || 'N/A', file.scan_tool || 'N/A', fileDetails(file), this.formatDate(file.scan_date)];
+        values.forEach((value, index) => {
+            const cell = document.createElement('td');
+            if (value instanceof Element) cell.appendChild(value);
+            else { cell.textContent = value; if (index === 2 || index === 6) { cell.title = value; cell.className = index === 2 ? 'file-path-cell' : 'text-truncate'; } }
+            row.appendChild(cell);
+        });
+        const actions = document.createElement('td');
+        actions.appendChild(this.createFileActions(file, true));
+        row.appendChild(actions);
+        return row;
+    }
+
+    createFileCheckbox(file) {
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox'; checkbox.className = 'file-checkbox'; checkbox.value = file.id;
+        checkbox.checked = this.selectedFiles.has(file.id);
+        return checkbox;
+    }
+
+    appendFileDetails(container, file) {
+        const add = (label, value) => {
+            const labelElement = document.createElement('span'); labelElement.className = 'label'; labelElement.textContent = label;
+            const valueElement = document.createElement('span'); valueElement.className = 'value'; valueElement.textContent = value;
+            container.append(labelElement, valueElement);
+        };
+        add('Tool:', file.scan_tool || 'N/A'); add('Scanned:', this.formatDate(file.scan_date));
+        if (file.last_integrity_check_date) add('Last Integrity Check:', this.formatDate(file.last_integrity_check_date));
+        if (fileDetails(file)) add('Details:', fileDetails(file));
+    }
+
+    createFileActions(file, compact) {
+        const actions = document.createElement('div'); actions.className = 'action-buttons';
+        const id = Number(file.id); const make = (text, icon, handler) => {
+            const button = document.createElement('button'); button.className = `btn ${compact ? 'btn-sm ' : ''}btn-secondary`;
+            button.title = text; button.innerHTML = `<i class="fas ${icon}"></i>`; button.append(` ${text}`);
+            button.addEventListener('click', handler); return button;
+        };
+        actions.appendChild(make('View', 'fa-eye', () => app.viewFile(id)));
+        const dropdown = document.createElement('div'); dropdown.className = 'action-dropdown';
+        const menu = document.createElement('ul'); menu.className = 'dropdown-menu'; menu.style.display = 'none';
+        const toggle = make('Actions', 'fa-tasks', (event) => this.toggleActionDropdown(event, menu.id));
+        menu.id = `file-action-menu-${id}-${compact ? 'table' : 'mobile'}`;
+        [['Rescan', 'fa-sync', () => app.rescanFile(id)], ['Cleanup', 'fa-search', () => app.orphanCheckFile(id)], ['Integrity Check', 'fa-shield-alt', () => app.changeCheckFile(id)]].forEach(([text, icon, handler]) => {
+            const item = document.createElement('li'); const action = document.createElement('a'); action.href = '#'; action.className = 'dropdown-item'; action.innerHTML = `<i class="fas ${icon}"></i>`; action.append(` ${text}`); action.addEventListener('click', (event) => { event.preventDefault(); handler(); }); item.appendChild(action); menu.appendChild(item);
+        });
+        if (file.bitrot_suspected) { const item = document.createElement('li'); const action = document.createElement('a'); action.href = '#'; action.className = 'dropdown-item'; action.textContent = 'Accept Current State'; action.addEventListener('click', (event) => { event.preventDefault(); app.acceptBitrot(id); }); item.appendChild(action); menu.appendChild(item); }
+        dropdown.append(toggle, menu); actions.appendChild(dropdown);
+        if (fileDetails(file)) actions.appendChild(make('Details', 'fa-file-alt', () => app.viewScanOutput(id)));
+        actions.append(make('Download', 'fa-download', () => app.downloadFile(id)), make('Mark Good', 'fa-check', () => app.markFileAsGood(id)));
+        return actions;
     }
 
     updatePagination(data) {
@@ -2331,60 +2357,79 @@ class PixelProbeApp {
         let content = '';
         
         if (fileType.startsWith('image/')) {
-            content = `<img src="/api/view/${file.id}" alt="${escapeAttribute(filePath)}" style="max-width: 100%; max-height: 60vh; height: auto; object-fit: contain; display: block; margin: 0 auto;">`;
+            const image = document.createElement('img');
+            image.src = `/api/view/${encodeURIComponent(file.id)}`;
+            image.alt = filePath;
+            image.style.cssText = 'max-width: 100%; max-height: 60vh; height: auto; object-fit: contain; display: block; margin: 0 auto;';
+            modalBody.replaceChildren(image);
+            content = '';
         } else if (fileType.startsWith('video/')) {
             // Match v1.x implementation more closely
             const videoUrl = `/api/view/${file.id}`;
             
-            content = `
-                <div style="position: relative; width: 100%; max-width: 800px; margin: 0 auto;">
-                    <video id="video-player-${file.id}"
-                           class="video-player"
-                           controls
-                           preload="metadata"
-                           style="width: 100%; display: block;"
-                           onloadedmetadata="this.volume = 1.0;"
-                           onerror="app.handleVideoError(${file.id})">
-                        <source src="${videoUrl}" type="${fileType}">
-                        <source src="${videoUrl}" type="video/mp4">
-                        <source src="${videoUrl}" type="video/webm">
-                        <source src="${videoUrl}" type="video/ogg">
-                        Your browser does not support the video tag.
-                    </video>
-                    <div id="video-error-${file.id}" style="display: none; padding: 20px; text-align: center; color: #ff6b6b;">
-                        <p>Unable to load video. <a href="${videoUrl}" target="_blank">Try opening directly</a></p>
-                    </div>
-                </div>
-            `;
+            const wrapper = document.createElement('div');
+            wrapper.style.cssText = 'position: relative; width: 100%; max-width: 800px; margin: 0 auto;';
+            const video = document.createElement('video');
+            video.id = `video-player-${file.id}`;
+            video.className = 'video-player';
+            video.controls = true;
+            video.preload = 'metadata';
+            video.style.cssText = 'width: 100%; display: block;';
+            video.addEventListener('loadedmetadata', () => { video.volume = 1.0; });
+            video.addEventListener('error', () => this.handleVideoError(file.id));
+            [fileType, 'video/mp4', 'video/webm', 'video/ogg'].forEach(type => {
+                const source = document.createElement('source');
+                source.src = videoUrl;
+                source.type = type;
+                video.appendChild(source);
+            });
+            video.appendChild(document.createTextNode('Your browser does not support the video tag.'));
+            const error = document.createElement('div');
+            error.id = `video-error-${file.id}`;
+            error.style.cssText = 'display: none; padding: 20px; text-align: center; color: #ff6b6b;';
+            const errorText = document.createElement('p');
+            errorText.textContent = 'Unable to load video. ';
+            const direct = document.createElement('a');
+            direct.href = videoUrl;
+            direct.target = '_blank';
+            direct.textContent = 'Try opening directly';
+            errorText.appendChild(direct);
+            error.appendChild(errorText);
+            wrapper.append(video, error);
+            modalBody.replaceChildren(wrapper);
+            content = '';
         } else if (fileType.startsWith('audio/')) {
-            content = `
-                <audio id="audio-player-${file.id}"
-                       controls
-                       style="width: 100%; display: block; margin: 0 auto;"
-                       onloadedmetadata="this.volume = 1.0;">
-                    <source src="/api/view/${file.id}" type="${escapeAttribute(fileType)}">
-                    Your browser does not support the audio element.
-                </audio>
-            `;
+            const audio = document.createElement('audio');
+            audio.id = `audio-player-${file.id}`;
+            audio.controls = true;
+            audio.style.cssText = 'width: 100%; display: block; margin: 0 auto;';
+            audio.addEventListener('loadedmetadata', () => { audio.volume = 1.0; });
+            const source = document.createElement('source');
+            source.src = `/api/view/${encodeURIComponent(file.id)}`;
+            source.type = fileType;
+            audio.append(source, document.createTextNode('Your browser does not support the audio element.'));
+            modalBody.replaceChildren(audio);
+            content = '';
         } else {
             content = `<p style="text-align: center;">Preview not available for this file type.</p>`;
         }
         
-        content += `
-            <div style="margin-top: 1rem;">
-                <a href="/api/download/${file.id}" class="btn btn-primary" download>
-                    <i class="fas fa-download"></i> Download
-                </a>
-            </div>
-        `;
-        
-        modalBody.innerHTML = content;
+        if (content) modalBody.textContent = content;
+        const downloadWrap = document.createElement('div');
+        downloadWrap.style.marginTop = '1rem';
+        const download = document.createElement('a');
+        download.href = `/api/download/${encodeURIComponent(file.id)}`;
+        download.className = 'btn btn-primary';
+        download.download = '';
+        download.textContent = 'Download';
+        downloadWrap.appendChild(download);
+        modalBody.appendChild(downloadWrap);
         modal.style.display = 'block';
         
         // Setup close handlers
         const closeBtn = modal.querySelector('.modal-close');
         if (closeBtn) {
-            closeBtn.onclick = () => this.closeModal('media-viewer-modal');
+            closeBtn.addEventListener('click', () => this.closeModal('media-viewer-modal'));
         }
 
         // Close on outside click
@@ -2546,7 +2591,7 @@ class PixelProbeApp {
                 ${rows.map(([label, value]) => `<tr><th>${esc(label)}:</th><td>${esc(value)}</td></tr>`).join('')}
             </table>
             ${file.bitrot_suspected ? `
-                <button class="btn btn-sm btn-primary" onclick="app.acceptBitrot(${Number(file.id)})">
+                <button class="btn btn-sm btn-primary" data-accept-bitrot="${Number(file.id)}">
                     <i class="fas fa-check-double"></i> Accept Current State
                 </button>
             ` : ''}
@@ -2709,7 +2754,7 @@ class PixelProbeApp {
             for (const [scanType, stats] of Object.entries(histogramData.by_scan_type)) {
                 html += `
                     <div class="stat-card" style="padding: 1rem; background: var(--card-bg, #f8f9fa); border-radius: 4px;">
-                        <div style="font-size: 0.875rem; font-weight: bold; margin-bottom: 0.5rem;">${scanType.replace('_', ' ').toUpperCase()}</div>
+                        <div style="font-size: 0.875rem; font-weight: bold; margin-bottom: 0.5rem;">${escapeHtml(String(scanType).replace('_', ' ').toUpperCase())}</div>
                         <div style="font-size: 0.75rem; color: var(--text-muted, #6c757d);">
                             Count: ${stats.count || 0}<br>
                             Avg: ${stats.avg ? stats.avg.toFixed(1) + 's' : 'N/A'}<br>
@@ -3400,31 +3445,28 @@ class PixelProbeApp {
     }
 
     showReportDetails(report) {
-        // Create modal content for report details
         const modal = document.createElement('div');
         modal.className = 'modal';
         modal.style.display = 'block';
-        
-        const content = `
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3>Report Details</h3>
-                    <button class="modal-close">&times;</button>
-                </div>
-                <div class="modal-body">
-                    <pre>${JSON.stringify(report, null, 2)}</pre>
-                </div>
-            </div>
-        `;
-        
-        modal.innerHTML = content;
+        const content = document.createElement('div');
+        content.className = 'modal-content';
+        const header = document.createElement('div');
+        header.className = 'modal-header';
+        const title = document.createElement('h3');
+        title.textContent = 'Report Details';
+        const closeButton = document.createElement('button');
+        closeButton.className = 'modal-close';
+        closeButton.textContent = '\u00d7';
+        const body = document.createElement('div');
+        body.className = 'modal-body';
+        const output = document.createElement('pre');
+        output.textContent = JSON.stringify(report, null, 2);
+        body.appendChild(output);
+        header.append(title, closeButton);
+        content.append(header, body);
+        modal.appendChild(content);
         document.body.appendChild(modal);
-        
-        // Setup close handlers
-        const closeBtn = modal.querySelector('.modal-close');
-        closeBtn.onclick = () => {
-            modal.remove();
-        };
+        closeButton.addEventListener('click', () => modal.remove());
         
         modal.onclick = (e) => {
             if (e.target === modal) {
@@ -3507,34 +3549,45 @@ class PixelProbeApp {
                     }
                 }
                 
-                row.innerHTML = `
-                    <td data-label="Select">
-                        <input type="checkbox" 
-                               data-report-id="${report.report_id}" 
-                               data-filename="${report.filename || ''}"
-                               onchange="app.toggleReportSelection('${report.report_id}', this.checked)">
-                    </td>
-                    <td data-label="Date">${this.table.formatDate(report.start_time)}</td>
-                    <td data-label="Type">${scanType}</td>
-                    <td data-label="Status"><span class="${statusClass}">${report.status}</span></td>
-                    <td data-label="Duration">${report.duration_formatted || 'N/A'}</td>
-                    <td data-label="Files">${filesInfo}</td>
-                    <td data-label="Issues">${issuesInfo}</td>
-                    <td data-label="Actions">
-                        <button class="btn btn-sm btn-primary" onclick="app.viewScanReport('${report.report_id}')" title="View Details">
-                            <i class="fas fa-eye"></i>
-                        </button>
-                        <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'json')" title="Export JSON">
-                            <i class="fas fa-file-export"></i>
-                        </button>
-                        <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'pdf')" title="Export PDF">
-                            <i class="fas fa-file-pdf"></i>
-                        </button>
-                        <button class="btn btn-sm btn-danger" onclick="app.deleteScanReport('${report.report_id}')" title="Delete Report">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </td>
-                `;
+                const reportId = String(report.report_id);
+                const cell = (label, value) => {
+                    const element = document.createElement('td');
+                    element.dataset.label = label;
+                    element.textContent = String(value == null ? '' : value);
+                    return element;
+                };
+                const selectCell = document.createElement('td');
+                selectCell.dataset.label = 'Select';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.dataset.reportId = reportId;
+                checkbox.dataset.filename = String(report.filename || '');
+                checkbox.addEventListener('change', () => this.toggleReportSelection(reportId, checkbox.checked));
+                selectCell.appendChild(checkbox);
+                row.append(selectCell, cell('Date', this.table.formatDate(report.start_time)), cell('Type', scanType));
+                const statusCell = cell('Status', '');
+                const status = document.createElement('span');
+                status.className = statusClass;
+                status.textContent = String(report.status || '');
+                statusCell.replaceChildren(status);
+                row.append(statusCell, cell('Duration', report.duration_formatted || 'N/A'), cell('Files', filesInfo), cell('Issues', issuesInfo));
+                const actionsCell = cell('Actions', '');
+                const makeReportButton = (title, handler) => {
+                    const button = document.createElement('button');
+                    button.className = title === 'Delete Report' ? 'btn btn-sm btn-danger' : title === 'View Details' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-secondary';
+                    button.title = title;
+                    button.textContent = title;
+                    button.addEventListener('click', handler);
+                    return button;
+                };
+                actionsCell.replaceChildren(
+                    makeReportButton('View Details', () => this.viewScanReport(reportId)),
+                    makeReportButton('Export JSON', () => this.exportScanReport(reportId, 'json')),
+                    makeReportButton('Export PDF', () => this.exportScanReport(reportId, 'pdf')),
+                    makeReportButton('Delete Report', () => this.deleteScanReport(reportId))
+                );
+                row.appendChild(actionsCell);
+                const buttons = actionsCell.querySelectorAll('button');
 
                 tbody.appendChild(row);
 
@@ -3542,33 +3595,19 @@ class PixelProbeApp {
                 if (cardsContainer) {
                     const card = document.createElement('div');
                     card.className = 'report-card';
-                    card.innerHTML = `
-                        <div class="report-card-header">
-                            <h4>${scanType}</h4>
-                            <div class="report-card-actions">
-                                <button class="btn btn-xs ${statusClass === 'text-success' ? 'btn-success' : statusClass === 'text-danger' ? 'btn-danger' : 'btn-warning'}">${report.status}</button>
-                                <button class="btn btn-xs btn-danger" onclick="app.deleteScanReport('${report.report_id}')" title="Delete">
-                                    <i class="fas fa-trash"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="report-card-info">
-                            <p><strong>Date:</strong> ${this.table.formatDate(report.start_time)}</p>
-                            <p><strong>Duration:</strong> ${report.duration_formatted || 'N/A'}</p>
-                            <p><strong>Files:</strong> ${filesInfo} | <strong>Issues:</strong> ${issuesInfo}</p>
-                        </div>
-                        <div class="report-card-footer">
-                            <button class="btn btn-sm btn-primary" onclick="app.viewScanReport('${report.report_id}')" title="View">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'json')" title="Export JSON">
-                                <i class="fas fa-file-code"></i>
-                            </button>
-                            <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'pdf')" title="Export PDF">
-                                <i class="fas fa-file-pdf"></i>
-                            </button>
-                        </div>
-                    `;
+                    const header = document.createElement('div'); header.className = 'report-card-header';
+                    const heading = document.createElement('h4'); heading.textContent = scanType;
+                    const headerActions = document.createElement('div'); headerActions.className = 'report-card-actions';
+                    const statusButton = document.createElement('button'); statusButton.className = `btn btn-xs ${statusClass === 'text-success' ? 'btn-success' : statusClass === 'text-danger' ? 'btn-danger' : 'btn-warning'}`; statusButton.textContent = String(report.status || '');
+                    const deleteButton = document.createElement('button'); deleteButton.className = 'btn btn-xs btn-danger'; deleteButton.title = 'Delete'; deleteButton.textContent = 'Delete'; deleteButton.addEventListener('click', () => this.deleteScanReport(reportId));
+                    headerActions.append(statusButton, deleteButton); header.append(heading, headerActions);
+                    const info = document.createElement('div'); info.className = 'report-card-info';
+                    info.textContent = `Date: ${this.table.formatDate(report.start_time)} | Duration: ${report.duration_formatted || 'N/A'} | Files: ${filesInfo} | Issues: ${issuesInfo}`;
+                    const footer = document.createElement('div'); footer.className = 'report-card-footer';
+                    const cardButton = (title, handler) => { const button = document.createElement('button'); button.className = 'btn btn-sm btn-secondary'; button.title = title; button.textContent = title; button.addEventListener('click', handler); return button; };
+                    const view = cardButton('View', () => this.viewScanReport(reportId)); view.className = 'btn btn-sm btn-primary';
+                    footer.append(view, cardButton('Export JSON', () => this.exportScanReport(reportId, 'json')), cardButton('Export PDF', () => this.exportScanReport(reportId, 'pdf')));
+                    card.append(header, info, footer);
                     cardsContainer.appendChild(card);
                 }
             });
@@ -3585,33 +3624,36 @@ class PixelProbeApp {
         const paginationContainer = document.querySelector('#scan-reports-pagination');
         if (!paginationContainer) return;
         
-        let paginationHtml = '<div class="pagination">';
-        
-        // Previous button
-        if (currentPage > 1) {
-            paginationHtml += `<button class="pagination-btn" onclick="app.loadScanReports(${currentPage - 1})">Previous</button>`;
-        }
-        
-        // Page numbers
+        const pagination = document.createElement('div');
+        pagination.className = 'pagination';
+        const addButton = (label, page) => {
+            const button = document.createElement('button');
+            button.className = 'pagination-btn';
+            button.textContent = label;
+            button.addEventListener('click', () => this.loadScanReports(page));
+            pagination.appendChild(button);
+        };
+        if (currentPage > 1) addButton('Previous', currentPage - 1);
         for (let i = 1; i <= totalPages; i++) {
             if (i === currentPage) {
-                paginationHtml += `<span class="pagination-current">${i}</span>`;
+                const current = document.createElement('span');
+                current.className = 'pagination-current';
+                current.textContent = String(i);
+                pagination.appendChild(current);
             } else if (i === 1 || i === totalPages || (i >= currentPage - 2 && i <= currentPage + 2)) {
-                paginationHtml += `<button class="pagination-btn" onclick="app.loadScanReports(${i})">${i}</button>`;
+                addButton(String(i), i);
             } else if (i === currentPage - 3 || i === currentPage + 3) {
-                paginationHtml += '<span>...</span>';
+                const ellipsis = document.createElement('span');
+                ellipsis.textContent = '...';
+                pagination.appendChild(ellipsis);
             }
         }
-        
-        // Next button
-        if (currentPage < totalPages) {
-            paginationHtml += `<button class="pagination-btn" onclick="app.loadScanReports(${currentPage + 1})">Next</button>`;
-        }
-        
-        paginationHtml += `<span class="pagination-info">Total: ${totalItems} reports</span>`;
-        paginationHtml += '</div>';
-        
-        paginationContainer.innerHTML = paginationHtml;
+        if (currentPage < totalPages) addButton('Next', currentPage + 1);
+        const info = document.createElement('span');
+        info.className = 'pagination-info';
+        info.textContent = `Total: ${totalItems} reports`;
+        pagination.appendChild(info);
+        paginationContainer.replaceChildren(pagination);
     }
 
     async viewScanReport(reportId) {
@@ -3625,12 +3667,12 @@ class PixelProbeApp {
             let detailsHtml = '<div class="scan-report-details">';
             detailsHtml += '<h4>Report Details</h4>';
             detailsHtml += '<table class="table">';
-            detailsHtml += `<tr><th>Report ID:</th><td>${report.report_id}</td></tr>`;
-            detailsHtml += `<tr><th>Scan Type:</th><td>${report.scan_type.replace('_', ' ').toUpperCase()}</td></tr>`;
-            detailsHtml += `<tr><th>Status:</th><td>${report.status}</td></tr>`;
-            detailsHtml += `<tr><th>Start Time:</th><td>${new Date(report.start_time).toLocaleString()}</td></tr>`;
-            detailsHtml += `<tr><th>End Time:</th><td>${report.end_time ? new Date(report.end_time).toLocaleString() : 'N/A'}</td></tr>`;
-            detailsHtml += `<tr><th>Duration:</th><td>${report.duration_formatted || 'N/A'}</td></tr>`;
+            detailsHtml += `<tr><th>Report ID:</th><td>${escapeHtml(report.report_id)}</td></tr>`;
+            detailsHtml += `<tr><th>Scan Type:</th><td>${escapeHtml(report.scan_type.replace('_', ' ').toUpperCase())}</td></tr>`;
+            detailsHtml += `<tr><th>Status:</th><td>${escapeHtml(report.status)}</td></tr>`;
+            detailsHtml += `<tr><th>Start Time:</th><td>${escapeHtml(new Date(report.start_time).toLocaleString())}</td></tr>`;
+            detailsHtml += `<tr><th>End Time:</th><td>${escapeHtml(report.end_time ? new Date(report.end_time).toLocaleString() : 'N/A')}</td></tr>`;
+            detailsHtml += `<tr><th>Duration:</th><td>${escapeHtml(report.duration_formatted || 'N/A')}</td></tr>`;
             
             if (report.directories_scanned && Array.isArray(report.directories_scanned) && report.directories_scanned.length > 0) {
                 // Cleanup and file-changes reports store file lists (objects with
@@ -3649,7 +3691,7 @@ class PixelProbeApp {
                 if (report.directories_scanned.length > maxEntries) {
                     entries.push(`... and ${report.directories_scanned.length - maxEntries} more`);
                 }
-                detailsHtml += `<tr><th>${label}</th><td>${entries.join('<br>')}</td></tr>`;
+                detailsHtml += `<tr><th>${escapeHtml(label)}</th><td>${entries.join('<br>')}</td></tr>`;
             }
             
             detailsHtml += '</table>';
@@ -3659,7 +3701,7 @@ class PixelProbeApp {
                 detailsHtml += '<table class="table">';
                 Object.entries(report.summary).forEach(([key, value]) => {
                     const label = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-                    detailsHtml += `<tr><th>${label}:</th><td>${value}</td></tr>`;
+                    detailsHtml += `<tr><th>${escapeHtml(label)}:</th><td>${escapeHtml(String(value))}</td></tr>`;
                 });
                 detailsHtml += '</table>';
             }
@@ -4627,7 +4669,10 @@ class PixelProbeApp {
                 if (statusDiv && config.last_ping_time) {
                     const lastPing = new Date(config.last_ping_time).toLocaleString();
                     const statusClass = config.last_ping_status === 'success' ? 'text-success' : 'text-danger';
-                    statusDiv.innerHTML = `<p class="${statusClass}">Last ping: ${lastPing} (${config.last_ping_status})</p>`;
+                    const message = document.createElement('p');
+                    message.className = statusClass;
+                    message.textContent = `Last ping: ${lastPing} (${config.last_ping_status || 'unknown'})`;
+                    statusDiv.replaceChildren(message);
                     statusDiv.style.display = 'block';
                 }
             } else if (response.status === 404) {
@@ -4762,6 +4807,12 @@ class PixelProbeApp {
             if (!response.ok) throw new Error('Request failed');
             const data = await response.json();
             container.innerHTML = data.groups.map(group => this.renderTunableGroup(group)).join('');
+            container.querySelectorAll('[data-tunable-reset]').forEach(button => {
+                button.addEventListener('click', () => this.resetTunable(button.dataset.tunableReset));
+            });
+            container.querySelectorAll('[data-accept-bitrot]').forEach(button => {
+                button.addEventListener('click', () => this.acceptBitrot(Number(button.dataset.acceptBitrot)));
+            });
             this.setTunablesStatus('');
         } catch (error) {
             console.error('Error loading tunables:', error);
@@ -4781,27 +4832,34 @@ class PixelProbeApp {
     }
 
     renderTunable(setting) {
-        const id = `tunable-${setting.key.replace(/\./g, '-')}`;
+        const key = String(setting.key || '');
+        const type = ['bool', 'int', 'float'].includes(setting.type) ? setting.type : 'float';
+        if (!/^[a-z][a-z0-9_.-]*$/i.test(key)) return '';
+        const id = `tunable-${key.replace(/\./g, '-')}`;
+        const min = setting.min !== null && setting.min !== '' && Number.isFinite(Number(setting.min))
+            ? Number(setting.min) : null;
+        const max = setting.max !== null && setting.max !== '' && Number.isFinite(Number(setting.max))
+            ? Number(setting.max) : null;
         const changed = setting.is_default
             ? '<span></span>'
             : `<button type="button" class="tunable-reset" title="Restore the default"
-                   onclick="app.resetTunable('${this.escapeHtml(setting.key)}')">Reset</button>`;
+                   data-tunable-reset="${escapeAttribute(key)}">Reset</button>`;
         const badge = setting.is_default
             ? ''
             : '<span class="tunable-changed" title="Changed from the default">Changed</span>';
 
         const control = setting.type === 'bool'
             ? `<label class="tunable-switch">
-                   <input type="checkbox" id="${id}" data-key="${this.escapeHtml(setting.key)}"
+                   <input type="checkbox" id="${id}" data-key="${escapeAttribute(key)}"
                           data-type="bool" ${setting.value ? 'checked' : ''}>
                    <span>${setting.value ? 'On' : 'Off'}</span>
                </label>`
             : `<input type="number" id="${id}" class="form-control tunable-input"
-                      data-key="${this.escapeHtml(setting.key)}" data-type="${setting.type}"
-                      value="${setting.value}"
-                      ${setting.min !== null ? `min="${setting.min}"` : ''}
-                      ${setting.max !== null ? `max="${setting.max}"` : ''}
-                      step="${setting.type === 'int' ? '1' : 'any'}">
+                      data-key="${escapeAttribute(key)}" data-type="${type}"
+                      value="${escapeAttribute(setting.value)}"
+                      ${min !== null ? `min="${min}"` : ''}
+                      ${max !== null ? `max="${max}"` : ''}
+                      step="${type === 'int' ? '1' : 'any'}">
                <span class="tunable-unit">${setting.unit ? this.escapeHtml(setting.unit) : ''}</span>`;
 
         return `
@@ -4810,7 +4868,7 @@ class PixelProbeApp {
                     <label class="tunable-label" for="${id}">${this.escapeHtml(setting.label)}${badge}</label>
                     <p class="tunable-help">${this.escapeHtml(setting.help)}</p>
                 </div>
-                <div class="tunable-control${setting.type === 'bool' ? ' tunable-control-switch' : ''}">
+                <div class="tunable-control${type === 'bool' ? ' tunable-control-switch' : ''}">
                     ${control}
                     ${changed}
                 </div>
@@ -4999,10 +5057,44 @@ class PixelProbeApp {
 
 }
 
+function bindTemplateActions() {
+    fetch('/api/version').then(response => response.json()).then(data => {
+        const version = document.getElementById('version-info');
+        if (version) version.textContent = `v${data.version}`;
+    }).catch(() => {});
+    const actions = {
+        showApiDocs: () => app.showApiDocs(), startScan: () => app.startScan(), cleanupOrphaned: () => app.cleanupOrphaned(),
+        checkFileChanges: () => app.checkFileChanges(), showSchedules: () => app.showSchedules(), showExclusions: () => app.showExclusions(),
+        showSystemStats: () => app.showSystemStats(), showTrends: () => app.showTrends(), showScanReports: () => app.showScanReports(),
+        showLogs: () => app.showLogs(), showTunables: () => app.showTunables(), cancelCurrentOperation: () => app.cancelCurrentOperation(),
+        markSelectedAsGood: () => app.markSelectedAsGood(), rescanSelected: () => app.rescanSelected(), orphanScanSelected: () => app.orphanScanSelected(),
+        changeCheckSelected: () => app.changeCheckSelected(), downloadSelected: () => app.downloadSelected(), toggleExportMenu: e => app.toggleExportMenu(e),
+        exportData: (e, arg) => app.exportData(arg), loadScanReports: () => app.loadScanReports(), toggleDropdown: (e, arg) => app.toggleDropdown(e, arg),
+        downloadSelectedReports: (e, arg) => app.downloadSelectedReports(arg), deleteSelectedReports: () => app.deleteSelectedReports(),
+        toggleAllReports: e => app.toggleAllReports(e.target.checked), downloadLogs: () => app.downloadLogs(), purgeLogs: () => app.purgeLogs(),
+        'logViewer-loadMore': () => app.logViewer.loadMore(), showAddSchedule: () => app.showAddSchedule(), toggleScheduleInput: () => app.toggleScheduleInput(),
+        toggleBudgetInput: (e, arg) => app.toggleBudgetInput(arg), toggleEditScheduleInput: () => app.toggleEditScheduleInput(), saveTunables: () => app.saveTunables(),
+        addExclusion: (e, arg) => app.addExclusion(arg), hideConfirmModal: (e, arg) => app.hideConfirmModal(arg === 'true'),
+        deleteHealthcheckConfig: () => app.deleteHealthcheckConfig(), testHealthcheck: () => app.testHealthcheck(), saveHealthcheckConfig: () => app.saveHealthcheckConfig(),
+        closeModal: (e, arg) => app.closeModal(arg), toggleActionDropdown: (e, arg) => app.toggleActionDropdown(e, arg),
+        'auth-showUserManagement': () => AuthManager.showUserManagement(), 'auth-showApiTokens': () => AuthManager.showApiTokens(),
+        'auth-showChangePassword': () => AuthManager.showChangePassword(), 'auth-logout': () => AuthManager.logout()
+    };
+    document.querySelectorAll('[data-action]').forEach(element => {
+        const action = actions[element.dataset.action];
+        if (!action) return;
+        element.addEventListener(element.tagName === 'SELECT' || element.type === 'checkbox' ? 'change' : 'click', event => {
+            if (element.tagName === 'A') event.preventDefault();
+            action(event, element.dataset.actionArg);
+        });
+    });
+}
+
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new PixelProbeApp();
     window.app.init();
+    bindTemplateActions();
     
     // Setup modal close buttons
     document.querySelectorAll('.modal-close').forEach(btn => {

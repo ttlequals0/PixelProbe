@@ -6,14 +6,19 @@ from pixelprobe.models import db, ScanSchedule, IgnoredErrorPattern
 class TestScheduleEndpoints:
     """Test schedule management endpoints"""
     
-    def test_create_schedule(self, authenticated_client, app, db):
+    def test_create_schedule(self, authenticated_client, app, db, tmp_path):
         """Test creating a new schedule"""
         with app.app_context():
-            response = authenticated_client.post('/api/schedules', 
+            from pixelprobe.models import ScanConfiguration
+            root = tmp_path / 'media'
+            root.mkdir()
+            db.session.add(ScanConfiguration(path=str(root), is_active=True))
+            db.session.commit()
+            response = authenticated_client.post('/api/schedules',
                 json={
                     'name': 'Test Schedule',
                     'cron_expression': '0 2 * * *',
-                    'scan_paths': ['/test/path'],
+                    'scan_paths': [str(root)],
                     'scan_type': 'full_scan'
                 })
             assert response.status_code == 201

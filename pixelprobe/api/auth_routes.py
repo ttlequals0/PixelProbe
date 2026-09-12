@@ -13,6 +13,8 @@ from flask import Blueprint, request, jsonify, session, render_template, redirec
 from flask_login import login_user, logout_user, login_required, current_user
 from pixelprobe.models import db, User, APIToken
 from pixelprobe.auth import authenticate_user, check_first_run, create_initial_admin, auth_required, admin_required, get_authenticated_user
+from pixelprobe.utils.rate_limiting import rate_limit
+from pixelprobe.utils.security import AuditLogger
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,7 @@ def auth_status():
 
 
 @auth_api_bp.route('/auth/setup', methods=['POST'])
+@rate_limit('3 per hour')
 def first_run_setup():
     """Initial setup for the admin user on first run"""
     if not check_first_run():
@@ -59,6 +62,7 @@ def first_run_setup():
     # Log the admin user in automatically
     login_user(admin, remember=True)
     session['session_generation'] = admin.session_generation
+    AuditLogger.log_action('initial_setup_completed', target=f'user:{admin.id}')
 
     return jsonify({
         'success': True,
@@ -68,6 +72,7 @@ def first_run_setup():
 
 
 @auth_api_bp.route('/auth/login', methods=['POST'])
+@rate_limit('5 per minute')
 def api_login():
     """API endpoint for user login"""
     data = request.get_json()
@@ -85,6 +90,7 @@ def api_login():
 
     login_user(user, remember=remember)
     session['session_generation'] = user.session_generation
+    AuditLogger.log_action('login_succeeded', user=user, target=f'user:{user.id}')
 
     return jsonify({
         'success': True,
@@ -96,6 +102,7 @@ def api_login():
 @login_required
 def api_logout():
     """API endpoint for user logout"""
+    AuditLogger.log_action('logout', target=f'user:{current_user.id}')
     logout_user()
     return jsonify({'success': True, 'message': 'Logged out successfully'})
 
@@ -147,6 +154,7 @@ def create_user():
     try:
         db.session.add(user)
         db.session.commit()
+        AuditLogger.log_action('user_created', target=f'user:{user.id}')
         return jsonify({
             'success': True,
             'user': user.to_dict()
@@ -177,6 +185,7 @@ def delete_user(user_id):
     try:
         db.session.delete(user_to_delete)
         db.session.commit()
+        AuditLogger.log_action('user_deleted', target=f'user:{user_id}')
         return jsonify({'success': True, 'message': 'User deleted successfully'})
     except Exception as e:
         db.session.rollback()
@@ -216,6 +225,10 @@ def change_password(user_id):
 
     try:
         db.session.commit()
+        if user.id == target_user.id:
+            login_user(target_user, remember=False)
+            session['session_generation'] = target_user.session_generation
+        AuditLogger.log_action('password_changed', target=f'user:{target_user.id}')
         return jsonify({'success': True, 'message': 'Password updated successfully'})
     except Exception as e:
         db.session.rollback()
@@ -255,6 +268,7 @@ def create_token():
     try:
         db.session.add(token)
         db.session.commit()
+        AuditLogger.log_action('api_token_created', target=f'token:{token.id}')
         return jsonify({
             'success': True,
             'token': token.plaintext_token,
@@ -279,6 +293,7 @@ def delete_token(token_id):
     try:
         db.session.delete(token)
         db.session.commit()
+        AuditLogger.log_action('api_token_deleted', target=f'token:{token_id}')
         return jsonify({'success': True, 'message': 'Token deleted successfully'})
     except Exception as e:
         db.session.rollback()
@@ -295,9 +310,10 @@ def login():
     return render_template('login.html', first_run=check_first_run())
 
 
-@auth_ui_bp.route('/logout')
+@auth_ui_bp.route('/logout', methods=['POST'])
 @login_required
 def logout():
     """Web logout route"""
+    AuditLogger.log_action('logout', target=f'user:{current_user.id}')
     logout_user()
     return redirect(url_for('auth_ui.login'))

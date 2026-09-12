@@ -8,7 +8,7 @@ import hashlib
 import logging
 import os
 from functools import wraps
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask import jsonify, request, redirect, url_for, session, current_app
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
@@ -44,12 +44,19 @@ def _lookup_api_token(token):
     if not token:
         return None
     digest = hashlib.sha256(token.encode('utf-8')).hexdigest()
-    return APIToken.query.filter_by(token_digest=digest, is_active=True).first()
+    # Join the owner in the authentication query. Reading the relationship from
+    # a scoped-session identity map can otherwise retain a pre-deactivation
+    # User object for the duration of a worker request cycle.
+    return (APIToken.query.join(User)
+            .filter(APIToken.token_digest == digest,
+                    APIToken.is_active.is_(True),
+                    User.is_active.is_(True))
+            .first())
 
 
 def _valid_api_token(token):
     api_token = _lookup_api_token(token)
-    if not api_token or not api_token.is_valid() or not api_token.user.is_active:
+    if not api_token or not api_token.is_valid():
         return None
     return api_token
 
@@ -73,12 +80,33 @@ def init_auth(app):
 
     # Session configuration for security. Secure cookies default ON; plain-HTTP
     # LAN deployments must opt out with SESSION_COOKIE_SECURE=false.
-    cookie_secure = os.environ.get('SESSION_COOKIE_SECURE', 'true').lower() != 'false'
+    def env_bool(name, default):
+        value = os.environ.get(name)
+        if value is None:
+            return app.config.get(name, default) if app.testing else default
+        return value.lower() in {'1', 'true', 'yes', 'on'}
+
+    cookie_secure = env_bool('SESSION_COOKIE_SECURE', True)
+    cookie_httponly = env_bool('SESSION_COOKIE_HTTPONLY', True)
+    cookie_samesite = os.environ.get('SESSION_COOKIE_SAMESITE')
+    if cookie_samesite is None:
+        configured_samesite = app.config.get('SESSION_COOKIE_SAMESITE')
+        cookie_samesite = configured_samesite if isinstance(configured_samesite, str) else 'Lax'
+    if cookie_samesite not in {'Lax', 'Strict', 'None'}:
+        raise ValueError('SESSION_COOKIE_SAMESITE must be Lax, Strict, or None')
+    remember_days = int(os.environ.get('REMEMBER_COOKIE_DURATION_DAYS',
+                                      app.config.get('REMEMBER_COOKIE_DURATION_DAYS', 30)))
+    if remember_days < 1 or remember_days > 365:
+        raise ValueError('REMEMBER_COOKIE_DURATION_DAYS must be between 1 and 365')
     app.config.update(
-        SESSION_COOKIE_SECURE=app.config.get('SESSION_COOKIE_SECURE', cookie_secure),
-        SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE='Lax',
-        PERMANENT_SESSION_LIFETIME=86400  # 24 hours
+        SESSION_COOKIE_SECURE=cookie_secure,
+        SESSION_COOKIE_HTTPONLY=cookie_httponly,
+        SESSION_COOKIE_SAMESITE=cookie_samesite,
+        REMEMBER_COOKIE_SECURE=cookie_secure,
+        REMEMBER_COOKIE_HTTPONLY=cookie_httponly,
+        REMEMBER_COOKIE_SAMESITE=cookie_samesite,
+        REMEMBER_COOKIE_DURATION=timedelta(days=remember_days),
+        PERMANENT_SESSION_LIFETIME=timedelta(days=1)
     )
 
     # Session inactivity timeout (30 minutes) - P1 audit fix
@@ -91,12 +119,10 @@ def init_auth(app):
         if request.endpoint and request.endpoint.startswith('static'):
             return None
 
+        if _extract_bearer_token(request):
+            return None
+
         if current_user.is_authenticated:
-            expected_generation = session.get('session_generation')
-            if expected_generation != getattr(current_user, 'session_generation', 0):
-                logout_user()
-                session.clear()
-                return jsonify({'error': 'Session revoked'}), 401
             last_activity = session.get('last_activity')
             now = datetime.now(timezone.utc).timestamp()
 
@@ -116,11 +142,14 @@ def init_auth(app):
 
     @login_manager.user_loader
     def load_user(user_id):
-        user = db.session.get(User, int(user_id))
-        if user:
-            # Force load all attributes to prevent lazy loading issues
-            _ = user.is_active
-        return user
+        try:
+            user_id, generation = user_id.split(':', 1)
+            user = db.session.get(User, int(user_id))
+            if user and user.is_active and generation == str(user.session_generation):
+                return user
+        except (AttributeError, ValueError):
+            return None
+        return None
 
     @login_manager.request_loader
     def load_user_from_request(request):
@@ -155,18 +184,20 @@ def auth_required(f):
         if request_uses_internal_auth():
             return f(*args, **kwargs)
 
-        # Check if user is authenticated via session
-        if current_user.is_authenticated and current_user.is_active:
-            return f(*args, **kwargs)
-
-        # Check for API token
-        token = _extract_bearer_token(request)
-        if token:
+        if request.headers.get('Authorization'):
+            token = _extract_bearer_token(request)
+            if not token:
+                return jsonify({'error': 'Authentication required'}), 401
             api_token = _valid_api_token(token)
             if api_token:
                 api_token.update_last_used()
                 request.current_user = api_token.user
                 return f(*args, **kwargs)
+            return jsonify({'error': 'Authentication required'}), 401
+
+        # Check session only when no bearer principal is presented.
+        if current_user.is_authenticated and current_user.is_active:
+            return f(*args, **kwargs)
 
         # Not authenticated
         return jsonify({'error': 'Authentication required'}), 401
@@ -174,37 +205,15 @@ def auth_required(f):
     return decorated_function
 
 
-def check_auth():
-    """Check if the current request is authenticated
-
-    Returns True if authenticated, False otherwise.
-    Use this inside Flask-RESTX Resource methods instead of the decorator.
-    """
-    # Allow internal scheduler requests authenticated by shared secret
-    if request_uses_internal_auth():
-        return True
-
-    # Check if user is authenticated via session
-    if current_user.is_authenticated and current_user.is_active:
-        return True
-
-    # Check for API token
-    token = _extract_bearer_token(request)
-    if token:
-        api_token = _valid_api_token(token)
-        if api_token:
-            api_token.update_last_used()
-            request.current_user = api_token.user
-            return True
-
-    return False
-
-
 def admin_required(f):
     """Decorator that requires admin privileges"""
     @wraps(f)
     @auth_required
     def decorated_function(*args, **kwargs):
+        # Scheduler callbacks authenticate with the internal shared secret and
+        # have no user principal to evaluate.
+        if request_uses_internal_auth():
+            return f(*args, **kwargs)
         user = getattr(request, 'current_user', current_user)
         if not user.is_admin:
             return jsonify({'error': 'Admin privileges required'}), 403
@@ -259,15 +268,16 @@ def get_authenticated_user(request):
     Get the authenticated user from the request.
     Checks both session authentication and API tokens.
     """
-    # Check session first
-    if current_user.is_authenticated and current_user.is_active:
-        return current_user
-
-    # Check for API token in header
-    token = _extract_bearer_token(request)
-    if token:
+    if request.headers.get('Authorization'):
+        token = _extract_bearer_token(request)
+        if not token:
+            return None
         api_token = _valid_api_token(token)
         if api_token:
             return api_token.user
+        return None
+
+    if current_user.is_authenticated and current_user.is_active:
+        return current_user
 
     return None

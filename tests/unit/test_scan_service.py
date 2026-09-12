@@ -6,9 +6,11 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 import threading
 import time
+from datetime import datetime, timezone
 
 from pixelprobe.services.scan_service import ScanService
-from pixelprobe.models import ScanResult, ScanState
+from pixelprobe.models import ScanConfiguration, ScanResult, ScanState
+from pixelprobe.utils.security import PathTraversalError
 
 class TestScanService:
     """Test the scan service business logic"""
@@ -56,47 +58,56 @@ class TestScanService:
         assert progress['current'] == 10
         assert progress['total'] == 10
     
-    @patch('os.path.exists')
     @patch('pixelprobe.services.scan_service.PixelProbe')
-    def test_scan_single_file_success(self, mock_probe_class, mock_exists, scan_service, app):
+    def test_scan_single_file_success(self, mock_probe_class, scan_service, app, db, tmp_path):
         """Test successful single file scan"""
         with app.app_context():
-            mock_exists.return_value = True
+            file_path = tmp_path / 'file.mp4'
+            file_path.touch()
+            db.session.add(ScanConfiguration(path=str(tmp_path), is_active=True))
+            db.session.commit()
             mock_probe = Mock()
             mock_probe_class.return_value = mock_probe
             
             # Mock scan result with a delay to ensure thread is running
-            mock_result = Mock()
+            mock_result = {
+                'outcome': 'completed', 'file_hash': 'a' * 64,
+                'last_modified': datetime.now(timezone.utc), 'file_size': 0,
+                'file_type': 'video', 'scan_tool': 'test', 'scan_output': '',
+                'is_corrupted': False, 'has_warnings': False,
+            }
             def mock_scan_with_delay(*args, **kwargs):
                 time.sleep(0.2)  # Simulate scan taking time
                 return mock_result
             mock_probe.scan_file.side_effect = mock_scan_with_delay
             
             # Start scan
-            result = scan_service.scan_single_file('/test/file.mp4')
+            result = scan_service.scan_single_file(str(file_path))
         
             assert result['message'] == 'Scan started'
-            assert result['file_path'] == '/test/file.mp4'
+            assert result['file_path'] == str(file_path)
             
             # Wait for thread to start
             time.sleep(0.05)
             assert scan_service.is_scan_running() == True
             
             # Wait for scan to complete
-            scan_service.current_scan_thread.join(timeout=1)
+            scan_service.current_scan_thread.join(timeout=5)
             
             # Verify scan was called
-            mock_probe.scan_file.assert_called_once_with('/test/file.mp4', force_rescan=False)
-    
-    def test_scan_single_file_not_found(self, scan_service):
-        """Test scanning non-existent file"""
-        with pytest.raises(FileNotFoundError):
-            scan_service.scan_single_file('/nonexistent/file.mp4')
+            mock_probe.scan_file.assert_called_once_with(str(file_path), force_rescan=False)
 
-    @patch('os.path.exists')
+    def test_scan_single_file_not_found(self, scan_service, app, db, tmp_path):
+        """Test scanning non-existent file"""
+        with app.app_context():
+            db.session.add(ScanConfiguration(path=str(tmp_path), is_active=True))
+            db.session.commit()
+            with pytest.raises(PathTraversalError):
+                scan_service.scan_single_file(str(tmp_path / 'missing.mp4'))
+
     @patch('pixelprobe.services.scan_service.PixelProbe')
-    def test_scan_single_file_reuses_existing_scan_state(self, mock_probe_class, mock_exists,
-                                                         scan_service, app, db):
+    def test_scan_single_file_reuses_existing_scan_state(self, mock_probe_class,
+                                                         scan_service, app, db, tmp_path):
         """Single-file scan reuses an existing ScanState row when scan_id is passed.
 
         Regression test for the v2.6.41 UI flicker bug: the API route created a
@@ -104,17 +115,28 @@ class TestScanService:
         a *second* row with a different scan_id and the UI lost track in between.
         """
         with app.app_context():
-            mock_exists.return_value = True
-            mock_probe_class.return_value.scan_file.return_value = Mock()
+            file_path = tmp_path / 'file.mp4'
+            file_path.touch()
+            db.session.add(ScanConfiguration(path=str(tmp_path), is_active=True))
+            db.session.commit()
+            release_scan = threading.Event()
+            scan_result = {
+                'outcome': 'completed', 'file_hash': 'a' * 64,
+                'last_modified': datetime.now(timezone.utc), 'file_size': 0,
+                'file_type': 'video', 'scan_tool': 'test', 'scan_output': '',
+                'is_corrupted': False, 'has_warnings': False,
+            }
+            mock_probe_class.return_value.scan_file.side_effect = (
+                lambda *args, **kwargs: (release_scan.wait(1), scan_result)[1])
 
             existing = ScanState.create_new_scan(scan_id='route-scan-id')
-            existing.start_scan(['/test/file.mp4'], force_rescan=True)
+            existing.start_scan([str(file_path)], force_rescan=True)
             existing.is_active = False  # Simulate post-failure state pre-retry
             existing.phase = 'failed'
             db.session.commit()
             existing_id = existing.id
 
-            scan_service.scan_single_file('/test/file.mp4', force_rescan=True,
+            scan_service.scan_single_file(str(file_path), force_rescan=True,
                                           scan_id='route-scan-id')
 
             rows = ScanState.query.filter_by(scan_id='route-scan-id').all()
@@ -124,8 +146,11 @@ class TestScanService:
             assert rows[0].phase == 'initializing'
             assert rows[0].error_message is None
 
-            if scan_service.current_scan_thread:
-                scan_service.current_scan_thread.join(timeout=1)
+            worker = scan_service.current_scan_thread
+            assert worker is not None
+            release_scan.set()
+            worker.join(timeout=5)
+            assert not worker.is_alive()
     
     @patch('os.path.exists')
     @patch('pixelprobe.services.scan_service.PixelProbe')
@@ -162,11 +187,9 @@ class TestScanService:
         # Cancel scan
         result = scan_service.cancel_scan()
         
-        assert result['message'] == 'Scan cancellation completed - all tasks killed'
-        assert scan_service.scan_cancelled == True
-        
-        # Verify scan state was updated
-        mock_scan_state.cancel_scan.assert_called_once()
+        assert result['cancelled'] is False
+        assert result['message'] == 'Scan cancellation was not persisted'
+        mock_scan_state.cancel_scan.assert_not_called()
         
         # Clean up - thread is set to None after cancel
         # No need to join since cancel_scan cleans it up

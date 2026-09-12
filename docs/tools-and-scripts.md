@@ -246,12 +246,14 @@ python3 tests/fixtures/media_samples/download_missing_samples.py
 ## Shell utilities
 
 #### `tools/delete_files_from_csv.sh`
-**Purpose:** Delete files listed in a CSV export
+**Purpose:** Python 3 utility, despite its historical `.sh` filename, for deleting regular files listed in a CSV export.
 **Usage:**
 ```bash
-./tools/delete_files_from_csv.sh corrupted_files.csv
+./tools/delete_files_from_csv.sh corrupted_files.csv --root /media
+# Review the default dry run, then explicitly apply:
+./tools/delete_files_from_csv.sh corrupted_files.csv --root /media --apply
 ```
-**Warning:** This permanently deletes files!
+The utility is dry-run by default. It accepts only paths under explicit repeatable `--root` values, or `SCAN_PATHS` when no root is supplied. `--apply` performs permanent deletion after confirmation. Application orphan cleanup removes inventory records only; it does not delete media files.
 
 #### `tools/reset_nal_files_direct.sh`
 **Purpose:** Direct database reset of NAL-flagged files
@@ -311,7 +313,7 @@ Legacy exception: `scripts/check_db_integrity.py`, `scripts/create_indexes.py`, 
 - Local setup scripts
 
 **Use with caution:**
-- `delete_files_from_csv.sh` - Deletes actual files
+- `delete_files_from_csv.sh` - Python 3 file-deletion utility; dry-run by default and requires `--apply`
 - Direct database manipulation scripts
 
 ---

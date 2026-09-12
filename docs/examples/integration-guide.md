@@ -819,10 +819,10 @@ curl -X POST http://localhost:5000/api/notifications/rules \
   -d '{"event_type": "bitrot_suspected", "provider_id": 1}'
 ```
 
-The only event dispatched today is `bitrot_suspected`, sent when a
-file-changes scan finds files whose content hash changed while the
-modification time did not. There is no `scan_completed` webhook event; to
-act on scan completion, poll `/api/scan-status` as shown above.
+Supported events are `scan_completed` and `bitrot_suspected`. The latter is
+sent when a file-changes scan finds a content hash change without a matching
+modification-time change. A completion rule receives the terminal scan
+summary; status polling remains useful for progress before completion.
 
 The generic webhook payload looks like:
 

@@ -26,7 +26,6 @@ PixelProbe/
 |   |
 |   +-- api/                  # Route blueprints
 |   |   +-- admin_routes.py       # Configurations, schedules, exclusions, ignored patterns
-|   |   +-- auth_decorator.py     # Authentication decorator
 |   |   +-- auth_routes.py        # Login, logout, users, tokens
 |   |   +-- export_routes.py      # CSV/data export, file viewer
 |   |   +-- healthcheck_routes.py # Healthcheck integration
@@ -40,8 +39,6 @@ PixelProbe/
 |   |   `-- stats_routes.py       # Statistics, trends, system info
 |   |
 |   +-- services/             # Business logic layer
-|   |   +-- db_optimization.py
-|   |   +-- export_service.py
 |   |   +-- healthcheck_service.py
 |   |   +-- maintenance_service.py
 |   |   +-- notification_service.py
@@ -103,7 +100,7 @@ PixelProbe/
 +-- pytest.ini                # Pytest configuration
 +-- .env.example              # Environment variable template
 +-- README.md                 # Project README
-`-- CHANGELOG.md              # Version changelog
+`-- CHANGELOG.MD              # Version changelog
 ```
 
 ## Key architecture notes

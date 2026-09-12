@@ -65,6 +65,8 @@ def create_test_app():
     from pixelprobe.api.scan_routes_parallel import parallel_scan_bp
     from pixelprobe.api.auth_routes import auth_bp
     from pixelprobe.api.log_routes import log_bp
+    from pixelprobe.api.notification_routes import notification_bp
+    from pixelprobe.api.healthcheck_routes import healthcheck_bp
     from pixelprobe.scheduler import MediaScheduler
 
     test_app.register_blueprint(scan_bp)
@@ -76,6 +78,8 @@ def create_test_app():
     test_app.register_blueprint(reports_bp)
     test_app.register_blueprint(parallel_scan_bp)
     test_app.register_blueprint(log_bp)
+    test_app.register_blueprint(notification_bp)
+    test_app.register_blueprint(healthcheck_bp)
 
     # Exempt API endpoints from CSRF
     csrf.exempt(scan_bp)
@@ -87,6 +91,8 @@ def create_test_app():
     csrf.exempt(parallel_scan_bp)
     csrf.exempt(auth_bp)
     csrf.exempt(log_bp)
+    csrf.exempt(notification_bp)
+    csrf.exempt(healthcheck_bp)
     
     # Set up scheduler without initializing (to avoid DB access before tables exist)
     scheduler = MediaScheduler()
@@ -121,6 +127,14 @@ def create_test_app():
             'github_url': 'https://github.com/test/test',
             'api_version': '1.0'
         }
+
+    @test_app.route('/api/openapi.yaml')
+    def get_openapi_yaml():
+        return test_app.response_class('', mimetype='application/x-yaml')
+
+    @test_app.route('/api/openapi.json')
+    def get_openapi_json():
+        return {}
     
     return test_app
 

@@ -1063,12 +1063,14 @@ class TestDataHolesInScanFile:
     @patch('pixelprobe.media_checker.PixelProbe.calculate_file_hash')
     @patch('pixelprobe.media_checker.PixelProbe.get_file_info')
     def test_holed_video_marked_corrupt_without_decoding(
-        self, mock_info, mock_hash, mock_holes, mock_video
+        self, mock_info, mock_hash, mock_holes, mock_video, tmp_path
     ):
         from datetime import datetime, timezone
 
+        media = tmp_path / 'holed.mkv'
+        media.write_bytes(b'placeholder')
         mock_info.return_value = {
-            'file_path': '/fake/holed.mkv',
+            'file_path': str(media),
             'file_size': 400 * 1024 * 1024,
             'file_type': 'video/x-matroska',
             'creation_date': datetime.now(timezone.utc),
@@ -1083,7 +1085,7 @@ class TestDataHolesInScanFile:
         )
 
         checker = PixelProbe()
-        result = checker.scan_file('/fake/holed.mkv')
+        result = checker.scan_file(str(media))
 
         assert result['is_corrupted'] is True
         assert 'Incomplete file' in result['corruption_details']
@@ -1094,11 +1096,13 @@ class TestDataHolesInScanFile:
     @patch('pixelprobe.media_checker.PixelProbe._check_data_holes')
     @patch('pixelprobe.media_checker.PixelProbe.calculate_file_hash')
     @patch('pixelprobe.media_checker.PixelProbe.get_file_info')
-    def test_non_media_file_skips_hole_check(self, mock_info, mock_hash, mock_holes):
+    def test_non_media_file_skips_hole_check(self, mock_info, mock_hash, mock_holes, tmp_path):
         from datetime import datetime, timezone
 
+        media = tmp_path / 'notes.nfo'
+        media.write_bytes(b'placeholder')
         mock_info.return_value = {
-            'file_path': '/fake/notes.nfo',
+            'file_path': str(media),
             'file_size': 400 * 1024 * 1024,
             'file_type': 'text/plain',
             'creation_date': datetime.now(timezone.utc),
@@ -1107,7 +1111,7 @@ class TestDataHolesInScanFile:
         mock_hash.return_value = 'deadbeef'
 
         checker = PixelProbe()
-        result = checker.scan_file('/fake/notes.nfo')
+        result = checker.scan_file(str(media))
 
         assert result['is_corrupted'] is False
         mock_holes.assert_not_called()

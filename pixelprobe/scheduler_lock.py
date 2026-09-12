@@ -7,7 +7,8 @@ TTL expiry, which standby processes pick up in their retry loop. There is no
 force-acquire heuristic: hostname/pid are not reliable identity (containers in
 a podman pod share a hostname while pids collide across pid namespaces), so the
 lock value carries a per-process uuid and ownership checks compare the exact
-value. Falls back to file-based locking when Redis is unavailable.
+value. Redis is required for scheduler ownership; without it, dispatch remains
+disabled.
 """
 
 import os
@@ -47,23 +48,40 @@ def make_lock_value():
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
 
 
-def _start_heartbeat(lock_key, redis_client, lock_value, scheduler_initialized):
+def _start_heartbeat(lock_key, redis_client, lock_value, scheduler=None, scheduler_initialized=None):
     """Start a daemon thread that refreshes the scheduler lock periodically.
 
     The refresh is an atomic compare-and-expire: it only extends the TTL while
     this process still holds the lock, so it can never overwrite another
     holder. If the key vanished (a Redis outage expires it for everyone), the
     thread reclaims it with SET NX. If another process claimed it in the
-    meantime, we log loudly but keep the scheduler running -- shutting a
-    BackgroundScheduler down is one-way (it cannot be started again), and in a
-    single-container deployment that would leave no scheduler at all. (A
-    future refinement could pause() here and resume() on reclaim.)
+    meantime, dispatch pauses. A later successful refresh or reclaim resumes
+    it only while this scheduler is still active.
 
     A refresh failure is RETRIED indefinitely rather than breaking the loop;
     a single transient Redis blip must not silently abandon the lock.
     """
+    # Compatibility for direct tests and legacy callers that passed the state
+    # as the fourth positional argument.
+    if scheduler_initialized is None:
+        scheduler_initialized = scheduler
+        scheduler = None
+
+    def pause_dispatch():
+        target = getattr(scheduler, 'scheduler', scheduler)
+        if target and getattr(scheduler, '_shutdown', False) is not True:
+            target.pause()
+
+    def resume_dispatch():
+        target = getattr(scheduler, 'scheduler', scheduler)
+        if target and getattr(scheduler, '_shutdown', False) is not True:
+            target.resume()
+
     def heartbeat_loop():
         consecutive_failures = 0
+        paused_for_lease_loss = False
+        lease_state = getattr(getattr(scheduler, 'app', None),
+                              'scheduler_lease_state', None)
         while scheduler_initialized[0]:
             time.sleep(HEARTBEAT_FAILURE_RETRY_SECS if consecutive_failures
                        else HEARTBEAT_INTERVAL_SECS)
@@ -74,19 +92,31 @@ def _start_heartbeat(lock_key, redis_client, lock_value, scheduler_initialized):
                     _REFRESH_IF_OWNER_SCRIPT, 1, lock_key, lock_value, LOCK_TTL_SECS
                 )
                 if not refreshed:
+                    logger.error("Scheduler lease lost; pausing dispatch until ownership is reacquired")
+                    if lease_state is not None:
+                        lease_state[0] = False
+                    try:
+                        if scheduler:
+                            pause_dispatch()
+                        paused_for_lease_loss = True
+                    except Exception as pause_error:
+                        logger.error(f"Failed to pause scheduler after lease loss: {pause_error}")
                     reclaimed = redis_client.set(lock_key, lock_value, nx=True, ex=LOCK_TTL_SECS)
                     if reclaimed:
-                        logger.info(
-                            f"Scheduler lock had expired; reclaimed in process {os.getpid()}"
-                        )
-                    else:
-                        holder = redis_client.get(lock_key)
-                        holder = holder.decode('utf-8') if isinstance(holder, bytes) else holder
-                        logger.warning(
-                            f"Scheduler lock now held by {holder} but process "
-                            f"{os.getpid()} is still running a scheduler -- "
-                            f"duplicate scheduled runs are possible until one restarts"
-                        )
+                        logger.info("Scheduler lease reacquired; resuming dispatch")
+                        if lease_state is not None:
+                            lease_state[0] = True
+                        if paused_for_lease_loss and scheduler:
+                            resume_dispatch()
+                            paused_for_lease_loss = False
+                    continue
+                if not scheduler_initialized[0] or getattr(scheduler, '_shutdown', False):
+                    break
+                if lease_state is not None:
+                    lease_state[0] = True
+                if paused_for_lease_loss and scheduler:
+                    resume_dispatch()
+                    paused_for_lease_loss = False
                 if consecutive_failures:
                     logger.info(
                         f"Scheduler lock refresh recovered after "
@@ -96,6 +126,14 @@ def _start_heartbeat(lock_key, redis_client, lock_value, scheduler_initialized):
                 logger.debug(f"Refreshed scheduler lock in process {os.getpid()}")
             except Exception as e:
                 consecutive_failures += 1
+                if lease_state is not None:
+                    lease_state[0] = False
+                if scheduler and not paused_for_lease_loss:
+                    try:
+                        pause_dispatch()
+                        paused_for_lease_loss = True
+                    except Exception as pause_error:
+                        logger.error(f"Failed to pause scheduler after Redis error: {pause_error}")
                 logger.warning(
                     f"Failed to refresh scheduler lock "
                     f"(consecutive failure {consecutive_failures}), will keep retrying: {e}"
@@ -113,7 +151,10 @@ def _init_scheduler_and_heartbeat(redis_client, lock_key, lock_value,
     scheduler.init_app(app)
     scheduler_initialized[0] = True
     app.scheduler_redis_lock_key = lock_key
-    _start_heartbeat(lock_key, redis_client, lock_value, scheduler_initialized)
+    app.scheduler_lease_state = [True]
+    app.scheduler_lock_state = scheduler_initialized
+    app.scheduler_heartbeat_thread = _start_heartbeat(
+        lock_key, redis_client, lock_value, scheduler, scheduler_initialized)
 
 
 def _start_retry_thread(redis_client, lock_key, lock_value,
@@ -196,24 +237,10 @@ def initialize_scheduler_with_lock(app, scheduler):
                 )
 
         except Exception as e:
-            logger.warning(f"Redis lock failed ({e}), falling back to file lock")
+            logger.warning(f"Redis lock failed ({e}); scheduler remains disabled")
             redis_client = None
 
-    # Fallback to file lock if Redis unavailable
     if not redis_client and not scheduler_initialized[0]:
-        import fcntl
-        scheduler_lock_file = '/tmp/pixelprobe_scheduler.lock'
-
-        try:
-            lock_file = open(scheduler_lock_file, 'w')
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-            logger.info(f"Acquired file scheduler lock in process {os.getpid()}, initializing scheduler (Redis unavailable)")
-            scheduler.init_app(app)
-            app.scheduler_lock_file = lock_file
-            scheduler_initialized[0] = True
-
-        except (IOError, OSError):
-            logger.info(f"Scheduler already running in another process, skipping initialization in process {os.getpid()}")
+        logger.error("Redis scheduler lease unavailable; scheduler remains disabled")
 
     return scheduler_initialized[0]

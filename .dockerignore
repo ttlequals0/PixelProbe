@@ -15,7 +15,6 @@ AGENTS.md
 GEMINI.md
 .claude
 node_modules
-package-lock.json
 __pycache__
 *.pyc
 *.pyo
@@ -32,6 +31,11 @@ pip-delete-this-directory.txt
 coverage*
 .cache
 .pytest_cache
+instance/
+.playwright-mcp/
+.ruff_cache/
+.benchmarks/
+audit_reports/
 dist
 build
 nosetests.xml

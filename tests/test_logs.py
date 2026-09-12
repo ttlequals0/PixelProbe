@@ -540,7 +540,24 @@ class TestPurgeLogs:
     def test_purge_requires_filter(self, auth_log_client, app, sample_logs):
         resp = auth_log_client.post('/api/logs/purge', json={})
         assert resp.status_code == 400
+
+    def test_purge_rejects_blank_effective_filter(self, auth_log_client, app, sample_logs):
+        resp = auth_log_client.post('/api/logs/purge', json={'scan_id': '   '})
+        assert resp.status_code == 400
         assert 'filter' in resp.get_json()['error'].lower()
+
+    def test_purge_rejects_invalid_supplied_filters_without_deleting(self, auth_log_client, app, sample_logs):
+        invalid_payloads = [
+            {'scan_id': 7, 'level': 'INFO'},
+            {'before': 7, 'level': 'INFO'},
+            {'level': '', 'scan_id': 'scan_001'},
+            ['scan_001'],
+        ]
+        for payload in invalid_payloads:
+            response = auth_log_client.post('/api/logs/purge', json=payload)
+            assert response.status_code == 400
+            with app.app_context():
+                assert LogEntry.query.count() == 6
 
     def test_purge_by_scan_id(self, auth_log_client, app, sample_logs):
         resp = auth_log_client.post('/api/logs/purge', json={'scan_id': 'scan_001'})

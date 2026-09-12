@@ -129,6 +129,32 @@ class TestMediaScheduler:
         """Test that update_schedules method exists"""
         assert hasattr(scheduler, 'update_schedules')
         assert callable(getattr(scheduler, 'update_schedules'))
+
+    def test_shutdown_stops_lease_before_scheduler_executors(self):
+        scheduler = MediaScheduler()
+        scheduler.app = MagicMock()
+        scheduler.app.scheduler_lock_state = [True]
+        scheduler.scheduler = MagicMock()
+        scheduler.scheduler.running = True
+
+        scheduler.shutdown()
+        scheduler.shutdown()
+
+        assert scheduler.app.scheduler_lock_state == [False]
+        scheduler.scheduler.pause.assert_called_once()
+        scheduler.scheduler.shutdown.assert_called_once_with(wait=False)
+
+    def test_queued_callback_cannot_dispatch_after_lease_loss(self, monkeypatch):
+        scheduler = MediaScheduler()
+        scheduler.app = MagicMock()
+        scheduler.app.scheduler_lease_state = [False]
+        post = MagicMock()
+        monkeypatch.setattr('pixelprobe.scheduler.requests.post', post)
+
+        response = scheduler._execute_scan_request('/api/scan', {}, 'fenced scan')
+
+        assert response is None
+        post.assert_not_called()
     
     def test_update_schedules_removes_and_reloads(self, scheduler, app, db):
         """Test that update_schedules removes existing jobs and reloads from DB"""
@@ -159,6 +185,34 @@ class TestMediaScheduler:
             # The job should be removed and re-added
             # Since we don't have the actual schedule loading logic in test,
             # at least verify the method runs without error
+
+    @pytest.mark.parametrize(
+        ('scan_type', 'endpoint'),
+        [('orphan', '/api/cleanup-orphaned'), ('file_changes', '/api/file-changes')],
+    )
+    def test_scheduled_maintenance_sends_roots_not_exact_file_paths(
+            self, scheduler, app, db, monkeypatch, scan_type, endpoint):
+        with app.app_context():
+            schedule = ScanSchedule(
+                name='Scoped maintenance', cron_expression='0 2 * * *',
+                scan_type=scan_type, scan_paths='["/media/a"]', is_active=True,
+            )
+            db.session.add(schedule)
+            db.session.commit()
+            schedule_id = schedule.id
+
+        request = MagicMock(status_code=200)
+        execute = MagicMock(return_value=request)
+        monkeypatch.setattr(scheduler, '_execute_scan_request', execute)
+        monkeypatch.setattr(scheduler, '_send_healthcheck_start', MagicMock())
+
+        scheduler._run_scheduled_scan(schedule_id)
+
+        assert execute.call_args.args[0] == endpoint
+        assert execute.call_args.args[1] == {
+            'schedule_id': schedule_id,
+            'scan_roots': ['/media/a'],
+        }
 
 
 class TestScheduleDbSync:
@@ -411,6 +465,55 @@ class TestHeartbeatRecovery:
         assert not t.is_alive()
         # The only write attempted was the NX reclaim, which lost cleanly.
         redis_client.set.assert_called_once()
+
+    def test_lease_loss_pauses_then_resumes_after_reacquire(self, monkeypatch):
+        monkeypatch.setattr(sl.time, 'sleep', lambda _s: None)
+        initialized = [True]
+        scheduler = MagicMock()
+        calls = {'n': 0}
+
+        def refresh(*_a, **_k):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                return 0
+            initialized[0] = False
+            return 1
+
+        redis_client = MagicMock()
+        redis_client.eval.side_effect = refresh
+        redis_client.set.return_value = True
+        thread = sl._start_heartbeat('k', redis_client, 'me', scheduler, initialized)
+        thread.join(timeout=5)
+        scheduler.scheduler.pause.assert_called_once()
+        scheduler.scheduler.resume.assert_called_once()
+
+    def test_transient_refresh_failure_restores_dispatch_lease(self, monkeypatch):
+        initialized = [True]
+        scheduler = MediaScheduler()
+        scheduler.app = MagicMock()
+        scheduler.app.scheduler_lease_state = [True]
+        calls = {'n': 0}
+
+        def refresh(*_a, **_k):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise Exception('temporary Redis error')
+            return 1
+
+        def sleep(_seconds):
+            if calls['n'] >= 2:
+                initialized[0] = False
+
+        monkeypatch.setattr(sl.time, 'sleep', sleep)
+
+        redis_client = MagicMock()
+        redis_client.eval.side_effect = refresh
+        thread = sl._start_heartbeat('k', redis_client, 'me', scheduler, initialized)
+        thread.join(timeout=5)
+
+        assert not thread.is_alive()
+        assert scheduler.app.scheduler_lease_state == [True]
+        assert scheduler._can_dispatch() is True
 
 
 class TestScanningReclaim:

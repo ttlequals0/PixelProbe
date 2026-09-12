@@ -1,10 +1,11 @@
-from flask import Blueprint, request, send_file, Response, make_response
+from flask import Blueprint, request, send_file, Response, make_response, stream_with_context
 import os
 import csv
 import io
 import json
 import logging
 from datetime import datetime, timezone
+from xml.sax.saxutils import escape as escape_xml
 
 from pixelprobe.models import db, ScanResult
 from pixelprobe.auth import auth_required
@@ -13,6 +14,76 @@ from pixelprobe.utils.security import PathTraversalError, open_authorized_media_
 logger = logging.getLogger(__name__)
 
 export_bp = Blueprint('export', __name__, url_prefix='/api')
+
+_INLINE_MEDIA_MIMETYPES = {
+    'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm',
+    'image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/webp',
+    'video/mp4', 'video/ogg', 'video/quicktime', 'video/webm',
+}
+
+def _result_status(result):
+    if result.scan_status in ('error', 'failed'):
+        return 'Error'
+    if result.scan_status == 'unreadable':
+        return 'Unreadable'
+    if result.scan_status == 'pending':
+        return 'Pending'
+    if result.scan_status == 'scanning':
+        return 'Scanning'
+    if result.scan_status in ('skipped', 'unsupported'):
+        return 'Skipped'
+    if result.scan_status != 'completed':
+        return 'Unknown'
+    if result.scan_tool == 'error':
+        return 'Error'
+    if result.scan_tool == 'unsupported':
+        return 'Skipped'
+    if result.is_corrupted and not result.marked_as_good:
+        return 'Corrupted'
+    if getattr(result, 'has_warnings', False) and not result.marked_as_good:
+        return 'Warning'
+    return 'Healthy'
+
+
+def _apply_status_filter(query, filter_type):
+    completed = ScanResult.scan_status == 'completed'
+    completed_normal = db.and_(
+        completed,
+        db.or_(ScanResult.scan_tool == None,
+               ScanResult.scan_tool.notin_(('error', 'unsupported'))),
+    )
+    unmarked = db.or_(ScanResult.marked_as_good == False, ScanResult.marked_as_good == None)
+    clean = db.and_(
+        db.or_(ScanResult.is_corrupted == False, ScanResult.is_corrupted == None),
+        db.or_(ScanResult.has_warnings == False, ScanResult.has_warnings == None),
+    )
+    if filter_type == 'corrupted':
+        return query.filter(completed_normal, ScanResult.is_corrupted == True, unmarked)
+    if filter_type == 'healthy':
+        return query.filter(completed_normal, db.or_(clean, ScanResult.marked_as_good == True))
+    if filter_type == 'warning':
+        return query.filter(completed_normal, ScanResult.has_warnings == True,
+                            db.or_(ScanResult.is_corrupted == False,
+                                   ScanResult.is_corrupted == None), unmarked)
+    if filter_type == 'pending':
+        return query.filter(ScanResult.scan_status == 'pending')
+    if filter_type == 'error':
+        return query.filter(db.or_(
+            ScanResult.scan_status.in_(('error', 'failed', 'unreadable')),
+            db.and_(completed, ScanResult.scan_tool == 'error'),
+        ))
+    return query
+
+
+def _pdf_export_rows(query):
+    """Load only the fields rendered by the bounded generic PDF export."""
+    return (query.with_entities(
+        ScanResult.id, ScanResult.file_path, ScanResult.file_size,
+        ScanResult.file_type, ScanResult.is_corrupted, ScanResult.marked_as_good,
+        ScanResult.has_warnings, ScanResult.scan_status, ScanResult.scan_tool,
+        ScanResult.corruption_details, ScanResult.warning_details,
+        ScanResult.error_message, ScanResult.scan_date,
+    ).order_by(ScanResult.id).limit(500).all())
 
 @export_bp.route('/view/<int:result_id>', methods=['GET', 'OPTIONS'])
 @auth_required
@@ -39,66 +110,29 @@ def view_file(result_id):
     
     # Get file stats
     file_size = file_stat.st_size
-    file_type = result.file_type or 'application/octet-stream'
+    file_type = (result.file_type or '').lower()
     
-    # Handle range requests for video streaming (required for mobile)
-    range_header = request.headers.get('range')
-    if range_header and file_type.startswith('video/'):
-        logger.info(f"Range request for video: {range_header}")
-        
-        # Parse range header
-        try:
-            byte_start = int(range_header.split('=')[1].split('-')[0])
-            byte_end = file_size - 1
-            if '-' in range_header.split('=')[1] and range_header.split('=')[1].split('-')[1]:
-                byte_end = int(range_header.split('=')[1].split('-')[1])
-            
-            # Limit chunk size for mobile
-            max_chunk = 1024 * 1024  # 1MB chunks
-            if byte_end - byte_start > max_chunk:
-                byte_end = byte_start + max_chunk
-            
-            logger.info(f"Serving bytes {byte_start}-{byte_end}/{file_size}")
-            
-            def generate():
-                with media_file:
-                    f = media_file
-                    f.seek(byte_start)
-                    remaining = byte_end - byte_start + 1
-                    while remaining:
-                        chunk_size = min(8192, remaining)
-                        chunk = f.read(chunk_size)
-                        if not chunk:
-                            break
-                        remaining -= len(chunk)
-                        yield chunk
-            
-            response = Response(
-                generate(),
-                206,  # Partial Content
-                mimetype=file_type,
-                headers={
-                    'Content-Range': f'bytes {byte_start}-{byte_end}/{file_size}',
-                    'Accept-Ranges': 'bytes',
-                    'Content-Length': str(byte_end - byte_start + 1),
-                    'Cache-Control': 'no-cache',
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                    'Access-Control-Allow-Headers': 'Range'
-                }
-            )
-            return response
-            
-        except Exception as e:
-            media_file.close()
-            logger.error(f"Error handling range request: {e}")
-            # Fall through to regular response
-    
-    # Regular response for non-range requests
     logger.info(f"Serving file for viewing: {result.file_path}")
-    response = send_file(media_file, as_attachment=False, mimetype=file_type, download_name=os.path.basename(result.file_path))
-    response.headers['Accept-Ranges'] = 'bytes'
+    inline_media = file_type in _INLINE_MEDIA_MIMETYPES
+    response = None
+    try:
+        response = send_file(
+            media_file,
+            as_attachment=not inline_media,
+            mimetype=file_type if inline_media else 'application/octet-stream',
+            download_name=os.path.basename(result.file_path),
+            conditional=False,
+        )
+        response.content_length = file_size
+        response.make_conditional(request.environ, accept_ranges=True, complete_length=file_size)
+    except Exception:
+        if response is not None:
+            response.close()
+        else:
+            media_file.close()
+        raise
     response.headers['Cache-Control'] = 'no-cache'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
     # Add CORS headers for mobile compatibility
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
@@ -149,9 +183,11 @@ def export_scan_results():
             
             if file_ids:
                 # Export selected files
-                results = ScanResult.query.filter(ScanResult.id.in_(file_ids)).all()
+                query = ScanResult.query.filter(ScanResult.id.in_(file_ids))
+                result_total = query.count()
+                results = _pdf_export_rows(query) if format_type == 'pdf' else None
                 export_type = "selected"
-                logger.info(f"Exporting {len(results)} selected scan results to CSV")
+                logger.info("Exporting %s selected scan results", result_total)
             else:
                 # Export based on current filter and search
                 filter_type = data.get('filter', 'all')
@@ -163,33 +199,12 @@ def export_scan_results():
                 if search:
                     query = query.filter(ScanResult.file_path.contains(search))
                 
-                # Apply corruption filter
-                if filter_type == 'corrupted':
-                    # Show only corrupted files that don't have warnings and aren't marked as good
-                    query = query.filter(
-                        (ScanResult.is_corrupted == True) & 
-                        ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None)) &
-                        (ScanResult.marked_as_good == False)
-                    )
-                elif filter_type == 'healthy':
-                    # Show only healthy files (no corruption, no warnings, or marked as good)
-                    query = query.filter(
-                        ((ScanResult.is_corrupted == False) & 
-                         ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None))) |
-                        (ScanResult.marked_as_good == True)
-                    )
-                elif filter_type == 'warning':
-                    # Show files with warnings that aren't corrupted and aren't marked as good
-                    query = query.filter(
-                        (ScanResult.has_warnings == True) &
-                        (ScanResult.marked_as_good == False) &
-                        (ScanResult.is_corrupted == False)  # Exclude corrupted files
-                    )
-                # 'all' filter - no additional filtering needed
+                query = _apply_status_filter(query, filter_type)
                 
-                results = query.all()
+                result_total = query.count()
+                results = _pdf_export_rows(query) if format_type == 'pdf' else None
                 export_type = filter_type if filter_type != 'all' else 'all'
-                logger.info(f"Exporting {len(results)} scan results to {format_type.upper()} (filter: {filter_type}, search: '{search}')")
+                logger.info("Exporting %s scan results to %s", result_total, format_type.upper())
         else:
             # GET request - support format, filter, and search parameters
             format_type = request.args.get('format', 'csv').lower()
@@ -207,43 +222,51 @@ def export_scan_results():
             if search:
                 query = query.filter(ScanResult.file_path.contains(search))
             
-            # Apply status filter
-            if filter_type == 'corrupted':
-                query = query.filter(ScanResult.is_corrupted == True)
-            elif filter_type == 'healthy':
-                query = query.filter(
-                    db.or_(
-                        ScanResult.is_corrupted == False,
-                        ScanResult.marked_as_good == True
-                    )
-                )
-            elif filter_type == 'pending':
-                query = query.filter(ScanResult.scan_status == 'pending')
-            elif filter_type == 'error':
-                query = query.filter(
-                    db.and_(
-                        ScanResult.is_corrupted == True,
-                        db.or_(
-                            ScanResult.marked_as_good == None,
-                            ScanResult.marked_as_good == False
-                        )
-                    )
-                )
-            # 'all' filter - no additional filtering needed
+            query = _apply_status_filter(query, filter_type)
             
-            results = query.all()
+            result_total = query.count()
+            results = _pdf_export_rows(query) if format_type == 'pdf' else None
             export_type = filter_type if filter_type != 'all' else 'all'
-            logger.info(f"Exporting {len(results)} scan results to {format_type.upper()} (filter: {filter_type}, search: '{search}' via GET)")
+            logger.info("Exporting %s scan results to %s", result_total, format_type.upper())
         
+        def result_batches():
+            columns = (ScanResult.id, ScanResult.file_path, ScanResult.file_size,
+                       ScanResult.file_type, ScanResult.creation_date, ScanResult.is_corrupted,
+                       ScanResult.corruption_details, ScanResult.scan_date, ScanResult.scan_status,
+                       ScanResult.discovered_date, ScanResult.marked_as_good, ScanResult.has_warnings,
+                       ScanResult.warning_details, ScanResult.error_message)
+            last_id = 0
+            while True:
+                session = db.session.session_factory()
+                try:
+                    batch = (query.with_session(session).filter(
+                        ScanResult.id > last_id, ScanResult.id <= export_max_id)
+                             .order_by(ScanResult.id).with_entities(*columns).limit(500).all())
+                finally:
+                    session.close()
+                if not batch:
+                    return
+                last_id = batch[-1].id
+                yield from batch
+
+        export_max_id = query.with_entities(db.func.max(ScanResult.id)).scalar() or 0
+
+        def release_request_session():
+            db.session.rollback()
+
         # Create filename with timestamp and export type
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         
         # Handle different export formats
         if format_type == 'json':
             # Export as JSON
-            json_data = []
-            for result in results:
-                json_data.append({
+            def generate_json():
+                yield '[\n'
+                first = True
+                for result in result_batches():
+                    if not first: yield ',\n'
+                    first = False
+                    yield json.dumps({
                     'id': result.id,
                     'file_path': result.file_path,
                     'file_size': result.file_size or 0,
@@ -263,19 +286,11 @@ def export_scan_results():
                         'warning': getattr(result, 'warning_details', None),
                         'error': getattr(result, 'error_message', None)
                     }
-                })
-            
-            json_content = json.dumps(json_data, indent=2)
+                    }, default=str)
+                yield '\n]\n'
             filename = f"pixelprobe_{export_type}_{timestamp}.json"
-            
-            logger.info(f"JSON export completed - {len(results)} records exported to {filename}")
-            
-            return send_file(
-                io.BytesIO(json_content.encode('utf-8')),
-                mimetype='application/json',
-                as_attachment=True,
-                download_name=filename
-            )
+            release_request_session()
+            return Response(stream_with_context(generate_json()), mimetype='application/json', headers={'Content-Disposition': f'attachment; filename={filename}'})
             
         elif format_type == 'pdf':
             # Export as PDF
@@ -325,8 +340,8 @@ def export_scan_results():
                 
                 # Add export info
                 info_text = f"Export Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}<br/>"
-                info_text += f"Total Records: {len(results)}<br/>"
-                info_text += f"Filter: {export_type}"
+                info_text += f"Total Records: {result_total}<br/>"
+                info_text += f"Filter: {escape_xml(str(export_type))}"
                 elements.append(Paragraph(info_text, styles['Normal']))
                 elements.append(Spacer(1, 0.2*inch))
                 
@@ -334,9 +349,7 @@ def export_scan_results():
                 table_data = [['File Path', 'Status', 'Size', 'Type', 'Details', 'Scan Date']]
                 
                 for result in results[:500]:  # Limit to 500 for PDF size
-                    status = 'Corrupted' if result.is_corrupted and not result.marked_as_good else 'Healthy'
-                    if getattr(result, 'has_warnings', False) and not result.marked_as_good:
-                        status = 'Warning'
+                    status = _result_status(result)
                     
                     size = f"{result.file_size / (1024*1024):.2f} MB" if result.file_size else 'N/A'
                     file_type = result.file_type or 'Unknown'
@@ -358,14 +371,14 @@ def export_scan_results():
                     details_text = "; ".join(details) if details else ''
                     
                     # Wrap file path and details in Paragraph for proper text wrapping
-                    file_path_para = Paragraph(file_path, cell_style)
-                    details_para = Paragraph(details_text, cell_style)
+                    file_path_para = Paragraph(escape_xml(str(file_path)), cell_style)
+                    details_para = Paragraph(escape_xml(str(details_text)), cell_style)
                     
                     table_data.append([
                         file_path_para,
-                        status,
+                        Paragraph(escape_xml(str(status)), cell_style),
                         size,
-                        file_type,
+                        Paragraph(escape_xml(str(file_type)), cell_style),
                         details_para,
                         scan_date
                     ])
@@ -386,9 +399,11 @@ def export_scan_results():
                 
                 elements.append(table)
                 
-                if len(results) > 500:
+                if result_total > len(results):
                     elements.append(Spacer(1, 0.1*inch))
-                    elements.append(Paragraph(f"Note: Showing first 500 of {len(results)} total records", styles['Normal']))
+                    elements.append(Paragraph(
+                        f"Note: Showing first {len(results)} of {result_total} total records. "
+                        "Use CSV or JSON export for the complete result set.", styles['Normal']))
                 
                 # Build PDF
                 doc.build(elements)
@@ -413,12 +428,10 @@ def export_scan_results():
                 
         else:
             # Default to CSV export
-            # Create CSV in memory
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # Write CSV header
-            writer.writerow([
+            def generate_csv():
+                output = io.StringIO()
+                writer = csv.writer(output)
+                writer.writerow([
                 'ID',
                 'File Path',
                 'File Size (bytes)',
@@ -431,21 +444,19 @@ def export_scan_results():
                 'Scan Status',
                 'Discovered Date',
                 'Marked as Good'
-            ])
-            
-            # Write data rows
-            for result in results:
-                # Combine all details into one column
-                details = []
-                if result.corruption_details:
-                    details.append(f"Corruption: {result.corruption_details}")
-                if getattr(result, 'warning_details', None):
-                    details.append(f"Warning: {result.warning_details}")
-                if getattr(result, 'error_message', None):
-                    details.append(f"Error: {result.error_message}")
-                details_text = "; ".join(details) if details else ''
+                ])
+                yield output.getvalue(); output.seek(0); output.truncate(0)
+                for result in result_batches():
+                    details = []
+                    if result.corruption_details:
+                        details.append(f"Corruption: {result.corruption_details}")
+                    if result.warning_details:
+                        details.append(f"Warning: {result.warning_details}")
+                    if result.error_message:
+                        details.append(f"Error: {result.error_message}")
+                    details_text = "; ".join(details) if details else ''
                 
-                writer.writerow([
+                    writer.writerow([
                     result.id,
                     result.file_path,
                     result.file_size or 0,
@@ -458,24 +469,11 @@ def export_scan_results():
                     getattr(result, 'scan_status', 'completed'),  # Default to completed for old records
                     getattr(result, 'discovered_date', result.scan_date).isoformat() if getattr(result, 'discovered_date', result.scan_date) else '',
                     'Yes' if result.marked_as_good else 'No'
-                ])
-            
-            # Prepare response
-            output.seek(0)
-            csv_content = output.getvalue()
-            output.close()
-            
+                    ])
+                    yield output.getvalue(); output.seek(0); output.truncate(0)
             filename = f"pixelprobe_{export_type}_{timestamp}.csv"
-            
-            logger.info(f"CSV export completed - {len(results)} records exported to {filename}")
-            
-            # Return CSV file
-            return send_file(
-                io.BytesIO(csv_content.encode('utf-8')),
-                mimetype='text/csv',
-                as_attachment=True,
-                download_name=filename
-            )
+            release_request_session()
+            return Response(stream_with_context(generate_csv()), mimetype='text/csv', headers={'Content-Disposition': f'attachment; filename={filename}'})
         
     except Exception as e:
         logger.error(f"Error exporting: {str(e)}", exc_info=True)

@@ -11,8 +11,6 @@ from datetime import datetime, timezone
 from flask import Flask, jsonify, send_file, render_template, request, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from flask_login import login_required, current_user
 from dotenv import load_dotenv
@@ -40,6 +38,7 @@ from pixelprobe.api.auth_routes import auth_api_bp, auth_ui_bp, auth_bp  # auth_
 # Import authentication module
 from pixelprobe.auth import (init_auth, auth_required, request_uses_bearer_auth,
                              request_uses_internal_auth)
+from pixelprobe.utils.rate_limiting import limiter
 
 # Import database log handler
 from pixelprobe.utils.log_handler import DatabaseLogHandler
@@ -47,7 +46,7 @@ from pixelprobe.utils.log_handler import DatabaseLogHandler
 # OpenAPI documentation is available as openapi.yaml in the project root
 
 # Import services
-from pixelprobe.services import ScanService, StatsService, ExportService, MaintenanceService
+from pixelprobe.services import ScanService, StatsService, MaintenanceService
 
 # Import repositories
 from pixelprobe.repositories import ScanRepository, ConfigurationRepository
@@ -171,10 +170,10 @@ def add_security_headers(response):
     # Referrer Policy
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
 
-    # Content Security Policy (unsafe-inline required - inline handlers kept per user decision)
+    # Content Security Policy
     csp = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "script-src 'self' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; "
         "img-src 'self' data: blob:; "
@@ -189,20 +188,6 @@ def add_security_headers(response):
 
     return response
 
-# Custom key function that exempts internal requests
-def get_rate_limit_key():
-    """Get rate limit key, exempting internal requests"""
-    remote_addr = get_remote_address()
-    # Exempt localhost and common Docker internal IPs
-    if remote_addr in ['127.0.0.1', 'localhost', '::1']:
-        return None  # Returning None exempts from rate limiting
-    # Exempt Docker internal networks (172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16)
-    if (remote_addr.startswith('172.') or 
-        remote_addr.startswith('10.') or 
-        remote_addr.startswith('192.168.')):
-        return None  # Returning None exempts from rate limiting
-    return remote_addr
-
 # Rate limit counters live in Redis so limits hold across all gunicorn
 # workers (memory:// gave each worker its own counters, multiplying every
 # limit by the worker count). Falls back to per-process memory if Redis is down.
@@ -215,15 +200,14 @@ def _rate_limit_storage_uri():
         return broker.rsplit('/', 1)[0] + '/1'  # separate DB from the broker
     return 'memory://'
 
-limiter = Limiter(
-    app=app,
-    key_func=get_rate_limit_key,
-    default_limits=[],  # Remove default limits to prevent spam when key_func returns None
-    storage_uri=_rate_limit_storage_uri(),
-    in_memory_fallback_enabled=True,
-    headers_enabled=True,
-    swallow_errors=True  # Don't fail requests if rate limiting has issues
+app.config.update(
+    RATELIMIT_STORAGE_URI=_rate_limit_storage_uri(),
+    RATELIMIT_KEY_PREFIX=os.environ.get('RATELIMIT_KEY_PREFIX', ''),
+    RATELIMIT_IN_MEMORY_FALLBACK_ENABLED=True,
+    RATELIMIT_HEADERS_ENABLED=True,
+    RATELIMIT_SWALLOW_ERRORS=True,
 )
+limiter.init_app(app)
 
 # API clients using Bearer credentials are not subject to CSRF. Cookie-authenticated
 # requests are explicitly protected below; disabling Flask-WTF's default lets the
@@ -236,17 +220,20 @@ csrf = CSRFProtect(app)
 def protect_cookie_authenticated_writes():
     if request.method in {'GET', 'HEAD', 'OPTIONS', 'TRACE'}:
         return None
+    session_routes = {'/api/auth/setup', '/api/auth/login', '/api/auth/logout', '/logout'}
+    if request.path in session_routes:
+        return csrf.protect()
     if request_uses_bearer_auth() or request_uses_internal_auth():
         return None
     return csrf.protect()
 
 # Initialize scheduler
 scheduler = MediaScheduler()
+atexit.register(scheduler.shutdown)
 
 # Initialize services (would be done with dependency injection in production)
 app.scan_service = None
 app.stats_service = None
-app.export_service = None
 app.maintenance_service = None
 
 # Initialize repositories
@@ -257,7 +244,6 @@ def init_services():
     """Initialize services with app context"""
     app.scan_service = ScanService(app.config['SQLALCHEMY_DATABASE_URI'])
     app.stats_service = StatsService()
-    app.export_service = ExportService()
     app.maintenance_service = MaintenanceService(app.config['SQLALCHEMY_DATABASE_URI'])
 
     app.scan_repository = ScanRepository()
@@ -307,41 +293,28 @@ def sync_scan_paths_to_db():
 app.register_blueprint(auth_api_bp)  # Register API auth blueprint first
 app.register_blueprint(auth_ui_bp)   # Register UI auth blueprint (login/logout pages)
 
-# Import auth decorator wrapper
-from pixelprobe.api.auth_decorator import apply_auth_to_blueprint
-
-# Register and protect API blueprints
+# Register API blueprints. Each protected route declares its own authorization.
 app.register_blueprint(scan_bp)
-apply_auth_to_blueprint(scan_bp)
 
 app.register_blueprint(stats_bp)
-apply_auth_to_blueprint(stats_bp)
 
 app.register_blueprint(admin_bp)
-apply_auth_to_blueprint(admin_bp)
 
 app.register_blueprint(export_bp)
-apply_auth_to_blueprint(export_bp)
 
 app.register_blueprint(maintenance_bp)
-apply_auth_to_blueprint(maintenance_bp)
 
 app.register_blueprint(reports_bp)
-apply_auth_to_blueprint(reports_bp)
 
 app.register_blueprint(parallel_scan_bp)
-apply_auth_to_blueprint(parallel_scan_bp)
 
 app.register_blueprint(healthcheck_bp)
-apply_auth_to_blueprint(healthcheck_bp)
 
 # P3 audit: Register notification API routes
 app.register_blueprint(notification_bp)
-apply_auth_to_blueprint(notification_bp)
 
 # v2.6.0: Register log API routes
 app.register_blueprint(log_bp)
-apply_auth_to_blueprint(log_bp)
 
 # API documentation is now provided via openapi.yaml specification file
 
@@ -373,11 +346,21 @@ def inject_assets():
     manifest = load_webpack_manifest()
 
     def asset_url(filename):
-        """Get the hashed filename from webpack manifest, fallback to original"""
+        """Get the hashed filename or a verified development source asset."""
         if manifest and filename in manifest:
             return manifest[filename]
-        # Fallback for development or if manifest doesn't exist
-        return f'/static/{filename}?v={__version__}'
+        source_assets = {
+            'app.js': 'js/app.js',
+            'auth.js': 'js/auth.js',
+            'csrf.js': 'js/csrf.js',
+            'login.js': 'js/login.js',
+            'api_docs.js': 'js/api_docs.js',
+            'styles.css': 'css/styles.css',
+        }
+        source = source_assets.get(filename)
+        if source and (Path(app.static_folder) / source).is_file():
+            return f'/static/{source}?v={__version__}'
+        raise RuntimeError(f'No built asset or development fallback for {filename}')
 
     return dict(asset_url=asset_url, version=__version__, github_url=__github_url__)
 
@@ -535,55 +518,12 @@ def create_tables():
     logger.info(f"Starting PixelProbe v{__version__}")
     with app.app_context():
         try:
-            from sqlalchemy import inspect, exc, text
-
-            try:
-                inspector = inspect(db.engine)
-                existing_tables = inspector.get_table_names()
-
-                for table_name, table in db.metadata.tables.items():
-                    if table_name not in existing_tables:
-                        try:
-                            table.create(db.engine)
-                            logger.info(f"Created table: {table_name}")
-                        except (exc.OperationalError, exc.IntegrityError, exc.ProgrammingError) as e:
-                            err_str = str(e).lower()
-                            if any(msg in err_str for msg in ["already exists", "duplicate key", "typname_nsp_index"]):
-                                logger.debug(f"Table {table_name} already created by another worker")
-                            else:
-                                logger.error(f"Error creating table {table_name}: {str(e)}")
-
-                logger.info("Database tables verified successfully")
-
-                # Run migrations for v2.2.68 - add tracking columns if they don't exist
-                if 'scan_state' in existing_tables:
-                    try:
-                        columns = [col['name'] for col in inspector.get_columns('scan_state')]
-                        with db.engine.connect() as conn:
-                            for col_name in ['num_workers', 'files_added', 'files_updated']:
-                                if col_name not in columns:
-                                    default = '1' if col_name == 'num_workers' else '0'
-                                    try:
-                                        conn.execute(text(f"ALTER TABLE scan_state ADD COLUMN {col_name} INTEGER DEFAULT {default}"))
-                                        conn.commit()
-                                        logger.info(f"Added {col_name} column to scan_state table")
-                                    except exc.OperationalError as e:
-                                        if "already exists" not in str(e).lower():
-                                            logger.warning(f"Could not add {col_name} column: {e}")
-                    except Exception as e:
-                        logger.warning(f"Migration check failed (non-critical): {e}")
-
-            except exc.OperationalError as e:
-                if "already exists" not in str(e):
-                    logger.error(f"Database operation error: {str(e)}")
-                else:
-                    logger.info("Tables already exist (created by another worker)")
-
             migrate_database(db)
             cleanup_stuck_operations(db)
 
         except Exception as e:
             logger.error(f"Error in database initialization: {str(e)}")
+            raise
 
 # Initialize on startup for better Docker compatibility
 with app.app_context():

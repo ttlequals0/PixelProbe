@@ -6,11 +6,12 @@ from typing import Dict, List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from pixelprobe.models import db, ScanSchedule, ScanResult, ScanState, ScanChunk, HealthcheckConfig, ScanReport
+from pixelprobe.models import (db, ScanSchedule, ScanResult, ScanState, ScanChunk,
+                               HealthcheckConfig, ScanReport, ScanNotificationOutbox)
 from pixelprobe.constants import SCAN_PHASES, TERMINAL_SCAN_PHASES
 from pixelprobe.services.scan_engine import maybe_finalize_scan
 from pixelprobe.utils.paths import is_path_under
-from sqlalchemy import text
+from sqlalchemy import and_, or_, text
 import threading
 import requests
 from pixelprobe.services.healthcheck_service import HealthcheckService
@@ -66,6 +67,7 @@ class MediaScheduler:
     def __init__(self, app=None):
         self.scheduler = BackgroundScheduler()
         self.app = app
+        self._shutdown = False
         self.scan_lock = threading.Lock()
         self.cleanup_lock = threading.Lock()
         self.excluded_paths = []
@@ -195,6 +197,9 @@ class MediaScheduler:
         Returns:
             The requests.Response object, or None on connection error.
         """
+        if not self._can_dispatch():
+            logger.warning("Skipping %s because this scheduler no longer owns its lease", scan_label)
+            return None
         base_url = self._get_api_base_url()
         headers = {
             'X-Internal-Secret': self.app.config.get('INTERNAL_API_SECRET', ''),
@@ -217,6 +222,13 @@ class MediaScheduler:
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to call API for {scan_label}: {e}")
             return None
+
+    def _can_dispatch(self):
+        """Fence queued callbacks after lease loss or local shutdown."""
+        if self._shutdown:
+            return False
+        lease_state = getattr(self.app, 'scheduler_lease_state', None)
+        return lease_state is None or bool(lease_state[0])
 
     def _send_healthcheck_start(self, schedule_id):
         """Send the healthcheck start ping for a schedule, if configured.
@@ -276,6 +288,9 @@ class MediaScheduler:
         return f'http://localhost:{port}'
         
     def init_app(self, app):
+        if self._shutdown:
+            logger.warning("Skipping scheduler initialization after shutdown")
+            return
         self.app = app
         self.scheduler.start()
         
@@ -600,9 +615,15 @@ class MediaScheduler:
                 cached_scan_type = getattr(schedule, 'scan_type', 'normal')
                 cached_schedule_name = schedule.name
                 cached_force_rescan = getattr(schedule, 'force_rescan', False)
-
-                from pixelprobe.utils.helpers import get_configured_scan_paths
-                scan_paths = get_configured_scan_paths()
+                try:
+                    scan_paths = json.loads(schedule.scan_paths) if schedule.scan_paths else []
+                except (TypeError, ValueError):
+                    logger.error("Scheduled scan %s has invalid saved paths", schedule_id)
+                    self._clear_pending_retry(retry_key)
+                    return
+                if not scan_paths:
+                    from pixelprobe.utils.helpers import get_configured_scan_paths
+                    scan_paths = get_configured_scan_paths()
 
                 if not scan_paths:
                     logger.error(f"Scheduled scan {schedule_id}: No scan paths configured in database or SCAN_PATHS env var!")
@@ -624,13 +645,13 @@ class MediaScheduler:
                 if scan_type == 'orphan':
                     response = self._execute_scan_request(
                         '/api/cleanup-orphaned',
-                        {'schedule_id': schedule_id},
+                        {'schedule_id': schedule_id, 'scan_roots': filtered_paths},
                         scan_label, timeout=60
                     )
                 elif scan_type == 'file_changes':
                     response = self._execute_scan_request(
                         '/api/file-changes',
-                        {'schedule_id': schedule_id},
+                        {'schedule_id': schedule_id, 'scan_roots': filtered_paths},
                         scan_label, timeout=60
                     )
                 else:
@@ -796,7 +817,7 @@ class MediaScheduler:
         """Reload all schedules from database"""
         # Only reload schedules if this worker has the scheduler running
         # In non-scheduler workers, self.app is None and scheduler isn't started
-        if not self.app or not self.scheduler.running:
+        if self._shutdown or not self.app or not self.scheduler.running:
             logger.debug("Scheduler not running in this worker, skipping update_schedules")
             return
 
@@ -832,6 +853,8 @@ class MediaScheduler:
         restart. Polling a fingerprint keeps the job store in sync without
         cross-process messaging, and only churns jobs when something changed.
         """
+        if self._shutdown:
+            return
         try:
             with self.app.app_context():
                 fingerprint = self._schedule_fingerprint()
@@ -865,9 +888,32 @@ class MediaScheduler:
 
     def _check_stuck_scans(self):
         """Check for stuck scans and mark them as crashed"""
+        if not self._can_dispatch():
+            return
         try:
             with self.app.app_context():
                 from datetime import datetime, timezone, timedelta
+                outbox_now = datetime.now(timezone.utc)
+                for outbox in ScanNotificationOutbox.query.filter(or_(
+                        ScanNotificationOutbox.status == 'pending',
+                        and_(ScanNotificationOutbox.status == 'processing',
+                             or_(ScanNotificationOutbox.lease_expires_at <= outbox_now,
+                                 ScanNotificationOutbox.lease_expires_at.is_(None)))
+                )).limit(100).all():
+                    try:
+                        self.app.celery.send_task(
+                            'pixelprobe.tasks.deliver_scan_notification_outbox',
+                            args=(outbox.id,))
+                    except Exception as exc:
+                        logger.warning(f"Outbox dispatch failed for {outbox.id}: {exc}")
+                try:
+                    from pixelprobe.tasks_parallel import reconcile_scan_task_intents
+                    recovered_tasks = reconcile_scan_task_intents()
+                    if recovered_tasks:
+                        logger.warning("Re-dispatched %s durable scan task intent(s)", recovered_tasks)
+                except Exception as exc:
+                    db.session.rollback()
+                    logger.error("Scan task intent reconciliation failed: %s", exc)
                 
                 # Consider a scan stuck if no update for 30 minutes
                 # This accounts for large files that can take 20+ minutes to scan
@@ -936,6 +982,28 @@ class MediaScheduler:
                                 f"(attempt {self._revive_attempts[scan.scan_id]}/"
                                 f"{_MAX_CHUNK_REVIVALS}): {revived} chunks re-dispatched")
                             continue
+
+                    # Orchestrators, discovery tasks, and continuations do
+                    # not have a chunk owner to replace. If their worker died
+                    # after recording processing, return their durable intent
+                    # to the normal reconciler before declaring the run dead.
+                    if last_update and last_update < revive_threshold:
+                        try:
+                            from pixelprobe.tasks_parallel import (
+                                reconcile_scan_task_intents,
+                                recover_stale_processing_task_intents,
+                            )
+                            recovered = recover_stale_processing_task_intents(scan.scan_id)
+                            if recovered:
+                                reconcile_scan_task_intents(limit=recovered)
+                                logger.warning(
+                                    "Recovered %s stale non-chunk task intent(s) for scan %s",
+                                    recovered, scan.scan_id)
+                                continue
+                        except Exception as exc:
+                            db.session.rollback()
+                            logger.error("Stale task-intent recovery failed for %s: %s",
+                                         scan.scan_id, exc)
 
                     # Check if scan has been running for more than 30 minutes without update
                     if last_update and last_update < stuck_threshold:
@@ -1103,6 +1171,13 @@ class MediaScheduler:
             logger.error(f"Failed to enqueue data retention cleanup: {e}")
 
     def shutdown(self):
-        """Shutdown the scheduler"""
+        """Stop lease renewal and scheduler executors without waiting on jobs."""
+        if self._shutdown:
+            return
+        self._shutdown = True
+        lock_state = getattr(self.app, 'scheduler_lock_state', None)
+        if lock_state:
+            lock_state[0] = False
         if self.scheduler.running:
-            self.scheduler.shutdown()
+            self.scheduler.pause()
+            self.scheduler.shutdown(wait=False)

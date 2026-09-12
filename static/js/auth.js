@@ -97,14 +97,18 @@ const AuthManager = {
                     'Accept': 'application/json'
                 }
             });
-
-            // Always redirect to login, even if the logout fails
-            // (user might already be logged out)
-            window.location.href = '/login';
+            if (!response.ok) {
+                this.showNotification('Logout failed. Your session is still active.', 'error');
+                return;
+            }
+            this.redirectToLogin();
         } catch (error) {
-            // Redirect anyway - connection issues shouldn't prevent logout
-            window.location.href = '/login';
+            this.showNotification('Logout failed. Your session is still active.', 'error');
         }
+    },
+
+    redirectToLogin() {
+        window.location.href = '/login';
     },
 
     /**
@@ -409,7 +413,7 @@ const AuthManager = {
             <div class="modal-content">
                 <div class="modal-header">
                     <h3 class="modal-title">API Token Created</h3>
-                    <button class="modal-close" onclick="this.closest('.modal').remove()">×</button>
+                    <button class="modal-close" type="button">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div class="exclusions-section">
@@ -455,12 +459,12 @@ const AuthManager = {
             <div class="modal-content">
                 <div class="modal-header">
                     <h3 class="modal-title">User Management</h3>
-                    <button class="modal-close" onclick="document.getElementById('userManagementModal').style.display='none'">×</button>
+                    <button class="modal-close" type="button">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div class="exclusions-section">
                         <h4>Create New User</h4>
-                        <form onsubmit="AuthManager.createUser(event); return false;" style="margin-bottom: 1rem;">
+                        <form style="margin-bottom: 1rem;">
                             <input type="text" name="username" class="form-control" placeholder="Username" required style="margin-bottom: 0.5rem;">
                             <input type="email" name="email" class="form-control" placeholder="Email" required style="margin-bottom: 0.5rem;">
                             <input type="password" name="password" class="form-control" placeholder="Password (min 8 characters)" required minlength="8" style="margin-bottom: 0.5rem;">
@@ -484,6 +488,8 @@ const AuthManager = {
             </div>
         `;
         document.body.appendChild(modal);
+        modal.querySelector('.modal-close').addEventListener('click', () => { modal.style.display = 'none'; });
+        modal.querySelector('form').addEventListener('submit', (event) => this.createUser(event));
     },
 
     /**
@@ -497,12 +503,12 @@ const AuthManager = {
             <div class="modal-content">
                 <div class="modal-header">
                     <h3 class="modal-title">API Tokens</h3>
-                    <button class="modal-close" onclick="document.getElementById('apiTokensModal').style.display='none'">×</button>
+                    <button class="modal-close" type="button">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div class="exclusions-section">
                         <h4>Create New Token</h4>
-                        <form onsubmit="AuthManager.createToken(event); return false;">
+                        <form>
                             <div class="exclusion-input-group">
                                 <input type="text" name="description" class="form-control" placeholder="Token description" required>
                                 <input type="number" name="expires_in_days" class="form-control" placeholder="Days" min="1" style="max-width: 100px;" title="Leave empty for no expiration">
@@ -524,6 +530,8 @@ const AuthManager = {
             </div>
         `;
         document.body.appendChild(modal);
+        modal.querySelector('.modal-close').addEventListener('click', () => { modal.style.display = 'none'; });
+        modal.querySelector('form').addEventListener('submit', (event) => this.createToken(event));
     },
 
     /**
@@ -537,11 +545,11 @@ const AuthManager = {
             <div class="modal-content">
                 <div class="modal-header">
                     <h3 class="modal-title">Change Password</h3>
-                    <button class="modal-close" onclick="document.getElementById('changePasswordModal').style.display='none'">×</button>
+                    <button class="modal-close" type="button">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div class="exclusions-section">
-                        <form onsubmit="AuthManager.changePassword(event); return false;">
+                        <form>
                             <input type="password" name="current_password" class="form-control" placeholder="Current Password" required style="margin-bottom: 0.5rem;">
                             <input type="password" name="new_password" class="form-control" placeholder="New Password (min 8 characters)" required minlength="8" style="margin-bottom: 0.5rem;">
                             <input type="password" name="confirm_password" class="form-control" placeholder="Confirm New Password" required minlength="8" style="margin-bottom: 1rem;">
@@ -554,6 +562,8 @@ const AuthManager = {
             </div>
         `;
         document.body.appendChild(modal);
+        modal.querySelector('.modal-close').addEventListener('click', () => { modal.style.display = 'none'; });
+        modal.querySelector('form').addEventListener('submit', (event) => this.changePassword(event));
     }
 };
 

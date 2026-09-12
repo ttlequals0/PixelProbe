@@ -24,7 +24,10 @@ import tempfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
-from pixelprobe.utils.security import safe_subprocess_run, validate_file_path, ensure_cli_safe_path
+from pixelprobe.utils.security import (
+    authorized_fd_path, open_authorized_media_file, rewind_authorized_fd_path,
+    safe_subprocess_run, validate_file_path, ensure_cli_safe_path,
+)
 from pixelprobe.utils.helpers import env_int, env_float
 from pixelprobe.utils.integrity import apply_scan_baseline
 from pixelprobe.utils.paths import is_path_under
@@ -152,7 +155,11 @@ class FileReadTimeoutError(Exception):
     """A raw file read stalled past its deadline (dead mount / bad sector)."""
 
 
-def _read_with_timeout(func, timeout, file_path, operation):
+def _descriptor_path_or_none(path):
+    return path if re.fullmatch(r'/(?:proc/self|dev)/fd/\d+', str(path)) else None
+
+
+def _read_with_timeout(func, timeout, file_path, operation, descriptor_path=None):
     """Run a blocking read in a watchdog thread with a hard deadline.
 
     A read stuck in uninterruptible kernel sleep cannot be interrupted or
@@ -171,12 +178,23 @@ def _read_with_timeout(func, timeout, file_path, operation):
                 f'storage appears unreachable')
 
     result = {}
+    owned_fd = None
+    reader_path = None
+    if descriptor_path is not None:
+        match = re.fullmatch(r'/(?:proc/self|dev)/fd/(\d+)', str(descriptor_path))
+        if not match:
+            raise ValueError('Invalid descriptor-backed read path')
+        owned_fd = os.dup(int(match.group(1)))
+        reader_path = authorized_fd_path(owned_fd)
 
     def target():
         try:
-            result['value'] = func()
+            result['value'] = func(reader_path) if reader_path is not None else func()
         except Exception as e:
             result['error'] = e
+        finally:
+            if owned_fd is not None:
+                os.close(owned_fd)
 
     thread = threading.Thread(target=target, daemon=True,
                               name=f'read-watchdog:{operation}')
@@ -416,7 +434,9 @@ def load_exclusions_with_patterns():
 
 
 class PixelProbe:
-    def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None, database_path=None, excluded_patterns=None):
+    def __init__(self, max_workers=None, excluded_paths=None, excluded_extensions=None,
+                 database_path=None, excluded_patterns=None, allowed_paths=None,
+                 required_paths=None, result_persistence_guard=None):
         # Lazy import to avoid circular dependency (media_checker <- pixelprobe <- media_checker)
         from pixelprobe.constants import VIDEO_EXTENSIONS, IMAGE_EXTENSIONS, AUDIO_EXTENSIONS, SUPPORTED_EXTENSIONS
 
@@ -433,6 +453,12 @@ class PixelProbe:
         self.excluded_extensions = excluded_extensions or []
         self.excluded_patterns = excluded_patterns or get_default_filename_patterns()
         self.database_path = database_path
+        # Scan services pass the active root evidence here.  Standalone callers
+        # retain their explicit direct-file contract for compatibility; web and
+        # worker entry points always provide roots before bytes are read.
+        self.allowed_paths = allowed_paths
+        self.required_paths = required_paths
+        self.result_persistence_guard = result_persistence_guard
         # Database session management - reuse connections
         self._db_engine = None
         self._db_session_factory = None
@@ -446,6 +472,7 @@ class PixelProbe:
         if self.database_path:
             try:
                 from sqlalchemy import create_engine
+                from sqlalchemy.engine import make_url
                 from sqlalchemy.orm import sessionmaker
                 from sqlalchemy.pool import QueuePool, StaticPool
                 from pixelprobe.config import PG_SESSION_TZ_UTC
@@ -459,6 +486,15 @@ class PixelProbe:
                     # progress updates. Budget: main app pool 20+40=60, workers
                     # max_workers+10 overflow ceiling, still under PostgreSQL's
                     # default 100 for any MAX_WORKERS the config allows.
+                    # libpq accepts URL query options, but a connect_args
+                    # ``options`` value replaces rather than augments them.
+                    # Keep caller-provided settings such as a test schema and
+                    # append the mandatory UTC pin last so it remains
+                    # authoritative.
+                    url_options = make_url(self.database_path).query.get('options')
+                    pg_options = ' '.join(
+                        option for option in (url_options, PG_SESSION_TZ_UTC) if option
+                    )
                     self._db_engine = create_engine(
                         self.database_path,
                         poolclass=QueuePool,
@@ -477,7 +513,7 @@ class PixelProbe:
                             'application_name': 'pixelprobe_worker',
                             # Same UTC session pin as the Flask engine (issue #65):
                             # this engine writes scan_date/creation_date/last_modified
-                            'options': PG_SESSION_TZ_UTC
+                            'options': pg_options
                         }
                     )
                 else:
@@ -813,7 +849,7 @@ class PixelProbe:
                 
         return extension in self.supported_formats
     
-    def get_file_info(self, file_path, timeout=None):
+    def get_file_info(self, file_path, timeout=None, display_path=None):
         """Get basic file information without scanning for corruption
 
         Raises FileReadTimeoutError if stat/magic stall (issue #70); other
@@ -822,12 +858,14 @@ class PixelProbe:
         if timeout is None:
             timeout = _setting('timeouts.file_read_timeout_secs')
         try:
-            def read_info():
-                stats = os.stat(file_path)
-                return stats, magic.from_file(file_path, mime=True)
+            def read_info(read_path=file_path):
+                rewind_authorized_fd_path(read_path)
+                stats = os.stat(read_path)
+                return stats, magic.from_file(read_path, mime=True)
 
             file_stats, file_type = _read_with_timeout(
-                read_info, timeout, file_path, 'stat/magic')
+                read_info, timeout, file_path, 'stat/magic',
+                descriptor_path=_descriptor_path_or_none(file_path))
             file_size = file_stats.st_size
             # UTC-aware: bitrot classification compares this stored baseline
             # against a UTC mtime, and naive local values poison it (the old
@@ -836,7 +874,7 @@ class PixelProbe:
             last_modified = datetime.fromtimestamp(file_stats.st_mtime, timezone.utc)
 
             return {
-                'file_path': file_path,
+                'file_path': display_path or file_path,
                 'file_size': file_size,
                 'file_type': file_type,
                 'creation_date': creation_date,
@@ -850,7 +888,7 @@ class PixelProbe:
         except Exception as e:
             logger.error(f"Error getting file info for {file_path}: {str(e)}")
             return {
-                'file_path': file_path,
+                'file_path': display_path or file_path,
                 'file_size': 0,
                 'file_type': 'unknown',
                 'creation_date': datetime.now(timezone.utc),
@@ -928,8 +966,8 @@ class PixelProbe:
         support reports the whole file as data, which is indistinguishable from
         a healthy file, so it is reported as unsupported rather than as clean.
         """
-        def scan():
-            fd = os.open(file_path, os.O_RDONLY)
+        def scan(read_path=file_path):
+            fd = os.open(read_path, os.O_RDONLY)
             try:
                 # A filesystem without sparse-region support rejects the whence
                 # itself rather than reporting a fully-written file, so the
@@ -959,7 +997,9 @@ class PixelProbe:
                 os.close(fd)
 
         try:
-            return _read_with_timeout(scan, _setting('timeouts.file_read_timeout_secs'), file_path, 'sparse scan')
+            return _read_with_timeout(
+                scan, _setting('timeouts.file_read_timeout_secs'), file_path,
+                'sparse scan', descriptor_path=_descriptor_path_or_none(file_path))
         except FileReadTimeoutError:
             # A stalled mount is not evidence that data is missing.
             logger.warning(f"Sparse-region scan stalled for {file_path}; drawing no conclusion")
@@ -978,15 +1018,16 @@ class PixelProbe:
         try:
             if file_size is None:
                 file_size = _read_with_timeout(
-                    lambda: os.path.getsize(file_path),
+                    lambda read_path=file_path: os.path.getsize(read_path),
                     timeout if timeout is not None else _setting('timeouts.file_read_timeout_secs'),
-                    file_path, 'stat')
+                    file_path, 'stat', descriptor_path=_descriptor_path_or_none(file_path))
             if timeout is None:
                 # Deadline assumes storage sustains at least ~5MB/s
                 timeout = _setting('timeouts.file_read_timeout_secs') + int(file_size / (5 * 1024 * 1024))
             return _read_with_timeout(
-                lambda: self._hash_file_contents(file_path, file_size),
-                timeout, file_path, 'hash read')
+                lambda read_path=file_path: self._hash_file_contents(read_path, file_size),
+                timeout, file_path, 'hash read',
+                descriptor_path=_descriptor_path_or_none(file_path))
         except FileReadTimeoutError:
             raise
         except Exception as e:
@@ -995,7 +1036,8 @@ class PixelProbe:
 
     def _hash_file_contents(self, file_path, file_size):
         """Blocking hash read; callers bound it via _read_with_timeout."""
-        logger.info(f"Calculating hash for: {file_path}")
+        rewind_authorized_fd_path(file_path)
+        logger.debug(f"Calculating hash for: {file_path}")
         hash_sha256 = hashlib.sha256()
         start_time = time.time()
         bytes_processed = 0
@@ -1026,10 +1068,6 @@ class PixelProbe:
             # Use adaptive chunk sizes for smaller files
             chunk_size = 1024 * 1024  # 1MB chunks for files up to 1GB
 
-            # For files 1-10GB, use larger chunks
-            if file_size > 1024 * 1024 * 1024:
-                chunk_size = 4 * 1024 * 1024  # 4MB chunks
-
             with open(file_path, "rb") as f:
                 while True:
                     chunk = f.read(chunk_size)
@@ -1043,13 +1081,13 @@ class PixelProbe:
                     if bytes_processed % (100 * 1024 * 1024) == 0:
                         mb_processed = bytes_processed / (1024 * 1024)
                         mb_per_sec = mb_processed / elapsed if elapsed > 0 else 0
-                        logger.info(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s ({mb_per_sec:.1f}MB/s)")
+                        logger.debug(f"Hash progress for {file_path}: {mb_processed:.0f}MB processed in {elapsed:.1f}s ({mb_per_sec:.1f}MB/s)")
 
         total_time = time.time() - start_time
         if total_time > 10:  # Log completion time for files that take more than 10 seconds
             mb_size = bytes_processed / (1024 * 1024)
             mb_per_sec = mb_size / total_time if total_time > 0 else 0
-            logger.info(f"Hash complete for {file_path}: {mb_size:.1f}MB in {total_time:.1f}s ({mb_per_sec:.1f}MB/s)")
+            logger.debug(f"Hash complete for {file_path}: {mb_size:.1f}MB in {total_time:.1f}s ({mb_per_sec:.1f}MB/s)")
 
         return hash_sha256.hexdigest()
     
@@ -1241,19 +1279,42 @@ class PixelProbe:
                 self.current_scan_file = file_path
                 self.scan_start_time = scan_start_time
             
-            # Get basic file info first
-            file_info = self.get_file_info(file_path)
+            media_file = None
+            checked_path = file_path
+            if self.allowed_paths is not None:
+                media_file, _, _ = open_authorized_media_file(
+                    file_path, self.allowed_paths, self.required_paths)
+                checked_path = authorized_fd_path(media_file.fileno())
+
+            # The descriptor, not a pathname re-stat, is the identity of the
+            # bytes being verified.  Proc/dev fd opens duplicate this descriptor
+            # for timeout workers, so an abandoned reader owns its fd safely.
+            pre_identity = self._file_identity(checked_path)
+
+            # Keep original pathname in results and extension decisions while
+            # every metadata/hash/decoder read uses the descriptor-backed path.
+            file_info = self.get_file_info(checked_path, display_path=file_path)
 
             # Calculate file hash (reuse the stat from file_info; its fallback
             # dict reports size 0, in which case hash re-stats under its guard)
             file_hash = self.calculate_file_hash(
-                file_path, file_size=file_info['file_size'] or None)
+                checked_path, file_size=file_info['file_size'] or None)
+            if not file_hash:
+                return self._save_unverifiable_result(
+                    file_path, file_info, scan_start_time, 'unreadable',
+                    'File content could not be read completely')
             
             # Check cache if not forcing rescan
             if not force_rescan and self.database_path:
                 cached_result = self._check_cache(file_path, file_hash, file_info['last_modified'])
                 if cached_result:
-                    logger.info(f"Using cached result for {file_path}")
+                    if (pre_identity is not None and
+                            self._file_identity(checked_path) != pre_identity):
+                        return self._save_unverifiable_result(
+                            file_path, file_info, scan_start_time, 'unreadable',
+                            'File changed while its cached result was being checked')
+                    cached_result['outcome'] = 'completed'
+                    logger.debug(f"Using cached result for {file_path}")
                     return cached_result
             
             is_corrupted = False
@@ -1268,7 +1329,7 @@ class PixelProbe:
             holes_found = False
             if extension in self.supported_formats:
                 holes_found, hole_details, hole_output = self._check_data_holes(
-                    file_path, file_info['file_size'], file_info.get('file_blocks', 0))
+                    checked_path, file_info['file_size'], file_info.get('file_blocks', 0))
                 # Kept even when the file is cleared: an operator looking at a
                 # suspiciously under-allocated file needs the reason it passed.
                 scan_output.extend(hole_output)
@@ -1277,20 +1338,21 @@ class PixelProbe:
                 is_corrupted = True
                 scan_tool = "data-integrity"
             elif extension in self.supported_image_formats:
-                is_corrupted, details, tool, output, warnings = self._check_image_corruption(file_path)
+                is_corrupted, details, tool, output, warnings = self._check_image_corruption(
+                    checked_path, display_path=file_path)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
                 warning_details = warnings
             elif extension in self.supported_video_formats:
-                is_corrupted, details, tool, output, warnings = self._check_video_corruption(file_path)
+                is_corrupted, details, tool, output, warnings = self._check_video_corruption(checked_path)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
                 warning_details = warnings
             elif extension in self.supported_audio_formats:
                 is_corrupted, details, tool, output, warnings = self._check_audio_corruption(
-                    file_path, file_info['file_size'] or None)
+                    checked_path, file_info['file_size'] or None, display_path=file_path)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
@@ -1321,44 +1383,66 @@ class PixelProbe:
                 'scan_duration': scan_duration,
                 'scan_output': '\n'.join(scan_output) if scan_output else None,
                 'has_warnings': len(warning_details) > 0,
-                'warning_details': '; '.join(warning_details) if warning_details else None
+                'warning_details': '; '.join(warning_details) if warning_details else None,
+                'outcome': 'unsupported' if scan_tool == 'unsupported' else 'completed'
             })
+
+            if (pre_identity is not None and
+                    self._file_identity(checked_path) != pre_identity):
+                return self._save_unverifiable_result(
+                    file_path, file_info, scan_start_time, 'unreadable',
+                    'File changed while content verification was in progress')
             
             # Save to cache
             self._save_to_cache(file_path, result)
             
             return result
         
+        except FileReadTimeoutError as e:
+            logger.error(f"Timed out reading file {file_path}: {e}")
+            return self._save_unverifiable_result(
+                file_path, None, scan_start_time, 'unreadable', str(e))
         except Exception as e:
-            scan_duration = time.time() - scan_start_time
             logger.error(f"Error scanning file {file_path}: {str(e)}")
-            result = {
-                'file_path': file_path,
-                'file_size': 0,
-                'file_type': 'unknown',
-                'creation_date': datetime.now(timezone.utc),
-                'last_modified': datetime.now(timezone.utc),
-                'is_corrupted': True,
-                'corruption_details': f"Scan error: {str(e)}",
-                'file_hash': None,
-                'scan_tool': 'error',
-                'scan_duration': scan_duration,
-                'scan_output': str(e),
-                'has_warnings': False,
-                'warning_details': None
-            }
-            # Persist the failure: without this the row stays 'pending' in the
-            # non-chunked paths and an unreadable file is re-selected forever
-            # (the re-stick loop of issue #70). No-op when database_path unset.
-            self._save_to_cache(file_path, result)
-            return result
+            return self._save_unverifiable_result(
+                file_path, None, scan_start_time, 'error', str(e))
         finally:
+            if 'media_file' in locals() and media_file is not None:
+                media_file.close()
             # Clear current scan tracking
             with self.scan_lock:
                 self.current_scan_file = None
                 self.scan_start_time = None
+
+    @staticmethod
+    def _file_identity(file_path):
+        """Return the filesystem identity used to prove a stable read."""
+        stat = os.stat(file_path)
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+    def _save_unverifiable_result(self, file_path, file_info, scan_start_time,
+                                   outcome, error_message):
+        """Persist a terminal non-verification without replacing a baseline."""
+        result = {
+            'file_path': file_path,
+            'file_size': file_info.get('file_size') if file_info else None,
+            'file_type': file_info.get('file_type') if file_info else None,
+            'creation_date': file_info.get('creation_date') if file_info else None,
+            'last_modified': file_info.get('last_modified') if file_info else None,
+            'is_corrupted': None,
+            'corruption_details': f"Scan error: {error_message}",
+            'file_hash': None,
+            'scan_tool': 'error',
+            'scan_duration': time.time() - scan_start_time,
+            'scan_output': error_message,
+            'has_warnings': False,
+            'warning_details': None,
+            'outcome': outcome,
+        }
+        self._save_to_cache(file_path, result)
+        return result
     
-    def _check_image_corruption(self, file_path):
+    def _check_image_corruption(self, file_path, display_path=None):
         corruption_details = []
         is_corrupted = False
         scan_tool = "pil"
@@ -1368,7 +1452,7 @@ class PixelProbe:
         logger.info(f"Starting PIL verification for: {file_path}")
         
         # Check file type
-        file_ext = os.path.splitext(file_path)[1].lower()
+        file_ext = os.path.splitext(display_path or file_path)[1].lower()
         is_gif = file_ext == '.gif'
         is_heic = file_ext in ['.heic', '.heif']
         is_jpeg = file_ext in ['.jpg', '.jpeg']
@@ -1384,6 +1468,7 @@ class PixelProbe:
             pil_error = None
             
             try:
+                rewind_authorized_fd_path(file_path)
                 with Image.open(file_path) as img:
                     img.verify()
                 logger.info(f"PIL verification passed for: {file_path}")
@@ -1410,6 +1495,7 @@ class PixelProbe:
             scan_output.append("PIL load test: SKIPPED (HEIC support not available)")
         else:
             try:
+                rewind_authorized_fd_path(file_path)
                 with Image.open(file_path) as img:
                     img.load()
                 
@@ -2108,7 +2194,7 @@ class PixelProbe:
         # Return warning details as well
         return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
 
-    def _check_audio_corruption(self, file_path, file_size=None):
+    def _check_audio_corruption(self, file_path, file_size=None, display_path=None):
         """Check audio files for corruption using FFmpeg and format-specific tools
 
         Pass file_size when already known to skip a redundant stat.
@@ -2292,7 +2378,7 @@ class PixelProbe:
                 logger.error(f"Error during deep audio scan for {file_path}: {str(e)}")
         
         # Step 4: Format-specific validation for lossless formats
-        extension = Path(file_path).suffix.lower()
+        extension = Path(display_path or file_path).suffix.lower()
         pass_timeout = remaining()
         if extension == '.flac' and pass_timeout < _AUDIO_MIN_PASS_SECS:
             scan_output.append("FLAC test: SKIPPED (file budget spent)")
@@ -3228,23 +3314,34 @@ class PixelProbe:
                 db_result = ScanResult(file_path=file_path)
                 session.add(db_result)
 
-            # Update with scan results
-            db_result.file_size = scan_result.get('file_size')
-            db_result.file_type = scan_result.get('file_type')
-            db_result.creation_date = scan_result.get('creation_date')
-            if not apply_scan_baseline(db_result, scan_result.get('file_hash'),
-                                       scan_result.get('last_modified')):
-                # Anti-laundering: a rescan of a bitrot-suspected file must not
-                # adopt its current content as the baseline - a bit flip can
-                # pass decode checks and would silently become the new "good"
-                # hash. Baseline updates for flagged files happen only via
-                # auto-expire or the manual accept action.
-                logger.info(f"Preserving hash/mtime baseline for bitrot-suspected file: {file_path}")
+            if (self.result_persistence_guard
+                    and not self.result_persistence_guard(session, db_result)):
+                session.rollback()
+                logger.info("Discarded scan cache write no longer owned by its run")
+                return
+
+            outcome = scan_result.get('outcome', 'completed')
+            if outcome == 'completed' and not scan_result.get('file_hash'):
+                outcome = 'error'
+            if outcome == 'completed':
+                baseline_written = apply_scan_baseline(
+                    db_result, scan_result.get('file_hash'), scan_result.get('last_modified'))
+                if baseline_written:
+                    db_result.file_size = scan_result.get('file_size')
+                    db_result.file_type = scan_result.get('file_type')
+                    db_result.creation_date = scan_result.get('creation_date')
+                else:
+                    # Anti-laundering: a rescan of a bitrot-suspected file must not
+                    # adopt its current content as the baseline - a bit flip can
+                    # pass decode checks and would silently become the new "good"
+                    # hash. Baseline updates for flagged files happen only via
+                    # auto-expire or the manual accept action.
+                    logger.info(f"Preserving hash/mtime baseline for bitrot-suspected file: {file_path}")
             if retire_stale_override(db_result, scan_result.get('file_hash'),
                                      scan_result.get('corruption_details'),
                                      scan_result.get('warning_details')):
                 logger.info(f"Override retired for {file_path}: new findings outside its scope")
-            db_result.is_corrupted = scan_result.get('is_corrupted', False)
+            db_result.is_corrupted = scan_result.get('is_corrupted')
             db_result.corruption_details = scan_result.get('corruption_details')
             db_result.scan_tool = scan_result.get('scan_tool')
             db_result.scan_duration = scan_result.get('scan_duration')
@@ -3252,8 +3349,11 @@ class PixelProbe:
             db_result.has_warnings = scan_result.get('has_warnings', False)
             db_result.warning_details = scan_result.get('warning_details')
             db_result.scan_date = datetime.now(timezone.utc)
-            db_result.scan_status = 'completed'
-            db_result.file_exists = True
+            db_result.scan_status = outcome
+            db_result.error_message = (str(scan_result.get('corruption_details') or '')[:1000]
+                                       if outcome in ('error', 'unreadable') else None)
+            if outcome == 'completed':
+                db_result.file_exists = True
 
             # Flush first to catch any database errors before commit
             session.flush()

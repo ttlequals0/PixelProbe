@@ -59,7 +59,7 @@ Every term PixelProbe uses, defined once and linked to the doc that covers it.
 - **Scan schedule** - A cron or interval definition that launches scans automatically through APScheduler. See [Configuration](configuration.md).
 - **Schedule time budget** - A cap on how long a scheduled integrity run may work per window. See [Configuration](configuration.md).
 - **Notification provider** - A delivery channel for events: Pushover, ntfy, webhook, or email (SMTP). See [Configuration](configuration.md).
-- **Notification rule** - A binding of one event type (scan started/completed/failed, corruption found, bitrot suspected, auth events) to one provider. See [Configuration](configuration.md).
+- **Notification rule** - A binding of `scan_completed` or `bitrot_suspected` to one provider. See [Configuration](configuration.md).
 - **Scheduler lock** - A Redis distributed lock so only one container runs the scheduler. See [How It Works](how-it-works.md).
 - **Advisory lock** - The PostgreSQL lock that coordinates startup migrations across multiple workers. See [How It Works](how-it-works.md).
 
