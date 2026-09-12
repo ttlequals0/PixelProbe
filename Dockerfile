@@ -132,7 +132,9 @@ COPY requirements.txt .
 # After install, remove chardet pulled in by reportlab. Its 7.x version fails
 # requests' version check (requires <6.0.0). Our app uses charset_normalizer instead.
 RUN pip install --no-cache-dir -r requirements.txt \
-    && (pip uninstall -y chardet 2>/dev/null || true)
+    && (pip uninstall -y chardet 2>/dev/null || true) \
+    && python -m pip uninstall -y pip \
+    && test ! -e /opt/venv/bin/pip
 
 # Keep build headers out of the runtime image. All Python dependencies above use
 # wheels, so the runtime does not need libc6-dev or linux-libc-dev.

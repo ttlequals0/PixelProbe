@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Login, setup, logout, schedule changes, log purges, and notification provider actions retain durable audit actor, target, and outcome evidence. Session-establishing and session-ending routes require CSRF even when a Bearer header is present.
 - Notification rule conditions now reject unsupported keys and invalid values. Rule and provider changes record audit evidence without logging provider secrets.
 - Compose rejects a missing media bind source. It gives the runtime tmpfs the app UID/GID and restrictive mode, passes shared output settings to workers, and keeps local runtime and diagnostic artifacts out of the image context.
-- The runtime image no longer installs unused C development headers, avoiding kernel-header CVEs. Its bundled pip is updated to 26.2.1.
+- The runtime image omits unused C headers and pip after dependency installation, removing known CVEs. Builds use pip 26.2.1; parser tests mount it only to install test dependencies.
 
 ### Testing
 

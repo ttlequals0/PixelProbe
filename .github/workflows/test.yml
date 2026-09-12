@@ -97,12 +97,18 @@ jobs:
     - name: Build Docker image
       run: docker build -t pixelprobe-ci .
 
+    - name: Install test-only pip bootstrap
+      run: |
+        python -m pip install --no-deps --target "$RUNNER_TEMP/pixelprobe-pip-bootstrap" pip==26.2.1
+
     # -p no:timeout disables the per-test timeout marks (they assume fast
     # local hardware); the job-level timeout-minutes is the hang backstop.
     - name: Run real-media parser tests inside the image
       run: |
-        docker run --rm -e SECRET_KEY=ci-test-secret pixelprobe-ci \
-          bash -c "python -m pip install --no-cache-dir --target /tmp/pixelprobe-test-deps -r requirements-test.txt && \
+        docker run --rm pixelprobe-ci python -c "import importlib.util; assert importlib.util.find_spec('pip') is None"
+        docker run --rm -e SECRET_KEY=ci-test-secret \
+          -v "$RUNNER_TEMP/pixelprobe-pip-bootstrap:/bootstrap:ro" pixelprobe-ci \
+          bash -c "PYTHONPATH=/bootstrap python -m pip install --no-cache-dir --target /tmp/pixelprobe-test-deps -r requirements-test.txt && \
                    rm -rf /tmp/pixelprobe-test-deps/chardet /tmp/pixelprobe-test-deps/chardet-*.dist-info && \
                    PYTHONPATH=/tmp/pixelprobe-test-deps:/app python -m pytest tests/test_real_media_samples.py -v -p no:cacheprovider -p no:timeout -o addopts=''"
 
