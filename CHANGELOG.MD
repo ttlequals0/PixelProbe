@@ -20,6 +20,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - PostgreSQL and live Celery recovery coverage remains required before this release is considered verified.
 
+## [2.8.11] - 2026-09-08
+
+### Fixed
+
+- **A library with one file per folder could not clean up anything.** Deleting a film empties or removes its folder, so there was nothing left in it to read and every record was kept for confirmation: an ordinary deletion, held back as though the drive might be offline. On a real library that was 44 of 46 flagged files in one run. When a folder has nothing to say, the question now moves up a level, to whether the library above it is still the library. Its parent has to list folders, and one of those has to hold a file this scanner recorded. A listing alone proves nothing, since files written to a mountpoint while it was unmounted list just as well, but rows the scanner recorded could not have come from them. A tree that has gone entirely still has nothing above it to answer, and those records are still kept.
+- **The cross-worker start lock had never once been taken.** It reads the session's dialect to decide whether PostgreSQL advisory locks are available, through `db.session.bind`, which is `None` unless a session was bound explicitly. Every call raised, and the handler logs and returns True, so the guard against two workers starting the same operation waved through every caller it ever saw. Reading the bind the way the rest of the file does fixes it.
+- **A schedule waiting on a long scan was abandoned for waiting.** A skipped cron fire queues a retry, ten minutes apart, up to 144 of them, and a scan of a large library runs well past that day: live, a 27-hour scan with 15 hours still to go had one schedule at retry 106 of 144 and another at 87. Retries now only spend that budget on conflicts that are failures. Queueing behind a scan that is reporting progress costs nothing, while a scan that has gone quiet for half an hour spends the budget as before, so a wedged scan still cannot hold a schedule in a retry loop forever.
+- **Two log lines were 42 percent of everything the application logged.** `/api/scan-status` recorded the state it was about to return, twice, at INFO, on an endpoint every open tab polls every few seconds: measured at roughly 4,000 lines per 86 seconds against a `log_entries` table already holding a million rows. Both are DEBUG now.
+- The cleanup's completion message called kept records ones "whose folder could not be read". A folder emptied by a deletion reads perfectly well; what could not be read is what was in it. The message and the confirmation dialog now say the records could not be confirmed as deleted, and why.
+
+### Tests
+
+- 2 cleanup tests: the library above a vanished folder answering for it, and leftovers on an unmounted mountpoint failing to.
+- 7 scheduler tests: a recently updated scan reading as progressing and a long quiet one not, missing timestamps, a naive timestamp read as UTC, waiting on a working scan costing nothing across 500 retries, a real conflict still giving up at the cap, and a stuck scan still spending the budget.
+
+## [2.8.10] - 2026-09-08
+
+### Fixed
+
+- **The 2.8.9 migration named a table that does not exist, so cleanup status broke on every poll.** The new `records_kept` column was added to `cleanup_states`; the table is `cleanup_state`. The ALTER failed, the failure was logged and swallowed as migrations here are written to be, and the column never arrived, while the model went on selecting it: `/api/cleanup-status` returned 500 on every poll of a deployed 2.8.9. The migration now takes the table name from the model, and a test rejects any migration naming a table the models do not define.
+
+## [2.8.9] - 2026-09-08
+
+### Fixed
+
+- **Long audio files were passing without being checked.** The full-file audio pass ran under a fixed 120 second deadline while the video pass scaled its deadline with file size and playing time. A two-hour podcast episode does not decode in 120 seconds on contended storage, so it timed out, recorded "Audio decode test timeout" as a warning, and moved on without ever validating the file. That was 44 of 185 scanned episodes in one archive, all of them over 62 MB. The audio deadline now scales the way the video one does: a base, plus whichever of size (2048 seconds per GB) and playing time (4x realtime) asks for more, plus a 20 percent buffer, capped at one hour. Both media types compute it through one helper now, with their own coefficients; the video deadline is unchanged. The three audio passes share a single per-file budget rather than each getting a fresh deadline, so a file on stalled storage cannot hold a worker for three of them; once the budget is spent the later passes are skipped rather than started and killed, which would have reported the spent budget as more findings against the file. A `flac -t` timeout is also recorded as a warning now instead of being swallowed, where the silence read as a passed CRC check.
+
+- **Orphan cleanup could not tell a deleted file from an unreachable one, so it judged the whole run at once.** It aborted when too much of what it checked read as missing, on the theory that a vanished mount makes every record under it look like an orphan. As a property of the whole run that is the wrong question, in both directions. An operator who deletes 331 corrupted files and then cleans up their records finds 96 percent of the run missing by design, and could never finish a cleanup. A mount dropping underneath a scan path that holds several keeps the fraction low and passed. Each file is now confirmed on its own, by reading its directory and finding other files in it. Something is there, so this storage is present and the file is not, and the record goes. An empty directory proves nothing, since an unmounted mountpoint reverts to an empty directory that stats perfectly well. Neither does a directory that is gone: a deleted folder and a folder inside a mount that came down are the same ENOENT. Those records are kept and counted. Flagged files are re-checked before deletion too, hours after the sweep that flagged them, so a mount that dropped mid-run and came back cannot have its library deleted; anything short of a clean "not there" keeps the record. Nothing unconfirmed is deleted here, so a run no longer aborts. It does the work it can prove, says what it kept, and calls out a share large enough to look like an outage.
+- **Records the cleanup keeps are now yours to confirm.** Whether a folder was deleted or went offline is a question only an operator can answer, so the run asks instead of guessing: after a cleanup that kept records, the UI offers to remove them, and `POST /api/cleanup-orphaned` accepts `trust_unreadable_dirs: true` to say the files really were deleted. A scheduled cleanup never sets it, and the offer is only made to whoever started the run. A confirmed run that finds more unreadable records than the previous run kept stops without deleting: an answer given about 331 records cannot cover a mount that dropped since.
+- **An aborted cleanup said "Removed 331 orphaned records" while deleting nothing.** The progress view read the aborted run's phase as completion and rendered the orphan count as a deletion count, with the reason sitting unread in the status payload. A run that stopped early now reports its reason as an error, refreshes the table it may have half-changed, and hands the progress view back to a media scan still running underneath it. It also writes a report, as does a cancelled run, counting only what phase 3 actually deleted, so a run that did nothing leaves evidence rather than a count that did not move. `/api/cleanup-status` and `/api/scan-status` carry `error_message` for that.
+
+### Added
+
+- `timeouts.audio_decode_base_secs` (default 120 seconds), under System > Tunables with the other timeouts.
+- `cleanup_states.records_kept`, added at startup, recording how many entries a cleanup kept because it could not confirm them. `/api/cleanup-status` returns it, and both that endpoint and `/api/scan-status` now return `error_message`.
+
+### Tests
+
+- 15 cleanup tests: an occupied folder settling it; an empty folder and a missing folder both keeping records instead of deleting them; the operator confirming those; a file that came back and a file that reads back an error both left alone; one dead tree not holding up a healthy one; the kept-records reason staying inside its column; the outage note firing on most of a run and not on a handful; the confirmation ceiling coming from the previous run; and reports for an aborted run and for a phase 3 that stopped part way.
+- 7 audio-timeout tests: the one hour cap, size-only scaling when the container reports no duration, the video deadline surviving the shared helper unchanged, the scaled deadline reaching the ffmpeg call, the three passes drawing down one budget, a spent budget skipping the later passes instead of warning again, and a timeout naming the deadline it hit.
+
 ## [2.8.8] - 2026-08-26
 
 ### Changed

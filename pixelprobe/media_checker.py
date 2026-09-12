@@ -78,8 +78,12 @@ def _probe_video_duration(file_path):
     """
     probe = _ffprobe_with_timeout(file_path)
     video_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
+    return _duration_from_probe(probe, video_stream)
 
-    for source in (video_stream, probe.get('format')):
+
+def _duration_from_probe(probe, stream):
+    """Duration in seconds from a stream, falling back to the container."""
+    for source in (stream, probe.get('format')):
         if source and 'duration' in source:
             try:
                 duration = float(source['duration'])
@@ -88,6 +92,48 @@ def _probe_video_duration(file_path):
             if duration > 0:
                 return duration
     return None
+
+
+# A pass that reads a whole file runs at a throughput set by the storage and
+# the host's load, so its deadline has to scale with the file: a fixed one cut
+# long files short, and on the audio path a two-hour episode timed out, was
+# recorded as a warning and was never actually validated. Whichever of size and
+# playing time asks for more wins, on top of a base, plus a buffer.
+VIDEO_PASS_TIMEOUT_CAP_SECS = 7200
+AUDIO_PASS_TIMEOUT_CAP_SECS = 3600
+
+
+def _full_pass_timeout(file_size, duration, base, secs_per_gb, realtime_factor, cap):
+    """Deadline in seconds for one pass over a whole file."""
+    size_timeout = int(file_size / (1024 * 1024 * 1024) * secs_per_gb)
+    duration_timeout = int(duration * realtime_factor) if duration else 0
+    return min(int((base + max(size_timeout, duration_timeout)) * 1.2), cap)
+
+
+def _video_pass_timeout(file_size, duration):
+    """Deadline for a full video decode. NAS latency, parallel I/O contention
+    and complex codecs make this slower than the stream's own playing time."""
+    return _full_pass_timeout(file_size, duration, base=300, secs_per_gb=180,
+                              realtime_factor=0.5, cap=VIDEO_PASS_TIMEOUT_CAP_SECS)
+
+
+# Below this a pass has no chance of finishing, so it is skipped rather than
+# started only to be killed and reported as a timeout.
+_AUDIO_MIN_PASS_SECS = 15
+
+
+def _audio_pass_timeout(file_size, duration):
+    """Budget for checking one audio file, shared by all of its passes.
+
+    A gigabyte of compressed audio carries far more playing time than a
+    gigabyte of video, so the size term has to be generous here. It decides the
+    budget when the container reports no duration, and for the high-bitrate
+    formats (PCM wav, high-rate ALAC) where a gigabyte is minutes, not hours.
+    """
+    return _full_pass_timeout(file_size, duration,
+                              base=_setting('timeouts.audio_decode_base_secs'),
+                              secs_per_gb=2048, realtime_factor=0.25,
+                              cap=AUDIO_PASS_TIMEOUT_CAP_SECS)
 
 # Deadline for pure-Python file reads (stat, magic, hash). Unlike the external
 # tools these have no subprocess timeout, so a file on stalled storage (dead
@@ -1243,7 +1289,8 @@ class PixelProbe:
                 scan_output.extend(output)
                 warning_details = warnings
             elif extension in self.supported_audio_formats:
-                is_corrupted, details, tool, output, warnings = self._check_audio_corruption(file_path)
+                is_corrupted, details, tool, output, warnings = self._check_audio_corruption(
+                    file_path, file_info['file_size'] or None)
                 corruption_details.extend(details)
                 scan_tool = tool
                 scan_output.extend(output)
@@ -1889,14 +1936,7 @@ class PixelProbe:
         file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
         file_size_gb = file_size / (1024 * 1024 * 1024)
 
-        # Calculate timeout based on BOTH file size AND video duration for better accuracy
-        # NAS I/O and 4K HEVC processing can be slower than expected, so be VERY generous
-        # Base: 5 min + 180s per GB + video duration * 0.5 (process at 2x realtime) + 20% buffer
-        # This accounts for: NAS latency, parallel I/O contention, complex codec processing, subtitle streams
-        size_timeout = int(file_size_gb * 180)  # 3 minutes per GB (up from 150s)
-        duration_timeout = int(duration * 0.5) if duration and duration > 0 else 0  # ~2x realtime (up from 0.4)
-        base_timeout = 300 + max(size_timeout, duration_timeout)
-        timeout_seconds = min(int(base_timeout * 1.2), 7200)  # Add 20% buffer, cap at 2 hours
+        timeout_seconds = _video_pass_timeout(file_size, duration)
         logger.info(f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (timeout: {timeout_seconds}s, duration: {duration:.1f}s)" if duration else f"Starting FFmpeg validation for {file_size_gb:.2f}GB file (timeout: {timeout_seconds}s)")
         
         # Enhanced FFmpeg validation with best practices for thorough file checking
@@ -2068,14 +2108,22 @@ class PixelProbe:
         # Return warning details as well
         return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
 
-    def _check_audio_corruption(self, file_path):
-        """Check audio files for corruption using FFmpeg and format-specific tools"""
+    def _check_audio_corruption(self, file_path, file_size=None):
+        """Check audio files for corruption using FFmpeg and format-specific tools
+
+        Pass file_size when already known to skip a redundant stat.
+        """
         corruption_details = []
         is_corrupted = False
         scan_tool = "ffmpeg"
         scan_output = []
         warning_details = []
-        
+
+        def record_timeout(label, secs):
+            warning_details.append(f"{label} timeout after {secs}s (file not fully validated)")
+            scan_output.append(f"{label}: TIMEOUT after {secs}s")
+            logger.warning(f"{label} timeout after {secs}s for {file_path}")
+
         # Step 1: Basic FFprobe analysis
         logger.info(f"Running FFprobe on audio file: {file_path}")
         try:
@@ -2103,8 +2151,8 @@ class PixelProbe:
             sample_rate = audio_stream.get('sample_rate', 'unknown')
             channels = audio_stream.get('channels', 'unknown')
             bit_rate = audio_stream.get('bit_rate', 'unknown')
-            duration = audio_stream.get('duration', 'unknown')
-            
+            duration_secs = _duration_from_probe(probe, audio_stream)
+
             logger.info(f"Audio details - Codec: {codec_name}, Sample rate: {sample_rate}, Channels: {channels}, Bitrate: {bit_rate}")
             scan_output.append(f"Audio stream: {codec_name}, {sample_rate}Hz, {channels}ch")
             
@@ -2138,7 +2186,19 @@ class PixelProbe:
             return is_corrupted, corruption_details, scan_tool, scan_output, warning_details
 
         # Step 2: Attempt to decode audio to check for corruption
-        logger.info(f"Performing comprehensive audio validation for: {file_path}")
+        if file_size is None:
+            file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+        # One deadline for the whole file rather than one per pass, so a file on
+        # stalled storage cannot hold a worker for three times the cap.
+        budget = _audio_pass_timeout(file_size, duration_secs)
+        deadline = time.monotonic() + budget
+
+        def remaining():
+            return int(deadline - time.monotonic())
+
+        logger.info(f"Performing comprehensive audio validation for: {file_path} "
+                    f"({file_size / (1024 * 1024):.1f}MB, budget: {budget}s)")
+        pass_timeout = remaining()
         try:
             # Enhanced audio validation - check entire file with aggressive detection
             # No more sampling - we validate the complete audio file
@@ -2151,8 +2211,8 @@ class PixelProbe:
                 '-i', file_path,
                 '-af', 'astats=metadata=1:reset=1,silencedetect=n=-60dB:d=1',  # Audio stats and silence detection
                 '-f', 'null', '-'
-            ], capture_output=True, text=True, timeout=120)
-            
+            ], capture_output=True, text=True, timeout=pass_timeout)
+
             if result.returncode != 0:
                 stderr = result.stderr
                 scan_output.append(f"Audio decode: FAILED - {stderr[:200]}")
@@ -2188,16 +2248,18 @@ class PixelProbe:
                 logger.info(f"Audio decode test passed for {file_path}")
                 
         except subprocess.TimeoutExpired:
-            warning_details.append("Audio decode test timeout (file may be very large)")
-            scan_output.append("Audio decode: TIMEOUT")
-            logger.warning(f"Audio decode timeout for {file_path}")
+            record_timeout('Audio decode', pass_timeout)
         except Exception as e:
             scan_output.append(f"Audio decode: ERROR - {str(e)}")
             logger.error(f"Error during audio decode test for {file_path}: {str(e)}")
         
         # Step 3: Additional validation - check for specific audio issues
         # Now integrated into main validation above, this section handles additional checks
-        if not is_corrupted:
+        pass_timeout = remaining()
+        if not is_corrupted and pass_timeout < _AUDIO_MIN_PASS_SECS:
+            # The pass that spent the budget already reported why.
+            scan_output.append("Deep audio scan: SKIPPED (file budget spent)")
+        elif not is_corrupted:
             logger.info(f"Checking for additional audio issues in: {file_path}")
             try:
                 # Check for packet corruption and timestamp issues
@@ -2207,7 +2269,7 @@ class PixelProbe:
                     '-i', file_path,
                     '-c', 'copy',  # Copy to check container integrity
                     '-f', 'null', '-'
-                ], capture_output=True, text=True, timeout=120)
+                ], capture_output=True, text=True, timeout=pass_timeout)
                 
                 if result.stderr:
                     # Look for non-fatal warnings that might indicate issues
@@ -2224,28 +2286,34 @@ class PixelProbe:
                     scan_output.append("Deep audio scan: PASSED")
                     
             except subprocess.TimeoutExpired:
-                warning_details.append("Deep scan timeout")
-                scan_output.append("Deep scan: TIMEOUT")
+                record_timeout('Deep scan', pass_timeout)
             except Exception as e:
                 scan_output.append(f"Deep scan: ERROR - {str(e)}")
                 logger.error(f"Error during deep audio scan for {file_path}: {str(e)}")
         
         # Step 4: Format-specific validation for lossless formats
         extension = Path(file_path).suffix.lower()
-        if extension == '.flac':
+        pass_timeout = remaining()
+        if extension == '.flac' and pass_timeout < _AUDIO_MIN_PASS_SECS:
+            scan_output.append("FLAC test: SKIPPED (file budget spent)")
+        elif extension == '.flac':
             # FLAC has built-in error detection
             logger.info(f"Running FLAC-specific validation for: {file_path}")
             try:
                 result = safe_subprocess_run([
                     'flac', '-t', file_path
-                ], capture_output=True, text=True, timeout=60)
-                
+                ], capture_output=True, text=True, timeout=pass_timeout)
+
                 if result.returncode != 0:
                     corruption_details.append("FLAC validation failed")
                     is_corrupted = True
                     scan_output.append(f"FLAC test: FAILED - {result.stderr[:200]}")
                 else:
                     scan_output.append("FLAC test: PASSED")
+            except subprocess.TimeoutExpired:
+                # Silence here would read as a passed CRC check on a file that
+                # was never decoded to the end.
+                record_timeout('FLAC test', pass_timeout)
             except FileNotFoundError:
                 # flac command not available, skip this test
                 logger.debug("FLAC command not found, skipping FLAC-specific test")

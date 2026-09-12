@@ -149,8 +149,30 @@ Rarely-changed knobs with sensible defaults.
 | `MAX_CONCURRENT_LARGE` | `50` | Max in-flight hash tasks for large files |
 | `MAX_CONCURRENT_HUGE` | `5` | Max in-flight hash tasks for huge files |
 | `BITROT_STABLE_CHECKS_TO_EXPIRE` | `2` | Stable integrity checks before a bitrot suspicion expires |
-| `ORPHAN_CLEANUP_ABORT_FLOOR` | `100` | Minimum missing-file count before the mass-delete safety check applies |
-| `ORPHAN_CLEANUP_MAX_DELETE_FRACTION` | `0.5` | Abort orphan cleanup if more than this fraction of records would be deleted (guards against an unmounted volume) |
+| `ORPHAN_CLEANUP_ABORT_FLOOR` | `100` | Minimum count of kept records before the run's message calls out a possible storage outage |
+| `ORPHAN_CLEANUP_MAX_DELETE_FRACTION` | `0.5` | Call out a possible outage when this fraction of the files checked could not be confirmed as deleted |
+
+Orphan cleanup confirms each missing file before deleting its record, by reading
+the file's own directory and finding other files in it. Something is there, so
+this storage is present and the file is not.
+
+A folder holding one film has nothing left to say once you delete it, so the
+question moves up a level: the parent has to list folders, and one of those has
+to hold a file PixelProbe recorded. That is the library answering. A listing
+alone proves nothing, since files written to a mountpoint while it was unmounted
+list just as well, but recorded files could not have come from them.
+
+Nothing above answers for a tree that has gone entirely, and those records are
+kept and counted. Files that have become readable again since the sweep are left
+alone.
+
+Confirming that kept records were deleted is your decision. The UI offers it
+after a run that kept records, and the API takes `trust_unreadable_dirs: true` on
+`POST /api/cleanup-orphaned`; it is never set for a scheduled cleanup. A
+confirmed run that finds more unreadable records than the previous run kept
+stops without deleting, since your answer cannot cover storage that went offline
+in between. The two variables above only decide when a run's message calls the
+kept records a likely outage.
 
 **Startup and migrations:**
 
@@ -778,4 +800,5 @@ How long to wait on storage and tools before giving up on a file.
 |---------|----------------|---------|--------------|
 | `timeouts.temporal_sample_timeout_secs` | Sampled window timeout | `30` seconds | Seconds to wait on one sampled window. Raise this on a busy host, where a timeout means contention rather than a bad file. Range 10 to 3600. |
 | `timeouts.ffprobe_timeout_secs` | Metadata read timeout | `120` seconds | Seconds to wait when reading a file's metadata. Raise it on slow storage. Range 10 to 3600. |
+| `timeouts.audio_decode_base_secs` | Audio decode base timeout | `120` seconds | Starting budget for checking one audio file, shared by its decode, container and lossless passes. The real budget scales up with the file's size and playing time, so a long episode is not cut short. Range 30 to 3600. |
 | `timeouts.file_read_timeout_secs` | File read timeout | `60` seconds | Seconds to wait on a raw read before treating the file as unreadable and moving on. The hashing deadline scales up with file size on top of this. Range 10 to 3600. |

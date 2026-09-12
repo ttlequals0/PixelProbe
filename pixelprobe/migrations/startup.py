@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from sqlalchemy import text, inspect, exc
 from pixelprobe.constants import (CONFIG_LOG_RETENTION_DAYS, CONFIG_LOG_EXCLUDE_LOGGERS,
                                   DEFAULT_LOG_EXCLUDE_LOGGERS, SCANNER_SETTINGS)
+from pixelprobe.models import CleanupState
 from pixelprobe.utils.helpers import env_int
 from pixelprobe.utils.overrides import classify_findings, encode_verdict
 
@@ -557,6 +558,28 @@ def create_performance_indexes(db):
         logger.debug("All performance indexes already exist")
 
 
+def run_v2_8_9_migrations(db):
+    """Record how many entries a cleanup kept because it could not confirm them.
+
+    A cleanup that holds records back has to be able to say so afterwards, and
+    the count is what the UI offers to act on.
+    """
+    # From the model, not spelled out: naming the wrong table here adds nothing,
+    # logs the failure, and leaves every query for a column the model declares
+    # failing against a database that does not have it.
+    table = CleanupState.__tablename__
+    try:
+        with migration_connection(db) as conn:
+            existing = {c['name'] for c in inspect(conn).get_columns(table)}
+            if 'records_kept' not in existing:
+                conn.execute(text(
+                    f'ALTER TABLE {table} ADD COLUMN records_kept INTEGER DEFAULT 0'))
+                logger.info(f"Added {table}.records_kept")
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Migration v2.8.9 failed: {e}")
+
+
 def _run_all_migrations(db):
     """Execute all database migrations. Called by migrate_database() after acquiring lock."""
     from tools.app_startup_migration import run_startup_migrations
@@ -567,6 +590,12 @@ def _run_all_migrations(db):
         logger.info("Startup migrations completed successfully")
     except Exception as e:
         logger.error(f"Startup migration failed: {e}")
+
+    logger.info("Recording cleanup records kept...")
+    try:
+        run_v2_8_9_migrations(db)
+    except Exception as e:
+        logger.error(f"v2.8.9 migration failed: {e}")
 
     logger.info("Scoping mark-as-good overrides...")
     try:

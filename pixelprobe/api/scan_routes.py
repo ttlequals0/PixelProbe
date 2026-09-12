@@ -501,11 +501,13 @@ def get_scan_status():
     
     state_dict = scan_state.to_dict()
     
-    # Debug logging - changed to INFO for visibility in production logs
-    logger.info(f"API scan-status: scan_id={scan_state.id}, phase={scan_state.phase}, "
-                f"is_active={scan_state.is_active}, files_processed={scan_state.files_processed}, "
-                f"estimated_total={scan_state.estimated_total}, current_file={scan_state.current_file}, "
-                f"start_time={scan_state.start_time}")
+    # Every open tab polls this every few seconds, so at INFO these two lines
+    # were 42% of everything the application logged, and every one of them is a
+    # row in log_entries. The state they print is what the response returns.
+    logger.debug(f"API scan-status: scan_id={scan_state.id}, phase={scan_state.phase}, "
+                 f"is_active={scan_state.is_active}, files_processed={scan_state.files_processed}, "
+                 f"estimated_total={scan_state.estimated_total}, current_file={scan_state.current_file}, "
+                 f"start_time={scan_state.start_time}")
     
     # Prioritize database values when available, fall back to service values
     is_running = current_app.scan_service.is_scan_running()
@@ -793,7 +795,10 @@ def get_scan_status():
         'phase_current': phase_current,
         'phase_total': phase_total,
         'progress_message': progress_message,
-        
+        # A scan that failed carries its reason here; without it the UI can only
+        # say the run stopped.
+        'error_message': state_dict.get('error_message') or '',
+
         # ETA fields - ensure we don't send None
         'eta': eta if eta else None,  # Let jsonify handle None properly
         'files_per_second': round(files_per_second, 2) if files_per_second > 0 else 0
@@ -819,9 +824,9 @@ def get_scan_status():
         except Exception as e:
             logger.debug(f"Failed to get chunk progress: {e}")
 
-    logger.info(f"API scan-status response: progress_message='{status['progress_message']}', "
-                f"file='{status['file']}', eta='{status['eta']}', "
-                f"current={status['current']}, total={status['total']}")
+    logger.debug(f"API scan-status response: progress_message='{status['progress_message']}', "
+                 f"file='{status['file']}', eta='{status['eta']}', "
+                 f"current={status['current']}, total={status['total']}")
 
     return status
 

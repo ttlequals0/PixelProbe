@@ -3,6 +3,7 @@ Maintenance service for cleanup and file monitoring operations
 """
 
 import os
+import itertools
 import json
 import threading
 import time
@@ -15,10 +16,13 @@ import uuid
 from celery import states
 from celery.exceptions import TimeoutError as CeleryTimeoutError
 from sqlalchemy import text, or_
-from pixelprobe.media_checker import PixelProbe, load_exclusions, load_exclusions_with_patterns
+from pixelprobe.media_checker import (PixelProbe, load_exclusions, load_exclusions_with_patterns,
+                                      _read_with_timeout, FileReadTimeoutError)
 from pixelprobe.models import db, ScanResult, ScanSchedule, CleanupState, FileChangesState, ScanReport, LogEntry, AppConfig
 from pixelprobe.services.notification_service import dispatch_event
-from pixelprobe.utils.helpers import ProgressTracker, env_int
+from pixelprobe.utils.helpers import (ProgressTracker, env_int, env_float,
+                                      classify_path_existence, mark_operation_error,
+                                      PATH_ABSENT, PATH_UNKNOWN)
 from pixelprobe.utils.integrity import adopt_bitrot_baseline
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
 from pixelprobe.progress_utils import (
@@ -48,6 +52,17 @@ INTEGRITY_TASK_TIMEOUT_SECS = int(
 # unreadable) and is abandoned as unverifiable - never deleted - so the
 # producer loop cannot pin at max concurrency and spin forever.
 CLEANUP_TASK_TIMEOUT_SECS = env_int('CLEANUP_TASK_TIMEOUT_SECS', 600, floor=60)
+
+# Bounds on the orphan cleanup's confirmation: how long one filesystem read may
+# take before it counts as no answer, and how many directories a held-back
+# reason may name before it is summarised (it is stored in a 1000-character
+# column and shown in a notification).
+_PROBE_STAT_TIMEOUT_SECS = 15
+_HOLD_REASON_DIRS = 3
+# How much of a parent directory to read when asking whether the library above a
+# vanished folder is still mounted, and how many of its files to look up.
+_PROBE_LISTING_ENTRIES = 50
+_PROBE_SAMPLE_FILES = 5
 
 # Consecutive stable-hash integrity checks (plus a clean rescan) required
 # before a bitrot flag auto-expires and the stable content becomes the new
@@ -475,13 +490,18 @@ class MaintenanceService:
         with app.app_context():
             self._run_file_changes_check(check_id)
 
-    def _run_cleanup(self, cleanup_id, file_paths=None, schedule_id=None):
+    def _run_cleanup(self, cleanup_id, file_paths=None, schedule_id=None,
+                     trust_unreadable_dirs=False):
         """Run the cleanup operation
 
         Args:
             cleanup_id: ID of the cleanup record
             file_paths: Optional list of specific file paths to check (if None, checks all files)
             schedule_id: Optional schedule ID for healthcheck integration
+            trust_unreadable_dirs: Delete records whose directory can no longer
+                be read. Only an operator can tell a deleted folder from an
+                unreachable one, so this says they have: never set it for a
+                scheduled run.
         """
         # Store schedule_id for report creation
         self._cleanup_schedule_id = schedule_id
@@ -668,42 +688,50 @@ class MaintenanceService:
                         f"found {len(orphaned_files)} orphaned, {unknown_count} unverifiable (skipped), "
                         f"{files_abandoned} abandoned")
 
-            # Extract IDs and paths for Phase 3
-            orphaned_ids = [f['file_id'] for f in orphaned_files]
-            orphaned_paths = [f['file_path'] for f in orphaned_files]
-            orphaned_count = len(orphaned_files)
-
-            # Store for report
-            self.orphaned_files_list = orphaned_paths
-
-            # Safety net: if an implausibly large fraction of checked files read as
-            # absent, a whole mount likely disappeared (the mountpoint dir survives
-            # but is empty, so each child stats ENOENT). Abort rather than mass-delete.
-            try:
-                abort_floor = int(os.environ.get('ORPHAN_CLEANUP_ABORT_FLOOR', '100'))
-            except (TypeError, ValueError):
-                abort_floor = 100
-            try:
-                max_fraction = float(os.environ.get('ORPHAN_CLEANUP_MAX_DELETE_FRACTION', '0.5'))
-            except (TypeError, ValueError):
-                max_fraction = 0.5
-            if (total_files_processed > 0 and orphaned_count >= abort_floor
-                    and (orphaned_count / total_files_processed) >= max_fraction):
-                msg = (f'Aborted: {orphaned_count:,} of {total_files_processed:,} checked files '
-                       f'({orphaned_count / total_files_processed:.0%}) read as missing - likely a '
-                       f'mount/storage outage, not real orphans. No entries were deleted.')
+            # Only rows whose absence could be confirmed may be deleted. A
+            # trusted run is the operator answering for the rows the run before
+            # it held; more unreadable rows than that means something else
+            # changed, and their confirmation does not cover it.
+            ceiling = self._trust_ceiling(cleanup_id) if trust_unreadable_dirs else None
+            orphaned_files, unconfirmed, returned, hold_reason = self._confirm_orphans(
+                orphaned_files, trust_unreadable_dirs=trust_unreadable_dirs)
+            if trust_unreadable_dirs and len(orphaned_files) > ceiling:
+                msg = (f'Aborted: {len(orphaned_files):,} records are missing a readable '
+                       f'directory, more than the {ceiling:,} you confirmed, so storage may '
+                       f'have gone offline since. No entries were deleted.')
                 logger.error(msg)
-                cleanup_record.phase = 'error'
-                cleanup_record.error_message = msg
+                mark_operation_error(cleanup_record, msg)
                 cleanup_record.progress_message = msg
-                cleanup_record.orphaned_found = orphaned_count
-                cleanup_record.is_active = False
-                cleanup_record.end_time = datetime.now(timezone.utc)
+                cleanup_record.records_kept = len(orphaned_files)
                 db.session.commit()
+                # A run that deleted nothing still has to leave a record.
+                self._create_cleanup_report(
+                    cleanup_record, [f['file_path'] for f in orphaned_files])
                 with self.cleanup_lock:
                     self.cleanup_state['is_running'] = False
                     self.cleanup_state['phase'] = 'error'
                 return
+
+            orphaned_ids = [f['file_id'] for f in orphaned_files]
+            orphaned_paths = [f['file_path'] for f in orphaned_files]
+            orphaned_count = len(orphaned_files)
+            held_paths = [f['file_path'] for f in unconfirmed]
+
+            # Store for report: the deleted paths, plus the held ones, since a
+            # run that kept records has to be able to say which.
+            self.orphaned_files_list = orphaned_paths + held_paths
+
+            # The count now means what the run will act on, so the completion
+            # message and the report cannot claim the phase 2 figure.
+            cleanup_record.orphaned_found = orphaned_count
+            cleanup_record.records_kept = len(unconfirmed)
+            db.session.commit()
+
+            if returned:
+                logger.warning(f"{len(returned):,} flagged file(s) are readable again since "
+                               f"phase 2 and were left alone; storage may have flapped mid-run")
+            if unconfirmed:
+                logger.warning(f"Holding back {len(unconfirmed):,} flagged file(s): {hold_reason}")
 
             # Check if cancelled before proceeding to deletion phase
             if self._is_cancelled(cleanup_record):
@@ -772,9 +800,22 @@ class MaintenanceService:
                 cleanup_record.progress_message = 'Cleanup cancelled by user'
             else:
                 cleanup_record.phase = 'complete'
+                # Rows held back are the operator's business: without them the
+                # message reads as "nothing to do" for files still on the books.
+                held = ((f' {len(unconfirmed):,} record(s) were kept because {hold_reason}.'
+                         + self._outage_note(len(unconfirmed), total_files_processed))
+                        if unconfirmed else '')
+                returned_note = (f' {len(returned):,} flagged file(s) are readable again and '
+                                 f'were left alone.') if returned else ''
                 if orphaned_count > 0:
                     deleted_count = len(orphaned_ids) if orphaned_ids else orphaned_count
-                    cleanup_record.progress_message = f'Cleanup complete. Deleted {deleted_count} orphaned database entries.'
+                    cleanup_record.progress_message = (
+                        f'Cleanup complete. Deleted {deleted_count} orphaned database '
+                        f'entries.{held}{returned_note}')
+                elif unconfirmed or returned:
+                    cleanup_record.progress_message = (
+                        f'Cleanup complete. No entries could be confirmed as '
+                        f'deleted.{held}{returned_note}')
                 else:
                     cleanup_record.progress_message = 'Cleanup complete. No orphaned entries found.'
             
@@ -782,9 +823,10 @@ class MaintenanceService:
             cleanup_record.end_time = datetime.now(timezone.utc)
             db.session.commit()
             
-            # Create scan report for cleanup operation
-            # Always try to create a report even if there was an error, as long as we have some data
-            if cleanup_record.phase in ('complete', 'error'):
+            # Create scan report for cleanup operation. A cancelled run gets one
+            # too: cancelling during phase 3 leaves rows already deleted, and
+            # that has to be on the record.
+            if cleanup_record.phase in ('complete', 'error', 'cancelled'):
                 self._create_cleanup_report(cleanup_record, getattr(self, 'orphaned_files_list', []))
             
             with self.cleanup_lock:
@@ -803,6 +845,167 @@ class MaintenanceService:
             except Exception as report_error:
                 logger.error(f"Failed to create error report: {report_error}")
     
+    def _outage_note(self, unconfirmed_count, total_checked):
+        """A warning to add to the run's message, or ''.
+
+        Holding a few rows back is ordinary: the operator removed a folder along
+        with its files. Holding back an implausible share of a run is what a
+        storage outage looks like, and a run that says only "kept 40,000" buries
+        that. Nothing is deleted on this path, so this reports rather than
+        stops - stopping would also throw away the rows it did confirm.
+        """
+        floor = env_int('ORPHAN_CLEANUP_ABORT_FLOOR', 100, floor=1)
+        max_fraction = env_float('ORPHAN_CLEANUP_MAX_DELETE_FRACTION', 0.5, floor=0.0, ceiling=1.0)
+        if (total_checked > 0 and unconfirmed_count >= floor
+                and (unconfirmed_count / total_checked) >= max_fraction):
+            return (f' That is {unconfirmed_count / total_checked:.0%} of the files checked, '
+                    f'which is what a storage outage looks like - check your mounts before '
+                    f'confirming.')
+        return ''
+
+    def _trust_ceiling(self, cleanup_id):
+        """How many records the run before this one kept.
+
+        A confirmation answers for the rows that run held back. Re-sweeping the
+        whole library under the same confirmation could meet a mount that has
+        dropped since, so a trusted run that finds more unreadable rows than
+        were confirmed stops instead.
+        """
+        previous = (CleanupState.query
+                    .filter(CleanupState.id != cleanup_id)
+                    .order_by(CleanupState.id.desc()).first())
+        return (previous.records_kept or 0) if previous else 0
+
+    def _confirm_orphans(self, orphaned_files, trust_unreadable_dirs=False):
+        """Split flagged rows into the ones safe to delete and the rest.
+
+        A file reading as missing is not proof that it was deleted: an
+        unreachable mount reports exactly the same thing, and deleting those
+        rows is the one mistake this operation cannot take back. What settles it
+        is reading the file's own directory and finding other files in it -
+        something is there, so this storage is present and the file is not.
+
+        A library that keeps one file per folder leaves nothing there to read,
+        because deleting the film empties or removes its folder, so the question
+        moves up a level: is the library above it still the library? Its parent
+        answers that, and only when the database recognises a file inside one of
+        the folders listed there. Leftovers written to an unmounted mountpoint
+        would list too; rows the scanner recorded could not have come from them.
+
+        Nothing above answers for a tree that has gone entirely. Those rows are
+        kept and reported for the operator to confirm with trust_unreadable_dirs.
+
+        Returns (deletable, unconfirmed, returned, reason): the entries to
+        delete, the entries held back, the entries whose file is readable again,
+        and why rows were held.
+        """
+        deletable, unconfirmed, returned, held_dirs = [], [], [], set()
+        occupied = {}
+
+        for entry in orphaned_files:
+            path = entry['file_path']
+            # Phase 2 can be hours old on a large library. A mount that dropped
+            # during it and came back since would otherwise have every file it
+            # holds deleted from the database. Anything short of a clean "not
+            # there" keeps the row: an errno from a half-restored mount is not
+            # evidence of deletion.
+            if self._classify(path) != PATH_ABSENT:
+                returned.append(entry)
+                continue
+
+            directory = os.path.dirname(path)
+            if directory not in occupied:
+                occupied[directory] = (self._has_entries(directory)
+                                       or self._library_answers(os.path.dirname(directory)))
+            if occupied[directory] or trust_unreadable_dirs:
+                deletable.append(entry)
+            else:
+                unconfirmed.append(entry)
+                held_dirs.add(directory)
+
+        return deletable, unconfirmed, returned, self._describe_holds(held_dirs)
+
+    def _library_answers(self, directory, _seen=None):
+        """Whether the library above a vanished folder is still mounted.
+
+        Deleting the only file in a folder leaves nothing in it to read, and
+        deleting the folder leaves nothing at all, so the evidence has to come
+        from the level above: the rest of the library, still where it was. A
+        listing alone will not do, since files written to a mountpoint while it
+        was unmounted list just as well. One of the folders listed there has to
+        hold a file this scanner recorded, which is the library answering rather
+        than whatever was left behind on the mountpoint.
+        """
+        if _seen is None:
+            _seen = {}
+        if directory in _seen:
+            return _seen[directory]
+        _seen[directory] = False
+
+        for candidate in self._sample_files_under(directory):
+            if ScanResult.query.with_entities(ScanResult.id).filter(
+                    ScanResult.file_path == candidate).first():
+                _seen[directory] = True
+                break
+        return _seen[directory]
+
+    def _sample_files_under(self, directory):
+        """A few file paths taken from a directory's own listing."""
+        def read():
+            found = []
+            with os.scandir(directory) as entries:
+                for entry in itertools.islice(entries, _PROBE_LISTING_ENTRIES):
+                    if entry.is_file(follow_symlinks=False):
+                        found.append(entry.path)
+                    elif entry.is_dir(follow_symlinks=False) and len(found) < _PROBE_SAMPLE_FILES:
+                        with os.scandir(entry.path) as inner:
+                            found.extend(child.path for child in
+                                         itertools.islice(inner, _PROBE_SAMPLE_FILES)
+                                         if child.is_file(follow_symlinks=False))
+                    if len(found) >= _PROBE_SAMPLE_FILES:
+                        break
+            return found[:_PROBE_SAMPLE_FILES]
+
+        try:
+            return _read_with_timeout(read, _PROBE_STAT_TIMEOUT_SECS, directory,
+                                      'cleanup library probe')
+        except (FileReadTimeoutError, OSError):
+            return []
+
+    def _describe_holds(self, directories):
+        """Name the directories rows were held for, bounded: the reason is
+        stored in a 1000-character column and shown in a notification."""
+        listed = sorted(directories)[:_HOLD_REASON_DIRS]
+        more = len(directories) - len(listed)
+        summary = '; '.join(listed) + (f'; and {more:,} more' if more > 0 else '')
+        return (f'their directory is empty or unreadable, so it could not be told apart '
+                f'from storage being offline ({summary})') if listed else ''
+
+    def _classify(self, path):
+        """Existence check bounded by a deadline.
+
+        A hung (rather than absent) mount blocks stat in the kernel, and this
+        runs in the thread holding the cleanup's database session. A timeout is
+        PATH_UNKNOWN for the same reason a stat error is: it is not an answer.
+        """
+        try:
+            return _read_with_timeout(lambda: classify_path_existence(path),
+                                      _PROBE_STAT_TIMEOUT_SECS, path,
+                                      'cleanup existence probe')
+        except FileReadTimeoutError:
+            return PATH_UNKNOWN
+
+    def _has_entries(self, directory):
+        """Whether a directory can be read and holds anything at all."""
+        def read():
+            with os.scandir(directory) as entries:
+                return any(entries)
+        try:
+            return _read_with_timeout(read, _PROBE_STAT_TIMEOUT_SECS, directory,
+                                      'cleanup directory probe')
+        except (FileReadTimeoutError, OSError):
+            return False
+
     def _create_cleanup_report(self, cleanup_record: CleanupState, orphaned_files_list=None):
         """Create a report for the cleanup operation"""
         try:
@@ -814,6 +1017,13 @@ class MaintenanceService:
             # Get schedule_id for healthcheck integration
             schedule_id = getattr(self, '_cleanup_schedule_id', None)
 
+            # Only phase 3 deletes, and there files_processed counts deletions.
+            # A run that stopped earlier deleted nothing; one that stopped inside
+            # phase 3 deleted whatever it got through, which is neither every
+            # orphan it found nor, necessarily, none of them.
+            deleted_count = ((cleanup_record.files_processed or 0)
+                             if cleanup_record.phase_number == 3 else 0)
+
             # Create the report
             report = ScanReport(
                 scan_type='cleanup',
@@ -821,11 +1031,16 @@ class MaintenanceService:
                 start_time=cleanup_record.start_time,
                 end_time=cleanup_record.end_time,
                 duration_seconds=duration_seconds,
-                status='completed' if cleanup_record.phase == 'complete' else 'cancelled',
+                status={'complete': 'completed', 'error': 'error'}.get(
+                    cleanup_record.phase, 'cancelled'),
+                # A crash records its reason as progress only.
+                error_message=(cleanup_record.error_message
+                               or (cleanup_record.progress_message
+                                   if cleanup_record.phase == 'error' else None)),
                 total_files_discovered=cleanup_record.total_files,
                 files_scanned=cleanup_record.files_processed,
                 orphaned_records_found=cleanup_record.orphaned_found,
-                orphaned_records_deleted=cleanup_record.orphaned_found,  # All found orphans are deleted
+                orphaned_records_deleted=deleted_count,
                 created_at=datetime.now(timezone.utc)
             )
 
