@@ -32,7 +32,7 @@ from sqlalchemy import update
 
 from pixelprobe.celery_config import celery_app
 from pixelprobe.constants import SCAN_PHASES
-from pixelprobe.models import db, ScanState, ScanResult, ScanChunk
+from pixelprobe.models import db, ScanState, ScanResult, ScanChunk, ScanRunFile, ScanRunRoot, ScanTask
 from pixelprobe.media_checker import PixelProbe, load_exclusions_with_patterns
 from pixelprobe.progress_utils import clear_scan_progress_redis, update_scan_progress_redis
 from pixelprobe.utils.integrity import apply_scan_baseline
@@ -124,13 +124,24 @@ def _mark_chunk_terminal(chunk, status: str, files_scanned: int = None, error: s
     db.session.commit()
 
 
-def _reclaim_chunk_range(first_path: str, last_path: str):
+def _reclaim_chunk_range(scan_id: str, first_path: str, last_path: str):
     """Return unscanned claimed rows in a chunk's range to pending."""
-    ScanResult.query.filter(
-        ScanResult.file_path >= first_path,
-        ScanResult.file_path <= last_path,
-        ScanResult.scan_status == 'scanning'
-    ).update({'scan_status': 'pending'}, synchronize_session=False)
+    member_ids = [row[0] for row in db.session.query(ScanRunFile.scan_result_id).filter(
+        ScanRunFile.scan_id == scan_id,
+        ScanRunFile.file_path >= first_path,
+        ScanRunFile.file_path <= last_path,
+        ScanRunFile.status == 'processing',
+    ).all()]
+    ScanRunFile.query.filter(
+        ScanRunFile.scan_id == scan_id,
+        ScanRunFile.file_path >= first_path,
+        ScanRunFile.file_path <= last_path,
+        ScanRunFile.status == 'processing',
+    ).update({'status': 'pending', 'claimed_at': None}, synchronize_session=False)
+    if member_ids:
+        ScanResult.query.filter(ScanResult.id.in_(member_ids),
+                                ScanResult.scan_status == 'scanning').update(
+            {'scan_status': 'pending'}, synchronize_session=False)
     db.session.commit()
 
 
@@ -228,15 +239,19 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
         # Bulk claim: one statement, race-free (ranges are disjoint by construction)
         def claim_pending():
             rows = db.session.execute(
-                update(ScanResult)
-                .where(ScanResult.file_path >= first_path,
-                       ScanResult.file_path <= last_path,
-                       ScanResult.scan_status == 'pending')
-                .values(scan_status='scanning')
-                .returning(ScanResult.id)
+                update(ScanRunFile)
+                .where(ScanRunFile.scan_id == scan_id,
+                       ScanRunFile.file_path >= first_path,
+                       ScanRunFile.file_path <= last_path,
+                       ScanRunFile.status == 'pending')
+                .values(status='processing', claimed_at=datetime.now(timezone.utc))
+                .returning(ScanRunFile.scan_result_id)
             ).fetchall()
+            ids = [row[0] for row in rows if row[0] is not None]
+            if ids:
+                db.session.execute(update(ScanResult).where(ScanResult.id.in_(ids)).values(scan_status='scanning'))
             db.session.commit()
-            return [row[0] for row in rows]
+            return ids
 
         claimed_ids = claim_pending()
 
@@ -246,7 +261,7 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
             # claimed as 'scanning'; without this reclaim-and-retry the chunk
             # would be marked completed with files_scanned=0 and those files
             # silently dropped from the scan
-            _reclaim_chunk_range(first_path, last_path)
+            _reclaim_chunk_range(scan_id, first_path, last_path)
             claimed_ids = claim_pending()
 
         if not claimed_ids:
@@ -274,7 +289,7 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
             is_active = db.session.query(ScanState.is_active).filter_by(scan_id=scan_id).scalar()
             if not is_active:
                 logger.info(f"Chunk {chunk_db_id}: scan cancelled, stopping")
-                _reclaim_chunk_range(first_path, last_path)
+                _reclaim_chunk_range(scan_id, first_path, last_path)
                 _mark_chunk_terminal(chunk, 'cancelled',
                                      files_scanned=base_scanned + files_processed)
                 return {'status': 'CANCELLED', 'chunk_id': chunk_db_id,
@@ -334,10 +349,30 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
                         db_result.file_size = scan_result.get('file_size', 0)
                         db_result.file_type = scan_result.get('file_type', 'unknown')
 
+                        member = ScanRunFile.query.filter_by(
+                            scan_id=scan_id, scan_result_id=db_result.id).first()
+                        if member:
+                            member.status = 'completed'
+                            member.outcome = 'completed'
+                            member.file_hash = scan_result.get('file_hash')
+                            member.file_size = scan_result.get('file_size')
+                            member.last_modified = scan_result.get('last_modified')
+                            member.is_corrupted = is_corrupted
+                            member.has_warnings = has_warnings
+                            member.corruption_details = corruption_details
+                            member.warning_details = warning_details
+                            member.completed_at = datetime.now(timezone.utc)
+
                         if is_corrupted:
                             files_corrupted += 1
                     else:
                         db_result.scan_status = 'error'
+                        member = ScanRunFile.query.filter_by(
+                            scan_id=scan_id, scan_result_id=db_result.id).first()
+                        if member:
+                            member.status = 'error'
+                            member.outcome = 'no_result'
+                            member.completed_at = datetime.now(timezone.utc)
                         db_result.error_message = 'Scanner returned no result'
 
                     files_processed += 1
@@ -417,7 +452,7 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
         # find nothing and mark the chunk completed with 0 files
         try:
             if first_path and last_path:
-                _reclaim_chunk_range(first_path, last_path)
+                _reclaim_chunk_range(scan_id, first_path, last_path)
         except Exception as reclaim_error:
             logger.error(f"Chunk {chunk_db_id} reclaim failed: {reclaim_error}")
             db.session.rollback()
@@ -464,7 +499,7 @@ def redispatch_orphaned_chunks(scan_id: str, force_rescan: bool = False) -> int:
             continue
         try:
             if chunk.status == 'processing':
-                _reclaim_chunk_range(*fcp)
+                _reclaim_chunk_range(scan_id, *fcp)
             new_id = str(uuid.uuid4())
             chunk.status = 'pending'
             chunk.celery_task_id = new_id
@@ -527,7 +562,7 @@ def discover_directory_task(self, directory: str, scan_id: str,
     def flush():
         nonlocal files_inserted
         if buffer:
-            added, _ = add_files_batch_to_db(buffer)
+            added, _ = add_files_batch_to_db(buffer, scan_id=scan_id)
             files_inserted += added
             buffer.clear()
             # Atomic increment: multiple discovery tasks update one row
@@ -547,7 +582,13 @@ def discover_directory_task(self, directory: str, scan_id: str,
     hb_stop = _start_chunk_heartbeat(current_app._get_current_object(),
                                      scan_id, f'discovery:{directory}')
     try:
-        for root, dirs, files in os.walk(directory):
+        def walk_error(exc):
+            nonlocal complete, error
+            complete = False
+            error = str(exc)
+            logger.error(f"Discovery cannot read {getattr(exc, 'filename', directory)}: {exc}")
+
+        for root, dirs, files in os.walk(directory, onerror=walk_error):
             dirs[:] = [d for d in dirs if not any(
                 is_path_under(os.path.join(root, d), exc) for exc in excluded_paths
             )]
@@ -583,6 +624,13 @@ def discover_directory_task(self, directory: str, scan_id: str,
     elapsed = time.time() - start_time
     logger.info(f"Discovery of {directory}: checked {files_checked}, inserted {files_inserted} "
                 f"in {elapsed:.1f}s (complete={complete})")
+    root_record = ScanRunRoot.query.filter_by(scan_id=scan_id, root_path=directory).first()
+    if root_record:
+        root_record.status = 'completed' if complete else 'incomplete'
+        root_record.error_message = error
+        root_record.discovered_count = files_inserted
+        root_record.completed_at = datetime.now(timezone.utc)
+        db.session.commit()
     return {'directory': directory, 'files_checked': files_checked,
             'files_inserted': files_inserted, 'complete': complete, 'error': error}
 
@@ -617,6 +665,14 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
                 return {'status': 'CONFLICT', 'scan_id': scan_id, **(err_payload or {})}
             scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
 
+        # acks_late may redeliver after discovery/chunks were dispatched. The
+        # run row is the durable phase owner: a duplicate orchestrator must
+        # never reset counters, delete chunks, or revive a cancelled run.
+        if scan_state.phase in ('cancelled', 'completed', 'error', 'crashed', 'interrupted'):
+            return {'status': 'TERMINAL', 'scan_id': scan_id, 'phase': scan_state.phase}
+        if scan_state.phase != SCAN_PHASES['INITIALIZING']:
+            return {'status': 'ALREADY_STARTED', 'scan_id': scan_id, 'phase': scan_state.phase}
+
         scan_state.start_scan(paths, force_rescan)  # phase='discovering', resets counters
         scan_state.celery_task_id = self.request.id
         scan_state.scan_type = scan_type
@@ -629,18 +685,39 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
             clear_scan_progress_redis(scan_id)
         except Exception:
             pass
-        ScanChunk.query.filter_by(scan_id=scan_id).delete(synchronize_session=False)
+        ScanTask.query.filter_by(scan_id=scan_id, celery_task_id=self.request.id).update(
+            {'status': 'processing'}, synchronize_session=False)
         db.session.commit()
 
         files_added = 0
 
-        # Phase 1: discovery (one task per directory, counts only)
+        # Phase 1: discovery (one task per directory, counts only). A missing
+        # or unreadable root is evidence of incomplete coverage, never an
+        # empty successful scan.
         if scan_type == 'full':
+            unavailable = []
+            for path in paths:
+                resolved = os.path.realpath(path)
+                root = ScanRunRoot(scan_id=scan_id, root_path=path,
+                                   resolved_path=resolved, status='pending')
+                db.session.add(root)
+                if not os.path.isdir(resolved) or not os.access(resolved, os.R_OK | os.X_OK):
+                    root.status = 'unavailable'
+                    root.error_message = 'Root does not exist, is not a directory, or is unreadable'
+                    root.completed_at = datetime.now(timezone.utc)
+                    unavailable.append(path)
+            db.session.commit()
+            if unavailable:
+                msg = f"Discovery unavailable for {len(unavailable)} requested root(s): {unavailable[:5]}"
+                scan_state.error_scan(msg[:1000])
+                create_scan_report(scan_state)
+                return {'status': 'error', 'scan_id': scan_id,
+                        'error': 'discovery_unavailable', 'unavailable_targets': unavailable}
             excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
             discovery_tasks = [
                 discover_directory_task.s(path, scan_id, excluded_paths,
                                           excluded_extensions, excluded_patterns)
-                for path in paths if os.path.exists(path)
+                for path in paths
             ]
 
             if discovery_tasks:
@@ -744,6 +821,12 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
                 process_chunk_task.s(chunk['id'], scan_id, force_rescan)
                 .set(task_id=task_id))
         db.session.bulk_update_mappings(ScanChunk, id_mappings)
+        db.session.add_all([
+            ScanTask(scan_id=scan_id, chunk_id=chunk['id'], purpose='chunk',
+                     celery_task_id=mapping['celery_task_id'],
+                     generation=scan_state.dispatch_generation)
+            for chunk, mapping in zip(chunks, id_mappings)
+        ])
         db.session.commit()
 
         group(signatures).apply_async()

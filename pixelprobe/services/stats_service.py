@@ -62,7 +62,7 @@ class StatsService:
 
         The integrity check sweeps the library stalest-first in budgeted
         slices, so no single run report answers "has every file been
-        verified?". Coverage counts files by last_integrity_check_date:
+        verified?". Attempts and successful verification are distinct:
         checked ever and within the last 30 days, plus the oldest check date
         (every checked file has been verified at least once since then) and
         how many files have never been checked.
@@ -73,9 +73,11 @@ class StatsService:
                 text("""
                     SELECT
                         COUNT(*) as total_files,
-                        SUM(CASE WHEN last_integrity_check_date IS NOT NULL THEN 1 ELSE 0 END) as checked_files,
-                        SUM(CASE WHEN last_integrity_check_date >= :cutoff THEN 1 ELSE 0 END) as checked_last_30_days,
-                        MIN(last_integrity_check_date) as oldest_check,
+                        SUM(CASE WHEN last_integrity_success_at IS NOT NULL THEN 1 ELSE 0 END) as checked_files,
+                        SUM(CASE WHEN last_integrity_success_at >= :cutoff THEN 1 ELSE 0 END) as checked_last_30_days,
+                        MIN(last_integrity_success_at) as oldest_check,
+                        SUM(CASE WHEN last_integrity_attempt_at IS NOT NULL THEN 1 ELSE 0 END) as attempted_files,
+                        SUM(CASE WHEN last_integrity_outcome = 'error' THEN 1 ELSE 0 END) as error_files,
                         SUM(CASE WHEN bitrot_suspected = TRUE THEN 1 ELSE 0 END) as bitrot_suspected
                     FROM scan_results
                 """),
@@ -94,7 +96,9 @@ class StatsService:
                 'checked_last_30_days': row[2] or 0,
                 'never_checked': total - checked,
                 'oldest_check_date': oldest,
-                'bitrot_suspected': row[4] or 0,
+                'attempted_files': row[4] or 0,
+                'integrity_error_files': row[5] or 0,
+                'bitrot_suspected': row[6] or 0,
             }
         except Exception as e:
             logger.error(f"Error getting integrity coverage: {e}")

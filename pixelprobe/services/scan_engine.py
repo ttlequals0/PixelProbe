@@ -13,7 +13,7 @@ from typing import Dict, List
 from sqlalchemy import text, update
 
 from pixelprobe.constants import SCAN_PHASES, TERMINAL_SCAN_PHASES
-from pixelprobe.models import db, ScanState, ScanResult, ScanChunk
+from pixelprobe.models import db, ScanState, ScanResult, ScanChunk, ScanRunFile, ScanRunRoot
 from pixelprobe.progress_utils import clear_scan_progress_redis
 from pixelprobe.services.scan_reporting import create_scan_report
 
@@ -116,18 +116,18 @@ def finalize_scan(scan_state):
     error_chunks = ScanChunk.query.filter_by(scan_id=scan_id, status='error').count()
 
     # Corrupted count scoped to this scan's window (ScanResult has no scan_id)
-    corrupted = 0
-    try:
-        if scan_state.start_time:
-            corrupted = ScanResult.query.filter(
-                ScanResult.scan_date >= scan_state.start_time,
-                ScanResult.is_corrupted == True
-            ).count()
-    except Exception as e:
-        logger.error(f"Failed to count corrupted files for scan {scan_id}: {e}")
+    corrupted = ScanRunFile.query.filter_by(scan_id=scan_id, is_corrupted=True).count()
 
-    # Rows left in 'scanning' by a dead chunk worker go back to pending
-    reclaimed = ScanResult.reclaim_scanning()
+    # Rows left in 'scanning' by a dead chunk worker go back to pending, but
+    # only when they belong to this run.
+    stranded = ScanRunFile.query.filter_by(scan_id=scan_id, status='processing').all()
+    stranded_ids = [row.scan_result_id for row in stranded if row.scan_result_id]
+    if stranded_ids:
+        ScanResult.query.filter(ScanResult.id.in_(stranded_ids),
+                                ScanResult.scan_status == 'scanning').update(
+            {'scan_status': 'pending'}, synchronize_session=False)
+    reclaimed = ScanRunFile.query.filter_by(scan_id=scan_id, status='processing').update(
+        {'status': 'pending', 'claimed_at': None}, synchronize_session=False)
     if reclaimed:
         logger.warning(f"Scan {scan_id}: reclaimed {reclaimed} files stuck in 'scanning'")
 
@@ -203,7 +203,7 @@ def build_scan_chunks(scan_id: str) -> List[Dict]:
     of 1.2M. Returns plain dicts ({'id', 'files_discovered'}) so the caller
     never touches expired ORM attributes after the commit.
     """
-    total_pending = ScanResult.query.filter_by(scan_status='pending').count()
+    total_pending = ScanRunFile.query.filter_by(scan_id=scan_id, status='pending').count()
     if total_pending == 0:
         return []
 
@@ -222,12 +222,12 @@ def build_scan_chunks(scan_id: str) -> List[Dict]:
         SELECT file_path, rn FROM (
             SELECT file_path,
                    row_number() OVER (ORDER BY file_path) AS rn
-            FROM scan_results
-            WHERE scan_status = 'pending'
+            FROM scan_run_files
+            WHERE scan_id = :scan_id AND status = 'pending'
         ) t
         WHERE rn % :size = 1 OR rn % :size = 0 OR rn = :total
         ORDER BY rn
-    """), {'size': chunk_size, 'total': total_pending}).fetchall()
+    """), {'size': chunk_size, 'total': total_pending, 'scan_id': scan_id}).fetchall()
 
     chunks = []
     chunk_index = 0

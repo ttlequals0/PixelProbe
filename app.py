@@ -38,7 +38,8 @@ from pixelprobe.api.log_routes import log_bp  # v2.6.0: View Logs feature
 from pixelprobe.api.auth_routes import auth_api_bp, auth_ui_bp, auth_bp  # auth_bp for backward compat
 
 # Import authentication module
-from pixelprobe.auth import init_auth, auth_required
+from pixelprobe.auth import (init_auth, auth_required, request_uses_bearer_auth,
+                             request_uses_internal_auth)
 
 # Import database log handler
 from pixelprobe.utils.log_handler import DatabaseLogHandler
@@ -224,21 +225,20 @@ limiter = Limiter(
     swallow_errors=True  # Don't fail requests if rate limiting has issues
 )
 
-# Initialize CSRF protection
+# API clients using Bearer credentials are not subject to CSRF. Cookie-authenticated
+# requests are explicitly protected below; disabling Flask-WTF's default lets the
+# decision depend on the authenticated principal rather than blueprint location.
+app.config['WTF_CSRF_CHECK_DEFAULT'] = False
 csrf = CSRFProtect(app)
-# Exempt API endpoints from CSRF for now (will need to implement token-based auth)
-csrf.exempt(scan_bp)
-csrf.exempt(parallel_scan_bp)  # Added: parallel scan endpoint was missing CSRF exemption
-csrf.exempt(stats_bp)
-csrf.exempt(admin_bp)
-csrf.exempt(export_bp)
-csrf.exempt(maintenance_bp)
-csrf.exempt(reports_bp)
-csrf.exempt(auth_api_bp)  # Exempt API auth endpoints from CSRF
-csrf.exempt(healthcheck_bp)  # Exempt healthcheck API endpoints from CSRF
-csrf.exempt(notification_bp)  # Exempt notification API endpoints from CSRF (P3 audit)
-csrf.exempt(log_bp)  # Exempt log API endpoints from CSRF (v2.6.0)
-# Note: auth_ui_bp (login/logout pages) should NOT be exempted from CSRF
+
+
+@app.before_request
+def protect_cookie_authenticated_writes():
+    if request.method in {'GET', 'HEAD', 'OPTIONS', 'TRACE'}:
+        return None
+    if request_uses_bearer_auth() or request_uses_internal_auth():
+        return None
+    return csrf.protect()
 
 # Initialize scheduler
 scheduler = MediaScheduler()

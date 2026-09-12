@@ -16,7 +16,7 @@ from pixelprobe.utils.overrides import classify_findings, encode_verdict
 from pixelprobe.utils.security import validate_json_input, AuditLogger, validate_directory_path
 from pixelprobe.utils.validators import validate_time_budget
 from pixelprobe.utils.integrity import adopt_bitrot_baseline
-from pixelprobe.auth import auth_required
+from pixelprobe.auth import admin_required
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def _parse_file_ids(data):
 
 @admin_bp.route('/mark-as-good', methods=['POST'])
 @rate_limit("10 per minute")
-@auth_required
+@admin_required
 @validate_json_input({
     'file_ids': {'required': True, 'type': list}
 })
@@ -144,7 +144,7 @@ def mark_as_good():
 
 @admin_bp.route('/bitrot/accept', methods=['POST'])
 @rate_limit("10 per minute")
-@auth_required
+@admin_required
 @validate_json_input({
     'file_ids': {'required': True, 'type': list}
 })
@@ -203,7 +203,7 @@ def accept_bitrot_current_state():
 
 
 @admin_bp.route('/ignored-patterns')
-@auth_required
+@admin_required
 def get_ignored_patterns():
     """Get all ignored error patterns"""
     patterns = IgnoredErrorPattern.query.filter_by(is_active=True).all()
@@ -215,7 +215,7 @@ def get_ignored_patterns():
     } for p in patterns]
 
 @admin_bp.route('/ignored-patterns', methods=['POST'])
-@auth_required
+@admin_required
 @validate_json_input({
     'pattern': {'required': True, 'type': str, 'max_length': 200},
     'description': {'required': False, 'type': str, 'max_length': 500}
@@ -262,7 +262,7 @@ def add_ignored_pattern():
         return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/ignored-patterns/<int:pattern_id>', methods=['DELETE'])
-@auth_required
+@admin_required
 def delete_ignored_pattern(pattern_id):
     """Delete an ignored error pattern"""
     pattern = db.session.get(IgnoredErrorPattern, pattern_id)
@@ -283,7 +283,7 @@ def delete_ignored_pattern(pattern_id):
         return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/configurations')
-@auth_required
+@admin_required
 def get_configurations():
     """Get all scan configurations"""
     configs = ScanConfiguration.query.all()
@@ -295,7 +295,7 @@ def get_configurations():
     } for c in configs]
 
 @admin_bp.route('/configurations', methods=['POST'])
-@auth_required
+@admin_required
 @validate_json_input({
     'path': {'required': True, 'type': str, 'max_length': 1000}
 })
@@ -347,7 +347,7 @@ def add_configuration():
         return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/schedules', methods=['GET'])
-@auth_required
+@admin_required
 def get_schedules():
     """Get all scan schedules"""
     # Return all schedules (active and inactive) so they can be toggled
@@ -356,7 +356,7 @@ def get_schedules():
     return {'schedules': [schedule.to_dict() for schedule in schedules]}
 
 @admin_bp.route('/schedules/<int:schedule_id>', methods=['GET'])
-@auth_required
+@admin_required
 def get_schedule(schedule_id):
     """Get a specific scan schedule by ID"""
     schedule = db.get_or_404(ScanSchedule, schedule_id)
@@ -371,7 +371,7 @@ def _validate_time_budget(data, scan_type):
 
 
 @admin_bp.route('/schedules', methods=['POST'])
-@auth_required
+@admin_required
 def create_schedule():
     """Create a new scan schedule"""
     data = request.get_json()
@@ -426,7 +426,7 @@ def create_schedule():
         return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/schedules/<int:schedule_id>', methods=['PUT'])
-@auth_required
+@admin_required
 def update_schedule(schedule_id):
     """Update a scan schedule"""
     schedule = db.get_or_404(ScanSchedule, schedule_id)
@@ -487,7 +487,7 @@ def update_schedule(schedule_id):
         return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/schedules/<int:schedule_id>', methods=['DELETE'])
-@auth_required
+@admin_required
 def delete_schedule(schedule_id):
     """Delete a scan schedule"""
     schedule = db.get_or_404(ScanSchedule, schedule_id)
@@ -511,7 +511,7 @@ def delete_schedule(schedule_id):
         return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/exclusions', methods=['GET'])
-@auth_required
+@admin_required
 def get_exclusions():
     """Get current exclusion settings from database"""
     try:
@@ -537,7 +537,7 @@ def get_exclusions():
         return {'paths': [], 'extensions': []}
 
 @admin_bp.route('/exclusions', methods=['PUT'])
-@auth_required
+@admin_required
 def update_exclusions():
     """Update all exclusion settings in database"""
     data = request.get_json()
@@ -569,7 +569,7 @@ def update_exclusions():
         return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['POST'])
-@auth_required
+@admin_required
 def add_exclusion(exclusion_type):
     """Add a single exclusion (path or extension) to database"""
     # Validate exclusion type
@@ -614,7 +614,7 @@ def add_exclusion(exclusion_type):
         return {'error': 'Internal server error'}, 500
 
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['DELETE'])
-@auth_required
+@admin_required
 def remove_exclusion(exclusion_type):
     """Remove a single exclusion (path or extension) from database"""
     # Validate exclusion type
@@ -677,7 +677,7 @@ def _rejection_message(spec):
 
 
 @admin_bp.route('/settings', methods=['GET'])
-@auth_required
+@admin_required
 def get_settings():
     """Every scanner setting with its current value, grouped for display."""
     described = describe_settings()
@@ -692,7 +692,7 @@ def get_settings():
 
 
 @admin_bp.route('/settings', methods=['PUT'])
-@auth_required
+@admin_required
 def update_settings():
     """Save one or more settings.
 
@@ -734,7 +734,7 @@ def update_settings():
 
 
 @admin_bp.route('/settings/<path:key>', methods=['DELETE'])
-@auth_required
+@admin_required
 def reset_setting(key):
     """Restore one setting to its built-in default."""
     spec = SCANNER_SETTINGS_BY_KEY.get(key)

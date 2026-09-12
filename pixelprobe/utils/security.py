@@ -2,6 +2,7 @@
 Security utilities for PixelProbe
 """
 import os
+import stat
 import re
 import socket
 import ipaddress
@@ -13,11 +14,30 @@ from typing import Optional, Set, Tuple, Union
 from flask import request, jsonify, current_app
 from werkzeug.utils import safe_join
 from pixelprobe.models import db, ScanConfiguration
+from pixelprobe.constants import SUPPORTED_EXTENSIONS
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
+
+_AUDIT_SECRET_KEYS = frozenset({
+    'authorization', 'cookie', 'password', 'token', 'token_digest', 'secret',
+    'api_key', 'api_token', 'webhook_url', 'healthcheck_url',
+})
+
+
+def _redact_audit_details(value):
+    """Remove credentials from structured audit details before logging."""
+    if isinstance(value, dict):
+        return {
+            str(key): '[redacted]' if str(key).lower() in _AUDIT_SECRET_KEYS
+            else _redact_audit_details(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_audit_details(item) for item in value]
+    return value
 
 
 # Trusted internal hosts cache (lazy-loaded from TRUSTED_INTERNAL_HOSTS env var)
@@ -195,6 +215,54 @@ def validate_file_path(file_path, allowed_paths=None):
         return normalized
     raise PathTraversalError(f"File not found or not readable: {file_path}")
 
+
+def resolve_authorized_media_file(file_path, allowed_paths=None):
+    """Resolve a readable supported regular media file under an active root.
+
+    A database result is metadata, not permission to read a path. The returned
+    canonical path must still be opened through ``open_authorized_media_file``
+    when serving it so a replacement race cannot redirect the response.
+    """
+    if not isinstance(file_path, str) or not file_path:
+        raise PathTraversalError("Invalid file path")
+    roots = get_allowed_scan_paths() if allowed_paths is None else allowed_paths
+    if not roots:
+        raise PathTraversalError("No active scan roots configured")
+    canonical = os.path.realpath(os.path.abspath(file_path))
+    safe_path = _safe_join_under_any(canonical, roots)
+    if safe_path is None or os.path.realpath(safe_path) != canonical:
+        raise PathTraversalError("Path outside active scan roots")
+    if os.path.splitext(canonical)[1].lower() not in SUPPORTED_EXTENSIONS:
+        raise PathTraversalError("Unsupported media file type")
+    try:
+        file_stat = os.stat(canonical, follow_symlinks=False)
+    except OSError as exc:
+        raise PathTraversalError("File not available") from exc
+    if not stat.S_ISREG(file_stat.st_mode) or not os.access(canonical, os.R_OK):
+        raise PathTraversalError("File is not a readable regular file")
+    return canonical
+
+
+def open_authorized_media_file(file_path, allowed_paths=None):
+    """Open an authorized file by descriptor and verify its stable identity."""
+    canonical = resolve_authorized_media_file(file_path, allowed_paths)
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+    flags |= getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        fd = os.open(canonical, flags)
+        opened = os.fstat(fd)
+        named = os.stat(canonical, follow_symlinks=False)
+    except OSError as exc:
+        try:
+            os.close(fd)
+        except (UnboundLocalError, OSError):
+            pass
+        raise PathTraversalError("File changed or is unavailable") from exc
+    if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+        os.close(fd)
+        raise PathTraversalError("File changed while opening")
+    return os.fdopen(fd, 'rb'), canonical, opened
+
 def validate_directory_path(dir_path, allowed_paths=None):
     """
     Validate that a directory path is safe.
@@ -371,12 +439,12 @@ class AuditLogger:
             'action': action,
             'user': user or 'anonymous',
             'ip_address': ip_address,
-            'details': details or {}
+            'details': _redact_audit_details(details or {})
         }
         
         # Log to security logger
         security_logger = logging.getLogger('security_audit')
-        security_logger.info(f"AUDIT: {log_entry}")
+        security_logger.info("AUDIT: %s", log_entry)
         
         # TODO: In production, also log to database or external audit system
         

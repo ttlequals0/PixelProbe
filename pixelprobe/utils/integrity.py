@@ -74,7 +74,7 @@ def apply_scan_baseline(row, file_hash, last_modified):
     content), and marks the mtime trusted (UTC) whenever a real mtime is
     written. Returns True when the baseline was written.
     """
-    if row.bitrot_suspected:
+    if row.bitrot_suspected or not file_hash or last_modified is None:
         return False
     row.file_hash = file_hash
     if last_modified is not None:

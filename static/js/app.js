@@ -8,9 +8,21 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function escapeAttribute(text) {
+    return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // Single source of truth for a file's status badge (used by the desktop
 // table, mobile cards, and the details modal - keep them in lockstep)
 function fileStatus(file) {
+    switch (file.scan_status) {
+        case 'pending': return { cls: 'neutral', text: 'Pending' };
+        case 'scanning': return { cls: 'info', text: 'Scanning' };
+        case 'error':
+        case 'failed': return { cls: 'danger', text: 'Scan Error' };
+        case 'unsupported':
+        case 'skipped': return { cls: 'neutral', text: 'Skipped' };
+    }
     if (file.marked_as_good) return { cls: 'success', text: 'Healthy' };
     if (file.bitrot_suspected) return { cls: 'bitrot', text: 'Bitrot?' };
     if (file.is_corrupted) return { cls: 'danger', text: 'Corrupted' };
@@ -1346,11 +1358,11 @@ class TableManager {
                 <div class="file-path">${this.escapeHtml(file.file_path)}</div>
                 <div class="file-info">
                     <span>${this.formatFileSize(file.file_size)}</span>
-                    <span>${file.file_type || 'Unknown'}</span>
+                    <span>${this.escapeHtml(file.file_type || 'Unknown')}</span>
                 </div>
                 <div class="file-details">
                     <span class="label">Tool:</span>
-                    <span class="value">${file.scan_tool || 'N/A'}</span>
+                    <span class="value">${this.escapeHtml(file.scan_tool || 'N/A')}</span>
                     <span class="label">Scanned:</span>
                     <span class="value">${this.formatDate(file.scan_date)}</span>
                     ${file.last_integrity_check_date ? `
@@ -1414,11 +1426,11 @@ class TableManager {
             <tr>
                 <td><input type="checkbox" class="file-checkbox" value="${file.id}" ${this.selectedFiles.has(file.id) ? 'checked' : ''}></td>
                 <td><span class="badge badge-${statusClass}">${statusText}</span></td>
-                <td class="file-path-cell" title="${this.escapeHtml(file.file_path)}">${this.escapeHtml(file.file_path)}</td>
+                <td class="file-path-cell" title="${escapeAttribute(file.file_path)}">${this.escapeHtml(file.file_path)}</td>
                 <td>${this.formatFileSize(file.file_size)}</td>
-                <td>${file.file_type || 'N/A'}</td>
-                <td>${file.scan_tool || 'N/A'}</td>
-                <td class="text-truncate" title="${this.escapeHtml(details)}">${this.escapeHtml(details)}</td>
+                <td>${this.escapeHtml(file.file_type || 'N/A')}</td>
+                <td>${this.escapeHtml(file.scan_tool || 'N/A')}</td>
+                <td class="text-truncate" title="${escapeAttribute(details)}">${this.escapeHtml(details)}</td>
                 <td>${this.formatDate(file.scan_date)}</td>
                 <td class="action-buttons">
                     <button class="btn btn-sm btn-secondary" onclick="app.viewFile(${file.id})">
@@ -2250,7 +2262,7 @@ class PixelProbeApp {
         let content = '';
         
         if (fileType.startsWith('image/')) {
-            content = `<img src="/api/view/${file.id}" alt="${this.escapeHtml(filePath)}" style="max-width: 100%; max-height: 60vh; height: auto; object-fit: contain; display: block; margin: 0 auto;">`;
+            content = `<img src="/api/view/${file.id}" alt="${escapeAttribute(filePath)}" style="max-width: 100%; max-height: 60vh; height: auto; object-fit: contain; display: block; margin: 0 auto;">`;
         } else if (fileType.startsWith('video/')) {
             // Match v1.x implementation more closely
             const videoUrl = `/api/view/${file.id}`;
@@ -2281,7 +2293,7 @@ class PixelProbeApp {
                        controls
                        style="width: 100%; display: block; margin: 0 auto;"
                        onloadedmetadata="this.volume = 1.0;">
-                    <source src="/api/view/${file.id}" type="${fileType}">
+                    <source src="/api/view/${file.id}" type="${escapeAttribute(fileType)}">
                     Your browser does not support the audio element.
                 </audio>
             `;
@@ -4140,34 +4152,49 @@ class PixelProbeApp {
         const verdicts = details.filter(d => d.label !== 'Scan Output');
         const transcript = details.find(d => d.label === 'Scan Output');
 
-        const verdictsHtml = verdicts.map(detail => `
-            <section class="detail-section detail-${DETAIL_SEVERITY[detail.label] || 'neutral'}">
-                <h4 class="detail-label">${detail.label}</h4>
-                <pre class="scan-output-text">${this.escapeHtml(detail.content)}</pre>
-            </section>
-        `).join('');
-
-        const transcriptHtml = transcript ? `
-            <details class="detail-transcript">
-                <summary>Full scan transcript</summary>
-                <pre class="scan-output-text">${this.escapeHtml(transcript.content)}</pre>
-            </details>
-        ` : '';
-
-        const detailsHtml = (verdictsHtml + transcriptHtml) || '<p>No scan output available</p>';
-        
-        modalBody.innerHTML = `
-            <div class="scan-output-details">
-                <h4>File: ${this.escapeHtml(file.file_path)}</h4>
-                <p><strong>Status:</strong> ${fileStatus(file).text}</p>
-                <p><strong>Tool:</strong> ${file.scan_tool || 'N/A'}</p>
-                <p><strong>Scanned:</strong> ${file.scan_date ? new Date(file.scan_date).toLocaleString() : 'N/A'}</p>
-                ${file.last_integrity_check_date ? `<p><strong>Last Integrity Check:</strong> ${new Date(file.last_integrity_check_date).toLocaleString()}</p>` : ''}
-                ${this.renderBitrotDetails(file)}
-                <hr>
-                ${detailsHtml}
-            </div>
-        `;
+        const detailsContainer = document.createElement('div');
+        detailsContainer.className = 'scan-output-details';
+        const addSummary = (label, value) => {
+            const paragraph = document.createElement('p');
+            const heading = document.createElement('strong');
+            heading.textContent = `${label}:`;
+            paragraph.append(heading, ` ${value}`);
+            detailsContainer.appendChild(paragraph);
+        };
+        addSummary('File', file.file_path);
+        addSummary('Status', fileStatus(file).text);
+        addSummary('Tool', file.scan_tool || 'N/A');
+        addSummary('Scanned', file.scan_date ? new Date(file.scan_date).toLocaleString() : 'N/A');
+        if (file.last_integrity_check_date) addSummary('Last Integrity Check', new Date(file.last_integrity_check_date).toLocaleString());
+        verdicts.forEach((detail) => {
+            const section = document.createElement('section');
+            section.className = `detail-section detail-${DETAIL_SEVERITY[detail.label] || 'neutral'}`;
+            const label = document.createElement('h4');
+            label.className = 'detail-label';
+            label.textContent = detail.label;
+            const output = document.createElement('pre');
+            output.className = 'scan-output-text';
+            output.textContent = detail.content;
+            section.append(label, output);
+            detailsContainer.appendChild(section);
+        });
+        if (transcript) {
+            const transcriptDetails = document.createElement('details');
+            transcriptDetails.className = 'detail-transcript';
+            const summary = document.createElement('summary');
+            summary.textContent = 'Full scan transcript';
+            const output = document.createElement('pre');
+            output.className = 'scan-output-text';
+            output.textContent = transcript.content;
+            transcriptDetails.append(summary, output);
+            detailsContainer.appendChild(transcriptDetails);
+        }
+        if (details.length === 0) {
+            const empty = document.createElement('p');
+            empty.textContent = 'No scan output available';
+            detailsContainer.appendChild(empty);
+        }
+        modalBody.replaceChildren(detailsContainer);
         
         modal.style.display = 'block';
         
@@ -4235,56 +4262,64 @@ class PixelProbeApp {
             const listContainer = document.querySelector('#schedules-list');
             if (!listContainer) return;
             
-            if (data.schedules && data.schedules.length > 0) {
-                let html = '<div class="schedules-list">';
-                data.schedules.forEach(schedule => {
-                    const nextRun = schedule.next_run ? new Date(schedule.next_run).toLocaleString() : 'Not scheduled';
-                    const lastRun = schedule.last_run ? new Date(schedule.last_run).toLocaleString() : 'Never';
-                    
-                    html += `
-                        <div class="schedule-item">
-                            <div class="schedule-header">
-                                <h4>${this.escapeHtml(schedule.name)}</h4>
-                                <div class="schedule-actions">
-                                    <button class="btn btn-sm btn-primary"
-                                            onclick="app.showEditSchedule(${schedule.id})"
-                                            title="Edit Schedule">
-                                        <i class="fas fa-edit"></i>
-                                    </button>
-                                    <button class="btn btn-sm ${schedule.has_healthcheck ? 'btn-success' : 'btn-info'}"
-                                            onclick="app.showHealthcheckConfig(${schedule.id}, '${this.escapeHtml(schedule.name)}')"
-                                            title="${schedule.has_healthcheck ? (schedule.healthcheck_active ? 'Healthcheck Active' : 'Healthcheck Configured (Inactive)') : 'Configure Healthcheck'}">
-                                        <i class="fas fa-heartbeat"></i>${schedule.has_healthcheck ? ' ✓' : ''}
-                                    </button>
-                                    <button class="btn btn-sm ${schedule.is_active ? 'btn-warning' : 'btn-success'}"
-                                            onclick="app.toggleSchedule(${schedule.id}, ${!schedule.is_active})"
-                                            title="${schedule.is_active ? 'Disable Schedule' : 'Enable Schedule'}">
-                                        <i class="fas ${schedule.is_active ? 'fa-pause' : 'fa-play'}"></i>
-                                    </button>
-                                    <button class="btn btn-sm btn-danger" onclick="app.deleteSchedule(${schedule.id})">
-                                        <i class="fas fa-trash"></i>
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="schedule-info">
-                                <p><strong>Schedule:</strong> ${this.escapeHtml(schedule.cron_expression)}</p>
-                                <p><strong>Type:</strong> ${this.formatScanType(schedule.scan_type || 'normal')}</p>
-                                ${schedule.time_budget_minutes ? `<p><strong>Time Budget:</strong> ${schedule.time_budget_minutes} min/run</p>` : ''}
-                                <p><strong>Next Run:</strong> ${nextRun}</p>
-                                <p><strong>Last Run:</strong> ${lastRun}</p>
-                                ${schedule.scan_paths && schedule.scan_paths.length > 0 ? `<p><strong>Paths:</strong> ${this.escapeHtml(schedule.scan_paths.join(', '))}</p>` : ''}
-                            </div>
-                        </div>
-                    `;
-                });
-                html += '</div>';
-                listContainer.innerHTML = html;
-            } else {
-                listContainer.innerHTML = '<p class="text-muted">No schedules configured.</p>';
+            listContainer.replaceChildren();
+            if (!data.schedules || data.schedules.length === 0) {
+                const empty = document.createElement('p');
+                empty.className = 'text-muted';
+                empty.textContent = 'No schedules configured.';
+                listContainer.appendChild(empty);
+                return;
             }
+            const schedules = document.createElement('div');
+            schedules.className = 'schedules-list';
+            data.schedules.forEach((schedule) => schedules.appendChild(this.renderSchedule(schedule)));
+            listContainer.appendChild(schedules);
         } catch (error) {
             this.showNotification('Failed to load schedules', 'error');
         }
+    }
+
+    renderSchedule(schedule) {
+        const item = document.createElement('div');
+        item.className = 'schedule-item';
+        const header = document.createElement('div');
+        header.className = 'schedule-header';
+        const name = document.createElement('h4');
+        name.textContent = schedule.name;
+        const actions = document.createElement('div');
+        actions.className = 'schedule-actions';
+        const button = (classes, title, icon, handler) => {
+            const element = document.createElement('button');
+            element.className = classes;
+            element.title = title;
+            element.innerHTML = `<i class="fas ${icon}"></i>`;
+            element.addEventListener('click', handler);
+            return element;
+        };
+        actions.append(
+            button('btn btn-sm btn-primary', 'Edit Schedule', 'fa-edit', () => this.showEditSchedule(schedule.id)),
+            button(`btn btn-sm ${schedule.has_healthcheck ? 'btn-success' : 'btn-info'}`, schedule.has_healthcheck ? (schedule.healthcheck_active ? 'Healthcheck Active' : 'Healthcheck Configured (Inactive)') : 'Configure Healthcheck', 'fa-heartbeat', () => this.showHealthcheckConfig(schedule.id, schedule.name)),
+            button(`btn btn-sm ${schedule.is_active ? 'btn-warning' : 'btn-success'}`, schedule.is_active ? 'Disable Schedule' : 'Enable Schedule', schedule.is_active ? 'fa-pause' : 'fa-play', () => this.toggleSchedule(schedule.id, !schedule.is_active)),
+            button('btn btn-sm btn-danger', 'Delete Schedule', 'fa-trash', () => this.deleteSchedule(schedule.id)),
+        );
+        header.append(name, actions);
+        const info = document.createElement('div');
+        info.className = 'schedule-info';
+        const addDetail = (label, value) => {
+            const paragraph = document.createElement('p');
+            const strong = document.createElement('strong');
+            strong.textContent = `${label}:`;
+            paragraph.append(strong, ` ${value}`);
+            info.appendChild(paragraph);
+        };
+        addDetail('Schedule', schedule.cron_expression);
+        addDetail('Type', this.formatScanType(schedule.scan_type || 'normal'));
+        if (schedule.time_budget_minutes) addDetail('Time Budget', `${schedule.time_budget_minutes} min/run`);
+        addDetail('Next Run', schedule.next_run ? new Date(schedule.next_run).toLocaleString() : 'Not scheduled');
+        addDetail('Last Run', schedule.last_run ? new Date(schedule.last_run).toLocaleString() : 'Never');
+        if (schedule.scan_paths && schedule.scan_paths.length > 0) addDetail('Paths', schedule.scan_paths.join(', '));
+        item.append(header, info);
+        return item;
     }
 
     showAddSchedule() {
@@ -4784,42 +4819,37 @@ class PixelProbeApp {
             const response = await fetch('/api/exclusions');
             const data = await response.json();
             
-            // Update paths list
-            const pathsList = document.querySelector('#excluded-paths-list');
-            if (pathsList) {
-                if (data.paths && data.paths.length > 0) {
-                    pathsList.innerHTML = data.paths.map(path => `
-                        <div class="exclusion-item">
-                            <span>${this.escapeHtml(path)}</span>
-                            <button class="btn btn-sm btn-danger" onclick="app.removeExclusion('path', '${this.escapeHtml(path)}')">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    `).join('');
-                } else {
-                    pathsList.innerHTML = '<div class="empty-state">No excluded paths</div>';
-                }
-            }
-            
-            // Update extensions list
-            const extensionsList = document.querySelector('#excluded-extensions-list');
-            if (extensionsList) {
-                if (data.extensions && data.extensions.length > 0) {
-                    extensionsList.innerHTML = data.extensions.map(ext => `
-                        <div class="exclusion-item">
-                            <span>${this.escapeHtml(ext)}</span>
-                            <button class="btn btn-sm btn-danger" onclick="app.removeExclusion('extension', '${this.escapeHtml(ext)}')">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    `).join('');
-                } else {
-                    extensionsList.innerHTML = '<div class="empty-state">No excluded extensions</div>';
-                }
-            }
+            this.renderExclusionList('#excluded-paths-list', data.paths, 'path', 'No excluded paths');
+            this.renderExclusionList('#excluded-extensions-list', data.extensions, 'extension', 'No excluded extensions');
         } catch (error) {
             this.showNotification('Failed to load exclusions', 'error');
         }
+    }
+
+    renderExclusionList(selector, values, type, emptyMessage) {
+        const container = document.querySelector(selector);
+        if (!container) return;
+        container.replaceChildren();
+        if (!values || values.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'empty-state';
+            empty.textContent = emptyMessage;
+            container.appendChild(empty);
+            return;
+        }
+        values.forEach((value) => {
+            const item = document.createElement('div');
+            item.className = 'exclusion-item';
+            const label = document.createElement('span');
+            label.textContent = value;
+            const removeButton = document.createElement('button');
+            removeButton.className = 'btn btn-sm btn-danger';
+            removeButton.title = `Remove ${type}`;
+            removeButton.innerHTML = '<i class="fas fa-trash"></i>';
+            removeButton.addEventListener('click', () => this.removeExclusion(type, value));
+            item.append(label, removeButton);
+            container.appendChild(item);
+        });
     }
     
     async addExclusion(type) {

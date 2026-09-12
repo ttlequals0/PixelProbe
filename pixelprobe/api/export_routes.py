@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from pixelprobe.models import db, ScanResult
 from pixelprobe.auth import auth_required
+from pixelprobe.utils.security import PathTraversalError, open_authorized_media_file
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,14 @@ def view_file(result_id):
     
     logger.info(f"View requested for file: {result.file_path} (ID: {result_id})")
     
-    if not os.path.exists(result.file_path):
-        logger.error(f"View failed - file not found: {result.file_path}")
+    try:
+        media_file, _, file_stat = open_authorized_media_file(result.file_path)
+    except PathTraversalError:
+        logger.warning("View denied for unavailable media result %s", result_id)
         return {'error': 'File not found'}, 404
     
     # Get file stats
-    file_size = os.path.getsize(result.file_path)
+    file_size = file_stat.st_size
     file_type = result.file_type or 'application/octet-stream'
     
     # Handle range requests for video streaming (required for mobile)
@@ -58,7 +61,8 @@ def view_file(result_id):
             logger.info(f"Serving bytes {byte_start}-{byte_end}/{file_size}")
             
             def generate():
-                with open(result.file_path, 'rb') as f:
+                with media_file:
+                    f = media_file
                     f.seek(byte_start)
                     remaining = byte_end - byte_start + 1
                     while remaining:
@@ -86,12 +90,13 @@ def view_file(result_id):
             return response
             
         except Exception as e:
+            media_file.close()
             logger.error(f"Error handling range request: {e}")
             # Fall through to regular response
     
     # Regular response for non-range requests
     logger.info(f"Serving file for viewing: {result.file_path}")
-    response = send_file(result.file_path, as_attachment=False, mimetype=file_type)
+    response = send_file(media_file, as_attachment=False, mimetype=file_type, download_name=os.path.basename(result.file_path))
     response.headers['Accept-Ranges'] = 'bytes'
     response.headers['Cache-Control'] = 'no-cache'
     # Add CORS headers for mobile compatibility
@@ -108,12 +113,14 @@ def download_file(result_id):
     
     logger.info(f"Download requested for file: {result.file_path} (ID: {result_id})")
     
-    if not os.path.exists(result.file_path):
-        logger.error(f"Download failed - file not found: {result.file_path}")
+    try:
+        media_file, _, _ = open_authorized_media_file(result.file_path)
+    except PathTraversalError:
+        logger.warning("Download denied for unavailable media result %s", result_id)
         return {'error': 'File not found'}, 404
     
     logger.info(f"Starting download of file: {result.file_path}")
-    return send_file(result.file_path, as_attachment=True)
+    return send_file(media_file, as_attachment=True, download_name=os.path.basename(result.file_path))
 
 @export_bp.route('/export', methods=['GET', 'POST'])
 @auth_required

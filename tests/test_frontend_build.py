@@ -75,7 +75,7 @@ class TestWebpackBuild:
         # Check that expected files are in manifest
         assert 'app.js' in manifest, "app.js should be in manifest"
         assert 'auth.js' in manifest, "auth.js should be in manifest"
-        assert 'state.js' in manifest, "state.js should be in manifest"
+        assert 'csrf.js' in manifest, "csrf.js should be in manifest"
         assert 'styles.css' in manifest, "styles.css should be in manifest"
         
         # Check that paths are correct format
@@ -208,6 +208,38 @@ class TestTemplateIntegration:
             if '/static/css/' in line and 'asset_url' not in line:
                 if not line.strip().startswith('<!--') and 'cdn' not in line.lower():
                     pytest.fail(f"Found hardcoded /static/css/ path without asset_url: {line.strip()}")
+
+
+class TestFrontendSecurityContracts:
+    """Regression checks for browser security and polling contracts."""
+
+    def test_templates_provide_csrf_token_before_unsafe_requests(self):
+        project_root = Path(__file__).parent.parent
+        for template_name in ('index.html', 'login.html'):
+            content = (project_root / 'templates' / template_name).read_text()
+            assert 'name="csrf-token" content="{{ csrf_token() }}"' in content
+            assert "asset_url('csrf.js')" in content
+
+    def test_csrf_wrapper_limits_token_to_same_origin_unsafe_requests(self):
+        source = (Path(__file__).parent.parent / 'static' / 'js' / 'csrf.js').read_text()
+        assert "new Set(['POST', 'PUT', 'PATCH', 'DELETE'])" in source
+        assert 'url.origin !== window.location.origin' in source
+        assert "headers.set('X-CSRFToken', token)" in source
+
+    def test_state_poller_is_not_loaded_by_the_application(self):
+        content = (Path(__file__).parent.parent / 'templates' / 'index.html').read_text()
+        assert "asset_url('state.js')" not in content
+
+    def test_file_status_has_nonterminal_and_error_states(self):
+        source = (Path(__file__).parent.parent / 'static' / 'js' / 'app.js').read_text()
+        for status in ('pending', 'scanning', 'error', 'failed', 'unsupported', 'skipped'):
+            assert f"case '{status}':" in source
+
+    def test_stored_auth_values_use_text_nodes_and_event_listeners(self):
+        source = (Path(__file__).parent.parent / 'static' / 'js' / 'auth.js').read_text()
+        assert 'username.textContent = user.username' in source
+        assert 'description.textContent = token.description' in source
+        assert "deleteButton.addEventListener('click'" in source
 
 
 class TestGitignore:

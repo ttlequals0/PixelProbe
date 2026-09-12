@@ -43,11 +43,9 @@ const AuthManager = {
         this.updateUserDisplay();
 
         // Show/hide admin features
-        if (this.currentUser && this.currentUser.is_admin) {
-            document.querySelectorAll('.admin-only').forEach(el => {
-                el.style.display = '';
-            });
-        }
+        document.querySelectorAll('.admin-only').forEach(el => {
+            el.style.display = this.currentUser && this.currentUser.is_admin ? '' : 'none';
+        });
     },
 
     /**
@@ -136,17 +134,25 @@ const AuthManager = {
             data.users.forEach(user => {
                 const userItem = document.createElement('div');
                 userItem.className = 'exclusion-item';
-                userItem.innerHTML = `
-                    <span>
-                        <strong>${user.username}</strong> - ${user.email}
-                        ${user.is_admin ? ' <span class="badge">ADMIN</span>' : ''}
-                    </span>
-                    ${user.id !== this.currentUser.id ?
-                        `<button class="btn btn-sm btn-danger" onclick="AuthManager.deleteUser(${user.id})">
-                            <i class="fas fa-trash"></i>
-                        </button>` :
-                        ''}
-                `;
+                const details = document.createElement('span');
+                const username = document.createElement('strong');
+                username.textContent = user.username;
+                details.append(username, document.createTextNode(` - ${user.email}`));
+                if (user.is_admin) {
+                    const badge = document.createElement('span');
+                    badge.className = 'badge';
+                    badge.textContent = 'ADMIN';
+                    details.append(' ', badge);
+                }
+                userItem.appendChild(details);
+                if (user.id !== this.currentUser.id) {
+                    const deleteButton = document.createElement('button');
+                    deleteButton.className = 'btn btn-sm btn-danger';
+                    deleteButton.title = 'Delete user';
+                    deleteButton.innerHTML = '<i class="fas fa-trash"></i>';
+                    deleteButton.addEventListener('click', () => this.deleteUser(user.id));
+                    userItem.appendChild(deleteButton);
+                }
                 usersList.appendChild(userItem);
             });
         } catch (error) {
@@ -248,15 +254,19 @@ const AuthManager = {
                 if (token.expires_at) {
                     tokenDetails.push(`Expires: ${new Date(token.expires_at).toLocaleDateString()}`);
                 }
-                tokenItem.innerHTML = `
-                    <span>
-                        <strong>${token.description || 'Unnamed Token'}</strong><br>
-                        <small style="color: var(--text-secondary);">${tokenDetails.join(' | ')}</small>
-                    </span>
-                    <button class="btn btn-sm btn-danger" onclick="AuthManager.deleteToken(${token.id})">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                `;
+                const details = document.createElement('span');
+                const description = document.createElement('strong');
+                description.textContent = token.description || 'Unnamed Token';
+                const metadata = document.createElement('small');
+                metadata.style.color = 'var(--text-secondary)';
+                metadata.textContent = tokenDetails.join(' | ');
+                details.append(description, document.createElement('br'), metadata);
+                const deleteButton = document.createElement('button');
+                deleteButton.className = 'btn btn-sm btn-danger';
+                deleteButton.title = 'Delete token';
+                deleteButton.innerHTML = '<i class="fas fa-trash"></i>';
+                deleteButton.addEventListener('click', () => this.deleteToken(token.id));
+                tokenItem.append(details, deleteButton);
                 tokensList.appendChild(tokenItem);
             });
         } catch (error) {
@@ -406,8 +416,8 @@ const AuthManager = {
                         <div style="padding: 1rem 0; color: var(--text-primary);">
                             <p style="margin-bottom: 1rem;"><strong>Important:</strong> Copy this token now. You won't be able to see it again!</p>
                             <div class="exclusion-input-group">
-                                <input type="text" value="${token}" readonly id="tokenValue" class="form-control" style="font-family: monospace;">
-                                <button class="btn btn-primary" onclick="AuthManager.copyToken()">
+                                <input type="text" readonly id="tokenValue" class="form-control" style="font-family: monospace;">
+                                <button class="btn btn-primary" type="button">
                                     <i class="fas fa-copy"></i> Copy
                                 </button>
                             </div>
@@ -417,6 +427,9 @@ const AuthManager = {
             </div>
         `;
         document.body.appendChild(modal);
+        modal.querySelector('#tokenValue').value = token;
+        modal.querySelector('.modal-close').addEventListener('click', () => modal.remove());
+        modal.querySelector('.btn-primary').addEventListener('click', () => this.copyToken());
         modal.style.display = 'block';
     },
 
@@ -452,7 +465,7 @@ const AuthManager = {
                             <input type="email" name="email" class="form-control" placeholder="Email" required style="margin-bottom: 0.5rem;">
                             <input type="password" name="password" class="form-control" placeholder="Password (min 8 characters)" required minlength="8" style="margin-bottom: 0.5rem;">
                             <label class="checkbox-label" style="display: block; margin-bottom: 1rem;">
-                                <input type="checkbox" name="is_admin" checked>
+                                <input type="checkbox" name="is_admin">
                                 <span style="margin-left: 0.5rem;">Admin Access</span>
                             </label>
                             <button type="submit" class="btn btn-primary">

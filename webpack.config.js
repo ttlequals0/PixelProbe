@@ -10,8 +10,8 @@ module.exports = (env, argv) => {
   return {
     entry: {
       app: './static/js/app.js',
+      csrf: './static/js/csrf.js',
       auth: './static/js/auth.js',
-      state: './static/js/state.js',
       styles: [
         './static/css/desktop.css',
         './static/css/mobile.css',

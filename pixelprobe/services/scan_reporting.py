@@ -12,7 +12,7 @@ from typing import List, Tuple
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
 
-from pixelprobe.models import db, ScanResult, ScanReport, ScanState
+from pixelprobe.models import db, ScanResult, ScanReport, ScanState, ScanRunFile
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +31,24 @@ def create_scan_report(scan_state: ScanState, scan_type: str = None):
         scan_type = _REPORT_SCAN_TYPE.get(scan_state.scan_type, 'full_scan')
     try:
         stats = db.session.query(
-            func.count(ScanResult.id).label('total'),
-            func.sum(db.case((ScanResult.is_corrupted == True, 1), else_=0)).label('corrupted'),
-            func.sum(db.case((ScanResult.has_warnings == True, 1), else_=0)).label('warnings'),
-            func.sum(db.case((ScanResult.scan_status == 'error', 1), else_=0)).label('errors'),
-            func.sum(db.case((ScanResult.scan_status == 'completed', 1), else_=0)).label('completed'),
-            func.sum(db.case((ScanResult.scan_status == 'pending', 1), else_=0)).label('pending')
-        ).first()
+            func.count(ScanRunFile.id).label('total'),
+            func.sum(db.case((ScanRunFile.is_corrupted == True, 1), else_=0)).label('corrupted'),
+            func.sum(db.case((ScanRunFile.has_warnings == True, 1), else_=0)).label('warnings'),
+            func.sum(db.case((ScanRunFile.status == 'error', 1), else_=0)).label('errors'),
+            func.sum(db.case((ScanRunFile.status == 'completed', 1), else_=0)).label('completed'),
+            func.sum(db.case((ScanRunFile.status == 'pending', 1), else_=0)).label('pending')
+        ).filter(ScanRunFile.scan_id == scan_state.scan_id).first()
+        # Legacy selected-file records predate immutable membership. Preserve
+        # their report path while all new directory runs use snapshots.
+        if not stats.total:
+            stats = db.session.query(
+                func.count(ScanResult.id).label('total'),
+                func.sum(db.case((ScanResult.is_corrupted == True, 1), else_=0)).label('corrupted'),
+                func.sum(db.case((ScanResult.has_warnings == True, 1), else_=0)).label('warnings'),
+                func.sum(db.case((ScanResult.scan_status == 'error', 1), else_=0)).label('errors'),
+                func.sum(db.case((ScanResult.scan_status == 'completed', 1), else_=0)).label('completed'),
+                func.sum(db.case((ScanResult.scan_status == 'pending', 1), else_=0)).label('pending')
+            ).filter(ScanResult.scan_date >= scan_state.start_time).first()
 
         pending_count = stats.pending or 0
         if pending_count > 0:
@@ -58,7 +69,7 @@ def create_scan_report(scan_state: ScanState, scan_type: str = None):
             start_time=scan_state.start_time,
             end_time=scan_state.end_time,
             duration_seconds=duration,
-            directories_scanned=json.dumps(scan_state.directories) if scan_state.directories else None,
+            directories_scanned=(scan_state.directories if scan_state.directories else None),
             force_rescan=scan_state.force_rescan,
             num_workers=scan_state.num_workers,
             total_files_discovered=scan_state.estimated_total,
@@ -93,7 +104,7 @@ def create_scan_report(scan_state: ScanState, scan_type: str = None):
         return None
 
 
-def add_files_batch_to_db(file_paths: List[str]) -> Tuple[int, int]:
+def add_files_batch_to_db(file_paths: List[str], scan_id: str = None) -> Tuple[int, int]:
     """Bulk-insert discovered files as pending rows (ON CONFLICT DO NOTHING).
 
     Returns:
@@ -170,5 +181,16 @@ def add_files_batch_to_db(file_paths: List[str]) -> Tuple[int, int]:
                 except Exception as e2:
                     logger.error(f"Failed to add file: {file_data['file_path']} - {e2}")
             db.session.commit()
+
+    if scan_id and file_paths:
+        rows = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+        existing = {
+            path for (path,) in db.session.query(ScanRunFile.file_path).filter_by(scan_id=scan_id).all()
+        }
+        for row in rows:
+            if row.file_path not in existing:
+                db.session.add(ScanRunFile(scan_id=scan_id, scan_result_id=row.id,
+                                           file_path=row.file_path, status='pending'))
+        db.session.commit()
 
     return added_count, duplicate_count

@@ -58,6 +58,7 @@ def first_run_setup():
 
     # Log the admin user in automatically
     login_user(admin, remember=True)
+    session['session_generation'] = admin.session_generation
 
     return jsonify({
         'success': True,
@@ -83,6 +84,7 @@ def api_login():
         return jsonify({'error': 'Invalid username or password'}), 401
 
     login_user(user, remember=remember)
+    session['session_generation'] = user.session_generation
 
     return jsonify({
         'success': True,
@@ -116,7 +118,9 @@ def create_user():
     username = data.get('username')
     email = data.get('email')
     password = data.get('password')
-    is_admin = data.get('is_admin', True)  # All users are admin by default
+    is_admin = data.get('is_admin', False)
+    if not isinstance(is_admin, bool):
+        return jsonify({'error': 'is_admin must be true or false'}), 400
 
     # Validate input
     if not username or not email or not password:
@@ -208,6 +212,7 @@ def change_password(user_id):
 
     # Set new password
     target_user.set_password(new_password)
+    target_user.session_generation += 1
 
     try:
         db.session.commit()
@@ -252,7 +257,7 @@ def create_token():
         db.session.commit()
         return jsonify({
             'success': True,
-            'token': token.token,  # Return full token only on creation
+            'token': token.plaintext_token,
             'token_info': token.to_dict()
         }), 201
     except Exception as e:

@@ -222,8 +222,8 @@ def fetch_integrity_batch(file_paths, run_watermark, excluded_ids, batch_size,
         ScanResult.bitrot_candidate_hash
     ).filter(
         or_(
-            ScanResult.last_integrity_check_date.is_(None),
-            ScanResult.last_integrity_check_date < run_watermark
+            ScanResult.last_integrity_attempt_at.is_(None),
+            ScanResult.last_integrity_attempt_at < run_watermark
         )
     )
     if file_paths:
@@ -234,7 +234,7 @@ def fetch_integrity_batch(file_paths, run_watermark, excluded_ids, batch_size,
         # Flagged files jump the queue so auto-expire resolves in a few runs
         # instead of a few full sweep cycles.
         ScanResult.bitrot_suspected.desc(),
-        ScanResult.last_integrity_check_date.asc().nullsfirst(),
+        ScanResult.last_integrity_attempt_at.asc().nullsfirst(),
         ScanResult.id.asc()
     ).limit(batch_size).all()
     batch = [
@@ -1046,7 +1046,8 @@ class MaintenanceService:
             # re-fetch and at the end of the run: two UPDATE statements per
             # flush instead of one SELECT + UPDATE per file (the dominant DB
             # chatter at 1M-file scale).
-            stamp_ids = []    # rotate to the back of the queue
+            stamp_ids = []    # attempted: rotate to the back of the queue
+            success_ids = []  # only successful reads count as verified
             seen_ids = []     # file was readable again -> restore file_exists
             rebaseline = []   # (id, mtime_iso): first check after the UTC fix
 
@@ -1054,14 +1055,21 @@ class MaintenanceService:
                 # A row whose stamp fails would re-queue at the front forever,
                 # so failed ids are excluded from further fetches and counted.
                 nonlocal timestamp_write_failures
-                if not (stamp_ids or seen_ids or rebaseline):
+                if not (stamp_ids or success_ids or seen_ids or rebaseline):
                     return
                 try:
                     if stamp_ids:
                         db.session.query(ScanResult).filter(
                             ScanResult.id.in_(stamp_ids)
-                        ).update({'last_integrity_check_date': datetime.now(timezone.utc)},
+                        ).update({'last_integrity_attempt_at': datetime.now(timezone.utc),
+                                   'last_integrity_outcome': 'error'},
                                  synchronize_session=False)
+                    if success_ids:
+                        db.session.query(ScanResult).filter(ScanResult.id.in_(success_ids)).update(
+                            {'last_integrity_success_at': datetime.now(timezone.utc),
+                             # Compatibility value is successful only.
+                             'last_integrity_check_date': datetime.now(timezone.utc),
+                             'last_integrity_outcome': 'success'}, synchronize_session=False)
                     if seen_ids:
                         # A file we just hashed exists, whatever a past run
                         # recorded (recovers rows stranded by a mount outage)
@@ -1085,6 +1093,7 @@ class MaintenanceService:
                     logger.error(f"Failed to flush {len(stamp_ids)} integrity stamps: {e}")
                 finally:
                     stamp_ids.clear()
+                    success_ids.clear()
                     seen_ids.clear()
                     rebaseline.clear()
 
@@ -1165,6 +1174,7 @@ class MaintenanceService:
                             # Terminal outcome: rotate to the back of the queue
                             stamp_ids.append(result['file_id'])
                             if result.get('current_hash'):
+                                success_ids.append(result['file_id'])
                                 seen_ids.append(result['file_id'])
                                 if (result['change_type'] == 'unchanged'
                                         and not task_info.get('mtime_trusted')

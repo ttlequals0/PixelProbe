@@ -202,8 +202,16 @@ def _setup_worker_process(**kwargs):
         )
         # Continue: a fresh connection on first session use is the fallback.
 
+    root_logger = logging.getLogger()
+    for inherited in list(root_logger.handlers):
+        if isinstance(inherited, DatabaseLogHandler):
+            root_logger.removeHandler(inherited)
+            try:
+                inherited.shutdown()
+            except Exception:
+                pass
     handler = DatabaseLogHandler(app)
     handler.setLevel(logging.INFO)
-    logging.getLogger().addHandler(handler)
+    root_logger.addHandler(handler)
     atexit.register(handler.shutdown)
     init_logger.info("_setup_worker_process: complete in worker pid=%s", pid)

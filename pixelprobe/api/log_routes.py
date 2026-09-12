@@ -11,7 +11,7 @@ from sqlalchemy import func
 from flask import Blueprint, request, Response, stream_with_context
 
 from pixelprobe.models import db, LogEntry, AppConfig, ScanState
-from pixelprobe.auth import auth_required
+from pixelprobe.auth import auth_required, admin_required
 from pixelprobe.utils.rate_limiting import rate_limit
 from pixelprobe.utils.timezone import from_utc_to_configured
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS, SYSTEM_LOG_ID
@@ -217,7 +217,7 @@ def download_logs():
 
 
 @log_bp.route('/logs/retention', methods=['GET', 'PUT'])
-@auth_required
+@admin_required
 def log_retention():
     """Get or set log retention configuration."""
     if request.method == 'GET':
@@ -246,7 +246,7 @@ def log_retention():
 
 @log_bp.route('/logs/purge', methods=['POST'])
 @rate_limit("2 per minute")
-@auth_required
+@admin_required
 def purge_logs():
     """Manually purge log entries.
 

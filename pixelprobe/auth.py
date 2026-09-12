@@ -4,6 +4,7 @@ Handles user authentication, session management, and API token validation
 """
 
 import hmac
+import hashlib
 import logging
 import os
 from functools import wraps
@@ -22,8 +23,7 @@ login_manager = LoginManager()
 def _extract_bearer_token(req):
     """Extract a Bearer token from the Authorization header.
 
-    Supports both 'Bearer <token>' and raw token formats (for Swagger UI).
-    Returns None if no valid token is found.
+    Only accepts the standard ``Bearer <token>`` form.
     """
     auth_header = req.headers.get('Authorization')
     if not auth_header:
@@ -37,9 +37,32 @@ def _extract_bearer_token(req):
         except ValueError:
             pass
         return None
-    else:
-        # No space means it's just the token (from Swagger UI)
-        return auth_header
+    return None
+
+
+def _lookup_api_token(token):
+    if not token:
+        return None
+    digest = hashlib.sha256(token.encode('utf-8')).hexdigest()
+    return APIToken.query.filter_by(token_digest=digest, is_active=True).first()
+
+
+def _valid_api_token(token):
+    api_token = _lookup_api_token(token)
+    if not api_token or not api_token.is_valid() or not api_token.user.is_active:
+        return None
+    return api_token
+
+
+def request_uses_bearer_auth():
+    """Return true only for an authenticated Bearer API-token request."""
+    return _valid_api_token(_extract_bearer_token(request)) is not None
+
+
+def request_uses_internal_auth():
+    supplied = request.headers.get('X-Internal-Secret', '')
+    expected = current_app.config.get('INTERNAL_API_SECRET', '')
+    return bool(supplied and expected and hmac.compare_digest(supplied, expected))
 
 
 def init_auth(app):
@@ -69,6 +92,11 @@ def init_auth(app):
             return None
 
         if current_user.is_authenticated:
+            expected_generation = session.get('session_generation')
+            if expected_generation != getattr(current_user, 'session_generation', 0):
+                logout_user()
+                session.clear()
+                return jsonify({'error': 'Session revoked'}), 401
             last_activity = session.get('last_activity')
             now = datetime.now(timezone.utc).timestamp()
 
@@ -100,8 +128,8 @@ def init_auth(app):
         try:
             token = _extract_bearer_token(request)
             if token:
-                api_token = APIToken.query.filter_by(token=token, is_active=True).first()
-                if api_token and api_token.is_valid():
+                api_token = _valid_api_token(token)
+                if api_token:
                     api_token.update_last_used()
                     return api_token.user
         except Exception as e:
@@ -124,20 +152,18 @@ def auth_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         # Allow internal scheduler requests authenticated by shared secret
-        internal_secret = request.headers.get('X-Internal-Secret', '')
-        expected_secret = current_app.config.get('INTERNAL_API_SECRET', '')
-        if internal_secret and expected_secret and hmac.compare_digest(internal_secret, expected_secret):
+        if request_uses_internal_auth():
             return f(*args, **kwargs)
 
         # Check if user is authenticated via session
-        if current_user.is_authenticated:
+        if current_user.is_authenticated and current_user.is_active:
             return f(*args, **kwargs)
 
         # Check for API token
         token = _extract_bearer_token(request)
         if token:
-            api_token = APIToken.query.filter_by(token=token, is_active=True).first()
-            if api_token and api_token.is_valid():
+            api_token = _valid_api_token(token)
+            if api_token:
                 api_token.update_last_used()
                 request.current_user = api_token.user
                 return f(*args, **kwargs)
@@ -155,20 +181,18 @@ def check_auth():
     Use this inside Flask-RESTX Resource methods instead of the decorator.
     """
     # Allow internal scheduler requests authenticated by shared secret
-    internal_secret = request.headers.get('X-Internal-Secret', '')
-    expected_secret = current_app.config.get('INTERNAL_API_SECRET', '')
-    if internal_secret and expected_secret and hmac.compare_digest(internal_secret, expected_secret):
+    if request_uses_internal_auth():
         return True
 
     # Check if user is authenticated via session
-    if current_user.is_authenticated:
+    if current_user.is_authenticated and current_user.is_active:
         return True
 
     # Check for API token
     token = _extract_bearer_token(request)
     if token:
-        api_token = APIToken.query.filter_by(token=token, is_active=True).first()
-        if api_token and api_token.is_valid():
+        api_token = _valid_api_token(token)
+        if api_token:
             api_token.update_last_used()
             request.current_user = api_token.user
             return True
@@ -236,14 +260,14 @@ def get_authenticated_user(request):
     Checks both session authentication and API tokens.
     """
     # Check session first
-    if current_user.is_authenticated:
+    if current_user.is_authenticated and current_user.is_active:
         return current_user
 
     # Check for API token in header
     token = _extract_bearer_token(request)
     if token:
-        api_token = APIToken.query.filter_by(token=token, is_active=True).first()
-        if api_token and api_token.is_valid():
+        api_token = _valid_api_token(token)
+        if api_token:
             return api_token.user
 
     return None

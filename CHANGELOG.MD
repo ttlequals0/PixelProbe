@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.9.0] - Unreleased
+
+### Changed
+
+- Audit remediation is in progress. New scans retain durable root evidence, file membership, task ownership, and result snapshots so scope, cancellation, and reports can be verified independently of mutable library rows.
+
+### Fixed
+
+- Integrity accounting now distinguishes attempts from successful verification, and scan baseline writes require a complete successful read with a hash and modification time.
+- Scan cancellation records intent before revoking only tasks owned by that run. Global queue purge and unrelated task termination are no longer part of normal cancellation.
+
+### Testing
+
+- PostgreSQL and live Celery recovery coverage remains required before this release is considered verified.
+
 ## [2.8.8] - 2026-08-26
 
 ### Changed

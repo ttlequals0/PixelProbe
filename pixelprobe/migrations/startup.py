@@ -503,6 +503,26 @@ def run_v2_8_8_migrations(db):
         logger.error(f"Migration v2.8.8 failed: {e}")
 
 
+def run_v2_8_12_lifecycle_migrations(db):
+    """Persist scan scope, task ownership, immutable results, and integrity outcomes."""
+    statements = (
+        "ALTER TABLE scan_state ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE scan_state ADD COLUMN IF NOT EXISTS dispatch_generation INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE scan_results ADD COLUMN IF NOT EXISTS last_integrity_attempt_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE scan_results ADD COLUMN IF NOT EXISTS last_integrity_success_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE scan_results ADD COLUMN IF NOT EXISTS last_integrity_outcome VARCHAR(32)",
+        "CREATE TABLE IF NOT EXISTS scan_run_roots (id SERIAL PRIMARY KEY, scan_id VARCHAR(64) NOT NULL, root_path TEXT NOT NULL, resolved_path TEXT, status VARCHAR(20) NOT NULL DEFAULT 'pending', error_message TEXT, discovered_count INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMP WITH TIME ZONE, CONSTRAINT uq_scan_run_roots_scan_root UNIQUE (scan_id, root_path))",
+        "CREATE TABLE IF NOT EXISTS scan_run_files (id SERIAL PRIMARY KEY, scan_id VARCHAR(64) NOT NULL, scan_result_id INTEGER, file_path TEXT NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending', outcome VARCHAR(32), file_hash VARCHAR(64), file_size BIGINT, last_modified TIMESTAMP WITH TIME ZONE, is_corrupted BOOLEAN, has_warnings BOOLEAN, corruption_details TEXT, warning_details TEXT, error_message TEXT, claimed_at TIMESTAMP WITH TIME ZONE, completed_at TIMESTAMP WITH TIME ZONE, CONSTRAINT uq_scan_run_files_scan_path UNIQUE (scan_id, file_path))",
+        "CREATE TABLE IF NOT EXISTS scan_tasks (id SERIAL PRIMARY KEY, scan_id VARCHAR(64) NOT NULL, chunk_id INTEGER, purpose VARCHAR(32) NOT NULL, celery_task_id VARCHAR(64) NOT NULL UNIQUE, generation INTEGER NOT NULL DEFAULT 0, status VARCHAR(20) NOT NULL DEFAULT 'queued', error_message TEXT, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMP WITH TIME ZONE)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_run_files_claim ON scan_run_files (scan_id, status, id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_results_integrity_attempt ON scan_results (last_integrity_attempt_at ASC NULLS FIRST, id ASC)",
+    )
+    with migration_connection(db) as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+        conn.commit()
+
+
 def create_performance_indexes(db):
     """Create performance indexes"""
     indexes = [
@@ -617,6 +637,9 @@ def _run_all_migrations(db):
         run_v2_6_61_migrations(db)
     except Exception as e:
         logger.error(f"v2.6.61 migration failed: {e}")
+
+    logger.info("Running v2.8.12 lifecycle migration...")
+    run_v2_8_12_lifecycle_migrations(db)
 
     logger.info("Creating performance indexes...")
     try:

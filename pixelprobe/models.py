@@ -7,6 +7,7 @@ import logging
 import os
 import bcrypt
 import secrets
+import hashlib
 from flask_login import UserMixin
 
 
@@ -58,6 +59,9 @@ class ScanResult(db.Model):
     file_hash = db.Column(db.String(64), nullable=True, index=True)  # SHA-256 hash for change detection
     last_modified = db.Column(db.DateTime, nullable=True, index=True)  # File system modification time
     last_integrity_check_date = db.Column(db.DateTime, nullable=True, index=True)  # Last time integrity check was run on this file
+    last_integrity_attempt_at = db.Column(db.DateTime(timezone=True), nullable=True, index=True)
+    last_integrity_success_at = db.Column(db.DateTime(timezone=True), nullable=True, index=True)
+    last_integrity_outcome = db.Column(db.String(32), nullable=True)
     scan_tool = db.Column(db.String(50), nullable=True)  # Tool used for detection (ffmpeg, imagemagick, pil)
     scan_duration = db.Column(db.Float, nullable=True)  # Time taken to scan in seconds
     scan_output = db.Column(db.Text)  # Full tool output for debugging
@@ -368,6 +372,10 @@ class ScanState(db.Model):
     num_workers = db.Column(db.Integer, nullable=False, default=1)  # Number of parallel workers used
     files_added = db.Column(db.Integer, nullable=False, default=0)  # New files added to database
     files_updated = db.Column(db.Integer, nullable=False, default=0)  # Existing files updated
+    # A run is immutable once created.  Cancellation is recorded before any
+    # broker operation so workers can stop without relying on revoke delivery.
+    cancel_requested_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    dispatch_generation = db.Column(db.Integer, nullable=False, default=0)
     
     # TODO: Crash recovery tracking columns will be added after migration
     # crash_count = db.Column(db.Integer, nullable=True, default=None)
@@ -441,18 +449,8 @@ class ScanState(db.Model):
             logger.error(f"Error cleaning up active scans: {e}")
             db.session.rollback()
 
-        # If scan_id provided (e.g., scheduled scans), delete any existing record with same ID
-        # This allows scheduled scans to run again without hitting unique constraint violation
-        if scan_id:
-            try:
-                existing = ScanState.query.filter_by(scan_id=scan_id).first()
-                if existing:
-                    logger.info(f"Removing previous scan_state with scan_id={scan_id} (id={existing.id}, phase={existing.phase})")
-                    db.session.delete(existing)
-                    db.session.commit()
-            except Exception as e:
-                logger.error(f"Error removing existing scan_state with scan_id={scan_id}: {e}")
-                db.session.rollback()
+        if scan_id and ScanState.query.filter_by(scan_id=scan_id).first():
+            raise ValueError(f"Scan ID already exists: {scan_id}")
 
         # Always create a fresh scan state when starting a new scan
         scan_state = ScanState()
@@ -768,6 +766,68 @@ class ScanChunk(db.Model):
             'error_message': self.error_message
         }
 
+
+class ScanRunRoot(db.Model):
+    """Evidence that a requested scan root was available and fully observed."""
+    __tablename__ = 'scan_run_roots'
+
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(64), nullable=False, index=True)
+    root_path = db.Column(db.Text, nullable=False)
+    resolved_path = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    error_message = db.Column(db.Text, nullable=True)
+    discovered_count = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (db.UniqueConstraint('scan_id', 'root_path', name='uq_scan_run_roots_scan_root'),)
+
+
+class ScanRunFile(db.Model):
+    """Immutable membership and observed outcome for one scan run file."""
+    __tablename__ = 'scan_run_files'
+
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(64), nullable=False, index=True)
+    scan_result_id = db.Column(db.Integer, nullable=True, index=True)
+    file_path = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    outcome = db.Column(db.String(32), nullable=True)
+    file_hash = db.Column(db.String(64), nullable=True)
+    file_size = db.Column(db.BigInteger, nullable=True)
+    last_modified = db.Column(db.DateTime(timezone=True), nullable=True)
+    is_corrupted = db.Column(db.Boolean, nullable=True)
+    has_warnings = db.Column(db.Boolean, nullable=True)
+    corruption_details = db.Column(db.Text, nullable=True)
+    warning_details = db.Column(db.Text, nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    claimed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('scan_id', 'file_path', name='uq_scan_run_files_scan_path'),
+        db.Index('idx_scan_run_files_claim', 'scan_id', 'status', 'id'),
+    )
+
+
+class ScanTask(db.Model):
+    """Durable Celery task ownership. Only these tasks may be revoked for a run."""
+    __tablename__ = 'scan_tasks'
+
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(64), nullable=False, index=True)
+    chunk_id = db.Column(db.Integer, nullable=True, index=True)
+    purpose = db.Column(db.String(32), nullable=False)
+    celery_task_id = db.Column(db.String(64), nullable=False, unique=True)
+    generation = db.Column(db.Integer, nullable=False, default=0)
+    status = db.Column(db.String(20), nullable=False, default='queued')
+    error_message = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
 class ScanReport(db.Model):
     __tablename__ = 'scan_reports'
     
@@ -844,11 +904,12 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(128), nullable=False)
-    is_admin = db.Column(db.Boolean, nullable=False, default=True)  # All users have admin access
+    is_admin = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     last_login = db.Column(db.DateTime(timezone=True), nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     first_setup_required = db.Column(db.Boolean, nullable=False, default=False)
+    session_generation = db.Column(db.Integer, nullable=False, default=0)
 
     # Relationship to API tokens
     api_tokens = db.relationship('APIToken', back_populates='user', cascade='all, delete-orphan')
@@ -894,7 +955,7 @@ class APIToken(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    token = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    token_digest = db.Column(db.String(64), unique=True, nullable=False, index=True)
     description = db.Column(db.String(200))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     last_used = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -906,8 +967,13 @@ class APIToken(db.Model):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        if not self.token:
-            self.token = secrets.token_urlsafe(48)
+        self._plaintext_token = secrets.token_urlsafe(48)
+        self.token_digest = hashlib.sha256(self._plaintext_token.encode('utf-8')).hexdigest()
+
+    @property
+    def plaintext_token(self):
+        """Return the value only while the newly created object is in memory."""
+        return getattr(self, '_plaintext_token', None)
 
     def is_valid(self):
         """Check if the token is valid (active and not expired)"""
@@ -949,7 +1015,7 @@ class APIToken(db.Model):
             'last_used': self.last_used.isoformat() if self.last_used else None,
             'expires_at': self.expires_at.isoformat() if self.expires_at else None,
             'is_active': self.is_active,
-            'token_preview': f"{self.token[:8]}..." if self.token else None
+            'token_preview': None
         }
 
     def __repr__(self):

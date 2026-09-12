@@ -430,84 +430,57 @@ class ScanService:
                 self.current_scan_thread = None
     
     def cancel_scan(self) -> Dict:
-        """Cancel the current scan - nuclear option: kill everything"""
-        logger.info("cancel_scan() method called - NUCLEAR OPTION")
+        """Cancel only work durably owned by the active scan."""
         
         # Get current scan state
         scan_state = ScanState.get_or_create()
         
         logger.info(f"Cancel scan - scan_id: {scan_state.scan_id}, phase: {scan_state.phase}")
         
-        # Step 1: Kill ALL Celery tasks (nuclear option)
+        failures = []
+        # Persist intent first. Workers check this state before claims and
+        # between batches, so cancellation remains correct if the broker is down.
+        try:
+            from pixelprobe.models import ScanChunk, ScanRunFile, ScanTask
+            now = datetime.now(timezone.utc)
+            scan_state.cancel_requested_at = now
+            scan_state.phase = 'cancelled'
+            scan_state.is_active = False
+            scan_state.end_time = now
+            ScanChunk.query.filter(ScanChunk.scan_id == scan_state.scan_id,
+                                   ScanChunk.status.in_(['pending', 'processing'])).update(
+                {'status': 'cancelled', 'is_complete': True, 'end_time': now},
+                synchronize_session=False)
+            owned_ids = [row[0] for row in db.session.query(ScanRunFile.scan_result_id).filter(
+                ScanRunFile.scan_id == scan_state.scan_id,
+                ScanRunFile.status == 'processing').all() if row[0]]
+            ScanRunFile.query.filter_by(scan_id=scan_state.scan_id, status='processing').update(
+                {'status': 'pending', 'claimed_at': None}, synchronize_session=False)
+            if owned_ids:
+                ScanResult.query.filter(ScanResult.id.in_(owned_ids),
+                                        ScanResult.scan_status == 'scanning').update(
+                    {'scan_status': 'pending'}, synchronize_session=False)
+            task_ids = [row[0] for row in db.session.query(ScanTask.celery_task_id).filter(
+                ScanTask.scan_id == scan_state.scan_id,
+                ScanTask.status.in_(['queued', 'processing'])).all()]
+            ScanTask.query.filter(ScanTask.scan_id == scan_state.scan_id,
+                                  ScanTask.status.in_(['queued', 'processing'])).update(
+                {'status': 'cancelled', 'completed_at': now}, synchronize_session=False)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            return {'message': 'Scan cancellation was not persisted', 'cancelled': False,
+                    'failures': [str(e)]}
+
+        # Revoke exactly the persisted task owners. No inspect(), terminate(),
+        # or purge: those APIs affect unrelated maintenance work.
         try:
             from pixelprobe.celery_config import celery_app
-            
-            logger.info("Step 1: Killing ALL Celery tasks")
-            
-            # Get inspection object
-            inspect = celery_app.control.inspect()
-            
-            # Kill ALL active tasks on ALL workers
-            active = inspect.active()
-            if active:
-                task_count = 0
-                for worker_name, tasks in active.items():
-                    logger.info(f"Killing {len(tasks)} tasks on worker {worker_name}")
-                    for task in tasks:
-                        task_id = task.get('id')
-                        celery_app.control.revoke(task_id, terminate=True, signal='SIGKILL')
-                        task_count += 1
-                logger.info(f"Killed {task_count} active tasks")
-            
-            # Revoke ALL reserved/queued tasks
-            reserved = inspect.reserved()
-            if reserved:
-                task_count = 0
-                for worker_name, tasks in reserved.items():
-                    logger.info(f"Revoking {len(tasks)} reserved tasks on worker {worker_name}")
-                    for task in tasks:
-                        task_id = task.get('id')
-                        celery_app.control.revoke(task_id, terminate=False)
-                        task_count += 1
-                logger.info(f"Revoked {task_count} reserved tasks")
-            
-            # Purge the entire queue
-            celery_app.control.purge()
-            logger.info("Purged entire Celery queue")
-            
+            for task_id in task_ids:
+                celery_app.control.revoke(task_id, terminate=False)
         except Exception as e:
-            logger.error(f"Error killing Celery tasks: {e}")
-        
-        # Step 2: Clean up database state
-        logger.info("Step 2: Cleaning up database state")
-        
-        try:
-            from pixelprobe.models import ScanChunk
-            
-            # Mark ALL chunks as cancelled
-            chunks_updated = db.session.query(ScanChunk).filter(
-                ScanChunk.scan_id == scan_state.scan_id,
-                ScanChunk.status.in_(['pending', 'processing', 'queued'])
-            ).update({
-                'status': 'cancelled',
-                'end_time': datetime.now(timezone.utc)
-            }, synchronize_session=False)
-            
-            logger.info(f"Marked {chunks_updated} chunks as cancelled")
-            
-            # Reset any files stuck in 'scanning' status
-            files_reset = ScanResult.reclaim_scanning()
-
-            logger.info(f"Reset {files_reset} files from 'scanning' to 'pending'")
-        
-            # Cancel the scan state
-            scan_state.cancel_scan()
-            
-            # Commit all changes
-            db.session.commit()
-            
-        except Exception as e:
-            logger.error(f"Error cleaning up database: {e}")
+            logger.error(f"Failed revoking owned scan tasks: {e}")
+            failures.append(str(e))
         
         # Step 3: Set cancellation flag and update progress
         self.scan_cancelled = True
@@ -526,12 +499,11 @@ class ScanService:
             logger.info("Cleaning up scan thread reference")
             self.current_scan_thread = None
         
-        logger.info("=== SCAN CANCELLATION COMPLETE (NUCLEAR) ===")
-        
         return {
-            'message': 'Scan cancellation completed - all tasks killed',
-            'tasks_killed': True,
-            'database_cleaned': True
+            'message': 'Scan cancellation recorded',
+            'cancelled': True,
+            'revoked_task_count': len(task_ids),
+            'failures': failures,
         }
     
     def reset_stuck_scans(self) -> Dict:
