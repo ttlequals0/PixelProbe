@@ -6,9 +6,7 @@ README.md
 .env.example
 .env.test
 
-# Local-only operator notes. Untracked and gitignored, so they never reach the
-# repo -- but the build context is the working directory, and `COPY . .` would
-# otherwise bake them (and any credentials they hold) into a published image.
+# Keep local operator notes and credentials out of published images.
 CLAUDE.md
 CLAUDE.MD
 AGENTS.md

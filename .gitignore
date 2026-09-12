@@ -179,6 +179,7 @@ pixelprobe.db
 docs/development/
 docker-compose.local.yml
 CLAUDE.md
+AGENTS.md
 CLAUDE.MD
 audit_reports/
 .playwright-mcp/

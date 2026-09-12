@@ -129,7 +129,7 @@ RUN ffmpeg -version && \
     echo "=== All image format tests passed ==="
 
 COPY requirements.txt .
-# After install, remove chardet (pulled in by reportlab) -- its 7.x version fails
+# After install, remove chardet pulled in by reportlab. Its 7.x version fails
 # requests' version check (requires <6.0.0). Our app uses charset_normalizer instead.
 RUN pip install --no-cache-dir -r requirements.txt \
     && (pip uninstall -y chardet 2>/dev/null || true)
