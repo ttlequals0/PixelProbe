@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.9.2] - 2026-09-12
+
+### Fixed
+
+- Large selected-file rescans group exact paths by directory, so a parent chunk does not reprocess a child-directory selection. Worker exceptions are recorded in immutable run evidence instead of copying a prior healthy inventory result.
+- Terminal selected-file runs do not reactivate on redelivery. Chunk state and progress counters retain completed and failed work accurately.
+- Media previews identify supported media from the authorized file descriptor, not stored scan metadata. Pending and unscanned files can preview without changing their inventory status; unsafe or unrecognized content remains a download.
+
 ## [2.9.1] - 2026-09-12
 
 ### Fixed

@@ -3,13 +3,15 @@ Unit tests for ScanService
 """
 
 import pytest
+import sys
+import types
 from unittest.mock import Mock, patch, MagicMock
 import threading
 import time
 from datetime import datetime, timezone
 
 from pixelprobe.services.scan_service import ScanService
-from pixelprobe.models import ScanConfiguration, ScanResult, ScanState
+from pixelprobe.models import ScanConfiguration, ScanChunk, ScanResult, ScanRunFile, ScanState
 from pixelprobe.utils.security import PathTraversalError
 
 class TestScanService:
@@ -223,6 +225,202 @@ class TestScanService:
             assert result['count'] == 2
             assert stuck1.scan_status == 'pending'
             assert stuck2.scan_status == 'pending'
+
+    def test_large_selected_chunk_failure_marks_only_run_member_error(self, scan_service, app, db):
+        class Checker:
+            def scan_file(self, file_path, force_rescan=False):
+                if file_path.endswith('broken.png'):
+                    raise RuntimeError('decoder failed')
+                return {
+                    'outcome': 'completed', 'file_hash': 'a' * 64,
+                    'file_size': 1, 'last_modified': datetime.now(timezone.utc),
+                    'is_corrupted': False, 'has_warnings': False,
+                    'file_type': 'image', 'scan_tool': 'pil', 'scan_output': '',
+                }
+
+        with app.app_context():
+            run_id = 'selected-parallel-error'
+            paths = [f'/library/parent/image_{index}.png' for index in range(100)]
+            paths.append('/library/parent/child/broken.png')
+            state = ScanState.create_new_scan(scan_id=run_id)
+            state.start_scan(['selected_files'], force_rescan=True)
+            state.scan_type = 'selected'
+            state.phase = 'scanning'
+            state.estimated_total = len(paths)
+            for path in paths:
+                row = ScanResult(file_path=path, scan_status='completed',
+                                 file_hash='before', is_corrupted=False)
+                db.session.add(row)
+                db.session.flush()
+                db.session.add(ScanRunFile(scan_id=run_id, scan_result_id=row.id,
+                                           file_path=path, status='pending'))
+            chunks = [
+                ScanChunk(scan_id=run_id, chunk_id='parent',
+                          directory_path='/library/parent', files_discovered=100),
+                ScanChunk(scan_id=run_id, chunk_id='child',
+                          directory_path='/library/parent/child', files_discovered=1),
+            ]
+            db.session.add_all(chunks)
+            db.session.commit()
+
+            scan_service._parallel_scan_selected_chunks(
+                Checker(), chunks, paths, True, 4, state, state.id)
+
+            members = ScanRunFile.query.filter_by(scan_id=run_id).all()
+            failed = ScanRunFile.query.filter_by(
+                scan_id=run_id, file_path='/library/parent/child/broken.png').one()
+            parent_member = ScanRunFile.query.filter_by(
+                scan_id=run_id, file_path='/library/parent/image_0.png').one()
+            failed_global = ScanResult.query.filter_by(
+                file_path='/library/parent/child/broken.png').one()
+            state = db.session.get(ScanState, state.id)
+            assert len(members) == len(paths)
+            assert {member.status for member in members} == {'completed', 'error'}
+            assert failed.status == 'error'
+            assert parent_member.status == 'completed'
+            assert failed_global.scan_status == 'completed'
+            assert failed_global.file_hash == 'before'
+            assert state.files_processed == len(paths)
+            assert state.phase == 'error'
+
+    def test_selected_task_does_not_reactivate_terminal_run(self, app, db):
+        class CeleryStub:
+            def task(self, *args, **kwargs):
+                if args and callable(args[0]):
+                    return args[0]
+                return lambda function: function
+
+        original_config = sys.modules.get('pixelprobe.celery_config')
+        sys.modules['pixelprobe.celery_config'] = types.SimpleNamespace(celery_app=CeleryStub())
+        sys.modules.pop('pixelprobe.tasks', None)
+        try:
+            from pixelprobe.tasks import scan_files_task
+
+            with app.app_context():
+                state = ScanState.create_new_scan(scan_id='selected-terminal-run')
+                state.phase = 'error'
+                state.is_active = False
+                db.session.commit()
+
+                task = types.SimpleNamespace(request=types.SimpleNamespace(id='terminal-task'))
+                result = scan_files_task(task, 'selected-terminal-run', [], force_rescan=True)
+
+                state = ScanState.query.filter_by(scan_id='selected-terminal-run').one()
+                assert result['status'] == 'ERROR'
+                assert state.phase == 'error'
+                assert state.is_active is False
+        finally:
+            sys.modules.pop('pixelprobe.tasks', None)
+            if original_config is None:
+                sys.modules.pop('pixelprobe.celery_config', None)
+            else:
+                sys.modules['pixelprobe.celery_config'] = original_config
+
+    def test_selected_service_does_not_reactivate_terminal_run(self, scan_service, app, db, tmp_path):
+        with app.app_context():
+            file_path = tmp_path / 'file.png'
+            file_path.touch()
+            db.session.add(ScanConfiguration(path=str(tmp_path), is_active=True))
+            state = ScanState.create_new_scan(scan_id='selected-terminal-service')
+            state.phase = 'cancelled'
+            state.is_active = False
+            db.session.commit()
+
+            result = scan_service.scan_files([str(file_path)], force_rescan=True,
+                                             num_workers=1, async_mode=False,
+                                             scan_id='selected-terminal-service')
+
+            state = ScanState.query.filter_by(scan_id='selected-terminal-service').one()
+            assert result['status'] == 'cancelled'
+            assert state.phase == 'cancelled'
+            assert state.is_active is False
+
+    def test_missing_selected_observation_does_not_copy_global_result(self, scan_service, app, db):
+        with app.app_context():
+            run_id = 'selected-no-observation'
+            file_path = '/library/previously-completed.png'
+            state = ScanState.create_new_scan(scan_id=run_id)
+            state.start_scan(['selected_files'], force_rescan=True)
+            state.phase = 'scanning'
+            result = ScanResult(file_path=file_path, scan_status='completed',
+                                file_hash='before', is_corrupted=False)
+            db.session.add(result)
+            db.session.flush()
+            db.session.add(ScanRunFile(scan_id=run_id, scan_result_id=result.id,
+                                       file_path=file_path, status='pending'))
+            db.session.commit()
+
+            assert scan_service._snapshot_run_member(run_id, file_path, None)
+
+            member = ScanRunFile.query.filter_by(scan_id=run_id, file_path=file_path).one()
+            result = ScanResult.query.filter_by(file_path=file_path).one()
+            assert member.status == 'error'
+            assert member.outcome == 'no_result'
+            assert result.scan_status == 'completed'
+            assert result.file_hash == 'before'
+
+    def test_large_selected_scan_stops_dispatching_after_durable_cancel(self, scan_service, app, db,
+                                                                         monkeypatch):
+        class Checker:
+            def __init__(self):
+                self.calls = []
+
+            def scan_file(self, file_path, force_rescan=False):
+                self.calls.append(file_path)
+                return {
+                    'outcome': 'completed', 'file_hash': 'a' * 64,
+                    'file_size': 1, 'last_modified': datetime.now(timezone.utc),
+                    'is_corrupted': False, 'has_warnings': False,
+                    'file_type': 'image', 'scan_tool': 'pil', 'scan_output': '',
+                }
+
+        with app.app_context():
+            run_id = 'selected-durable-cancel'
+            paths = [f'/library/parent/image_{index}.png' for index in range(100)]
+            paths.append('/library/parent/child/image.png')
+            state = ScanState.create_new_scan(scan_id=run_id)
+            state.start_scan(['selected_files'], force_rescan=True)
+            state.scan_type = 'selected'
+            state.phase = 'scanning'
+            for path in paths:
+                row = ScanResult(file_path=path, scan_status='completed', file_hash='before')
+                db.session.add(row)
+                db.session.flush()
+                db.session.add(ScanRunFile(scan_id=run_id, scan_result_id=row.id,
+                                           file_path=path, status='pending'))
+            chunks = [
+                ScanChunk(scan_id=run_id, chunk_id='parent-cancel',
+                          directory_path='/library/parent', files_discovered=100),
+                ScanChunk(scan_id=run_id, chunk_id='child-cancel',
+                          directory_path='/library/parent/child', files_discovered=1),
+            ]
+            db.session.add_all(chunks)
+            db.session.commit()
+            original_snapshot = scan_service._snapshot_run_member
+            snapshots = 0
+
+            def cancel_after_first(*args, **kwargs):
+                nonlocal snapshots
+                saved = original_snapshot(*args, **kwargs)
+                snapshots += 1
+                if snapshots == 1:
+                    active = db.session.get(ScanState, state.id)
+                    active.is_active = False
+                    db.session.commit()
+                return saved
+
+            monkeypatch.setattr(scan_service, '_snapshot_run_member', cancel_after_first)
+            checker = Checker()
+            scan_service._parallel_scan_selected_chunks(
+                checker, chunks, paths, True, 2, state, state.id)
+
+            state = db.session.get(ScanState, state.id)
+            assert len(checker.calls) <= 2
+            assert state.phase == 'cancelled'
+            assert state.is_active is False
+            persisted_chunks = ScanChunk.query.filter_by(scan_id=run_id).all()
+            assert {chunk.status for chunk in persisted_chunks} == {'processing'}
+            assert sum(chunk.files_scanned for chunk in persisted_chunks) == 0
 
     def test_progress_tracking_thread_safety(self, scan_service):
         """Test that progress tracking is thread-safe"""

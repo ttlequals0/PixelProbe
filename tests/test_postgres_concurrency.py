@@ -302,3 +302,54 @@ def test_selected_run_report_uses_immutable_membership(tmp_path):
         with engine.begin() as conn:
             conn.execute(text(f'DROP SCHEMA {schema} CASCADE'))
         engine.dispose()
+
+
+@pytest.mark.postgres
+@pytest.mark.timeout(300)
+@pytest.mark.skipif(not POSTGRES_URI, reason='PIXELPROBE_TEST_POSTGRES_URI not set')
+def test_large_selected_scan_visits_each_multidirectory_file_once(tmp_path):
+    schema = f"selected_large_{uuid4().hex[:12]}"
+    engine = create_engine(POSTGRES_URI)
+    with engine.begin() as conn:
+        conn.execute(text(f'CREATE SCHEMA {schema}'))
+    app = Flask(__name__)
+    app.config.update(SQLALCHEMY_DATABASE_URI=POSTGRES_URI,
+                      SQLALCHEMY_ENGINE_OPTIONS={'connect_args': {'options': f'-csearch_path={schema}'}},
+                      SQLALCHEMY_TRACK_MODIFICATIONS=False)
+    db.init_app(app)
+    root = tmp_path / 'media'
+    child = root / 'nested'
+    child.mkdir(parents=True)
+    paths = []
+    for index in range(101):
+        directory = root if index < 51 else child
+        image_path = directory / f'image_{index}.png'
+        Image.new('RGB', (8, 8), (index, 1, 2)).save(image_path)
+        paths.append(str(image_path))
+    run_id = str(uuid4())
+    try:
+        with app.app_context():
+            db.create_all()
+            from pixelprobe.models import ScanConfiguration, ScanChunk, ScanRunFile
+            db.session.add(ScanConfiguration(path=str(root), is_active=True))
+            db.session.commit()
+            assert claim_scan_slot(run_id, 'selected')[0]
+            scoped_uri = f"{POSTGRES_URI}?options={quote(f'-csearch_path={schema}')}"
+            result = ScanService(scoped_uri).scan_files(paths, force_rescan=True,
+                                                        num_workers=4, async_mode=False,
+                                                        scan_id=run_id)
+            members = ScanRunFile.query.filter_by(scan_id=run_id).all()
+            chunks = ScanChunk.query.filter_by(scan_id=run_id).all()
+            state = ScanState.query.filter_by(scan_id=run_id).one()
+            assert result['status'] == 'completed'
+            assert len(members) == len(paths)
+            assert {member.file_path for member in members} == set(paths)
+            assert {member.status for member in members} == {'completed'}
+            assert len(chunks) == 2
+            assert sum(chunk.files_scanned for chunk in chunks) == len(paths)
+            assert {chunk.status for chunk in chunks} == {'completed'}
+            assert state.files_processed == len(paths)
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA {schema} CASCADE'))
+        engine.dispose()

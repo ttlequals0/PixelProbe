@@ -40,6 +40,8 @@ The mobile layout has a collapsible sidebar and shows scan results as cards inst
    - Integrity Check: verify the file still exists and has not changed
    - Details: open the Scan Details modal - verdict sections first, with the raw tool transcript collapsed behind "Full scan transcript"
 
+Preview type comes from the authorized file content, not saved scan metadata. Supported pending and unscanned media can preview without changing scan status. Content that cannot be safely previewed remains available for download.
+
 ## Authentication and user management
 
 ### Login

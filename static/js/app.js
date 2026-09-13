@@ -2365,14 +2365,14 @@ class PixelProbeApp {
             const response = await fetch(`/api/scan-results/${fileId}`);
             if (response.ok) {
                 const file = await response.json();
-                this.showMediaViewerModal(file);
+                await this.showMediaViewerModal(file);
             }
         } catch (error) {
             this.showNotification('Failed to load file', 'error');
         }
     }
 
-    showMediaViewerModal(file) {
+    async showMediaViewerModal(file) {
         const modal = document.querySelector('#media-viewer-modal');
         if (!modal) return;
         
@@ -2380,66 +2380,6 @@ class PixelProbeApp {
         const modalTitle = modal.querySelector('.modal-title');
         
         modalTitle.textContent = file.file_path.split('/').pop();
-        
-        // Determine file type and create appropriate viewer
-        const fileType = file.file_type?.toLowerCase() || '';
-        const filePath = file.file_path;
-        if (fileType.startsWith('image/')) {
-            const image = document.createElement('img');
-            image.className = 'media-preview-image';
-            image.src = `/api/view/${encodeURIComponent(file.id)}`;
-            image.alt = filePath;
-            modalBody.replaceChildren(image);
-        } else if (fileType.startsWith('video/')) {
-            // Match v1.x implementation more closely
-            const videoUrl = `/api/view/${file.id}`;
-            
-            const wrapper = document.createElement('div');
-            wrapper.className = 'media-preview';
-            const video = document.createElement('video');
-            video.id = `video-player-${file.id}`;
-            video.className = 'video-player';
-            video.controls = true;
-            video.preload = 'metadata';
-            video.addEventListener('loadedmetadata', () => { video.volume = 1.0; });
-            video.addEventListener('error', () => this.handleVideoError(file.id));
-            [fileType, 'video/mp4', 'video/webm', 'video/ogg'].forEach(type => {
-                const source = document.createElement('source');
-                source.src = videoUrl;
-                source.type = type;
-                video.appendChild(source);
-            });
-            video.appendChild(document.createTextNode('Your browser does not support the video tag.'));
-            const error = document.createElement('div');
-            error.id = `video-error-${file.id}`;
-            error.style.cssText = 'display: none; padding: 20px; text-align: center; color: #ff6b6b;';
-            const errorText = document.createElement('p');
-            errorText.textContent = 'Unable to load video. ';
-            const direct = document.createElement('a');
-            direct.href = videoUrl;
-            direct.target = '_blank';
-            direct.textContent = 'Try opening directly';
-            errorText.appendChild(direct);
-            error.appendChild(errorText);
-            wrapper.append(video, error);
-            modalBody.replaceChildren(wrapper);
-        } else if (fileType.startsWith('audio/')) {
-            const audio = document.createElement('audio');
-            audio.className = 'media-preview-audio';
-            audio.id = `audio-player-${file.id}`;
-            audio.controls = true;
-            audio.addEventListener('loadedmetadata', () => { audio.volume = 1.0; });
-            const source = document.createElement('source');
-            source.src = `/api/view/${encodeURIComponent(file.id)}`;
-            source.type = fileType;
-            audio.append(source, document.createTextNode('Your browser does not support the audio element.'));
-            modalBody.replaceChildren(audio);
-        } else {
-            const message = document.createElement('p');
-            message.className = 'media-preview-unavailable';
-            message.textContent = 'Preview not available for this file type.';
-            modalBody.replaceChildren(message);
-        }
         const modalContent = modal.querySelector('.modal-content');
         let downloadWrap = modal.querySelector('.media-viewer-footer');
         if (!downloadWrap) {
@@ -2454,20 +2394,105 @@ class PixelProbeApp {
         download.textContent = 'Download';
         downloadWrap.replaceChildren(download);
         modal.style.display = 'block';
-        
-        // Setup close handlers
         const closeBtn = modal.querySelector('.modal-close');
-        if (closeBtn) {
-            closeBtn.addEventListener('click', () => this.closeModal('media-viewer-modal'));
-        }
-
-        // Close on outside click
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                this.closeModal('media-viewer-modal');
-            }
+        if (closeBtn) closeBtn.onclick = () => this.closeModal('media-viewer-modal');
+        modal.onclick = (event) => {
+            if (event.target === modal) this.closeModal('media-viewer-modal');
         };
 
+        const requestId = (this.previewRequestId || 0) + 1;
+        this.previewRequestId = requestId;
+        const showPreviewMessage = (text) => {
+            if (this.previewRequestId !== requestId) return;
+            const message = document.createElement('p');
+            message.className = 'media-preview-unavailable';
+            message.textContent = text;
+            modalBody.replaceChildren(message);
+        };
+        showPreviewMessage('Loading preview...');
+
+        const previewUrl = `/api/view/${encodeURIComponent(file.id)}`;
+        let response;
+        try {
+            response = await fetch(previewUrl, { method: 'HEAD', credentials: 'same-origin' });
+        } catch (error) {
+            showPreviewMessage('Preview unavailable.');
+            return;
+        }
+        if (this.previewRequestId !== requestId) return;
+        if (response.status === 401) {
+            showPreviewMessage('Sign in again to preview this file.');
+            return;
+        }
+        if (response.status === 403) {
+            showPreviewMessage('You do not have permission to preview this file.');
+            return;
+        }
+        if (response.status === 404) {
+            showPreviewMessage('This file is no longer available.');
+            return;
+        }
+        const previewType = response.headers.get('Content-Type')?.split(';', 1)[0].toLowerCase();
+        const disposition = response.headers.get('Content-Disposition')?.toLowerCase() || '';
+        const dispositionType = disposition.split(';', 1)[0].trim();
+        if (!response.ok || dispositionType === 'attachment' || !previewType
+                || !(/^(image|video|audio)\//.test(previewType))) {
+            showPreviewMessage('Preview unavailable.');
+            return;
+        }
+
+        const filePath = file.file_path;
+        if (previewType.startsWith('image/')) {
+            const image = document.createElement('img');
+            image.className = 'media-preview-image';
+            image.src = previewUrl;
+            image.alt = filePath;
+            image.addEventListener('error', () => showPreviewMessage('Preview could not be loaded.'));
+            modalBody.replaceChildren(image);
+        } else if (previewType.startsWith('video/')) {
+            
+            const wrapper = document.createElement('div');
+            wrapper.className = 'media-preview';
+            const video = document.createElement('video');
+            video.id = `video-player-${file.id}`;
+            video.className = 'video-player';
+            video.controls = true;
+            video.preload = 'metadata';
+            video.addEventListener('loadedmetadata', () => { video.volume = 1.0; });
+            video.addEventListener('error', () => {
+                if (this.previewRequestId === requestId) this.handleVideoError(file.id);
+            });
+            const source = document.createElement('source');
+            source.src = previewUrl;
+            source.type = previewType;
+            video.appendChild(source);
+            video.appendChild(document.createTextNode('Your browser does not support the video tag.'));
+            const error = document.createElement('div');
+            error.id = `video-error-${file.id}`;
+            error.style.cssText = 'display: none; padding: 20px; text-align: center; color: #ff6b6b;';
+            const errorText = document.createElement('p');
+            errorText.textContent = 'Unable to load video. ';
+            const direct = document.createElement('a');
+            direct.href = previewUrl;
+            direct.target = '_blank';
+            direct.textContent = 'Try opening directly';
+            errorText.appendChild(direct);
+            error.appendChild(errorText);
+            wrapper.append(video, error);
+            modalBody.replaceChildren(wrapper);
+        } else if (previewType.startsWith('audio/')) {
+            const audio = document.createElement('audio');
+            audio.className = 'media-preview-audio';
+            audio.id = `audio-player-${file.id}`;
+            audio.controls = true;
+            audio.addEventListener('loadedmetadata', () => { audio.volume = 1.0; });
+            const source = document.createElement('source');
+            source.src = previewUrl;
+            source.type = previewType;
+            audio.append(source, document.createTextNode('Your browser does not support the audio element.'));
+            audio.addEventListener('error', () => showPreviewMessage('Preview could not be loaded.'));
+            modalBody.replaceChildren(audio);
+        }
     }
 
     async rescanFile(fileId) {
@@ -5064,6 +5089,7 @@ class PixelProbeApp {
     closeModal(modalId) {
         const modal = document.querySelector(`#${modalId}`);
         if (modal) {
+            if (modalId === 'media-viewer-modal') this.previewRequestId = (this.previewRequestId || 0) + 1;
             this.stopModalMedia(modal);
             modal.style.display = 'none';
         }

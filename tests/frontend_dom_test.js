@@ -85,20 +85,69 @@ viewerSource = viewerSource.replace('document.addEventListener(\'DOMContentLoade
 viewerSource += '\nwindow.__PixelProbeApp = PixelProbeApp;';
 viewerWindow.eval(viewerSource);
 const viewerApp = Object.create(viewerWindow.__PixelProbeApp.prototype);
-viewerApp.closeModal = () => {};
 const unsafeFilename = '<img src=x onerror=alert(1)> movie.bin';
-viewerApp.showMediaViewerModal({ id: 42, file_path: `/media/${unsafeFilename}`, file_type: 'application/octet-stream' });
 const viewerBody = viewerWindow.document.querySelector('#media-viewer-modal .modal-body');
-assert.equal(viewerBody.querySelector('.media-preview-unavailable').textContent, 'Preview not available for this file type.');
-assert.equal(viewerBody.textContent.includes('<p style='), false);
-assert.equal(viewerWindow.document.querySelector('#media-viewer-modal img'), null);
-assert.equal(viewerWindow.document.querySelector('#media-viewer-modal .modal-title').textContent, unsafeFilename);
-viewerApp.showMediaViewerModal({ id: 43, file_path: '/media/portrait.mp4', file_type: 'video/mp4' });
-assert.equal(viewerBody.querySelector('.media-preview video').controls, true);
-assert.equal(viewerWindow.document.querySelectorAll('#media-viewer-modal .media-viewer-footer').length, 1);
-assert.equal(viewerWindow.document.querySelector('#media-viewer-modal .media-viewer-footer a').textContent, 'Download');
+let previewResponse;
+viewerWindow.fetch = async () => previewResponse;
+const previewHeaders = (contentType, disposition = 'inline') => ({
+  get: name => ({ 'content-type': contentType, 'content-disposition': disposition }[name.toLowerCase()] || null),
+});
+
+async function verifyViewer() {
+  previewResponse = { ok: true, status: 200, headers: previewHeaders('application/octet-stream', 'attachment') };
+  await viewerApp.showMediaViewerModal({ id: 42, file_path: `/media/${unsafeFilename}`, file_type: 'application/octet-stream' });
+  assert.equal(viewerBody.querySelector('.media-preview-unavailable').textContent, 'Preview unavailable.');
+  assert.equal(viewerBody.textContent.includes('<p style='), false);
+  assert.equal(viewerWindow.document.querySelector('#media-viewer-modal img'), null);
+  assert.equal(viewerWindow.document.querySelector('#media-viewer-modal .modal-title').textContent, unsafeFilename);
+
+  previewResponse = { ok: true, status: 200, headers: previewHeaders('image/jpeg', 'inline; filename=attachment.jpg') };
+  await viewerApp.showMediaViewerModal({ id: 42, file_path: '/media/photo.jpg', file_type: 'Unknown' });
+  assert.notEqual(viewerBody.querySelector('.media-preview-image'), null);
+
+  previewResponse = { ok: true, status: 200, headers: previewHeaders('video/mp4') };
+  await viewerApp.showMediaViewerModal({ id: 43, file_path: '/media/portrait.mp4', file_type: 'Unknown' });
+  assert.equal(viewerBody.querySelector('.media-preview video').controls, true);
+  assert.equal(viewerBody.querySelector('.media-preview source').type, 'video/mp4');
+  assert.equal(viewerWindow.document.querySelectorAll('#media-viewer-modal .media-viewer-footer').length, 1);
+  assert.equal(viewerWindow.document.querySelector('#media-viewer-modal .media-viewer-footer a').textContent, 'Download');
+  const oldVideo = viewerBody.querySelector('.media-preview video');
+  await viewerApp.showMediaViewerModal({ id: 43, file_path: '/media/portrait.mp4', file_type: 'Unknown' });
+  const currentVideo = viewerBody.querySelector('.media-preview video');
+  oldVideo.dispatchEvent(new viewerWindow.Event('error'));
+  assert.notEqual(currentVideo.style.display, 'none');
+  assert.equal(viewerBody.querySelector('#video-error-43').style.display, 'none');
+
+  previewResponse = { ok: true, status: 200, headers: previewHeaders('audio/mpeg') };
+  await viewerApp.showMediaViewerModal({ id: 44, file_path: '/media/song.mp3', file_type: 'Unknown' });
+  assert.equal(viewerBody.querySelector('.media-preview-audio').controls, true);
+  assert.equal(viewerBody.querySelector('.media-preview-audio source').type, 'audio/mpeg');
+
+  previewResponse = { ok: true, status: 200, headers: previewHeaders('image/jpeg') };
+  await viewerApp.showMediaViewerModal({ id: 45, file_path: '/media/photo.jpg', file_type: 'Unknown' });
+  viewerBody.querySelector('img').dispatchEvent(new viewerWindow.Event('error'));
+  assert.equal(viewerBody.querySelector('.media-preview-unavailable').textContent, 'Preview could not be loaded.');
+
+  previewResponse = { ok: false, status: 401, headers: previewHeaders(null) };
+  await viewerApp.showMediaViewerModal({ id: 46, file_path: '/media/private.mp3', file_type: 'Unknown' });
+  assert.equal(viewerBody.querySelector('.media-preview-unavailable').textContent, 'Sign in again to preview this file.');
+
+  let resolveLateHead;
+  viewerWindow.fetch = () => new Promise(resolve => { resolveLateHead = resolve; });
+  const pending = viewerApp.showMediaViewerModal({ id: 47, file_path: '/media/late.jpg', file_type: 'Unknown' });
+  assert.equal(viewerWindow.document.querySelector('#media-viewer-modal').style.display, 'block');
+  assert.equal(viewerBody.querySelector('.media-preview-unavailable').textContent, 'Loading preview...');
+  assert.equal(viewerWindow.document.querySelectorAll('#media-viewer-modal .media-viewer-footer').length, 1);
+  viewerApp.closeModal('media-viewer-modal');
+  resolveLateHead({ ok: true, status: 200, headers: previewHeaders('image/jpeg') });
+  await pending;
+  assert.equal(viewerWindow.document.querySelector('#media-viewer-modal').style.display, 'none');
+  assert.equal(viewerBody.querySelector('img'), null);
+  viewerWindow.fetch = async () => previewResponse;
+}
 
 (async () => {
+  await verifyViewer();
   const statsDom = new JSDOM(`
     <div id="total-files"></div><div id="healthy-files"></div><div id="corrupted-files"></div>
     <div id="warning-files"></div><div id="bitrot-files"></div><div id="pending-files"></div>

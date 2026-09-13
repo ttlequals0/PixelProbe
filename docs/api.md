@@ -930,6 +930,8 @@ curl -X DELETE https://your-host/api/settings/detection.freeze_min_duration_secs
 | GET | `/api/download/{result_id}` | Download the original media file |
 | GET | `/api/openapi.yaml`, `/api/openapi.json` | OpenAPI specification (partial; unauthenticated) |
 
+`HEAD /api/view/{result_id}` returns the content type and disposition used for preview without a body. The type comes from the file content, not stored scan metadata. Clients must treat an attachment disposition as download-only.
+
 ## Code examples
 
 ### Python

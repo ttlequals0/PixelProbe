@@ -210,10 +210,10 @@ class TestMappedSSRFAddresses:
 
 
 class TestMediaServingBoundaries:
-    def _result(self, db, path, mime='image/jpeg'):
+    def _result(self, db, path, mime='image/jpeg', scan_status='completed'):
         from pixelprobe.models import ScanResult
         result = ScanResult(file_path=str(path), file_size=path.stat().st_size,
-                            file_type=mime, scan_status='completed')
+                            file_type=mime, scan_status=scan_status)
         db.session.add(result)
         db.session.commit()
         return result
@@ -225,10 +225,13 @@ class TestMediaServingBoundaries:
 
     def test_view_download_and_ranges_use_authorized_descriptor(self, app, db,
                                                                  authenticated_client, tmp_path):
+        from PIL import Image
+
         root = tmp_path / 'media'
         root.mkdir()
         media = root / 'sample.jpg'
-        media.write_bytes(b'0123456789')
+        Image.new('RGB', (4, 4)).save(media, format='JPEG')
+        payload = media.read_bytes()
         with app.app_context():
             self._root(db, root)
             result = self._result(db, media)
@@ -236,17 +239,19 @@ class TestMediaServingBoundaries:
 
         view = authenticated_client.get(f'/api/view/{result_id}')
         assert view.status_code == 200
-        assert view.data == b'0123456789'
-        assert view.headers['Content-Length'] == '10'
+        assert view.data == payload
+        assert view.headers['Content-Length'] == str(len(payload))
+        assert view.mimetype == 'image/jpeg'
         assert view.headers['X-Content-Type-Options'] == 'nosniff'
         download = authenticated_client.get(f'/api/download/{result_id}')
         assert download.status_code == 200
         assert 'attachment' in download.headers['Content-Disposition']
 
         cases = {
-            'bytes=2-5': (206, b'2345', 'bytes 2-5/10'),
-            'bytes=8-20': (206, b'89', 'bytes 8-9/10'),
-            'bytes=-3': (206, b'789', 'bytes 7-9/10'),
+            'bytes=2-5': (206, payload[2:6], f'bytes 2-5/{len(payload)}'),
+            f'bytes={len(payload) - 2}-{len(payload) + 10}': (
+                206, payload[-2:], f'bytes {len(payload) - 2}-{len(payload) - 1}/{len(payload)}'),
+            'bytes=-3': (206, payload[-3:], f'bytes {len(payload) - 3}-{len(payload) - 1}/{len(payload)}'),
         }
         for range_header, (status, body, content_range) in cases.items():
             response = authenticated_client.get(f'/api/view/{result_id}',
@@ -255,11 +260,94 @@ class TestMediaServingBoundaries:
             assert response.data == body
             assert response.headers['Content-Range'] == content_range
             assert response.headers['Content-Length'] == str(len(body))
-        for range_header in ('bytes=10-', 'bytes=8-2'):
+        for range_header in (f'bytes={len(payload)}-', 'bytes=8-2'):
             response = authenticated_client.get(f'/api/view/{result_id}',
                                                 headers={'Range': range_header})
             assert response.status_code == 416
-            assert response.headers['Content-Range'] == 'bytes */10'
+            assert response.headers['Content-Range'] == f'bytes */{len(payload)}'
+
+    def test_view_detects_jpeg_from_authorized_bytes_not_inventory_mime(
+            self, app, db, authenticated_client, tmp_path):
+        from PIL import Image
+
+        root = tmp_path / 'media'
+        root.mkdir()
+        media = root / 'sample.jpg'
+        Image.new('RGB', (1, 1)).save(media, format='JPEG')
+        with app.app_context():
+            self._root(db, root)
+            result_id = self._result(db, media, 'Unknown', scan_status='pending').id
+
+        response = authenticated_client.head(f'/api/view/{result_id}')
+        assert response.status_code == 200
+        assert response.mimetype == 'image/jpeg'
+        assert 'attachment' not in response.headers.get('Content-Disposition', '')
+        assert response.headers['X-Content-Type-Options'] == 'nosniff'
+        with app.app_context():
+            from pixelprobe.models import ScanResult
+            result = db.session.get(ScanResult, result_id)
+            assert result.file_type == 'Unknown'
+            assert result.scan_status == 'pending'
+
+    @pytest.mark.parametrize(('detected_type', 'expected_type'), [
+        ('audio/mpeg', 'audio/mpeg'),
+        ('video/mp4', 'video/mp4'),
+        ('image/svg+xml', 'application/octet-stream'),
+    ])
+    def test_view_allows_only_detected_safe_preview_types(
+            self, app, db, authenticated_client, tmp_path, monkeypatch,
+            detected_type, expected_type):
+        root = tmp_path / 'media'
+        root.mkdir()
+        media = root / 'untrusted.jpg'
+        media.write_bytes(b'untrusted bytes')
+        with app.app_context():
+            self._root(db, root)
+            result_id = self._result(db, media, 'Unknown').id
+        monkeypatch.setattr('pixelprobe.api.export_routes.magic.from_buffer',
+                            lambda _data, mime: detected_type)
+
+        response = authenticated_client.head(f'/api/view/{result_id}')
+        assert response.status_code == 200
+        assert response.mimetype == expected_type
+        if detected_type == 'image/svg+xml':
+            assert 'attachment' in response.headers['Content-Disposition']
+        else:
+            assert 'attachment' not in response.headers.get('Content-Disposition', '')
+
+    def test_view_attaches_detected_svg_despite_image_inventory_mime(
+            self, app, db, authenticated_client, tmp_path, monkeypatch):
+        root = tmp_path / 'media'
+        root.mkdir()
+        media = root / 'unsafe.jpg'
+        media.write_bytes(b'not an image')
+        with app.app_context():
+            self._root(db, root)
+            result_id = self._result(db, media, 'image/jpeg').id
+        monkeypatch.setattr('pixelprobe.api.export_routes.magic.from_buffer',
+                            lambda _data, mime: 'image/svg+xml')
+
+        response = authenticated_client.head(f'/api/view/{result_id}')
+        assert response.mimetype == 'application/octet-stream'
+        assert 'attachment' in response.headers['Content-Disposition']
+
+    def test_view_rewinds_after_mime_probe_error(
+            self, app, db, authenticated_client, tmp_path, monkeypatch):
+        root = tmp_path / 'media'
+        root.mkdir()
+        media = root / 'sample.jpg'
+        payload = b'0123456789' * 1000
+        media.write_bytes(payload)
+        with app.app_context():
+            self._root(db, root)
+            result_id = self._result(db, media, 'Unknown').id
+        monkeypatch.setattr('pixelprobe.api.export_routes.magic.from_buffer',
+                            lambda _data, mime: (_ for _ in ()).throw(RuntimeError()))
+
+        response = authenticated_client.get(f'/api/view/{result_id}')
+        assert response.mimetype == 'application/octet-stream'
+        assert response.data == payload
+        assert response.headers['Content-Length'] == str(len(payload))
 
     def test_unsatisfiable_ranges_close_each_opened_descriptor(self, app, db,
                                                                 authenticated_client, tmp_path,

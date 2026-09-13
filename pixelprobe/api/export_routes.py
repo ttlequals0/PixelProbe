@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import logging
+import magic
 from datetime import datetime, timezone
 from xml.sax.saxutils import escape as escape_xml
 
@@ -20,6 +21,24 @@ _INLINE_MEDIA_MIMETYPES = {
     'image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/webp',
     'video/mp4', 'video/ogg', 'video/quicktime', 'video/webm',
 }
+
+_MIME_ALIASES = {
+    'audio/x-wav': 'audio/wav',
+}
+
+
+def _preview_mimetype(media_file):
+    try:
+        media_file.seek(0)
+        sample = media_file.read(4096)
+        try:
+            mime_type = magic.from_buffer(sample, mime=True).lower()
+        except Exception:
+            return None
+    finally:
+        media_file.seek(0)
+    mime_type = _MIME_ALIASES.get(mime_type, mime_type)
+    return mime_type if mime_type in _INLINE_MEDIA_MIMETYPES else None
 
 def _result_status(result):
     if result.scan_status in ('error', 'failed'):
@@ -108,18 +127,16 @@ def view_file(result_id):
         logger.warning("View denied for unavailable media result %s", result_id)
         return {'error': 'File not found'}, 404
     
-    # Get file stats
     file_size = file_stat.st_size
-    file_type = (result.file_type or '').lower()
-    
     logger.info(f"Serving file for viewing: {result.file_path}")
-    inline_media = file_type in _INLINE_MEDIA_MIMETYPES
     response = None
     try:
+        preview_type = _preview_mimetype(media_file)
+        inline_media = preview_type is not None
         response = send_file(
             media_file,
             as_attachment=not inline_media,
-            mimetype=file_type if inline_media else 'application/octet-stream',
+            mimetype=preview_type if inline_media else 'application/octet-stream',
             download_name=os.path.basename(result.file_path),
             conditional=False,
         )

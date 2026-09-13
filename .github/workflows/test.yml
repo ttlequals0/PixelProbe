@@ -112,6 +112,9 @@ jobs:
                    rm -rf /tmp/pixelprobe-test-deps/chardet /tmp/pixelprobe-test-deps/chardet-*.dist-info && \
                    PYTHONPATH=/tmp/pixelprobe-test-deps:/app python -m pytest tests/test_real_media_samples.py -v -p no:cacheprovider -p no:timeout -o addopts=''"
 
+    - name: Run large selected-file scan through image services
+      run: python tests/image_integration/run_large_selected_scan.py --image pixelprobe-ci
+
     - name: Verify tool versions in image
       run: |
         docker run --rm pixelprobe-ci bash -c "ffmpeg -version | head -1 && magick -version | head -1 && python --version"

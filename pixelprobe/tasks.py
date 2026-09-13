@@ -271,12 +271,13 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
     owned_task = ScanTask.query.filter_by(scan_id=scan_id,
                                           celery_task_id=self.request.id).first()
     state = ScanState.query.filter_by(scan_id=scan_id).first()
-    if state and state.phase == 'cancelled':
+    if state and state.phase in ('cancelled', 'completed', 'error', 'crashed'):
         if owned_task:
-            owned_task.status = 'cancelled'
+            owned_task.status = ('cancelled' if state.phase == 'cancelled' else
+                                 'completed' if state.phase == 'completed' else 'failed')
             owned_task.completed_at = datetime.now(timezone.utc)
             db.session.commit()
-        return {'status': 'CANCELLED', 'scan_id': scan_id, 'task_id': self.request.id}
+        return {'status': state.phase.upper(), 'scan_id': scan_id, 'task_id': self.request.id}
     if owned_task and owned_task.status == 'processing':
         return {'status': 'SUPERSEDED', 'scan_id': scan_id, 'task_id': self.request.id}
     if owned_task:
@@ -335,10 +336,9 @@ def scan_files_task(self, scan_id, file_paths, force_rescan=False, num_workers=N
             }
         )
         
-        logger.info(f"Celery file scan task {self.request.id} completed successfully")
-        
         if result.get('status') not in ('completed', 'success'):
             raise RuntimeError(f"Selected-file scan did not complete: {result}")
+        logger.info(f"Celery file scan task {self.request.id} completed successfully")
         if owned_task:
             owned_task.status = 'completed'
             owned_task.completed_at = datetime.now(timezone.utc)
