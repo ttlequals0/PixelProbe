@@ -7,6 +7,7 @@ import logging
 import os
 import bcrypt
 import secrets
+import hashlib
 from flask_login import UserMixin
 
 
@@ -58,6 +59,9 @@ class ScanResult(db.Model):
     file_hash = db.Column(db.String(64), nullable=True, index=True)  # SHA-256 hash for change detection
     last_modified = db.Column(db.DateTime, nullable=True, index=True)  # File system modification time
     last_integrity_check_date = db.Column(db.DateTime, nullable=True, index=True)  # Last time integrity check was run on this file
+    last_integrity_attempt_at = db.Column(db.DateTime(timezone=True), nullable=True, index=True)
+    last_integrity_success_at = db.Column(db.DateTime(timezone=True), nullable=True, index=True)
+    last_integrity_outcome = db.Column(db.String(32), nullable=True)
     scan_tool = db.Column(db.String(50), nullable=True)  # Tool used for detection (ffmpeg, imagemagick, pil)
     scan_duration = db.Column(db.Float, nullable=True)  # Time taken to scan in seconds
     scan_output = db.Column(db.Text)  # Full tool output for debugging
@@ -312,6 +316,10 @@ class ScanConfiguration(db.Model):
     path = db.Column(db.String(500), nullable=True, unique=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=True, default=lambda: datetime.now(timezone.utc))
+    require_mount = db.Column(db.Boolean, nullable=False, default=False)
+    mount_filesystem_type = db.Column(db.String(100), nullable=True)
+    mount_source = db.Column(db.Text, nullable=True)
+    mount_root = db.Column(db.Text, nullable=True)
     
     def to_dict(self):
         # Support both old and new structures
@@ -321,7 +329,8 @@ class ScanConfiguration(db.Model):
                 'id': self.id,
                 'path': self.path,
                 'is_active': self.is_active,
-                'created_at': convert_to_tz(self.created_at)
+                'created_at': convert_to_tz(self.created_at),
+                'require_mount': self.require_mount,
             }
         else:
             # Old key-value structure
@@ -368,6 +377,10 @@ class ScanState(db.Model):
     num_workers = db.Column(db.Integer, nullable=False, default=1)  # Number of parallel workers used
     files_added = db.Column(db.Integer, nullable=False, default=0)  # New files added to database
     files_updated = db.Column(db.Integer, nullable=False, default=0)  # Existing files updated
+    # A run is immutable once created.  Cancellation is recorded before any
+    # broker operation so workers can stop without relying on revoke delivery.
+    cancel_requested_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    dispatch_generation = db.Column(db.Integer, nullable=False, default=0)
     
     # TODO: Crash recovery tracking columns will be added after migration
     # crash_count = db.Column(db.Integer, nullable=True, default=None)
@@ -376,7 +389,21 @@ class ScanState(db.Model):
     def to_dict(self):
         # Import here to avoid circular imports
         from pixelprobe.utils.helpers import create_state_dict
-        return create_state_dict(self, extra_fields=['estimated_total', 'discovery_count'])
+        result = create_state_dict(self, extra_fields=[
+            'estimated_total', 'discovery_count', 'directories', 'force_rescan',
+        ])
+        directories = []
+        if result['directories']:
+            try:
+                directories = json.loads(result['directories'])
+                if isinstance(directories, str):
+                    directories = json.loads(directories)
+                if not isinstance(directories, list):
+                    directories = []
+            except (TypeError, ValueError):
+                directories = []
+        result['directories'] = directories
+        return result
     
     @staticmethod
     def get_or_create():
@@ -441,18 +468,8 @@ class ScanState(db.Model):
             logger.error(f"Error cleaning up active scans: {e}")
             db.session.rollback()
 
-        # If scan_id provided (e.g., scheduled scans), delete any existing record with same ID
-        # This allows scheduled scans to run again without hitting unique constraint violation
-        if scan_id:
-            try:
-                existing = ScanState.query.filter_by(scan_id=scan_id).first()
-                if existing:
-                    logger.info(f"Removing previous scan_state with scan_id={scan_id} (id={existing.id}, phase={existing.phase})")
-                    db.session.delete(existing)
-                    db.session.commit()
-            except Exception as e:
-                logger.error(f"Error removing existing scan_state with scan_id={scan_id}: {e}")
-                db.session.rollback()
+        if scan_id and ScanState.query.filter_by(scan_id=scan_id).first():
+            raise ValueError(f"Scan ID already exists: {scan_id}")
 
         # Always create a fresh scan state when starting a new scan
         scan_state = ScanState()
@@ -472,7 +489,7 @@ class ScanState(db.Model):
             raise
         return scan_state
     
-    def start_scan(self, directories, force_rescan=False):
+    def start_scan(self, directories, force_rescan=False, commit=True):
         """Start a new scan, resetting all per-scan counters on the reused row"""
         self.phase = 'discovering'
         self.is_active = True  # Ensure scan is marked as active
@@ -492,7 +509,8 @@ class ScanState(db.Model):
         # (selected-file) scan reusing this row for a chunk-engine scan;
         # the orchestrator re-sets it right after calling start_scan()
         self.scan_type = None
-        db.session.commit()
+        if commit:
+            db.session.commit()
         logger.info(f"Scan started: directories={directories}, "
                     f"force_rescan={force_rescan}")
     
@@ -596,45 +614,16 @@ class ScanState(db.Model):
                 db.session.rollback()
     
     def complete_scan(self):
-        """Mark scan as completed - thread-safe version
-
-        Also cleans up any orphaned pending files that were discovered
-        during this scan but never actually scanned.
-        """
+        """Mark this active run completed without touching other file rows."""
         try:
-            # Get the scan ID before we lose session binding
-            scan_id = self.id if hasattr(self, 'id') and self.id else 'unknown'
-            end_time = datetime.now(timezone.utc)
-            start_time = self.start_time if hasattr(self, 'start_time') else None
-
-            # Update the database record directly using thread-safe query
-            # This avoids the detached instance problem
-            from sqlalchemy import text
-            db.session.execute(
-                text("UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time WHERE id = :id"),
-                {'end_time': end_time, 'id': scan_id}
-            )
-
-            # Clean up orphaned pending files that were discovered during this scan
-            # but never actually scanned (likely due to filters or exclusions)
-            if start_time:
-                orphaned_result = db.session.execute(
-                    text("""
-                        UPDATE scan_results
-                        SET scan_status = 'skipped',
-                            scan_output = 'File discovered but not scanned (likely filtered or excluded)'
-                        WHERE scan_status = 'pending'
-                        AND discovered_date >= :start_time
-                        AND discovered_date <= :end_time
-                    """),
-                    {'start_time': start_time, 'end_time': end_time}
-                )
-                orphaned_count = orphaned_result.rowcount
-                if orphaned_count > 0:
-                    logger.info(f"Scan {scan_id}: Cleaned up {orphaned_count} orphaned pending files")
-
+            row = db.session.get(ScanState, self.id)
+            if not row or not row.is_active or row.phase in ('cancelled', 'error', 'crashed'):
+                return
+            row.phase = 'completed'
+            row.is_active = False
+            row.end_time = datetime.now(timezone.utc)
             db.session.commit()
-            logger.info(f"Scan {scan_id} completed - phase set to 'completed', is_active=False")
+            logger.info(f"Scan {row.scan_id} completed - phase set to 'completed', is_active=False")
         except Exception as e:
             logger.error(f"Failed to commit scan completion: {e}")
             db.session.rollback()
@@ -653,17 +642,41 @@ class CleanupState(db.Model):
     files_processed = db.Column(db.Integer, nullable=False, default=0)
     total_files = db.Column(db.Integer, nullable=False, default=0)
     orphaned_found = db.Column(db.Integer, nullable=False, default=0)
+    # Flagged entries the run refused to delete because it could not confirm
+    # the file was deleted rather than unreachable
+    records_kept = db.Column(db.Integer, nullable=True, default=0)
     start_time = db.Column(db.DateTime(timezone=True), nullable=True)
     end_time = db.Column(db.DateTime(timezone=True), nullable=True)
     current_file = db.Column(db.String(500), nullable=True)
     progress_message = db.Column(db.String(1000), nullable=True)  # Increased from 200
     error_message = db.Column(db.String(1000), nullable=True)  # Increased from 500
     cancel_requested = db.Column(db.Boolean, nullable=True, default=False)
-    
+
     def to_dict(self):
         # Import here to avoid circular imports
         from pixelprobe.utils.helpers import create_state_dict
-        return create_state_dict(self, extra_fields=['orphaned_found'])
+        return create_state_dict(self, extra_fields=['orphaned_found', 'records_kept'])
+
+
+class CleanupFileDecision(db.Model):
+    """Immutable record of one cleanup run's decision for an inventory row."""
+    __tablename__ = 'cleanup_file_decisions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    cleanup_run_id = db.Column(db.String(36), nullable=False, index=True)
+    scan_result_id = db.Column(db.Integer, nullable=True, index=True)
+    file_path = db.Column(db.Text, nullable=False)
+    decision = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    reason = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(timezone.utc))
+    decided_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('cleanup_run_id', 'scan_result_id',
+                            name='uq_cleanup_file_decision_run_result'),
+        db.Index('idx_cleanup_file_decision_run_state', 'cleanup_run_id', 'decision', 'id'),
+    )
 
 class FileChangesState(db.Model):
     __tablename__ = 'file_changes_state'
@@ -679,6 +692,10 @@ class FileChangesState(db.Model):
     total_files = db.Column(db.Integer, nullable=False, default=0)
     changes_found = db.Column(db.Integer, nullable=False, default=0)
     corrupted_found = db.Column(db.Integer, nullable=False, default=0)
+    integrity_attempted = db.Column(db.Integer, nullable=False, default=0)
+    integrity_successful = db.Column(db.Integer, nullable=False, default=0)
+    integrity_errors = db.Column(db.Integer, nullable=False, default=0)
+    integrity_unavailable = db.Column(db.Integer, nullable=False, default=0)
     start_time = db.Column(db.DateTime(timezone=True), nullable=True)
     end_time = db.Column(db.DateTime(timezone=True), nullable=True)
     last_heartbeat = db.Column(db.DateTime(timezone=True), nullable=True)  # Track liveness to detect stuck workers
@@ -691,7 +708,10 @@ class FileChangesState(db.Model):
     def to_dict(self):
         # Import here to avoid circular imports
         from pixelprobe.utils.helpers import create_state_dict
-        result = create_state_dict(self, extra_fields=['changes_found', 'corrupted_found'])
+        result = create_state_dict(self, extra_fields=[
+            'changes_found', 'corrupted_found', 'integrity_attempted',
+            'integrity_successful', 'integrity_errors', 'integrity_unavailable',
+        ])
         # Handle special case for changed_files JSON field
         result['changed_files'] = json.loads(self.changed_files) if self.changed_files else []
         return result
@@ -768,6 +788,121 @@ class ScanChunk(db.Model):
             'error_message': self.error_message
         }
 
+
+class ScanRunRoot(db.Model):
+    """Evidence that a requested scan root was available and fully observed."""
+    __tablename__ = 'scan_run_roots'
+
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(64), nullable=False, index=True)
+    root_path = db.Column(db.Text, nullable=False)
+    resolved_path = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    error_message = db.Column(db.Text, nullable=True)
+    discovered_count = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (db.UniqueConstraint('scan_id', 'root_path', name='uq_scan_run_roots_scan_root'),)
+
+
+class ScanRunFile(db.Model):
+    """Immutable membership and observed outcome for one scan run file."""
+    __tablename__ = 'scan_run_files'
+
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(64), nullable=False, index=True)
+    scan_result_id = db.Column(db.Integer, nullable=True, index=True)
+    file_path = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    outcome = db.Column(db.String(32), nullable=True)
+    file_hash = db.Column(db.String(64), nullable=True)
+    file_size = db.Column(db.BigInteger, nullable=True)
+    last_modified = db.Column(db.DateTime(timezone=True), nullable=True)
+    is_corrupted = db.Column(db.Boolean, nullable=True)
+    has_warnings = db.Column(db.Boolean, nullable=True)
+    corruption_details = db.Column(db.Text, nullable=True)
+    warning_details = db.Column(db.Text, nullable=True)
+    file_type = db.Column(db.String(100), nullable=True)
+    scan_tool = db.Column(db.String(50), nullable=True)
+    scan_output = db.Column(db.Text, nullable=True)
+    marked_as_good = db.Column(db.Boolean, nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    claimed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('scan_id', 'file_path', name='uq_scan_run_files_scan_path'),
+        db.Index('idx_scan_run_files_claim', 'scan_id', 'status', 'id'),
+    )
+
+
+class ScanTask(db.Model):
+    """Durable Celery task ownership. Only these tasks may be revoked for a run."""
+    __tablename__ = 'scan_tasks'
+
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(64), nullable=False, index=True)
+    chunk_id = db.Column(db.Integer, nullable=True, index=True)
+    purpose = db.Column(db.String(32), nullable=False)
+    celery_task_id = db.Column(db.String(64), nullable=False, unique=True)
+    generation = db.Column(db.Integer, nullable=False, default=0)
+    status = db.Column(db.String(20), nullable=False, default='queued')
+    payload = db.Column(db.JSON, nullable=True)
+    dispatch_attempts = db.Column(db.Integer, nullable=False, default=0)
+    dispatch_lease_expires_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+
+class ScanNotificationOutbox(db.Model):
+    __tablename__ = 'scan_notification_outbox'
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    event = db.Column(db.String(64), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    error_message = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    delivered_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    lease_expires_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    payload = db.Column(db.JSON, nullable=True)
+    targets_initialized = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    terminal_reason = db.Column(db.String(64), nullable=True)
+
+
+class ScanNotificationDelivery(db.Model):
+    """A durable, independently retryable notification destination."""
+    __tablename__ = 'scan_notification_deliveries'
+
+    id = db.Column(db.Integer, primary_key=True)
+    outbox_id = db.Column(db.Integer, db.ForeignKey('scan_notification_outbox.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    rule_id = db.Column(db.Integer, nullable=True)
+    provider_id = db.Column(db.Integer, nullable=True)
+    provider_type = db.Column(db.String(20), nullable=True)
+    provider_config = db.Column(db.JSON, nullable=True)
+    conditions = db.Column(db.JSON, nullable=True)
+    priority = db.Column(db.String(10), nullable=False, default='normal')
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    lease_expires_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    lease_token = db.Column(db.String(36), nullable=True)
+    outcome = db.Column(db.String(32), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    skip_reason = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(timezone.utc))
+    delivered_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('outbox_id', 'rule_id', name='uq_scan_notification_delivery_rule'),
+        db.Index('idx_scan_notification_delivery_claim', 'outbox_id', 'status', 'lease_expires_at', 'id'),
+    )
+
 class ScanReport(db.Model):
     __tablename__ = 'scan_reports'
     
@@ -806,9 +941,25 @@ class ScanReport(db.Model):
     
     # Additional metadata
     scan_id = db.Column(db.String(64), nullable=True)  # Link to ScanState scan_id
+    # Cleanup reports point to durable decisions using this immutable run ID.
+    # It deliberately has no FK because inventory rows and cleanup state may be
+    # retained on different schedules.
+    cleanup_run_id = db.Column(db.String(36), nullable=True, index=True)
+    cleanup_details_total = db.Column(db.Integer, nullable=False, default=0)
+    cleanup_details_truncated = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     
     def to_dict(self):
+        directories = []
+        if self.directories_scanned:
+            try:
+                directories = json.loads(self.directories_scanned)
+                if isinstance(directories, str):
+                    directories = json.loads(directories)
+                if not isinstance(directories, list):
+                    directories = []
+            except (TypeError, ValueError, json.JSONDecodeError):
+                directories = []
         return {
             'id': self.id,
             'report_id': self.report_id,
@@ -816,7 +967,7 @@ class ScanReport(db.Model):
             'start_time': convert_to_tz(self.start_time),
             'end_time': convert_to_tz(self.end_time),
             'duration_seconds': self.duration_seconds,
-            'directories_scanned': json.loads(self.directories_scanned) if self.directories_scanned else [],
+            'directories_scanned': directories,
             'force_rescan': self.force_rescan,
             'num_workers': self.num_workers,
             'total_files_discovered': self.total_files_discovered,
@@ -833,6 +984,9 @@ class ScanReport(db.Model):
             'status': self.status,
             'error_message': self.error_message,
             'scan_id': self.scan_id,
+            'cleanup_run_id': self.cleanup_run_id,
+            'cleanup_details_total': self.cleanup_details_total,
+            'cleanup_details_truncated': self.cleanup_details_truncated,
             'created_at': convert_to_tz(self.created_at)
         }
 
@@ -844,11 +998,12 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(128), nullable=False)
-    is_admin = db.Column(db.Boolean, nullable=False, default=True)  # All users have admin access
+    is_admin = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     last_login = db.Column(db.DateTime(timezone=True), nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     first_setup_required = db.Column(db.Boolean, nullable=False, default=False)
+    session_generation = db.Column(db.Integer, nullable=False, default=0)
 
     # Relationship to API tokens
     api_tokens = db.relationship('APIToken', back_populates='user', cascade='all, delete-orphan')
@@ -856,6 +1011,9 @@ class User(UserMixin, db.Model):
     def set_password(self, password):
         """Hash and set the user's password"""
         self.password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+    def get_id(self):
+        return f'{self.id}:{self.session_generation}'
 
     def check_password(self, password):
         """Check if the provided password matches the hash"""
@@ -894,7 +1052,7 @@ class APIToken(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    token = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    token_digest = db.Column(db.String(64), unique=True, nullable=False, index=True)
     description = db.Column(db.String(200))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     last_used = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -906,8 +1064,13 @@ class APIToken(db.Model):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        if not self.token:
-            self.token = secrets.token_urlsafe(48)
+        self._plaintext_token = secrets.token_urlsafe(48)
+        self.token_digest = hashlib.sha256(self._plaintext_token.encode('utf-8')).hexdigest()
+
+    @property
+    def plaintext_token(self):
+        """Return the value only while the newly created object is in memory."""
+        return getattr(self, '_plaintext_token', None)
 
     def is_valid(self):
         """Check if the token is valid (active and not expired)"""
@@ -949,11 +1112,26 @@ class APIToken(db.Model):
             'last_used': self.last_used.isoformat() if self.last_used else None,
             'expires_at': self.expires_at.isoformat() if self.expires_at else None,
             'is_active': self.is_active,
-            'token_preview': f"{self.token[:8]}..." if self.token else None
+            'token_preview': None
         }
 
     def __repr__(self):
         return f'<APIToken {self.id} for user {self.user_id}>'
+
+
+class SecurityAuditEvent(db.Model):
+    """Append-only security trail, deliberately separate from routine logs."""
+    __tablename__ = 'security_audit_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    actor_id = db.Column(db.Integer, nullable=True, index=True)
+    action = db.Column(db.String(100), nullable=False, index=True)
+    target = db.Column(db.String(300), nullable=True)
+    outcome = db.Column(db.String(30), nullable=False)
+    details = db.Column(db.JSON, nullable=False, default=dict)
+    ip_address = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class LogEntry(db.Model):

@@ -23,17 +23,15 @@ PixelProbe supports two authentication methods:
 
 ### 1. Session-based authentication (web UI)
 - Used automatically when logged in through the web interface
-- Managed via secure HTTP-only cookies
-- Best for browser-based access
+- Managed by secure HTTP-only cookies
 - Sessions expire after 30 minutes of inactivity; an expired session receives
   `401 {"error": "Session expired due to inactivity"}` and must log in again
+- State-changing session requests require the CSRF protection configured by the application. Bearer-token requests do not use cookie CSRF.
 
 ### 2. API token authentication (programmatic access)
 - Generate tokens through the web UI under Account -> API Tokens
 - Include in requests using the Authorization header
-- Two formats are supported:
-  - Standard: `Authorization: Bearer <your-token>`
-  - Direct: `Authorization: <your-token>` (for Swagger UI compatibility)
+- Use the standard form: `Authorization: Bearer <your-token>`
 
 #### Example with curl
 ```bash
@@ -41,9 +39,6 @@ PixelProbe supports two authentication methods:
 curl -H "Authorization: Bearer your-api-token-here" \
      http://localhost:5000/api/scan-status
 
-# Using direct format (Swagger UI style)
-curl -H "Authorization: your-api-token-here" \
-     http://localhost:5000/api/scan-status
 ```
 
 #### Example with Python
@@ -64,16 +59,19 @@ response = requests.get('http://localhost:5000/api/scan-status', headers=headers
 4. Provide a description
 5. Copy the generated token (it won't be shown again)
 
+### Session and token revocation
+
+Changing a password increments the user's session generation, invalidates earlier login and remember cookies, and starts a new non-remembered session in the current browser. It does not revoke API tokens. Revoke a token through `DELETE /api/tokens/{id}`, let it expire, or deactivate its owner. Shared token validation also rejects tokens whose owner is inactive.
+
+The token migration hashes existing raw token values before removing the plaintext column. Existing client token values remain valid after that upgrade; they are not rotated automatically. Treat token revocation as an independent operator action and audit requirement.
+
 ### Internal header (not for integrations)
 
-An `X-Internal-Secret` request header exists solely for the scheduler's HTTP
-self-call inside the container. The secret is generated at startup and never
-exposed; do not build integrations against it - use API tokens instead.
+An `X-Internal-Secret` request header exists solely for the scheduler's HTTP self-call inside the container. The secret is generated at startup and never exposed; do not build integrations against it - use API tokens instead.
 
 ## Rate limiting
 
-Only individually decorated endpoints are rate limited; there are
-**no default/global limits**. The decorated limits are:
+Only individually decorated endpoints are rate limited; there are **no default/global limits**. The decorated limits are:
 
 | Endpoints | Limit |
 |-----------|-------|
@@ -94,6 +92,17 @@ Rate limit headers are included in responses:
 - `X-RateLimit-Limit`: Maximum requests allowed
 - `X-RateLimit-Remaining`: Requests remaining
 - `X-RateLimit-Reset`: Time when the limit resets
+
+## Permission matrix
+
+| Access | Routes |
+|---|---|
+| Unauthenticated | `GET /healthz`, `GET /api/auth/status`, first-run `POST /api/auth/setup`, `POST /api/auth/login`, and the served OpenAPI document |
+| Authenticated session or Bearer token | Scan status, results, reports, exports, logs, and account-token routes according to the route's documented method |
+| Administrator session or Bearer token | Scan launch and recovery, maintenance, schedules, exclusions, settings, users, notification providers and rules, healthchecks, retention, and destructive operations |
+| Internal scheduler header | Container-local scheduler callbacks only. It is not an integration API. |
+
+All browser session routes remain CSRF-protected. `SESSION_COOKIE_SECURE=true` is the production default. Set it to `false` only for a deliberate local or LAN HTTP deployment. `REMEMBER_COOKIE_DURATION_DAYS` defaults to 30 and accepts 1 through 365 days.
 
 ## Request/response format
 
@@ -197,7 +206,7 @@ Get paginated scan results with optional filters.
 - `bitrot_suspected` (string): Filter by suspected bitrot: `all`, `true`, `false`
 - `search` (string): Case-insensitive substring match on file path
 - `path` (string): Restrict results to one configured scan path (must exactly match a configured path)
-- `sort_field` (string): Field to sort by (default: `scan_date`). Valid values: `scan_date`, `file_path`, `file_size`, `file_type`, `scan_status`, `status`, `is_corrupted`, `marked_as_good`, `scan_tool`, `corruption_details`, `discovered_date`, `last_modified` (`status` sorts by corruption status; unknown values fall back to `scan_date` descending)
+- `sort_field` (string): Field to sort by (default: `scan_date`). Valid values: `scan_date`, `file_path`, `file_size`, `file_type`, `scan_status`, `status`, `is_corrupted`, `marked_as_good`, `scan_tool`, `corruption_details`, `discovered_date`, `last_modified`. `status` sorts by corruption status. Unknown values fall back to `scan_date` descending.
 - `sort_order` (string): `asc` or `desc` (default: `desc`)
 
 `per_page=-1` returns every matching row in a single response (no pagination).
@@ -376,7 +385,7 @@ Get the current scan progress and status.
   "is_running": true,
   "is_scanning": true,
   "is_active": true,
-  "scan_id": 123,
+  "scan_id": "0c5e0afd-743b-422e-b349-50a8ed6da2bb",
   "start_time": "2025-01-20T12:00:00Z",
   "end_time": null,
   "directories": ["/media/photos"],
@@ -403,6 +412,7 @@ Get the current scan progress and status.
 
 Field notes:
 - `is_scanning` mirrors `is_running` (legacy compatibility); `is_active` reflects the database scan-state row.
+- `scan_id` is the durable scan UUID. `directories` is always an array from the stored scan scope, and `force_rescan` is the stored run flag.
 - `eta` is an ISO-8601 timestamp (or `null`); `files_per_second` is a float.
 - `chunks` is only present during the `scanning` phase and lists per-worker chunk progress.
 
@@ -872,11 +882,7 @@ The endpoints below are not documented in detail above; methods and one-line pur
 | PUT | `/api/settings` | Save one or more settings. Send a JSON object of keys and values |
 | DELETE | `/api/settings/{key}` | Restore one setting to its default |
 
-Values are validated against the type and range declared for each setting. A `PUT`
-carrying a bad value is rejected whole, with a message naming the setting, and
-nothing is written. Settings take effect on the next file scanned, including in a
-scan that is already running. Every key and default is listed in
-[Configuration](configuration.md#scanner-settings).
+Values are validated against the type and range declared for each setting. A `PUT` carrying a bad value is rejected whole, with a message naming the setting, and nothing is written. Settings take effect on the next file scanned, including in a scan that is already running. Every key and default is listed in [Configuration](configuration.md#scanner-settings).
 
 ```bash
 # Report only freezes of 10 seconds or longer
@@ -914,6 +920,7 @@ curl -X DELETE https://your-host/api/settings/detection.freeze_min_duration_secs
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | GET | `/api/scan-reports` | List scan reports |
+| GET | `/api/scan-runs/{scan_id}/files` | Page immutable membership and current raw member states for one scan run |
 | GET | `/api/scan-reports/latest` | Latest report per scan type |
 | GET, DELETE | `/api/scan-reports/{report_id}` | Read / delete a report |
 | GET | `/api/scan-reports/{report_id}/export` | Export a report (CSV/JSON) |
@@ -923,6 +930,10 @@ curl -X DELETE https://your-host/api/settings/detection.freeze_min_duration_secs
 | GET | `/api/view/{result_id}` | Stream a media file for in-browser viewing |
 | GET | `/api/download/{result_id}` | Download the original media file |
 | GET | `/api/openapi.yaml`, `/api/openapi.json` | OpenAPI specification (partial; unauthenticated) |
+
+`HEAD /api/view/{result_id}` returns the content type and disposition used for preview without a body. The type comes from the file content, not stored scan metadata. Clients must treat an attachment disposition as download-only.
+
+`GET /api/scan-runs/{scan_id}/files` requires authentication and is available in 2.9.3. It returns immutable members and their current state after `cursor` (default `0`), with `limit` from 1 through 1000 (default `500`). `next_cursor` is `null` on the final page. It never resumes a run; any follow-up selection is created separately with a new scan UUID.
 
 ## Code examples
 
@@ -1014,7 +1025,7 @@ Future versions will include WebSocket support for real-time updates:
 - File paths are validated against the configured allowed directories.
 - Inputs are validated for type and length.
 - Rate limiting protects against abuse and DoS attacks.
-- CSRF protection is enabled for the web interface (API endpoints are currently exempt).
+- Cookie-authenticated writes require CSRF protection. Use a Bearer token for non-browser API clients.
 - Subprocess calls use validated arguments to prevent command injection.
 
 ## Troubleshooting

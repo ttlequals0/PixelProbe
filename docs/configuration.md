@@ -19,6 +19,19 @@ Reference for PixelProbe environment variables and performance tuning.
 
 All configuration is done via environment variables, either in `.env` file or directly in `docker-compose.yml`.
 
+## Effective Compose deployment
+
+The root `docker-compose.yml` is the deployment source of truth. It starts PostgreSQL 18, Valkey 9, the `pixelprobe` web service, and `celery-worker`.
+
+| Service | Scheduler | Media mount | Identity | Writable paths |
+|---|---|---|---|---|
+| `pixelprobe` | Disabled by default | `${MEDIA_PATH}:/media:ro` | `${PUID:-10001}:${PGID:-10001}` | `./instance`, `/app/runtime`, `/tmp`, `/app/logs` |
+| `celery-worker` | Enabled by default | `${MEDIA_PATH}:/media:ro` | `${PUID:-10001}:${PGID:-10001}` | `/app/runtime`, `/tmp` |
+
+The services share the same UID/GID and read-only media view. Do not change only one service identity or mount path. Create the host `instance` directory before startup and give it to the configured identity, for example `sudo chown 10001:10001 instance` when using defaults.
+
+The web service publishes `${PORT:-5000}:5000`. PostgreSQL and Valkey are internal to the Compose network. The scheduler lease prevents duplicate ownership, but the normal deployment deliberately enables scheduler work only in `celery-worker`.
+
 ### Required variables
 
 | Variable | Description | Example |
@@ -59,9 +72,9 @@ All configuration is done via environment variables, either in `.env` file or di
 | Variable | Default | Description | Recommendations |
 |----------|---------|-------------|-----------------|
 | `MAX_WORKERS` | `10` | Parallel file scanning workers per task | 10-24 for most systems |
-| `BATCH_SIZE` | `100` | Files per batch during discovery | 50-200 based on file sizes |
-| `MAX_OUTPUT_SIZE` | `10000` | Max output characters before rotation | 10000-50000 |
-| `OUTPUT_ROTATION_ENABLED` | `true` | Enable output truncation | `true` for large scans |
+| `BATCH_SIZE` | `100` | Legacy media-checker discovery lookup batch. It does not set parallel discovery inserts or scan chunk commits. | Leave at `100` unless diagnosing that legacy path. |
+| `MAX_OUTPUT_SIZE` | `10000` | Maximum stored scan-output characters before model-level rotation truncates the stored text. | Keep the default unless operators accept less retained diagnostic output. |
+| `OUTPUT_ROTATION_ENABLED` | `true` | Enable model-level stored-output rotation. | Keep `true` for bounded stored output. |
 | `CHUNK_HEARTBEAT_INTERVAL_SECS` | `120` | How often a running chunk task bumps the scan's liveness timestamp. Keeps a scan busy on one long movie from being falsely marked crashed by the 30-minute stuck-scan rule | Leave at default unless debugging |
 | `CHUNK_REVIVE_STALENESS_SECS` | `600` | How stale the scan liveness timestamp must be before the stuck-scan sweeper treats the chunk workers as gone and re-queues their chunks (recovers scans interrupted by container restarts) | Must exceed several heartbeat intervals |
 
@@ -127,7 +140,7 @@ CLEANUP_SCHEDULE=interval:days:7             # Every 7 days
 **Data retention notes:**
 - Automated cleanup runs daily via the built-in MediaScheduler (APScheduler): data retention at 04:00, log retention at 03:00
 - `SCAN_OUTPUT_RETENTION_DAYS` is currently not used (scan results kept forever)
-- Log retention days is not an environment variable: it is stored in the `app_configs` database table (default 30) and changed via the UI (System > View Logs) or API (`PUT /api/logs/retention`)
+- Log retention days are stored in the `app_configs` database table, not an environment variable. The default is 30 days. Change it through System > View Logs or `PUT /api/logs/retention`.
 
 ### Advanced variables
 
@@ -149,8 +162,16 @@ Rarely-changed knobs with sensible defaults.
 | `MAX_CONCURRENT_LARGE` | `50` | Max in-flight hash tasks for large files |
 | `MAX_CONCURRENT_HUGE` | `5` | Max in-flight hash tasks for huge files |
 | `BITROT_STABLE_CHECKS_TO_EXPIRE` | `2` | Stable integrity checks before a bitrot suspicion expires |
-| `ORPHAN_CLEANUP_ABORT_FLOOR` | `100` | Minimum missing-file count before the mass-delete safety check applies |
-| `ORPHAN_CLEANUP_MAX_DELETE_FRACTION` | `0.5` | Abort orphan cleanup if more than this fraction of records would be deleted (guards against an unmounted volume) |
+| `ORPHAN_CLEANUP_ABORT_FLOOR` | `100` | Minimum count of kept records before the run's message calls out a possible storage outage |
+| `ORPHAN_CLEANUP_MAX_DELETE_FRACTION` | `0.5` | Call out a possible outage when this fraction of the files checked could not be confirmed as deleted |
+
+Orphan cleanup confirms each missing file before deleting its record, by reading the file's own directory and finding other files in it. A nonempty listing is evidence that the directory is available and supports treating the file as absent.
+
+A folder holding one film has nothing left to say once you delete it. The question moves up a level: the parent lists folders, and one must hold a file PixelProbe recorded. That is evidence that the library is available, not proof of mount identity. Enable `require_mount=true` to compare the filesystem type, source, and mount root with the administrator-approved baseline.
+
+Nothing above answers for a tree that has gone entirely, and those records are kept and counted. Files that have become readable again since the sweep are left alone.
+
+Confirming that kept records were deleted is your decision. The UI offers it after a run that kept records, and the API takes `trust_unreadable_dirs: true` on `POST /api/cleanup-orphaned`; it is never set for a scheduled cleanup. A confirmed run that finds more unreadable records than the previous run kept stops without deleting, since your answer cannot cover storage that went offline in between. The two variables above only decide when a run's message calls the kept records a likely outage.
 
 **Startup and migrations:**
 
@@ -169,94 +190,29 @@ Rarely-changed knobs with sensible defaults.
 
 **Image processing:**
 
-`PILLOW_BLOCKS_MAX` (set to `256` in the bundled compose file) is a
-Pillow-internal memory allocator tuning knob read by the Pillow library
-itself, not by PixelProbe code.
+`PILLOW_BLOCKS_MAX` (set to `256` in the bundled compose file) is a Pillow-internal memory allocator tuning knob read by the Pillow library itself, not by PixelProbe code.
 
 ### Monitoring variables (future)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENABLE_MONITORING` | `false` | Enable Prometheus metrics endpoint |
-| `METRICS_PORT` | `9090` | Metrics endpoint port |
 
 ## Docker Compose configuration
 
 ### Basic configuration
 
-Minimal `docker-compose.yml` for production:
+The root [`docker-compose.yml`](../docker-compose.yml) is the authoritative deployment configuration. It supplies the current image tag, exact web and worker environment forwarding, non-root identity, read-only bind behavior, resource limits, and scheduler ownership. Do not copy a second full Compose file from documentation.
+
+For a local override, retain the root file's `PUID`, `PGID`, mount mode, and service names. For example:
 
 ```yaml
 services:
-  postgres:
-    image: postgres:18-alpine
-    container_name: pixelprobe-postgres
-    environment:
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: valkey/valkey:9-alpine
-    container_name: pixelprobe-redis
-    command: valkey-server --maxmemory ${REDIS_MAX_MEMORY:-2gb} --maxmemory-policy noeviction
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   pixelprobe:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
-    container_name: pixelprobe-app
     environment:
-      SECRET_KEY: ${SECRET_KEY}
-      POSTGRES_HOST: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      SCAN_PATHS: ${SCAN_PATHS:-/media}
-      MAX_WORKERS: ${MAX_WORKERS:-10}
-      TZ: ${TZ:-UTC}
-    volumes:
-      - ${MEDIA_PATH}:/media:ro
-    ports:
-      - "${PORT:-5000}:5000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
+      GUNICORN_WORKERS: 2
   celery-worker:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
-    container_name: pixelprobe-celery-worker
-    command: python celery_worker.py
     environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      POSTGRES_HOST: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      SECRET_KEY: ${SECRET_KEY}
-      MAX_WORKERS: ${MAX_WORKERS:-10}
-      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
-    volumes:
-      - ${MEDIA_PATH}:/media:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-volumes:
-  postgres_data:
+      CELERY_CONCURRENCY: 2
 ```
 
 ### Multiple scan paths
@@ -297,12 +253,12 @@ Both `pixelprobe` and `celery-worker` MUST run as the same user to access media 
 
 ```yaml
 pixelprobe:
-  user: "${PUID:-1000}:${PGID:-1000}"
+  user: "${PUID:-10001}:${PGID:-10001}"
   volumes:
     - ${MEDIA_PATH}:/media:ro
 
 celery-worker:
-  user: "${PUID:-1000}:${PGID:-1000}"  # MUST match pixelprobe
+  user: "${PUID:-10001}:${PGID:-10001}"  # MUST match pixelprobe
   volumes:
     - ${MEDIA_PATH}:/media:ro
 ```
@@ -330,7 +286,7 @@ SQLALCHEMY_ENGINE_OPTIONS = {
 }
 ```
 
-**Total connections (worst case):** web app 4 gunicorn workers x (5 base + 10 overflow) = 60, plus CELERY_CONCURRENCY x (5 + 10) from the Celery prefork children, plus ~MAX_WORKERS checker connections
+**Total connections (worst case):** Four Gunicorn workers use 60 connections: 4 x (5 base + 10 overflow). Add `CELERY_CONCURRENCY` x (5 + 10) for Celery prefork children, plus about `MAX_WORKERS` checker connections.
 
 **PostgreSQL max_connections:**
 - Default: 100 connections
@@ -352,22 +308,20 @@ ALTER SYSTEM SET work_mem = '16MB';
 ALTER SYSTEM SET max_parallel_workers_per_gather = 4;
 ```
 
-`work_mem` and `max_parallel_workers_per_gather` take effect after
-`SELECT pg_reload_conf();`, but `shared_buffers` and `max_connections`
-require a full PostgreSQL restart
-(`docker compose restart postgres`) - a reload is not enough. The same
-settings can instead be passed as `command:` flags on the postgres service;
-see [docker-setup.md](docker-setup.md).
+`work_mem` and `max_parallel_workers_per_gather` take effect after `SELECT pg_reload_conf();`. `shared_buffers` and `max_connections` require a full PostgreSQL restart with `docker compose restart postgres`. A reload is not enough. The same settings can instead be passed as `command:` flags on the postgres service. See [docker-setup.md](docker-setup.md).
 
 ## Performance tuning
 
+The values in this section are operator starting points, not benchmark results. Measure CPU, memory, database connections, and media storage behavior on the library that will run the deployment before increasing concurrency.
+
 ### Recommended settings by system size
+
+`BATCH_SIZE` is omitted from these profiles because it does not tune parallel discovery inserts or scan chunk commits. Leave its legacy lookup default at `100` unless investigating that specific code path.
 
 #### Small library (< 10,000 files)
 ```bash
 MAX_WORKERS=4
 CELERY_CONCURRENCY=2
-BATCH_SIZE=50
 REDIS_MAX_MEMORY=512mb
 ```
 
@@ -375,7 +329,6 @@ REDIS_MAX_MEMORY=512mb
 ```bash
 MAX_WORKERS=10
 CELERY_CONCURRENCY=4
-BATCH_SIZE=100
 REDIS_MAX_MEMORY=1gb
 ```
 
@@ -383,7 +336,6 @@ REDIS_MAX_MEMORY=1gb
 ```bash
 MAX_WORKERS=16
 CELERY_CONCURRENCY=6
-BATCH_SIZE=200
 REDIS_MAX_MEMORY=2gb
 ```
 
@@ -391,7 +343,6 @@ REDIS_MAX_MEMORY=2gb
 ```bash
 MAX_WORKERS=24
 CELERY_CONCURRENCY=8
-BATCH_SIZE=200
 REDIS_MAX_MEMORY=4gb
 ```
 
@@ -535,13 +486,9 @@ reports and scan states immediately.
 
 ## Notification providers
 
-Notifications are configured through the API, not environment variables. A
-*provider* is where messages go; a *rule* maps an event to a provider. Provider
-types are `pushover`, `ntfy`, `webhook`, and `email`.
+Notifications are configured through the API, not environment variables. A *provider* is where messages go; a *rule* maps an event to a provider. Provider types are `pushover`, `ntfy`, `webhook`, and `email`.
 
-Event types available to rules: `scan_start`, `scan_complete`, `scan_failed`,
-`scan_missed`, `corruption_found`, `bitrot_suspected`, `user_added`,
-`user_deleted`, `api_key_added`, `api_key_deleted`, `auth_failed`.
+Event types available to rules are `scan_completed` and `bitrot_suspected`.
 
 ### Email (SMTP)
 
@@ -585,7 +532,7 @@ curl -X POST http://localhost:5000/api/notifications/providers/1/test \
 curl -X POST http://localhost:5000/api/notifications/rules \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"provider_id": 1, "event_type": "corruption_found", "priority": "high"}'
+  -d '{"provider_id": 1, "event_type": "scan_completed", "priority": "high"}'
 ```
 
 **Notes:**
@@ -605,7 +552,7 @@ curl -X POST http://localhost:5000/api/notifications/rules \
 
 PixelProbe includes SSRF protection that blocks outbound requests to private/reserved IP ranges. If you use internal services for healthchecks, notifications (ntfy, webhooks), or similar integrations that resolve to private IPs, you can allowlist them:
 
-Email (SMTP) notification providers are the one exception and need no allowlist entry: a self-hosted relay is normally on localhost, a Docker network or the LAN, so private, LAN and loopback SMTP hosts are permitted by default. Cloud-metadata and link-local addresses are still refused for SMTP.
+Email (SMTP) notification providers are the one exception and need no allowlist entry. A self-hosted relay is normally on localhost, a Docker network, or the LAN. Private, LAN, and loopback SMTP hosts are permitted by default. Cloud-metadata and link-local addresses are still refused for SMTP.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -706,7 +653,6 @@ Start with the defaults and raise `MAX_WORKERS` and `CELERY_CONCURRENCY` gradual
 ```bash
 MAX_WORKERS=8
 CELERY_CONCURRENCY=3
-BATCH_SIZE=100
 REDIS_MAX_MEMORY=1gb
 POSTGRES_PASSWORD=strong-password-here
 SCAN_PATHS=/movies,/tv
@@ -716,7 +662,6 @@ SCAN_PATHS=/movies,/tv
 ```bash
 MAX_WORKERS=20
 CELERY_CONCURRENCY=6
-BATCH_SIZE=200
 REDIS_MAX_MEMORY=4gb
 POSTGRES_PASSWORD=very-strong-password
 SCAN_PATHS=/archive/video,/archive/images
@@ -728,7 +673,6 @@ MAX_OUTPUT_SIZE=50000
 ```bash
 MAX_WORKERS=24
 CELERY_CONCURRENCY=8
-BATCH_SIZE=200
 REDIS_MAX_MEMORY=8gb
 POSTGRES_PASSWORD=enterprise-strength-password
 SCAN_PATHS=/storage/media1,/storage/media2,/storage/media3
@@ -740,14 +684,9 @@ See [troubleshooting.md](troubleshooting.md) for solutions to common configurati
 
 ## Scanner settings
 
-These are edited under **System > Tunables** in the web interface, or through
-`GET`, `PUT` and `DELETE` on `/api/settings`. They are stored in the database, so a
-change reaches a running scan without a restart and survives a container rebuild.
+These are edited under **System > Tunables** in the web interface, or through `GET`, `PUT` and `DELETE` on `/api/settings`. They are stored in the database, so a change reaches a running scan without a restart and survives a container rebuild.
 
-Each one used to be an environment variable. On first start after upgrading, any of
-those variables still set in your environment is copied into the database once, so
-nothing changes under you. After that the stored value wins and the variable is
-ignored. Removing a setting through the API restores its default.
+Each one used to be an environment variable. On first start after upgrading, any of those variables still set in your environment is copied into the database once, so nothing changes under you. After that the stored value wins and the variable is ignored. Removing a setting through the API restores its default.
 
 ### Detection
 
@@ -778,4 +717,5 @@ How long to wait on storage and tools before giving up on a file.
 |---------|----------------|---------|--------------|
 | `timeouts.temporal_sample_timeout_secs` | Sampled window timeout | `30` seconds | Seconds to wait on one sampled window. Raise this on a busy host, where a timeout means contention rather than a bad file. Range 10 to 3600. |
 | `timeouts.ffprobe_timeout_secs` | Metadata read timeout | `120` seconds | Seconds to wait when reading a file's metadata. Raise it on slow storage. Range 10 to 3600. |
+| `timeouts.audio_decode_base_secs` | Audio decode base timeout | `120` seconds | Starting budget for checking one audio file, shared by its decode, container and lossless passes. The real budget scales up with the file's size and playing time, so a long episode is not cut short. Range 30 to 3600. |
 | `timeouts.file_read_timeout_secs` | File read timeout | `60` seconds | Seconds to wait on a raw read before treating the file as unreadable and moving on. The hashing deadline scales up with file size on top of this. Range 10 to 3600. |

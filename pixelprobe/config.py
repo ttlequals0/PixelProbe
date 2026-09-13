@@ -104,10 +104,6 @@ class Config:
     timezone = 'UTC'
     enable_utc = True
     
-    # Monitoring
-    ENABLE_MONITORING = os.getenv('ENABLE_MONITORING', 'false').lower() == 'true'
-    METRICS_PORT = int(os.getenv('METRICS_PORT', '9090'))
-
     # SSRF trusted hosts -- hostnames and/or CIDR ranges that bypass private-IP blocking.
     # Read directly from env by security.py (works outside Flask app context too).
     # Example: "healthcheck.internal.local,192.168.5.0/24"

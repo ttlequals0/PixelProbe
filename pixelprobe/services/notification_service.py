@@ -9,6 +9,7 @@ Supports multiple notification providers:
 """
 
 import logging
+import re
 import smtplib
 import ssl
 import requests
@@ -17,12 +18,72 @@ from email.utils import formatdate, make_msgid
 from urllib.parse import urlparse
 from typing import Dict, Optional, List
 from datetime import datetime, timezone
-from pixelprobe.models import db, NotificationRule
+from pixelprobe.models import (db, HealthcheckConfig, NotificationRule,
+                               ScanNotificationDelivery, ScanReport)
 from pixelprobe.utils.security import validate_safe_url, create_safe_session, validate_outbound_host
 
 logger = logging.getLogger(__name__)
 
 VALID_EMAIL_SECURITY = ('starttls', 'ssl', 'none')
+
+# Event types are a contract: each item must have a production dispatch site.
+# Lifecycle code extends this mapping when it adds the matching outbox event.
+SUPPORTED_NOTIFICATION_EVENTS = frozenset({'bitrot_suspected', 'scan_completed'})
+
+# Public rule capability contract. Conditions may only refer to values emitted
+# by the production dispatch sites, never to arbitrary keys that would remain
+# silently false forever.
+NOTIFICATION_EVENT_CONDITIONS = {
+    'scan_completed': {
+        'scan_id': 'string',
+        'status': 'string',
+        'files_scanned': 'number',
+        'corrupted_count': 'number',
+        'warning_count': 'number',
+        'error_count': 'number',
+    },
+    'bitrot_suspected': {'count': 'number'},
+}
+
+
+def conditions_match(conditions, event_data):
+    """Evaluate all configured numeric/string comparisons against event data."""
+    if not conditions:
+        return True
+    for key, expression in conditions.items():
+        actual = event_data.get(key)
+        if actual is None:
+            return False
+        if isinstance(expression, dict):
+            operator, expected = expression.get('operator'), expression.get('value')
+        else:
+            operator, expected = 'eq', expression
+            if isinstance(expression, str):
+                for prefix, comparison in (('>=', 'gte'), ('<=', 'lte'),
+                                           ('>', 'gt'), ('<', 'lt')):
+                    if expression.startswith(prefix):
+                        operator = comparison
+                        try:
+                            expected = float(expression[len(prefix):].strip())
+                        except ValueError:
+                            return False
+                        break
+        if operator == 'eq' and actual != expected:
+            return False
+        if operator in {'gt', 'gte', 'lt', 'lte'}:
+            if not isinstance(actual, (int, float)) or not isinstance(expected, (int, float)):
+                return False
+            if operator == 'gt' and not actual > expected:
+                return False
+            if operator == 'gte' and not actual >= expected:
+                return False
+            if operator == 'lt' and not actual < expected:
+                return False
+            if operator == 'lte' and not actual <= expected:
+                return False
+        if operator not in {'eq', 'gt', 'gte', 'lt', 'lte'}:
+            return False
+    return True
 
 
 def parse_recipients(raw) -> List[str]:
@@ -46,6 +107,165 @@ def resolve_smtp_port(config: Dict, security: str) -> int:
     return int(port)
 
 
+def snapshot_event_targets(event_type, priority='normal', additional_data=None):
+    """Capture every rule's eligibility and provider configuration for one event.
+
+    The result is intentionally plain data so a durable outbox can retain the
+    exact targets selected at finalization time. Later rule or provider edits
+    must not turn a failed delivery into a new destination.
+    """
+    event_data = additional_data or {}
+    rules = NotificationRule.query.filter_by(event_type=event_type).all()
+    targets = []
+    for rule in rules:
+        provider = rule.provider
+        target = {
+            'rule_id': rule.id,
+            'provider_id': provider.id if provider else rule.provider_id,
+            'provider_type': provider.provider_type if provider else None,
+            'provider_config': dict(provider.configuration or {}) if provider else None,
+            'conditions': dict(rule.conditions or {}),
+            'priority': (rule.priority if rule.priority and rule.priority != 'normal'
+                         else priority),
+            'eligible': True,
+            'skip_reason': None,
+        }
+        if not rule.is_active:
+            target.update(eligible=False, skip_reason='rule_inactive')
+        elif not provider or not provider.is_active:
+            target.update(eligible=False, skip_reason='provider_inactive')
+        elif not conditions_match(rule.conditions, event_data):
+            target.update(eligible=False, skip_reason='conditions_not_met')
+        targets.append(target)
+    return targets
+
+
+def snapshot_scan_notification_outbox(outbox, report=None):
+    """Persist an outbox event's immutable payload and evaluated rule targets.
+
+    This helper is Celery-free so scan finalization can call it before the
+    transaction that commits the report and outbox row. It is idempotent for
+    legacy recovery rows that have not yet been initialized.
+    """
+    if outbox.targets_initialized:
+        return
+    if report is None:
+        report = (ScanReport.query.filter_by(scan_id=outbox.scan_id)
+                  .order_by(ScanReport.id.desc()).first())
+    succeeded = not report or report.status == 'completed'
+    payload = outbox.payload or {
+        'title': ('PixelProbe scan completed' if succeeded
+                  else 'PixelProbe scan finished with errors'),
+        'message': (f'Scan {outbox.scan_id} completed.' if succeeded
+                    else f'Scan {outbox.scan_id} finished with errors.'),
+        'additional_data': {
+            'scan_id': outbox.scan_id,
+            'status': report.status if report else None,
+            'files_scanned': report.files_scanned if report else 0,
+            'corrupted_count': report.files_corrupted if report else 0,
+            'warning_count': report.files_with_warnings if report else 0,
+            'error_count': report.files_error if report else 0,
+        },
+    }
+    outbox.payload = payload
+    for target in snapshot_event_targets(outbox.event, additional_data=payload['additional_data']):
+        eligible = target['eligible']
+        db.session.add(ScanNotificationDelivery(
+            outbox_id=outbox.id,
+            rule_id=target['rule_id'],
+            provider_id=target['provider_id'],
+            provider_type=target['provider_type'],
+            provider_config=target['provider_config'],
+            conditions=target['conditions'],
+            priority=target['priority'],
+            status='pending' if eligible else 'skipped',
+            outcome=None if eligible else 'skipped',
+            skip_reason=target['skip_reason'],
+        ))
+    snapshot_scheduled_healthcheck_target(outbox, report)
+    outbox.targets_initialized = True
+
+
+def _scheduled_scan_id(scan_id):
+    match = re.match(r'^scheduled_(\d+)(?:_|$)', scan_id or '')
+    return int(match.group(1)) if match else None
+
+
+def snapshot_scheduled_healthcheck_target(outbox, report):
+    """Persist the completion healthcheck target selected for this scan."""
+    schedule_id = _scheduled_scan_id(outbox.scan_id)
+    if not schedule_id or not report:
+        return
+    config = HealthcheckConfig.query.filter_by(schedule_id=schedule_id).first()
+    if not config:
+        return
+
+    mode = 'success' if report.status == 'completed' else 'failure'
+    enabled = config.is_active and (
+        config.send_success_ping if mode == 'success' else config.send_failure_ping)
+    if not config.is_active:
+        skip_reason = 'healthcheck_inactive'
+    elif not enabled:
+        skip_reason = f'healthcheck_{mode}_disabled'
+    else:
+        skip_reason = None
+    report_data = report.to_dict() if config.include_report_data else None
+    db.session.add(ScanNotificationDelivery(
+        outbox_id=outbox.id,
+        provider_type='healthcheck',
+        provider_config={
+            'healthcheck_config_id': config.id,
+            'healthcheck_url': config.healthcheck_url,
+            'mode': mode,
+            'include_report_data': bool(config.include_report_data),
+            'report_data': report_data,
+            'error_message': (report.error_message or f'Scan status: {report.status}'),
+        },
+        priority='normal',
+        status='pending' if enabled else 'skipped',
+        outcome=None if enabled else 'skipped',
+        skip_reason=skip_reason,
+    ))
+
+
+def deliver_healthcheck_target(snapshot):
+    """Deliver one immutable scheduled-healthcheck completion target."""
+    from pixelprobe.services.healthcheck_service import HealthcheckService
+
+    mode = snapshot.get('mode')
+    url = snapshot.get('healthcheck_url')
+    if mode == 'success':
+        success = HealthcheckService().ping_success(
+            url, snapshot.get('report_data') if snapshot.get('include_report_data') else None)
+    elif mode == 'failure':
+        success = HealthcheckService().ping_fail(url, snapshot.get('error_message'))
+    else:
+        return False, 'invalid healthcheck target mode'
+    return (True, None) if success else (False, 'healthcheck ping failed')
+
+
+def deliver_notification_target(provider_type, provider_config, title, message,
+                                priority='normal', additional_data=None):
+    """Deliver one already-selected target and return its provider outcome.
+
+    Callers own persistence and retries. A provider exception is converted to
+    a failed outcome so the generic dispatcher remains best-effort and the
+    scan outbox can retry only that target.
+    """
+    try:
+        return NotificationService().send_notification(
+            provider_type=provider_type,
+            provider_config=provider_config,
+            title=title,
+            message=message,
+            priority=priority,
+            additional_data=additional_data,
+        )
+    except Exception as exc:
+        logger.error("Notification delivery raised for provider type %s", provider_type)
+        return False, str(exc)
+
+
 def dispatch_event(event_type, title, message, priority='normal', additional_data=None):
     """Send an event through every active NotificationRule for event_type.
 
@@ -56,42 +276,41 @@ def dispatch_event(event_type, title, message, priority='normal', additional_dat
     notification must not break the operation that triggered it.
     """
     try:
-        rules = NotificationRule.query.filter_by(event_type=event_type, is_active=True).all()
+        targets = snapshot_event_targets(event_type, priority, additional_data)
     except Exception as e:
-        logger.error(f"Could not load notification rules for {event_type}: {e}")
+        logger.error("Could not load notification rules")
         return 0
 
-    if not rules:
+    if not targets:
         logger.debug(f"No active notification rules for event {event_type}")
         return 0
 
-    service = NotificationService()
     sent = 0
-    for rule in rules:
-        provider = rule.provider
-        if not provider or not provider.is_active:
+    for target in targets:
+        if not target['eligible']:
             continue
         try:
-            success, error = service.send_notification(
-                provider_type=provider.provider_type,
-                provider_config=provider.configuration,
+            success, error = deliver_notification_target(
+                provider_type=target['provider_type'],
+                provider_config=target['provider_config'],
                 title=title,
                 message=message,
-                # rule.priority defaults to 'normal' (NOT NULL), so it cannot
-                # simply win over the event: an explicitly raised/lowered rule
-                # priority applies, otherwise the event's priority does (e.g.
-                # bitrot dispatches at 'high')
-                priority=rule.priority if rule.priority and rule.priority != 'normal' else priority,
-                additional_data=additional_data
+                priority=target['priority'],
+                additional_data=additional_data,
             )
+            rule = db.session.get(NotificationRule, target['rule_id'])
+            provider = rule.provider if rule else None
+            if not provider:
+                continue
             provider.last_notification_status = 'success' if success else 'failure'
             provider.last_notification_time = datetime.now(timezone.utc)
             if success:
                 sent += 1
             else:
-                logger.warning(f"Notification via {provider.name} failed for {event_type}: {error}")
+                logger.warning("Notification delivery failed for provider %s", provider.id)
         except Exception as e:
-            logger.error(f"Notification via provider {provider.id} raised for {event_type}: {e}")
+            logger.error("Notification delivery bookkeeping raised for provider %s",
+                         target['provider_id'])
 
     try:
         db.session.commit()
@@ -146,7 +365,7 @@ class NotificationService:
                 return False, f"Unknown provider type: {provider_type}"
 
         except Exception as e:
-            logger.error(f"Error sending notification via {provider_type}: {e}")
+            logger.error("Error sending notification via provider type %s", provider_type)
             return False, str(e)
 
     def _send_pushover(
@@ -217,7 +436,7 @@ class NotificationService:
                 return False, f"HTTP {response.status_code}"
 
         except requests.RequestException as e:
-            logger.error(f"Pushover request failed: {e}")
+            logger.error("Pushover request failed")
             return False, str(e)
 
     def _send_ntfy(
@@ -275,7 +494,7 @@ class NotificationService:
             )
 
             if response.status_code == 200:
-                logger.info(f"ntfy notification sent successfully to {topic}")
+                logger.info("ntfy notification sent successfully")
                 return True, None
             else:
                 logger.warning(f"ntfy API returned status {response.status_code}")
@@ -286,7 +505,7 @@ class NotificationService:
                 return False, f"HTTP {response.status_code}: {error_detail}"
 
         except requests.RequestException as e:
-            logger.error(f"ntfy request failed: {e}")
+            logger.error("ntfy request failed")
             return False, str(e)
 
     def _send_webhook(
@@ -420,7 +639,7 @@ class NotificationService:
                 return False, f"HTTP {response.status_code}"
 
         except requests.RequestException as e:
-            logger.error(f"Webhook request failed: {e}")
+            logger.error("Webhook request failed")
             return False, str(e)
 
     def _send_email(
@@ -504,11 +723,11 @@ class NotificationService:
                     logger.warning("SMTP username set without a password; connecting without login")
                 smtp.send_message(msg)
 
-            logger.info(f"Email notification sent to {len(recipients)} recipient(s) via {smtp_host}")
+            logger.info("Email notification sent to %s recipient(s)", len(recipients))
             return True, None
 
         except (smtplib.SMTPException, ssl.SSLError, OSError) as e:
-            logger.error(f"Email send failed via {smtp_host}: {e}")
+            logger.error("Email send failed")
             return False, str(e)
 
     def _render_email_body(
@@ -544,7 +763,7 @@ class NotificationService:
             Tuple of (success: bool, error_message: Optional[str])
         """
         test_title = "PixelProbe Test Notification"
-        test_message = "This is a test notification from PixelProbe. If you receive this, your notification provider is configured correctly."
+        test_message = "PixelProbe test notification. Receiving it confirms this provider is configured."
 
         return self.send_notification(
             provider_type=provider_type,

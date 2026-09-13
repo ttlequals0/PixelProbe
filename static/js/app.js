@@ -8,14 +8,31 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function escapeAttribute(text) {
+    return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // Single source of truth for a file's status badge (used by the desktop
 // table, mobile cards, and the details modal - keep them in lockstep)
 function fileStatus(file) {
-    if (file.marked_as_good) return { cls: 'success', text: 'Healthy' };
-    if (file.bitrot_suspected) return { cls: 'bitrot', text: 'Bitrot?' };
-    if (file.is_corrupted) return { cls: 'danger', text: 'Corrupted' };
-    if (file.has_warnings) return { cls: 'warning', text: 'Warning' };
-    return { cls: 'success', text: 'Healthy' };
+    switch (file.scan_status) {
+        case 'pending': return { cls: 'neutral', text: 'Pending' };
+        case 'scanning': return { cls: 'info', text: 'Scanning' };
+        case 'unreadable': return { cls: 'danger', text: 'Unreadable' };
+        case 'error':
+        case 'failed': return { cls: 'danger', text: 'Scan Error' };
+        case 'unsupported':
+        case 'skipped': return { cls: 'neutral', text: 'Skipped' };
+        case 'completed':
+            if (file.scan_tool === 'error') return { cls: 'danger', text: 'Scan Error' };
+            if (file.scan_tool === 'unsupported') return { cls: 'neutral', text: 'Skipped' };
+            if (file.marked_as_good) return { cls: 'success', text: 'Healthy' };
+            if (file.bitrot_suspected) return { cls: 'bitrot', text: 'Bitrot?' };
+            if (file.is_corrupted) return { cls: 'danger', text: 'Corrupted' };
+            if (file.has_warnings) return { cls: 'warning', text: 'Warning' };
+            return { cls: 'success', text: 'Healthy' };
+        default: return { cls: 'neutral', text: 'Unknown' };
+    }
 }
 
 // Single source of truth for a file's detail sections, most useful first:
@@ -48,6 +65,7 @@ const DETAIL_SEVERITY = {
     'Error Message': 'danger',
     'Scan Output': 'neutral',
 };
+const MAX_VISIBLE_ACTIVE_FILES = 4;
 
 // Theme Management
 class ThemeManager {
@@ -293,10 +311,10 @@ class APIClient {
         });
     }
 
-    async cleanupOrphaned() {
+    async cleanupOrphaned(trustUnreadableDirs = false) {
         return this.request('/cleanup-orphaned', {
             method: 'POST',
-            body: JSON.stringify({})
+            body: JSON.stringify(trustUnreadableDirs ? { trust_unreadable_dirs: true } : {})
         });
     }
 
@@ -364,10 +382,30 @@ class StatsDashboard {
     constructor(apiClient) {
         this.api = apiClient;
         this.refreshInterval = null;
+        this.lastIntegrity = null;
+        this.lastSuccessfulRefresh = null;
+        this.setupIntegrityDetailsToggle();
+    }
+
+    setupIntegrityDetailsToggle() {
+        const toggle = document.querySelector('#integrity-details-toggle');
+        const panel = document.querySelector('#integrity-detail-panel');
+        if (!toggle || !panel || toggle.dataset.bound) return;
+        toggle.dataset.bound = 'true';
+        toggle.addEventListener('click', () => {
+            const expanded = toggle.getAttribute('aria-expanded') === 'true';
+            toggle.setAttribute('aria-expanded', String(!expanded));
+            panel.hidden = expanded;
+        });
     }
 
     async init() {
-        await this.updateStats();
+        try {
+            await this.updateStats();
+        } catch (error) {
+            this.renderIntegrityCoverage(null, true);
+            this.renderRefreshStatus(error);
+        }
         this.startAutoRefresh();
     }
 
@@ -376,41 +414,85 @@ class StatsDashboard {
             const stats = await this.api.getStats();
             if (stats) {
                 this.renderStats(stats);
+                this.lastSuccessfulRefresh = new Date();
+                this.renderRefreshStatus();
             }
         } catch (error) {
-            // Silently handle stats update failures (likely during server restart)
+            throw error;
         }
     }
 
     renderStats(stats) {
-        // Update stat cards
-        // Show completed files as total so math adds up: healthy + corrupted + warnings = total
-        this.updateStatCard('total-files', stats.completed_files);
+        // Total files and integrity coverage use the same full inventory population.
+        this.updateStatCard('total-files', stats.total_files);
         this.updateStatCard('healthy-files', stats.healthy_files);
         this.updateStatCard('corrupted-files', stats.corrupted_files);
         this.updateStatCard('warning-files', stats.warning_files || 0);
         this.updateStatCard('bitrot-files', (stats.integrity && stats.integrity.bitrot_suspected) || 0);
         this.updateStatCard('pending-files', stats.pending_files);
         this.updateStatCard('scanning-files', stats.scanning_files);
+        this.lastIntegrity = stats.integrity || null;
         this.renderIntegrityCoverage(stats.integrity);
     }
 
-    renderIntegrityCoverage(integrity) {
+    renderIntegrityCoverage(integrity, stale = false) {
         const element = document.querySelector('#integrity-checked');
-        if (!element || !integrity || !integrity.total_files) return;
-        element.textContent = `${integrity.checked_percent}%`;
-        let title = `${integrity.checked_files.toLocaleString()} of ` +
-            `${integrity.total_files.toLocaleString()} files integrity-checked`;
-        if (integrity.never_checked > 0) {
-            title += `; ${integrity.never_checked.toLocaleString()} never checked`;
+        if (!element) return;
+        if (!integrity || !integrity.total_files) {
+            element.textContent = '-';
+            element.title = stale ? 'Integrity coverage is unavailable while the dashboard refresh is stale.' :
+                'No files are available for integrity coverage.';
+            const details = document.querySelector('#integrity-details');
+            if (details) details.textContent = '';
+            return;
         }
+        element.textContent = `${integrity.checked_percent}%`;
+        const attempted = integrity.attempted_files || 0;
+        const successful = integrity.checked_files || 0;
+        const errors = integrity.integrity_error_files || 0;
+        const unavailable = integrity.integrity_unavailable_files || 0;
+        let title = `${successful.toLocaleString()} successful integrity rechecks; ${attempted.toLocaleString()} attempts; ` +
+            `${errors.toLocaleString()} latest errors; ${unavailable.toLocaleString()} latest unavailable; ` +
+            `${(integrity.never_attempted || 0).toLocaleString()} with no recorded recheck attempt. ` +
+            'Legacy integrity outcomes were not recorded.';
         if (integrity.oldest_check_date) {
-            title += `; every checked file verified since ${new Date(integrity.oldest_check_date).toLocaleString()}`;
+            title += `; oldest successful verification ${new Date(integrity.oldest_check_date).toLocaleString()}`;
         }
         if (integrity.bitrot_suspected > 0) {
             title += `; ${integrity.bitrot_suspected.toLocaleString()} bitrot suspected`;
         }
         element.title = title;
+        const details = document.querySelector('#integrity-details');
+        if (details) {
+            details.textContent = `Successful integrity rechecks ${successful.toLocaleString()}. ` +
+                `Attempts ${attempted.toLocaleString()}, errors ${errors.toLocaleString()}, ` +
+                `unavailable ${unavailable.toLocaleString()}, with no recorded recheck attempt ${(integrity.never_attempted || 0).toLocaleString()}. ` +
+                'Legacy integrity outcomes were not recorded.';
+        }
+    }
+
+    renderRefreshStatus(error = null) {
+        const element = document.querySelector('#integrity-refresh-status');
+        if (!element) return;
+        const toggle = document.querySelector('#integrity-details-toggle');
+        const warning = document.querySelector('.integrity-refresh-warning');
+        element.classList.toggle('is-stale', Boolean(error));
+        if (toggle) {
+            toggle.classList.toggle('is-stale', Boolean(error));
+            toggle.title = error ? 'Stats refresh failed. Open details for the last successful refresh.' :
+                'Show integrity recheck details';
+        }
+        if (warning) warning.hidden = !error;
+        if (error) {
+            this.renderIntegrityCoverage(this.lastIntegrity, true);
+            const previous = this.lastSuccessfulRefresh ?
+                ` Showing data from ${this.lastSuccessfulRefresh.toLocaleString()}.` :
+                ' No current data is available.';
+            element.textContent = `Refresh failed.${previous}`;
+            return;
+        }
+        element.textContent = this.lastSuccessfulRefresh ?
+            `Last refreshed ${this.lastSuccessfulRefresh.toLocaleString()}.` : '';
     }
 
     updateStatCard(id, value) {
@@ -421,13 +503,40 @@ class StatsDashboard {
     }
 
     startAutoRefresh() {
-        // Refresh every 30 seconds instead of 5 seconds to reduce server load
-        this.refreshInterval = setInterval(() => this.updateStats(), 30000);
+        this.stopAutoRefresh();
+        this._statsPollGeneration = (this._statsPollGeneration || 0) + 1;
+        const generation = this._statsPollGeneration;
+        this.statsPollDelay = 30000;
+        const poll = async () => {
+            if (generation !== this._statsPollGeneration) return;
+            this.refreshInterval = null;
+            if (document.hidden) {
+                this.refreshInterval = setTimeout(poll, 30000);
+                return;
+            }
+            try {
+                await this.updateStats();
+                this.statsPollDelay = 30000;
+            } catch (error) {
+                this.statsPollDelay = Math.min(this.statsPollDelay * 2, 300000);
+                this.renderRefreshStatus(error);
+            }
+            if (generation === this._statsPollGeneration) {
+                this.refreshInterval = setTimeout(poll, this.statsPollDelay);
+            }
+        };
+        this._statsPoll = poll;
+        if (!this._statsVisibilityListener) this._statsVisibilityListener = () => {
+            if (!document.hidden && !this.refreshInterval) this._statsPoll();
+        };
+        document.addEventListener('visibilitychange', this._statsVisibilityListener);
+        this.refreshInterval = setTimeout(poll, this.statsPollDelay);
     }
 
     stopAutoRefresh() {
+        this._statsPollGeneration = (this._statsPollGeneration || 0) + 1;
         if (this.refreshInterval) {
-            clearInterval(this.refreshInterval);
+            clearTimeout(this.refreshInterval);
             this.refreshInterval = null;
         }
     }
@@ -443,6 +552,8 @@ class ProgressManager {
         this.progressContainer = document.querySelector('.progress-container');
         this.checkInterval = null;
         this.operationType = 'scan'; // 'scan', 'cleanup', or 'file-changes'
+        this._keptRecords = 0;   // records the last cleanup could not confirm
+        this.startedHere = false;  // whether this person started the run
     }
 
     show() {
@@ -481,7 +592,7 @@ class ProgressManager {
         }
     }
 
-    update(percentage, text, details = '', isStuck = false) {
+    update(percentage, text, details = '', isStuck = false, scanActivity = null) {
         if (this.progressBar) {
             this.progressBar.style.width = `${percentage}%`;
         }
@@ -501,22 +612,88 @@ class ProgressManager {
             
             // Add recovery button if scan is stuck
             if (isStuck && this.operationType === 'scan') {
-                progressDetails.innerHTML = `
-                    <div>${escapeHtml(detailsText)}</div>
-                    <div style="margin-top: 10px;">
-                        <button class="btn btn-warning" onclick="app.recoverStuckScan()">
-                            <i class="fas fa-wrench"></i> Recover Stuck Scan
-                        </button>
-                    </div>
-                `;
+                progressDetails.replaceChildren();
+                const message = document.createElement('div');
+                message.textContent = detailsText;
+                const action = document.createElement('div');
+                action.style.marginTop = '10px';
+                const button = document.createElement('button');
+                button.className = 'btn btn-warning';
+                button.textContent = 'Recover Stuck Scan';
+                button.addEventListener('click', () => app.recoverStuckScan());
+                action.appendChild(button);
+                progressDetails.append(message, action);
             } else {
                 progressDetails.textContent = detailsText;
             }
+
+            this._renderScanActivity(progressDetails, scanActivity);
 
             // Render per-worker chunk progress grid if available
             if (this._lastScanStatus && this._lastScanStatus.chunks && this._lastScanStatus.chunks.length > 0) {
                 this._renderWorkerGrid(progressDetails, this._lastScanStatus.chunks);
             }
+        }
+    }
+
+    _renderScanActivity(container, scanActivity) {
+        let activity = container.querySelector('.scan-activity');
+        if (!scanActivity) {
+            if (activity) activity.remove();
+            return;
+        }
+
+        if (!activity) {
+            activity = document.createElement('div');
+            activity.className = 'scan-activity';
+            const workerGrid = container.querySelector('.worker-grid-container');
+            if (workerGrid) {
+                container.insertBefore(activity, workerGrid);
+            } else {
+                container.appendChild(activity);
+            }
+        }
+
+        activity.replaceChildren();
+        if (scanActivity.eta) {
+            const eta = document.createElement('div');
+            eta.className = 'scan-eta';
+            eta.textContent = `Estimated time remaining: ${scanActivity.eta}`;
+            activity.appendChild(eta);
+        }
+
+        const activeFiles = Array.isArray(scanActivity.activeFiles) ?
+            scanActivity.activeFiles.slice(0, MAX_VISIBLE_ACTIVE_FILES) : [];
+        if (activeFiles.length === 0) return;
+
+        const files = document.createElement('details');
+        files.className = 'active-files';
+        files.open = Boolean(this._activeFilesExpanded);
+        files.addEventListener('toggle', () => {
+            this._activeFilesExpanded = files.open;
+        });
+        const summary = document.createElement('summary');
+        const activeCount = Number.isInteger(scanActivity.activeFileCount) && scanActivity.activeFileCount >= activeFiles.length ?
+            scanActivity.activeFileCount : activeFiles.length;
+        const firstFile = activeFiles.find(entry => entry && typeof entry.file === 'string' && entry.file);
+        if (!firstFile) return;
+        summary.append('Active file: ');
+        const filename = document.createElement('span');
+        filename.className = 'active-file-name';
+        filename.textContent = firstFile.file;
+        summary.appendChild(filename);
+        if (activeCount > 1) summary.append(` (+${activeCount - 1} more)`);
+        const list = document.createElement('ul');
+        for (const entry of activeFiles) {
+            if (!entry || typeof entry.file !== 'string' || !entry.file) continue;
+            const item = document.createElement('li');
+            item.textContent = entry.file;
+            if (typeof entry.directory === 'string' && entry.directory) item.title = entry.directory;
+            list.appendChild(item);
+        }
+        if (list.childElementCount > 0) {
+            files.append(summary, list);
+            activity.appendChild(files);
         }
     }
 
@@ -683,7 +860,12 @@ class ProgressManager {
             if (status) {
                 if (isRunning) {
                     const progress = this.calculateProgress(status, this.operationType);
-                    this.update(progress.percentage, progress.text, progress.details, status._isStuck || false);
+                    const scanActivity = this.operationType === 'scan' ? {
+                        eta: progress.eta,
+                        activeFiles: status.active_files,
+                        activeFileCount: status.active_file_count
+                    } : null;
+                    this.update(progress.percentage, progress.text, progress.details, status._isStuck || false, scanActivity);
                 } else if (status.phase === 'complete' || status.phase === 'completed' ||
                           status.phase === 'cancelled' || status.phase === 'error' ||
                           status.status === 'completed') {
@@ -710,6 +892,7 @@ class ProgressManager {
         // integrity check started mid-scan) must not leak a second poll loop
         this.stopMonitoring();
         this.operationType = operationType;
+        this._activeFilesExpanded = false;
         this.show();
         
         // Update button states based on operation type
@@ -758,7 +941,7 @@ class ProgressManager {
     }
     
     updateCleanupButton(isRunning) {
-        const cleanupButton = document.querySelector('[onclick*="cleanupOrphaned"]');
+        const cleanupButton = document.querySelector('[data-action="cleanupOrphaned"]');
         if (cleanupButton) {
             cleanupButton.disabled = isRunning;
             cleanupButton.innerHTML = isRunning ?
@@ -768,7 +951,7 @@ class ProgressManager {
     }
     
     updateFileChangesButton(isRunning) {
-        const fileChangesButton = document.querySelector('[onclick*="checkFileChanges"]');
+        const fileChangesButton = document.querySelector('[data-action="checkFileChanges"]');
         if (fileChangesButton) {
             fileChangesButton.disabled = isRunning;
             fileChangesButton.innerHTML = isRunning ?
@@ -779,7 +962,7 @@ class ProgressManager {
     
     updateScanButtons(isScanning) {
         // Update all Start Scan buttons
-        const scanButtons = document.querySelectorAll('[onclick*="startScan"]');
+        const scanButtons = document.querySelectorAll('[data-action="startScan"]');
         scanButtons.forEach(button => {
             button.disabled = isScanning;
             if (isScanning) {
@@ -805,6 +988,7 @@ class ProgressManager {
         }
         this._lastScanStatus = null;
         this._workersExpanded = false;
+        this._activeFilesExpanded = false;
     }
 
     calculateProgress(status, operationType = 'scan') {
@@ -955,7 +1139,7 @@ class ProgressManager {
             details = parts.join(' - ');
         }
         
-        return { percentage, text, details };
+        return { percentage, text, details, eta };
     }
 
     formatTime(seconds) {
@@ -994,40 +1178,63 @@ class ProgressManager {
     async complete(operationType = 'scan', status = null) {
         // Always show 100% when operation completes
         let completionMessage = '';
-        
+
         // Debug log the status on completion
-        
-        // Handle cancelled operations
-        if (status?.phase === 'cancelled') {
+
+        // Runs that stopped early. An aborted one reports phase 'error': it did
+        // no work, so reporting its orphaned_found as records removed told the
+        // operator the opposite of what happened, with the reason left unread in
+        // the status payload.
+        if (status?.phase === 'error' || status?.phase === 'cancelled') {
+            const failed = status.phase === 'error';
+            const cancelledText = {
+                'scan': 'Scan cancelled',
+                'cleanup': 'Cleanup cancelled',
+                'file-changes': 'Integrity scan cancelled'
+            }[operationType] || 'Operation cancelled';
+
             this.stopMonitoring();
             this.hide();
-            
+
             if (operationType === 'scan') {
                 this.updateScanButtons(false);
-                this.app.showNotification('Scan cancelled', 'info');
             } else if (operationType === 'cleanup') {
                 this.updateCleanupButton(false);
-                this.app.showNotification('Cleanup cancelled', 'info');
             } else if (operationType === 'file-changes') {
                 this.updateFileChangesButton(false);
-                this.app.showNotification('Integrity scan cancelled', 'info');
             }
-            
-            // Refresh stats to update UI
-            if (this.app) {
-                await this.app.stats.updateStats();
+
+            this.app.showNotification(
+                failed
+                    ? (status.error_message || status.progress_message ||
+                       'The operation stopped before finishing.')
+                    : cancelledText,
+                failed ? 'error' : 'info');
+
+            // A run can stop after deleting some rows, and a media scan may
+            // still be running underneath it, so refresh both and hand the
+            // progress view back rather than leaving it hidden.
+            await this.app.stats.updateStats();
+            if (operationType === 'cleanup') {
+                await this.app.table.loadData();
             }
+            await this.resumeScanMonitorIfRunning();
             return;
         }
-        
+
         // Handle completed operations
         if (operationType === 'scan') {
             completionMessage = 'Scan completed!';
             this.updateScanButtons(false); // Re-enable scan buttons
         } else if (operationType === 'cleanup') {
             const deletedCount = status?.orphaned_found || 0;
+            const keptCount = status?.records_kept || 0;
             completionMessage = `Cleanup completed! Removed ${deletedCount} orphaned records.`;
+            if (keptCount > 0) {
+                completionMessage += ` Kept ${keptCount} that could not be confirmed as deleted.`;
+            }
             this.updateCleanupButton(false); // Re-enable cleanup button
+            this._keptRecords = keptCount;
         } else if (operationType === 'file-changes') {
             const changesFound = status?.changes_found || 0;
             completionMessage = `Integrity scan completed! Found ${changesFound} changed files.`;
@@ -1064,25 +1271,62 @@ class ProgressManager {
                 // hijack it
                 if (this.checkInterval) return;
                 this.hide();
-                // A media scan may still be running (concurrent operations
-                // are allowed); resume its monitor so the UI returns to the
-                // scan progress view instead of stranding the user
-                try {
-                    const scanStatus = await this.api.getScanStatus();
-                    if (scanStatus.is_scanning) {
-                        this.startMonitoring('scan');
-                        return;
-                    }
-                } catch (error) {
-                    // Fall through and re-enable the buttons: a wrongly
-                    // enabled Start Scan is rejected server-side while a
-                    // wrongly disabled one strands the UI
+                const kept = this.startedHere ? this._keptRecords : 0;
+                this._keptRecords = 0;
+                await this.resumeScanMonitorIfRunning();
+                // Only ask when nothing else has taken the progress view: a
+                // scan resumed above owns it now.
+                if (operationType === 'cleanup' && kept > 0 && !this.checkInterval) {
+                    await this.offerToConfirmKeptRecords(kept);
                 }
-                this.updateScanButtons(false);
             }, 5000);
         }
     }
-    
+
+    async offerToConfirmKeptRecords(keptCount) {
+        // Whether a folder was deleted or went offline is a question only the
+        // operator can answer, so ask instead of guessing.
+        const confirmed = confirm(
+            `${keptCount.toLocaleString()} record(s) could not be confirmed as deleted: ` +
+            `nothing readable is left where those files were, which is what a deleted folder ` +
+            `and an offline drive both look like.\n\nIf you deleted those files, click OK to ` +
+            `remove their records. If a drive is offline, click Cancel and run cleanup again ` +
+            `once it is back.`);
+        if (!confirmed) return;
+
+        try {
+            await this.api.cleanupOrphaned(true);
+            this.startedHere = true;
+            this.startMonitoring('cleanup');
+        } catch (error) {
+            // Keep the count so the offer survives a cleanup that is already
+            // running (a schedule can start one in this window).
+            this._keptRecords = keptCount;
+            this.app.showNotification(
+                'Could not start cleanup. It may already be running. Try again shortly.',
+                'error');
+        }
+    }
+
+    async resumeScanMonitorIfRunning() {
+        // A media scan may still be running (concurrent operations are
+        // allowed); resume its monitor so the UI returns to the scan progress
+        // view instead of stranding the user
+        try {
+            const scanStatus = await this.api.getScanStatus();
+            if (scanStatus.is_scanning) {
+                this.startMonitoring('scan');
+                return;
+            }
+        } catch (error) {
+            // Fall through and re-enable the buttons: a wrongly enabled Start
+            // Scan is rejected server-side while a wrongly disabled one
+            // strands the UI
+        }
+        this.updateScanButtons(false);
+    }
+
+
     showFileChangesResults(result) {
         // Show file changes in a modal or alert
         const changedFiles = result.changed_files || [];
@@ -1300,7 +1544,7 @@ class TableManager {
             const tbody = document.querySelector('#results-tbody');
             if (!tbody) return;
 
-            tbody.innerHTML = data.results.map(file => this.renderRow(file)).join('');
+            tbody.replaceChildren(...data.results.map(file => this.renderRow(file)));
 
             // Re-bind checkbox events with shift-select support
             tbody.querySelectorAll('.file-checkbox').forEach(cb => {
@@ -1324,7 +1568,7 @@ class TableManager {
             container = mobileContainer;
         }
 
-        container.innerHTML = data.results.map(file => this.renderMobileCard(file)).join('');
+        container.replaceChildren(...data.results.map(file => this.renderMobileCard(file)));
 
         // Re-bind checkbox events for mobile with shift-select support
         container.querySelectorAll('.file-checkbox').forEach(cb => {
@@ -1335,132 +1579,89 @@ class TableManager {
     }
 
     renderMobileCard(file) {
-        const status = fileStatus(file);
-        const statusClass = status.cls;
-        const statusText = status.text.toUpperCase();
-        const details = fileDetails(file);
-        
-        return `
-            <div class="result-card">
-                <div class="badge badge-${statusClass}">${statusText}</div>
-                <div class="file-path">${this.escapeHtml(file.file_path)}</div>
-                <div class="file-info">
-                    <span>${this.formatFileSize(file.file_size)}</span>
-                    <span>${file.file_type || 'Unknown'}</span>
-                </div>
-                <div class="file-details">
-                    <span class="label">Tool:</span>
-                    <span class="value">${file.scan_tool || 'N/A'}</span>
-                    <span class="label">Scanned:</span>
-                    <span class="value">${this.formatDate(file.scan_date)}</span>
-                    ${file.last_integrity_check_date ? `
-                        <span class="label">Last Integrity Check:</span>
-                        <span class="value">${this.formatDate(file.last_integrity_check_date)}</span>
-                    ` : ''}
-                    ${details ? `
-                        <span class="label">Details:</span>
-                        <span class="value">${this.escapeHtml(details)}</span>
-                    ` : ''}
-                </div>
-                <div class="action-buttons">
-                    <button class="btn btn-secondary" onclick="app.viewFile(${file.id})" title="View File">
-                        <i class="fas fa-eye"></i><span class="btn-text"> View</span>
-                    </button>
-                    <!-- Individual File Actions Dropdown for Mobile -->
-                    <div class="action-dropdown">
-                        <button class="btn btn-secondary" type="button"
-                                onclick="app.toggleActionDropdown(event, 'mobile-file-action-menu-${file.id}')" title="Actions">
-                            <i class="fas fa-tasks"></i><span class="btn-text"> Actions</span> <i class="fas fa-caret-down"></i>
-                        </button>
-                        <ul class="dropdown-menu" id="mobile-file-action-menu-${file.id}" style="display: none;">
-                            <li><a class="dropdown-item" href="#" onclick="app.rescanFile(${file.id}); return false;">
-                                <i class="fas fa-sync"></i> Rescan
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
-                                <i class="fas fa-search"></i> Cleanup
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
-                                <i class="fas fa-shield-alt"></i> Integrity Check
-                            </a></li>
-                            ${file.bitrot_suspected ? `
-                            <li><a class="dropdown-item" href="#" onclick="app.acceptBitrot(${file.id}); return false;">
-                                <i class="fas fa-check-double"></i> Accept Current State
-                            </a></li>
-                            ` : ''}
-                        </ul>
-                    </div>
-                    ${details ? `
-                        <button class="btn btn-secondary" onclick="app.viewScanOutput(${file.id})" title="View Details">
-                            <i class="fas fa-file-alt"></i><span class="btn-text"> Details</span>
-                        </button>
-                    ` : ''}
-                    <button class="btn btn-secondary" onclick="app.downloadFile(${file.id})" title="Download">
-                        <i class="fas fa-download"></i><span class="btn-text"> Download</span>
-                    </button>
-                    <button class="btn btn-primary" onclick="app.markFileAsGood(${file.id})" title="Mark as Good">
-                        <i class="fas fa-check"></i><span class="btn-text"> Mark Good</span>
-                    </button>
-                </div>
-                <input type="checkbox" class="file-checkbox" value="${file.id}" ${this.selectedFiles.has(file.id) ? 'checked' : ''}>
-            </div>
-        `;
+        const card = document.createElement('div');
+        card.className = 'result-card';
+        const status = document.createElement('div');
+        const verdict = fileStatus(file);
+        status.className = `badge badge-${verdict.cls}`;
+        status.textContent = verdict.text;
+        const path = document.createElement('div');
+        path.className = 'file-path';
+        path.textContent = file.file_path;
+        path.title = file.file_path;
+        const info = document.createElement('div');
+        info.className = 'file-info';
+        for (const value of [this.formatFileSize(file.file_size), file.file_type || 'Unknown']) {
+            const span = document.createElement('span'); span.textContent = value; info.appendChild(span);
+        }
+        const details = document.createElement('div');
+        details.className = 'file-details';
+        this.appendFileDetails(details, file);
+        card.append(status, path, info, details, this.createFileActions(file, false), this.createFileCheckbox(file));
+        return card;
     }
 
     renderRow(file) {
-        const { cls: statusClass, text: statusText } = fileStatus(file);
-        const details = fileDetails(file);
-        
-        return `
-            <tr>
-                <td><input type="checkbox" class="file-checkbox" value="${file.id}" ${this.selectedFiles.has(file.id) ? 'checked' : ''}></td>
-                <td><span class="badge badge-${statusClass}">${statusText}</span></td>
-                <td class="file-path-cell" title="${this.escapeHtml(file.file_path)}">${this.escapeHtml(file.file_path)}</td>
-                <td>${this.formatFileSize(file.file_size)}</td>
-                <td>${file.file_type || 'N/A'}</td>
-                <td>${file.scan_tool || 'N/A'}</td>
-                <td class="text-truncate" title="${this.escapeHtml(details)}">${this.escapeHtml(details)}</td>
-                <td>${this.formatDate(file.scan_date)}</td>
-                <td class="action-buttons">
-                    <button class="btn btn-sm btn-secondary" onclick="app.viewFile(${file.id})">
-                        <i class="fas fa-eye"></i> View
-                    </button>
-                    <!-- Individual File Actions Dropdown -->
-                    <div class="action-dropdown">
-                        <button class="btn btn-sm btn-secondary" type="button"
-                                onclick="app.toggleActionDropdown(event, 'file-action-menu-${file.id}')">
-                            <i class="fas fa-tasks"></i> Actions <i class="fas fa-caret-down"></i>
-                        </button>
-                        <ul class="dropdown-menu" id="file-action-menu-${file.id}" style="display: none;">
-                            <li><a class="dropdown-item" href="#" onclick="app.rescanFile(${file.id}); return false;">
-                                <i class="fas fa-sync"></i> Rescan
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" onclick="app.orphanCheckFile(${file.id}); return false;">
-                                <i class="fas fa-search"></i> Cleanup
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" onclick="app.changeCheckFile(${file.id}); return false;">
-                                <i class="fas fa-shield-alt"></i> Integrity Check
-                            </a></li>
-                            ${file.bitrot_suspected ? `
-                            <li><a class="dropdown-item" href="#" onclick="app.acceptBitrot(${file.id}); return false;">
-                                <i class="fas fa-check-double"></i> Accept Current State
-                            </a></li>
-                            ` : ''}
-                        </ul>
-                    </div>
-                    ${details ? `
-                        <button class="btn btn-sm btn-secondary" onclick="app.viewScanOutput(${file.id})">
-                            <i class="fas fa-file-alt"></i> Details
-                        </button>
-                    ` : ''}
-                    <button class="btn btn-sm btn-secondary" onclick="app.downloadFile(${file.id})">
-                        <i class="fas fa-download"></i> Download
-                    </button>
-                    <button class="btn btn-sm btn-primary" onclick="app.markFileAsGood(${file.id})">
-                        <i class="fas fa-check"></i> Mark Good
-                    </button>
-                </td>
-            </tr>
-        `;
+        const row = document.createElement('tr');
+        const verdict = fileStatus(file);
+        const status = document.createElement('span');
+        status.className = `badge badge-${verdict.cls}`;
+        status.textContent = verdict.text;
+        const values = [this.createFileCheckbox(file), status, file.file_path, this.formatFileSize(file.file_size), file.file_type || 'N/A', file.scan_tool || 'N/A', fileDetails(file), this.formatDate(file.scan_date)];
+        values.forEach((value, index) => {
+            const cell = document.createElement('td');
+            if (value instanceof Element) cell.appendChild(value);
+            else { cell.textContent = value; if (index === 2 || index === 6) { cell.title = value; cell.className = index === 2 ? 'file-path-cell' : 'text-truncate'; } }
+            row.appendChild(cell);
+        });
+        const actions = document.createElement('td');
+        actions.appendChild(this.createFileActions(file, true));
+        row.appendChild(actions);
+        return row;
+    }
+
+    createFileCheckbox(file) {
+        const control = document.createElement('label');
+        control.className = 'file-checkbox-control';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox'; checkbox.className = 'file-checkbox'; checkbox.value = file.id;
+        checkbox.checked = this.selectedFiles.has(file.id);
+        checkbox.setAttribute('aria-label', `Select ${file.file_path}`);
+        control.appendChild(checkbox);
+        return control;
+    }
+
+    appendFileDetails(container, file) {
+        const add = (label, value) => {
+            const labelElement = document.createElement('span'); labelElement.className = 'label'; labelElement.textContent = label;
+            const valueElement = document.createElement('span'); valueElement.className = 'value'; valueElement.textContent = value;
+            container.append(labelElement, valueElement);
+        };
+        add('Tool:', file.scan_tool || 'N/A'); add('Scanned:', this.formatDate(file.scan_date));
+        if (file.last_integrity_check_date) add('Last Integrity Check:', this.formatDate(file.last_integrity_check_date));
+        if (fileDetails(file)) add('Details:', fileDetails(file));
+    }
+
+    createFileActions(file, compact) {
+        const actions = document.createElement('div'); actions.className = 'action-buttons';
+        const id = Number(file.id); const make = (text, icon, handler, variant = 'btn-secondary') => {
+            const button = document.createElement('button'); button.className = `btn ${compact ? 'btn-sm ' : ''}${variant}`;
+            button.title = text; button.innerHTML = `<i class="fas ${icon}"></i>`; button.append(` ${text}`);
+            button.addEventListener('click', handler); return button;
+        };
+        actions.appendChild(make('View', 'fa-eye', () => app.viewFile(id), 'btn-primary'));
+        const dropdown = document.createElement('div'); dropdown.className = 'action-dropdown';
+        const menu = document.createElement('ul'); menu.className = 'dropdown-menu'; menu.style.display = 'none';
+        const toggle = make('Actions', 'fa-tasks', (event) => this.toggleActionDropdown(event, menu.id));
+        menu.id = `file-action-menu-${id}-${compact ? 'table' : 'mobile'}`;
+        [['Rescan', 'fa-sync', () => app.rescanFile(id)], ['Cleanup', 'fa-search', () => app.orphanCheckFile(id)], ['Integrity Check', 'fa-shield-alt', () => app.changeCheckFile(id)]].forEach(([text, icon, handler]) => {
+            const item = document.createElement('li'); const action = document.createElement('a'); action.href = '#'; action.className = 'dropdown-item'; action.innerHTML = `<i class="fas ${icon}"></i>`; action.append(` ${text}`); action.addEventListener('click', (event) => { event.preventDefault(); handler(); }); item.appendChild(action); menu.appendChild(item);
+        });
+        if (file.bitrot_suspected) { const item = document.createElement('li'); const action = document.createElement('a'); action.href = '#'; action.className = 'dropdown-item'; action.textContent = 'Accept Current State'; action.addEventListener('click', (event) => { event.preventDefault(); app.acceptBitrot(id); }); item.appendChild(action); menu.appendChild(item); }
+        dropdown.append(toggle, menu); actions.appendChild(dropdown);
+        if (fileDetails(file)) actions.appendChild(make('Details', 'fa-file-alt', () => app.viewScanOutput(id)));
+        actions.append(make('Download', 'fa-download', () => app.downloadFile(id)), make('Mark Good', 'fa-check', () => app.markFileAsGood(id)));
+        return actions;
     }
 
     updatePagination(data) {
@@ -2055,6 +2256,9 @@ class PixelProbeApp {
             const cleanupStatus = await this.api.getCleanupStatus();
             if (cleanupStatus.is_running) {
                 this.progress.operationType = 'cleanup';
+                // Attaching to a run in progress: it may be a scheduled one,
+                // whose kept records are not this person's to confirm.
+                this.progress.startedHere = false;
                 this.progress.startMonitoring('cleanup');
                 return; // Only monitor one operation at a time
             }
@@ -2094,6 +2298,7 @@ class PixelProbeApp {
                 const cleanupStatus = await this.api.getCleanupStatus();
                 if (cleanupStatus.is_running) {
                     this.progress.operationType = 'cleanup';
+                    this.progress.startedHere = false;
                     this.progress.startMonitoring('cleanup');
                     return;
                 }
@@ -2133,7 +2338,7 @@ class PixelProbeApp {
 
     async recoverStuckScan() {
         try {
-            this.showNotification('Attempting to recover stuck scan...', 'info');
+            this.showNotification('Recovering stuck scan.', 'info');
             const response = await fetch('/api/scan/recovery', {
                 method: 'POST',
                 headers: {
@@ -2146,7 +2351,7 @@ class PixelProbeApp {
             }
 
             const result = await response.json();
-            this.showNotification(result.message || 'Scan recovered successfully', 'success');
+            this.showNotification(result.message || 'Scan recovered', 'success');
 
             // Reload the page to reset the UI
             setTimeout(() => {
@@ -2175,11 +2380,14 @@ class PixelProbeApp {
 
         try {
             const result = await this.api.cleanupOrphaned();
-            
+
             if (result.status === 'started') {
-                this.showNotification('Cleanup started...', 'info');
+                this.showNotification('Cleanup started', 'info');
                 // Start monitoring cleanup progress
                 this.progress.operationType = 'cleanup';
+                // Only a run this person started may ask them to confirm the
+                // records it keeps; a scheduled one is nobody's decision here.
+                this.progress.startedHere = true;
                 this.progress.startMonitoring('cleanup');
                 
                 // Also do a manual check after 1 second to debug
@@ -2205,7 +2413,7 @@ class PixelProbeApp {
             const result = await this.api.checkFileChanges();
             
             if (result.status === 'started') {
-                this.showNotification('Integrity scan started...', 'info');
+                this.showNotification('Integrity scan started', 'info');
                 // Start monitoring file changes progress
                 this.progress.operationType = 'file-changes';
                 this.progress.startMonitoring('file-changes');
@@ -2228,14 +2436,14 @@ class PixelProbeApp {
             const response = await fetch(`/api/scan-results/${fileId}`);
             if (response.ok) {
                 const file = await response.json();
-                this.showMediaViewerModal(file);
+                await this.showMediaViewerModal(file);
             }
         } catch (error) {
             this.showNotification('Failed to load file', 'error');
         }
     }
 
-    showMediaViewerModal(file) {
+    async showMediaViewerModal(file) {
         const modal = document.querySelector('#media-viewer-modal');
         if (!modal) return;
         
@@ -2243,76 +2451,119 @@ class PixelProbeApp {
         const modalTitle = modal.querySelector('.modal-title');
         
         modalTitle.textContent = file.file_path.split('/').pop();
-        
-        // Determine file type and create appropriate viewer
-        const fileType = file.file_type?.toLowerCase() || '';
-        const filePath = file.file_path;
-        let content = '';
-        
-        if (fileType.startsWith('image/')) {
-            content = `<img src="/api/view/${file.id}" alt="${this.escapeHtml(filePath)}" style="max-width: 100%; max-height: 60vh; height: auto; object-fit: contain; display: block; margin: 0 auto;">`;
-        } else if (fileType.startsWith('video/')) {
-            // Match v1.x implementation more closely
-            const videoUrl = `/api/view/${file.id}`;
-            
-            content = `
-                <div style="position: relative; width: 100%; max-width: 800px; margin: 0 auto;">
-                    <video id="video-player-${file.id}"
-                           class="video-player"
-                           controls
-                           preload="metadata"
-                           style="width: 100%; display: block;"
-                           onloadedmetadata="this.volume = 1.0;"
-                           onerror="app.handleVideoError(${file.id})">
-                        <source src="${videoUrl}" type="${fileType}">
-                        <source src="${videoUrl}" type="video/mp4">
-                        <source src="${videoUrl}" type="video/webm">
-                        <source src="${videoUrl}" type="video/ogg">
-                        Your browser does not support the video tag.
-                    </video>
-                    <div id="video-error-${file.id}" style="display: none; padding: 20px; text-align: center; color: #ff6b6b;">
-                        <p>Unable to load video. <a href="${videoUrl}" target="_blank">Try opening directly</a></p>
-                    </div>
-                </div>
-            `;
-        } else if (fileType.startsWith('audio/')) {
-            content = `
-                <audio id="audio-player-${file.id}"
-                       controls
-                       style="width: 100%; display: block; margin: 0 auto;"
-                       onloadedmetadata="this.volume = 1.0;">
-                    <source src="/api/view/${file.id}" type="${fileType}">
-                    Your browser does not support the audio element.
-                </audio>
-            `;
-        } else {
-            content = `<p style="text-align: center;">Preview not available for this file type.</p>`;
+        const modalContent = modal.querySelector('.modal-content');
+        let downloadWrap = modal.querySelector('.media-viewer-footer');
+        if (!downloadWrap) {
+            downloadWrap = document.createElement('div');
+            downloadWrap.className = 'media-viewer-footer';
+            modalContent.appendChild(downloadWrap);
         }
-        
-        content += `
-            <div style="margin-top: 1rem;">
-                <a href="/api/download/${file.id}" class="btn btn-primary" download>
-                    <i class="fas fa-download"></i> Download
-                </a>
-            </div>
-        `;
-        
-        modalBody.innerHTML = content;
+        const download = document.createElement('a');
+        download.href = `/api/download/${encodeURIComponent(file.id)}`;
+        download.className = 'btn btn-primary';
+        download.download = '';
+        download.textContent = 'Download';
+        downloadWrap.replaceChildren(download);
         modal.style.display = 'block';
-        
-        // Setup close handlers
         const closeBtn = modal.querySelector('.modal-close');
-        if (closeBtn) {
-            closeBtn.onclick = () => this.closeModal('media-viewer-modal');
-        }
-
-        // Close on outside click
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                this.closeModal('media-viewer-modal');
-            }
+        if (closeBtn) closeBtn.onclick = () => this.closeModal('media-viewer-modal');
+        modal.onclick = (event) => {
+            if (event.target === modal) this.closeModal('media-viewer-modal');
         };
 
+        const requestId = (this.previewRequestId || 0) + 1;
+        this.previewRequestId = requestId;
+        const showPreviewMessage = (text) => {
+            if (this.previewRequestId !== requestId) return;
+            const message = document.createElement('p');
+            message.className = 'media-preview-unavailable';
+            message.textContent = text;
+            modalBody.replaceChildren(message);
+        };
+        showPreviewMessage('Loading preview...');
+
+        const previewUrl = `/api/view/${encodeURIComponent(file.id)}`;
+        let response;
+        try {
+            response = await fetch(previewUrl, { method: 'HEAD', credentials: 'same-origin' });
+        } catch (error) {
+            showPreviewMessage('Preview unavailable.');
+            return;
+        }
+        if (this.previewRequestId !== requestId) return;
+        if (response.status === 401) {
+            showPreviewMessage('Sign in again to preview this file.');
+            return;
+        }
+        if (response.status === 403) {
+            showPreviewMessage('You do not have permission to preview this file.');
+            return;
+        }
+        if (response.status === 404) {
+            showPreviewMessage('This file is no longer available.');
+            return;
+        }
+        const previewType = response.headers.get('Content-Type')?.split(';', 1)[0].toLowerCase();
+        const disposition = response.headers.get('Content-Disposition')?.toLowerCase() || '';
+        const dispositionType = disposition.split(';', 1)[0].trim();
+        if (!response.ok || dispositionType === 'attachment' || !previewType
+                || !(/^(image|video|audio)\//.test(previewType))) {
+            showPreviewMessage('Preview unavailable.');
+            return;
+        }
+
+        const filePath = file.file_path;
+        if (previewType.startsWith('image/')) {
+            const image = document.createElement('img');
+            image.className = 'media-preview-image';
+            image.src = previewUrl;
+            image.alt = filePath;
+            image.addEventListener('error', () => showPreviewMessage('Preview could not be loaded.'));
+            modalBody.replaceChildren(image);
+        } else if (previewType.startsWith('video/')) {
+            
+            const wrapper = document.createElement('div');
+            wrapper.className = 'media-preview';
+            const video = document.createElement('video');
+            video.id = `video-player-${file.id}`;
+            video.className = 'video-player';
+            video.controls = true;
+            video.preload = 'metadata';
+            video.addEventListener('loadedmetadata', () => { video.volume = 1.0; });
+            video.addEventListener('error', () => {
+                if (this.previewRequestId === requestId) this.handleVideoError(file.id);
+            });
+            const source = document.createElement('source');
+            source.src = previewUrl;
+            source.type = previewType;
+            video.appendChild(source);
+            video.appendChild(document.createTextNode('Your browser does not support the video tag.'));
+            const error = document.createElement('div');
+            error.id = `video-error-${file.id}`;
+            error.style.cssText = 'display: none; padding: 20px; text-align: center; color: #ff6b6b;';
+            const errorText = document.createElement('p');
+            errorText.textContent = 'Unable to load video. ';
+            const direct = document.createElement('a');
+            direct.href = previewUrl;
+            direct.target = '_blank';
+            direct.textContent = 'Try opening directly';
+            errorText.appendChild(direct);
+            error.appendChild(errorText);
+            wrapper.append(video, error);
+            modalBody.replaceChildren(wrapper);
+        } else if (previewType.startsWith('audio/')) {
+            const audio = document.createElement('audio');
+            audio.className = 'media-preview-audio';
+            audio.id = `audio-player-${file.id}`;
+            audio.controls = true;
+            audio.addEventListener('loadedmetadata', () => { audio.volume = 1.0; });
+            const source = document.createElement('source');
+            source.src = previewUrl;
+            source.type = previewType;
+            audio.append(source, document.createTextNode('Your browser does not support the audio element.'));
+            audio.addEventListener('error', () => showPreviewMessage('Preview could not be loaded.'));
+            modalBody.replaceChildren(audio);
+        }
     }
 
     async rescanFile(fileId) {
@@ -2370,6 +2621,7 @@ class PixelProbeApp {
 
                 if (orphanResponse.ok) {
                     this.showNotification('Cleanup started for file', 'success');
+                    this.progress.startedHere = false;
                     this.progress.startMonitoring('cleanup');
                 } else {
                     throw new Error('Failed to start cleanup');
@@ -2464,7 +2716,7 @@ class PixelProbeApp {
                 ${rows.map(([label, value]) => `<tr><th>${esc(label)}:</th><td>${esc(value)}</td></tr>`).join('')}
             </table>
             ${file.bitrot_suspected ? `
-                <button class="btn btn-sm btn-primary" onclick="app.acceptBitrot(${Number(file.id)})">
+                <button class="btn btn-sm btn-primary" data-accept-bitrot="${Number(file.id)}">
                     <i class="fas fa-check-double"></i> Accept Current State
                 </button>
             ` : ''}
@@ -2627,7 +2879,7 @@ class PixelProbeApp {
             for (const [scanType, stats] of Object.entries(histogramData.by_scan_type)) {
                 html += `
                     <div class="stat-card" style="padding: 1rem; background: var(--card-bg, #f8f9fa); border-radius: 4px;">
-                        <div style="font-size: 0.875rem; font-weight: bold; margin-bottom: 0.5rem;">${scanType.replace('_', ' ').toUpperCase()}</div>
+                        <div style="font-size: 0.875rem; font-weight: bold; margin-bottom: 0.5rem;">${escapeHtml(String(scanType).replace('_', ' ').toUpperCase())}</div>
                         <div style="font-size: 0.75rem; color: var(--text-muted, #6c757d);">
                             Count: ${stats.count || 0}<br>
                             Avg: ${stats.avg ? stats.avg.toFixed(1) + 's' : 'N/A'}<br>
@@ -3271,8 +3523,8 @@ class PixelProbeApp {
 
         const hasFilter = purgeBody.scan_id || purgeBody.before || purgeBody.level;
         const confirmMsg = hasFilter
-            ? 'Are you sure you want to purge the currently filtered logs? This cannot be undone.'
-            : 'No filters are active. This will purge ALL logs. Are you sure?';
+            ? 'Purge the filtered logs? This cannot be undone.'
+            : 'Purge all logs? This cannot be undone.';
 
         // If no filters, require explicit "purge all" intent
         if (!hasFilter) {
@@ -3318,31 +3570,28 @@ class PixelProbeApp {
     }
 
     showReportDetails(report) {
-        // Create modal content for report details
         const modal = document.createElement('div');
         modal.className = 'modal';
         modal.style.display = 'block';
-        
-        const content = `
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3>Report Details</h3>
-                    <button class="modal-close">&times;</button>
-                </div>
-                <div class="modal-body">
-                    <pre>${JSON.stringify(report, null, 2)}</pre>
-                </div>
-            </div>
-        `;
-        
-        modal.innerHTML = content;
+        const content = document.createElement('div');
+        content.className = 'modal-content';
+        const header = document.createElement('div');
+        header.className = 'modal-header';
+        const title = document.createElement('h3');
+        title.textContent = 'Report Details';
+        const closeButton = document.createElement('button');
+        closeButton.className = 'modal-close';
+        closeButton.textContent = '\u00d7';
+        const body = document.createElement('div');
+        body.className = 'modal-body';
+        const output = document.createElement('pre');
+        output.textContent = JSON.stringify(report, null, 2);
+        body.appendChild(output);
+        header.append(title, closeButton);
+        content.append(header, body);
+        modal.appendChild(content);
         document.body.appendChild(modal);
-        
-        // Setup close handlers
-        const closeBtn = modal.querySelector('.modal-close');
-        closeBtn.onclick = () => {
-            modal.remove();
-        };
+        closeButton.addEventListener('click', () => modal.remove());
         
         modal.onclick = (e) => {
             if (e.target === modal) {
@@ -3425,34 +3674,45 @@ class PixelProbeApp {
                     }
                 }
                 
-                row.innerHTML = `
-                    <td data-label="Select">
-                        <input type="checkbox" 
-                               data-report-id="${report.report_id}" 
-                               data-filename="${report.filename || ''}"
-                               onchange="app.toggleReportSelection('${report.report_id}', this.checked)">
-                    </td>
-                    <td data-label="Date">${this.table.formatDate(report.start_time)}</td>
-                    <td data-label="Type">${scanType}</td>
-                    <td data-label="Status"><span class="${statusClass}">${report.status}</span></td>
-                    <td data-label="Duration">${report.duration_formatted || 'N/A'}</td>
-                    <td data-label="Files">${filesInfo}</td>
-                    <td data-label="Issues">${issuesInfo}</td>
-                    <td data-label="Actions">
-                        <button class="btn btn-sm btn-primary" onclick="app.viewScanReport('${report.report_id}')" title="View Details">
-                            <i class="fas fa-eye"></i>
-                        </button>
-                        <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'json')" title="Export JSON">
-                            <i class="fas fa-file-export"></i>
-                        </button>
-                        <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'pdf')" title="Export PDF">
-                            <i class="fas fa-file-pdf"></i>
-                        </button>
-                        <button class="btn btn-sm btn-danger" onclick="app.deleteScanReport('${report.report_id}')" title="Delete Report">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </td>
-                `;
+                const reportId = String(report.report_id);
+                const cell = (label, value) => {
+                    const element = document.createElement('td');
+                    element.dataset.label = label;
+                    element.textContent = String(value == null ? '' : value);
+                    return element;
+                };
+                const selectCell = document.createElement('td');
+                selectCell.dataset.label = 'Select';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.dataset.reportId = reportId;
+                checkbox.dataset.filename = String(report.filename || '');
+                checkbox.addEventListener('change', () => this.toggleReportSelection(reportId, checkbox.checked));
+                selectCell.appendChild(checkbox);
+                row.append(selectCell, cell('Date', this.table.formatDate(report.start_time)), cell('Type', scanType));
+                const statusCell = cell('Status', '');
+                const status = document.createElement('span');
+                status.className = statusClass;
+                status.textContent = String(report.status || '');
+                statusCell.replaceChildren(status);
+                row.append(statusCell, cell('Duration', report.duration_formatted || 'N/A'), cell('Files', filesInfo), cell('Issues', issuesInfo));
+                const actionsCell = cell('Actions', '');
+                const makeReportButton = (title, handler) => {
+                    const button = document.createElement('button');
+                    button.className = title === 'Delete Report' ? 'btn btn-sm btn-danger' : title === 'View Details' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-secondary';
+                    button.title = title;
+                    button.textContent = title;
+                    button.addEventListener('click', handler);
+                    return button;
+                };
+                actionsCell.replaceChildren(
+                    makeReportButton('View Details', () => this.viewScanReport(reportId)),
+                    makeReportButton('Export JSON', () => this.exportScanReport(reportId, 'json')),
+                    makeReportButton('Export PDF', () => this.exportScanReport(reportId, 'pdf')),
+                    makeReportButton('Delete Report', () => this.deleteScanReport(reportId))
+                );
+                row.appendChild(actionsCell);
+                const buttons = actionsCell.querySelectorAll('button');
 
                 tbody.appendChild(row);
 
@@ -3460,33 +3720,19 @@ class PixelProbeApp {
                 if (cardsContainer) {
                     const card = document.createElement('div');
                     card.className = 'report-card';
-                    card.innerHTML = `
-                        <div class="report-card-header">
-                            <h4>${scanType}</h4>
-                            <div class="report-card-actions">
-                                <button class="btn btn-xs ${statusClass === 'text-success' ? 'btn-success' : statusClass === 'text-danger' ? 'btn-danger' : 'btn-warning'}">${report.status}</button>
-                                <button class="btn btn-xs btn-danger" onclick="app.deleteScanReport('${report.report_id}')" title="Delete">
-                                    <i class="fas fa-trash"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="report-card-info">
-                            <p><strong>Date:</strong> ${this.table.formatDate(report.start_time)}</p>
-                            <p><strong>Duration:</strong> ${report.duration_formatted || 'N/A'}</p>
-                            <p><strong>Files:</strong> ${filesInfo} | <strong>Issues:</strong> ${issuesInfo}</p>
-                        </div>
-                        <div class="report-card-footer">
-                            <button class="btn btn-sm btn-primary" onclick="app.viewScanReport('${report.report_id}')" title="View">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'json')" title="Export JSON">
-                                <i class="fas fa-file-code"></i>
-                            </button>
-                            <button class="btn btn-sm btn-secondary" onclick="app.exportScanReport('${report.report_id}', 'pdf')" title="Export PDF">
-                                <i class="fas fa-file-pdf"></i>
-                            </button>
-                        </div>
-                    `;
+                    const header = document.createElement('div'); header.className = 'report-card-header';
+                    const heading = document.createElement('h4'); heading.textContent = scanType;
+                    const headerActions = document.createElement('div'); headerActions.className = 'report-card-actions';
+                    const statusButton = document.createElement('button'); statusButton.className = `btn btn-xs ${statusClass === 'text-success' ? 'btn-success' : statusClass === 'text-danger' ? 'btn-danger' : 'btn-warning'}`; statusButton.textContent = String(report.status || '');
+                    const deleteButton = document.createElement('button'); deleteButton.className = 'btn btn-xs btn-danger'; deleteButton.title = 'Delete'; deleteButton.textContent = 'Delete'; deleteButton.addEventListener('click', () => this.deleteScanReport(reportId));
+                    headerActions.append(statusButton, deleteButton); header.append(heading, headerActions);
+                    const info = document.createElement('div'); info.className = 'report-card-info';
+                    info.textContent = `Date: ${this.table.formatDate(report.start_time)} | Duration: ${report.duration_formatted || 'N/A'} | Files: ${filesInfo} | Issues: ${issuesInfo}`;
+                    const footer = document.createElement('div'); footer.className = 'report-card-footer';
+                    const cardButton = (title, handler) => { const button = document.createElement('button'); button.className = 'btn btn-sm btn-secondary'; button.title = title; button.textContent = title; button.addEventListener('click', handler); return button; };
+                    const view = cardButton('View', () => this.viewScanReport(reportId)); view.className = 'btn btn-sm btn-primary';
+                    footer.append(view, cardButton('Export JSON', () => this.exportScanReport(reportId, 'json')), cardButton('Export PDF', () => this.exportScanReport(reportId, 'pdf')));
+                    card.append(header, info, footer);
                     cardsContainer.appendChild(card);
                 }
             });
@@ -3503,33 +3749,36 @@ class PixelProbeApp {
         const paginationContainer = document.querySelector('#scan-reports-pagination');
         if (!paginationContainer) return;
         
-        let paginationHtml = '<div class="pagination">';
-        
-        // Previous button
-        if (currentPage > 1) {
-            paginationHtml += `<button class="pagination-btn" onclick="app.loadScanReports(${currentPage - 1})">Previous</button>`;
-        }
-        
-        // Page numbers
+        const pagination = document.createElement('div');
+        pagination.className = 'pagination';
+        const addButton = (label, page) => {
+            const button = document.createElement('button');
+            button.className = 'pagination-btn';
+            button.textContent = label;
+            button.addEventListener('click', () => this.loadScanReports(page));
+            pagination.appendChild(button);
+        };
+        if (currentPage > 1) addButton('Previous', currentPage - 1);
         for (let i = 1; i <= totalPages; i++) {
             if (i === currentPage) {
-                paginationHtml += `<span class="pagination-current">${i}</span>`;
+                const current = document.createElement('span');
+                current.className = 'pagination-current';
+                current.textContent = String(i);
+                pagination.appendChild(current);
             } else if (i === 1 || i === totalPages || (i >= currentPage - 2 && i <= currentPage + 2)) {
-                paginationHtml += `<button class="pagination-btn" onclick="app.loadScanReports(${i})">${i}</button>`;
+                addButton(String(i), i);
             } else if (i === currentPage - 3 || i === currentPage + 3) {
-                paginationHtml += '<span>...</span>';
+                const ellipsis = document.createElement('span');
+                ellipsis.textContent = '...';
+                pagination.appendChild(ellipsis);
             }
         }
-        
-        // Next button
-        if (currentPage < totalPages) {
-            paginationHtml += `<button class="pagination-btn" onclick="app.loadScanReports(${currentPage + 1})">Next</button>`;
-        }
-        
-        paginationHtml += `<span class="pagination-info">Total: ${totalItems} reports</span>`;
-        paginationHtml += '</div>';
-        
-        paginationContainer.innerHTML = paginationHtml;
+        if (currentPage < totalPages) addButton('Next', currentPage + 1);
+        const info = document.createElement('span');
+        info.className = 'pagination-info';
+        info.textContent = `Total: ${totalItems} reports`;
+        pagination.appendChild(info);
+        paginationContainer.replaceChildren(pagination);
     }
 
     async viewScanReport(reportId) {
@@ -3543,12 +3792,12 @@ class PixelProbeApp {
             let detailsHtml = '<div class="scan-report-details">';
             detailsHtml += '<h4>Report Details</h4>';
             detailsHtml += '<table class="table">';
-            detailsHtml += `<tr><th>Report ID:</th><td>${report.report_id}</td></tr>`;
-            detailsHtml += `<tr><th>Scan Type:</th><td>${report.scan_type.replace('_', ' ').toUpperCase()}</td></tr>`;
-            detailsHtml += `<tr><th>Status:</th><td>${report.status}</td></tr>`;
-            detailsHtml += `<tr><th>Start Time:</th><td>${new Date(report.start_time).toLocaleString()}</td></tr>`;
-            detailsHtml += `<tr><th>End Time:</th><td>${report.end_time ? new Date(report.end_time).toLocaleString() : 'N/A'}</td></tr>`;
-            detailsHtml += `<tr><th>Duration:</th><td>${report.duration_formatted || 'N/A'}</td></tr>`;
+            detailsHtml += `<tr><th>Report ID:</th><td>${escapeHtml(report.report_id)}</td></tr>`;
+            detailsHtml += `<tr><th>Scan Type:</th><td>${escapeHtml(report.scan_type.replace('_', ' ').toUpperCase())}</td></tr>`;
+            detailsHtml += `<tr><th>Status:</th><td>${escapeHtml(report.status)}</td></tr>`;
+            detailsHtml += `<tr><th>Start Time:</th><td>${escapeHtml(new Date(report.start_time).toLocaleString())}</td></tr>`;
+            detailsHtml += `<tr><th>End Time:</th><td>${escapeHtml(report.end_time ? new Date(report.end_time).toLocaleString() : 'N/A')}</td></tr>`;
+            detailsHtml += `<tr><th>Duration:</th><td>${escapeHtml(report.duration_formatted || 'N/A')}</td></tr>`;
             
             if (report.directories_scanned && Array.isArray(report.directories_scanned) && report.directories_scanned.length > 0) {
                 // Cleanup and file-changes reports store file lists (objects with
@@ -3567,7 +3816,7 @@ class PixelProbeApp {
                 if (report.directories_scanned.length > maxEntries) {
                     entries.push(`... and ${report.directories_scanned.length - maxEntries} more`);
                 }
-                detailsHtml += `<tr><th>${label}</th><td>${entries.join('<br>')}</td></tr>`;
+                detailsHtml += `<tr><th>${escapeHtml(label)}</th><td>${entries.join('<br>')}</td></tr>`;
             }
             
             detailsHtml += '</table>';
@@ -3577,7 +3826,7 @@ class PixelProbeApp {
                 detailsHtml += '<table class="table">';
                 Object.entries(report.summary).forEach(([key, value]) => {
                     const label = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-                    detailsHtml += `<tr><th>${label}:</th><td>${value}</td></tr>`;
+                    detailsHtml += `<tr><th>${escapeHtml(label)}:</th><td>${escapeHtml(String(value))}</td></tr>`;
                 });
                 detailsHtml += '</table>';
             }
@@ -3586,7 +3835,7 @@ class PixelProbeApp {
             
             // Show in a simple alert for now (could be improved with a modal)
             const detailModal = document.createElement('div');
-            detailModal.className = 'modal';
+            detailModal.className = 'modal scan-report-details-modal';
             detailModal.style.display = 'block';
             detailModal.innerHTML = `
                 <div class="modal-content">
@@ -3633,7 +3882,7 @@ class PixelProbeApp {
         }
     }
     async deleteScanReport(reportId) {
-        if (!confirm('Are you sure you want to delete this report? This action cannot be undone.')) {
+        if (!confirm('Delete this report? This cannot be undone.')) {
             return;
         }
         
@@ -3648,7 +3897,7 @@ class PixelProbeApp {
             if (!response.ok) throw new Error('Failed to delete report');
             
             const result = await response.json();
-            this.showNotification('Report deleted successfully', 'success');
+            this.showNotification('Report deleted', 'success');
             
             // Reload the reports list
             await this.loadScanReports();
@@ -3764,7 +4013,7 @@ class PixelProbeApp {
             return;
         }
 
-        if (!confirm(`Are you sure you want to delete ${this.selectedReports.size} report(s)?`)) {
+        if (!confirm(`Delete ${this.selectedReports.size} report(s)?`)) {
             return;
         }
 
@@ -3900,7 +4149,7 @@ class PixelProbeApp {
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
                 
-                this.showNotification(`${formatUpper} export completed successfully`, 'success');
+                this.showNotification(`${formatUpper} export complete`, 'success');
             } else {
                 throw new Error('Export failed');
             }
@@ -3921,7 +4170,7 @@ class PixelProbeApp {
         }
 
         if (this.table.selectedFiles.size > 10) {
-            if (!confirm(`Are you sure you want to download ${this.table.selectedFiles.size} files?`)) {
+            if (!confirm(`Download ${this.table.selectedFiles.size} files?`)) {
                 return;
             }
         }
@@ -4015,6 +4264,7 @@ class PixelProbeApp {
 
             if (response.ok) {
                 this.showNotification(`Cleanup started for ${fileIds.length} files`, 'success');
+                this.progress.startedHere = false;
                 this.progress.startMonitoring('cleanup');
             } else {
                 throw new Error('Cleanup failed');
@@ -4140,34 +4390,49 @@ class PixelProbeApp {
         const verdicts = details.filter(d => d.label !== 'Scan Output');
         const transcript = details.find(d => d.label === 'Scan Output');
 
-        const verdictsHtml = verdicts.map(detail => `
-            <section class="detail-section detail-${DETAIL_SEVERITY[detail.label] || 'neutral'}">
-                <h4 class="detail-label">${detail.label}</h4>
-                <pre class="scan-output-text">${this.escapeHtml(detail.content)}</pre>
-            </section>
-        `).join('');
-
-        const transcriptHtml = transcript ? `
-            <details class="detail-transcript">
-                <summary>Full scan transcript</summary>
-                <pre class="scan-output-text">${this.escapeHtml(transcript.content)}</pre>
-            </details>
-        ` : '';
-
-        const detailsHtml = (verdictsHtml + transcriptHtml) || '<p>No scan output available</p>';
-        
-        modalBody.innerHTML = `
-            <div class="scan-output-details">
-                <h4>File: ${this.escapeHtml(file.file_path)}</h4>
-                <p><strong>Status:</strong> ${fileStatus(file).text}</p>
-                <p><strong>Tool:</strong> ${file.scan_tool || 'N/A'}</p>
-                <p><strong>Scanned:</strong> ${file.scan_date ? new Date(file.scan_date).toLocaleString() : 'N/A'}</p>
-                ${file.last_integrity_check_date ? `<p><strong>Last Integrity Check:</strong> ${new Date(file.last_integrity_check_date).toLocaleString()}</p>` : ''}
-                ${this.renderBitrotDetails(file)}
-                <hr>
-                ${detailsHtml}
-            </div>
-        `;
+        const detailsContainer = document.createElement('div');
+        detailsContainer.className = 'scan-output-details';
+        const addSummary = (label, value) => {
+            const paragraph = document.createElement('p');
+            const heading = document.createElement('strong');
+            heading.textContent = `${label}:`;
+            paragraph.append(heading, ` ${value}`);
+            detailsContainer.appendChild(paragraph);
+        };
+        addSummary('File', file.file_path);
+        addSummary('Status', fileStatus(file).text);
+        addSummary('Tool', file.scan_tool || 'N/A');
+        addSummary('Scanned', file.scan_date ? new Date(file.scan_date).toLocaleString() : 'N/A');
+        if (file.last_integrity_check_date) addSummary('Last Integrity Check', new Date(file.last_integrity_check_date).toLocaleString());
+        verdicts.forEach((detail) => {
+            const section = document.createElement('section');
+            section.className = `detail-section detail-${DETAIL_SEVERITY[detail.label] || 'neutral'}`;
+            const label = document.createElement('h4');
+            label.className = 'detail-label';
+            label.textContent = detail.label;
+            const output = document.createElement('pre');
+            output.className = 'scan-output-text';
+            output.textContent = detail.content;
+            section.append(label, output);
+            detailsContainer.appendChild(section);
+        });
+        if (transcript) {
+            const transcriptDetails = document.createElement('details');
+            transcriptDetails.className = 'detail-transcript';
+            const summary = document.createElement('summary');
+            summary.textContent = 'Full scan transcript';
+            const output = document.createElement('pre');
+            output.className = 'scan-output-text';
+            output.textContent = transcript.content;
+            transcriptDetails.append(summary, output);
+            detailsContainer.appendChild(transcriptDetails);
+        }
+        if (details.length === 0) {
+            const empty = document.createElement('p');
+            empty.textContent = 'No scan output available';
+            detailsContainer.appendChild(empty);
+        }
+        modalBody.replaceChildren(detailsContainer);
         
         modal.style.display = 'block';
         
@@ -4235,56 +4500,64 @@ class PixelProbeApp {
             const listContainer = document.querySelector('#schedules-list');
             if (!listContainer) return;
             
-            if (data.schedules && data.schedules.length > 0) {
-                let html = '<div class="schedules-list">';
-                data.schedules.forEach(schedule => {
-                    const nextRun = schedule.next_run ? new Date(schedule.next_run).toLocaleString() : 'Not scheduled';
-                    const lastRun = schedule.last_run ? new Date(schedule.last_run).toLocaleString() : 'Never';
-                    
-                    html += `
-                        <div class="schedule-item">
-                            <div class="schedule-header">
-                                <h4>${this.escapeHtml(schedule.name)}</h4>
-                                <div class="schedule-actions">
-                                    <button class="btn btn-sm btn-primary"
-                                            onclick="app.showEditSchedule(${schedule.id})"
-                                            title="Edit Schedule">
-                                        <i class="fas fa-edit"></i>
-                                    </button>
-                                    <button class="btn btn-sm ${schedule.has_healthcheck ? 'btn-success' : 'btn-info'}"
-                                            onclick="app.showHealthcheckConfig(${schedule.id}, '${this.escapeHtml(schedule.name)}')"
-                                            title="${schedule.has_healthcheck ? (schedule.healthcheck_active ? 'Healthcheck Active' : 'Healthcheck Configured (Inactive)') : 'Configure Healthcheck'}">
-                                        <i class="fas fa-heartbeat"></i>${schedule.has_healthcheck ? ' ✓' : ''}
-                                    </button>
-                                    <button class="btn btn-sm ${schedule.is_active ? 'btn-warning' : 'btn-success'}"
-                                            onclick="app.toggleSchedule(${schedule.id}, ${!schedule.is_active})"
-                                            title="${schedule.is_active ? 'Disable Schedule' : 'Enable Schedule'}">
-                                        <i class="fas ${schedule.is_active ? 'fa-pause' : 'fa-play'}"></i>
-                                    </button>
-                                    <button class="btn btn-sm btn-danger" onclick="app.deleteSchedule(${schedule.id})">
-                                        <i class="fas fa-trash"></i>
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="schedule-info">
-                                <p><strong>Schedule:</strong> ${this.escapeHtml(schedule.cron_expression)}</p>
-                                <p><strong>Type:</strong> ${this.formatScanType(schedule.scan_type || 'normal')}</p>
-                                ${schedule.time_budget_minutes ? `<p><strong>Time Budget:</strong> ${schedule.time_budget_minutes} min/run</p>` : ''}
-                                <p><strong>Next Run:</strong> ${nextRun}</p>
-                                <p><strong>Last Run:</strong> ${lastRun}</p>
-                                ${schedule.scan_paths && schedule.scan_paths.length > 0 ? `<p><strong>Paths:</strong> ${this.escapeHtml(schedule.scan_paths.join(', '))}</p>` : ''}
-                            </div>
-                        </div>
-                    `;
-                });
-                html += '</div>';
-                listContainer.innerHTML = html;
-            } else {
-                listContainer.innerHTML = '<p class="text-muted">No schedules configured.</p>';
+            listContainer.replaceChildren();
+            if (!data.schedules || data.schedules.length === 0) {
+                const empty = document.createElement('p');
+                empty.className = 'text-muted';
+                empty.textContent = 'No schedules configured.';
+                listContainer.appendChild(empty);
+                return;
             }
+            const schedules = document.createElement('div');
+            schedules.className = 'schedules-list';
+            data.schedules.forEach((schedule) => schedules.appendChild(this.renderSchedule(schedule)));
+            listContainer.appendChild(schedules);
         } catch (error) {
             this.showNotification('Failed to load schedules', 'error');
         }
+    }
+
+    renderSchedule(schedule) {
+        const item = document.createElement('div');
+        item.className = 'schedule-item';
+        const header = document.createElement('div');
+        header.className = 'schedule-header';
+        const name = document.createElement('h4');
+        name.textContent = schedule.name;
+        const actions = document.createElement('div');
+        actions.className = 'schedule-actions';
+        const button = (classes, title, icon, handler) => {
+            const element = document.createElement('button');
+            element.className = classes;
+            element.title = title;
+            element.innerHTML = `<i class="fas ${icon}"></i>`;
+            element.addEventListener('click', handler);
+            return element;
+        };
+        actions.append(
+            button('btn btn-sm btn-primary', 'Edit Schedule', 'fa-edit', () => this.showEditSchedule(schedule.id)),
+            button(`btn btn-sm ${schedule.has_healthcheck ? 'btn-success' : 'btn-info'}`, schedule.has_healthcheck ? (schedule.healthcheck_active ? 'Healthcheck Active' : 'Healthcheck Configured (Inactive)') : 'Configure Healthcheck', 'fa-heartbeat', () => this.showHealthcheckConfig(schedule.id, schedule.name)),
+            button(`btn btn-sm ${schedule.is_active ? 'btn-warning' : 'btn-success'}`, schedule.is_active ? 'Disable Schedule' : 'Enable Schedule', schedule.is_active ? 'fa-pause' : 'fa-play', () => this.toggleSchedule(schedule.id, !schedule.is_active)),
+            button('btn btn-sm btn-danger', 'Delete Schedule', 'fa-trash', () => this.deleteSchedule(schedule.id)),
+        );
+        header.append(name, actions);
+        const info = document.createElement('div');
+        info.className = 'schedule-info';
+        const addDetail = (label, value) => {
+            const paragraph = document.createElement('p');
+            const strong = document.createElement('strong');
+            strong.textContent = `${label}:`;
+            paragraph.append(strong, ` ${value}`);
+            info.appendChild(paragraph);
+        };
+        addDetail('Schedule', schedule.cron_expression);
+        addDetail('Type', this.formatScanType(schedule.scan_type || 'normal'));
+        if (schedule.time_budget_minutes) addDetail('Time Budget', `${schedule.time_budget_minutes} min/run`);
+        addDetail('Next Run', schedule.next_run ? new Date(schedule.next_run).toLocaleString() : 'Not scheduled');
+        addDetail('Last Run', schedule.last_run ? new Date(schedule.last_run).toLocaleString() : 'Never');
+        if (schedule.scan_paths && schedule.scan_paths.length > 0) addDetail('Paths', schedule.scan_paths.join(', '));
+        item.append(header, info);
+        return item;
     }
 
     showAddSchedule() {
@@ -4424,7 +4697,7 @@ class PixelProbeApp {
             });
 
             if (response.ok) {
-                this.showNotification('Schedule updated successfully', 'success');
+                this.showNotification('Schedule updated', 'success');
                 this.closeModal('edit-schedule-modal');
                 await this.loadSchedules();
             } else {
@@ -4456,7 +4729,7 @@ class PixelProbeApp {
     }
 
     async deleteSchedule(scheduleId) {
-        if (!confirm('Are you sure you want to delete this schedule?')) return;
+        if (!confirm('Delete this schedule?')) return;
 
         try {
             const response = await fetch(`/api/schedules/${scheduleId}`, {
@@ -4521,7 +4794,10 @@ class PixelProbeApp {
                 if (statusDiv && config.last_ping_time) {
                     const lastPing = new Date(config.last_ping_time).toLocaleString();
                     const statusClass = config.last_ping_status === 'success' ? 'text-success' : 'text-danger';
-                    statusDiv.innerHTML = `<p class="${statusClass}">Last ping: ${lastPing} (${config.last_ping_status})</p>`;
+                    const message = document.createElement('p');
+                    message.className = statusClass;
+                    message.textContent = `Last ping: ${lastPing} (${config.last_ping_status || 'unknown'})`;
+                    statusDiv.replaceChildren(message);
                     statusDiv.style.display = 'block';
                 }
             } else if (response.status === 404) {
@@ -4588,7 +4864,7 @@ class PixelProbeApp {
     }
 
     async deleteHealthcheckConfig(configId) {
-        if (!confirm('Are you sure you want to delete this healthcheck configuration?')) return;
+        if (!confirm('Delete this healthcheck configuration?')) return;
 
         try {
             const response = await fetch(`/api/healthcheck/${configId}`, {
@@ -4614,7 +4890,7 @@ class PixelProbeApp {
             // First check if config exists
             const checkResponse = await fetch(`/api/healthcheck/schedule/${scheduleId}`);
             if (!checkResponse.ok) {
-                this.showNotification('Please save the configuration before testing', 'warning');
+                this.showNotification('Save the configuration before testing.', 'warning');
                 return;
             }
 
@@ -4626,7 +4902,7 @@ class PixelProbeApp {
             const result = await response.json();
 
             if (result.success) {
-                this.showNotification('Test ping sent successfully!', 'success');
+                this.showNotification('Test ping sent.', 'success');
 
                 // Reload config to show updated ping status
                 await this.loadHealthcheckConfig(scheduleId);
@@ -4656,6 +4932,12 @@ class PixelProbeApp {
             if (!response.ok) throw new Error('Request failed');
             const data = await response.json();
             container.innerHTML = data.groups.map(group => this.renderTunableGroup(group)).join('');
+            container.querySelectorAll('[data-tunable-reset]').forEach(button => {
+                button.addEventListener('click', () => this.resetTunable(button.dataset.tunableReset));
+            });
+            container.querySelectorAll('[data-accept-bitrot]').forEach(button => {
+                button.addEventListener('click', () => this.acceptBitrot(Number(button.dataset.acceptBitrot)));
+            });
             this.setTunablesStatus('');
         } catch (error) {
             console.error('Error loading tunables:', error);
@@ -4675,36 +4957,39 @@ class PixelProbeApp {
     }
 
     renderTunable(setting) {
-        const id = `tunable-${setting.key.replace(/\./g, '-')}`;
+        const key = String(setting.key || '');
+        const type = ['bool', 'int', 'float'].includes(setting.type) ? setting.type : 'float';
+        if (!/^[a-z][a-z0-9_.-]*$/i.test(key)) return '';
+        const id = `tunable-${key.replace(/\./g, '-')}`;
+        const min = setting.min !== null && setting.min !== '' && Number.isFinite(Number(setting.min))
+            ? Number(setting.min) : null;
+        const max = setting.max !== null && setting.max !== '' && Number.isFinite(Number(setting.max))
+            ? Number(setting.max) : null;
         const changed = setting.is_default
             ? '<span></span>'
             : `<button type="button" class="tunable-reset" title="Restore the default"
-                   onclick="app.resetTunable('${this.escapeHtml(setting.key)}')">Reset</button>`;
-        const badge = setting.is_default
-            ? ''
-            : '<span class="tunable-changed" title="Changed from the default">Changed</span>';
-
+                   data-tunable-reset="${escapeAttribute(key)}">Reset</button>`;
         const control = setting.type === 'bool'
             ? `<label class="tunable-switch">
-                   <input type="checkbox" id="${id}" data-key="${this.escapeHtml(setting.key)}"
+                   <input type="checkbox" id="${id}" data-key="${escapeAttribute(key)}"
                           data-type="bool" ${setting.value ? 'checked' : ''}>
                    <span>${setting.value ? 'On' : 'Off'}</span>
                </label>`
             : `<input type="number" id="${id}" class="form-control tunable-input"
-                      data-key="${this.escapeHtml(setting.key)}" data-type="${setting.type}"
-                      value="${setting.value}"
-                      ${setting.min !== null ? `min="${setting.min}"` : ''}
-                      ${setting.max !== null ? `max="${setting.max}"` : ''}
-                      step="${setting.type === 'int' ? '1' : 'any'}">
+                      data-key="${escapeAttribute(key)}" data-type="${type}"
+                      value="${escapeAttribute(setting.value)}"
+                      ${min !== null ? `min="${min}"` : ''}
+                      ${max !== null ? `max="${max}"` : ''}
+                      step="${type === 'int' ? '1' : 'any'}">
                <span class="tunable-unit">${setting.unit ? this.escapeHtml(setting.unit) : ''}</span>`;
 
         return `
             <div class="tunable-row">
                 <div class="tunable-text">
-                    <label class="tunable-label" for="${id}">${this.escapeHtml(setting.label)}${badge}</label>
+                    <label class="tunable-label" for="${id}">${this.escapeHtml(setting.label)}</label>
                     <p class="tunable-help">${this.escapeHtml(setting.help)}</p>
                 </div>
-                <div class="tunable-control${setting.type === 'bool' ? ' tunable-control-switch' : ''}">
+                <div class="tunable-control${type === 'bool' ? ' tunable-control-switch' : ''}">
                     ${control}
                     ${changed}
                 </div>
@@ -4784,42 +5069,37 @@ class PixelProbeApp {
             const response = await fetch('/api/exclusions');
             const data = await response.json();
             
-            // Update paths list
-            const pathsList = document.querySelector('#excluded-paths-list');
-            if (pathsList) {
-                if (data.paths && data.paths.length > 0) {
-                    pathsList.innerHTML = data.paths.map(path => `
-                        <div class="exclusion-item">
-                            <span>${this.escapeHtml(path)}</span>
-                            <button class="btn btn-sm btn-danger" onclick="app.removeExclusion('path', '${this.escapeHtml(path)}')">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    `).join('');
-                } else {
-                    pathsList.innerHTML = '<div class="empty-state">No excluded paths</div>';
-                }
-            }
-            
-            // Update extensions list
-            const extensionsList = document.querySelector('#excluded-extensions-list');
-            if (extensionsList) {
-                if (data.extensions && data.extensions.length > 0) {
-                    extensionsList.innerHTML = data.extensions.map(ext => `
-                        <div class="exclusion-item">
-                            <span>${this.escapeHtml(ext)}</span>
-                            <button class="btn btn-sm btn-danger" onclick="app.removeExclusion('extension', '${this.escapeHtml(ext)}')">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    `).join('');
-                } else {
-                    extensionsList.innerHTML = '<div class="empty-state">No excluded extensions</div>';
-                }
-            }
+            this.renderExclusionList('#excluded-paths-list', data.paths, 'path', 'No excluded paths');
+            this.renderExclusionList('#excluded-extensions-list', data.extensions, 'extension', 'No excluded extensions');
         } catch (error) {
             this.showNotification('Failed to load exclusions', 'error');
         }
+    }
+
+    renderExclusionList(selector, values, type, emptyMessage) {
+        const container = document.querySelector(selector);
+        if (!container) return;
+        container.replaceChildren();
+        if (!values || values.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'empty-state';
+            empty.textContent = emptyMessage;
+            container.appendChild(empty);
+            return;
+        }
+        values.forEach((value) => {
+            const item = document.createElement('div');
+            item.className = 'exclusion-item';
+            const label = document.createElement('span');
+            label.textContent = value;
+            const removeButton = document.createElement('button');
+            removeButton.className = 'btn btn-sm btn-danger';
+            removeButton.title = `Remove ${type}`;
+            removeButton.innerHTML = '<i class="fas fa-trash"></i>';
+            removeButton.addEventListener('click', () => this.removeExclusion(type, value));
+            item.append(label, removeButton);
+            container.appendChild(item);
+        });
     }
     
     async addExclusion(type) {
@@ -4840,7 +5120,7 @@ class PixelProbeApp {
             if (response.ok) {
                 input.value = '';
                 await this.loadExclusions();
-                this.showNotification(`${type === 'path' ? 'Path' : 'Extension'} excluded successfully`, 'success');
+                this.showNotification(`${type === 'path' ? 'Path' : 'Extension'} excluded`, 'success');
             } else {
                 throw new Error('Failed to add exclusion');
             }
@@ -4880,6 +5160,7 @@ class PixelProbeApp {
     closeModal(modalId) {
         const modal = document.querySelector(`#${modalId}`);
         if (modal) {
+            if (modalId === 'media-viewer-modal') this.previewRequestId = (this.previewRequestId || 0) + 1;
             this.stopModalMedia(modal);
             modal.style.display = 'none';
         }
@@ -4898,10 +5179,44 @@ class PixelProbeApp {
 
 }
 
+function bindTemplateActions() {
+    fetch('/api/version').then(response => response.json()).then(data => {
+        const version = document.getElementById('version-info');
+        if (version) version.textContent = `v${data.version}`;
+    }).catch(() => {});
+    const actions = {
+        showApiDocs: () => app.showApiDocs(), startScan: () => app.startScan(), cleanupOrphaned: () => app.cleanupOrphaned(),
+        checkFileChanges: () => app.checkFileChanges(), showSchedules: () => app.showSchedules(), showExclusions: () => app.showExclusions(),
+        showSystemStats: () => app.showSystemStats(), showTrends: () => app.showTrends(), showScanReports: () => app.showScanReports(),
+        showLogs: () => app.showLogs(), showTunables: () => app.showTunables(), cancelCurrentOperation: () => app.cancelCurrentOperation(),
+        markSelectedAsGood: () => app.markSelectedAsGood(), rescanSelected: () => app.rescanSelected(), orphanScanSelected: () => app.orphanScanSelected(),
+        changeCheckSelected: () => app.changeCheckSelected(), downloadSelected: () => app.downloadSelected(), toggleExportMenu: e => app.toggleExportMenu(e),
+        exportData: (e, arg) => app.exportData(arg), loadScanReports: () => app.loadScanReports(), toggleDropdown: (e, arg) => app.toggleDropdown(e, arg),
+        downloadSelectedReports: (e, arg) => app.downloadSelectedReports(arg), deleteSelectedReports: () => app.deleteSelectedReports(),
+        toggleAllReports: e => app.toggleAllReports(e.target.checked), downloadLogs: () => app.downloadLogs(), purgeLogs: () => app.purgeLogs(),
+        'logViewer-loadMore': () => app.logViewer.loadMore(), showAddSchedule: () => app.showAddSchedule(), toggleScheduleInput: () => app.toggleScheduleInput(),
+        toggleBudgetInput: (e, arg) => app.toggleBudgetInput(arg), toggleEditScheduleInput: () => app.toggleEditScheduleInput(), saveTunables: () => app.saveTunables(),
+        addExclusion: (e, arg) => app.addExclusion(arg), hideConfirmModal: (e, arg) => app.hideConfirmModal(arg === 'true'),
+        deleteHealthcheckConfig: () => app.deleteHealthcheckConfig(), testHealthcheck: () => app.testHealthcheck(), saveHealthcheckConfig: () => app.saveHealthcheckConfig(),
+        closeModal: (e, arg) => app.closeModal(arg), toggleActionDropdown: (e, arg) => app.toggleActionDropdown(e, arg),
+        'auth-showUserManagement': () => AuthManager.showUserManagement(), 'auth-showApiTokens': () => AuthManager.showApiTokens(),
+        'auth-showChangePassword': () => AuthManager.showChangePassword(), 'auth-logout': () => AuthManager.logout()
+    };
+    document.querySelectorAll('[data-action]').forEach(element => {
+        const action = actions[element.dataset.action];
+        if (!action) return;
+        element.addEventListener(element.tagName === 'SELECT' || element.type === 'checkbox' ? 'change' : 'click', event => {
+            if (element.tagName === 'A') event.preventDefault();
+            action(event, element.dataset.actionArg);
+        });
+    });
+}
+
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new PixelProbeApp();
     window.app.init();
+    bindTemplateActions();
     
     // Setup modal close buttons
     document.querySelectorAll('.modal-close').forEach(btn => {
@@ -4958,7 +5273,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 
                 if (response.ok) {
-                    app.showNotification('Schedule created successfully', 'success');
+                    app.showNotification('Schedule created', 'success');
                     app.closeModal('add-schedule-modal');
                     await app.loadSchedules();
                 } else {

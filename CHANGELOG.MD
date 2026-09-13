@@ -5,6 +5,135 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.9.3] - 2026-09-13
+
+### Added
+
+- Authenticated `GET /api/scan-runs/{scan_id}/files` pages a run's durable member paths and current raw states with an ID cursor.
+
+### Changed
+
+- Python 3.12 is now the supported runtime. CI no longer tests Python 3.10 or 3.11.
+- The retired SQLite test setup helper now directs contributors to the supported PostgreSQL workflow.
+
+### Fixed
+
+- Parallel selected-file workers use a settings snapshot resolved by their parent task. Saved scanner tunables no longer fall back to defaults outside Flask application context.
+- Scan status reports bounded in-flight selected files through the progress mirror. ETA remains available when no single current file is shown.
+- Scan status follows the newest durable run. A cancelled run no longer displays an older completed scan.
+- Cancelling a selected run clears only claims owned by that run. It no longer resets unrelated inventory rows.
+
+## [2.9.2] - 2026-09-12
+
+### Fixed
+
+- Large selected-file rescans group exact paths by directory, so a parent chunk does not reprocess a child-directory selection. Worker exceptions are recorded in immutable run evidence instead of copying a prior healthy inventory result.
+- Terminal selected-file runs do not reactivate on redelivery. Chunk state and progress counters retain completed and failed work accurately.
+- Media previews identify supported media from the authorized file descriptor, not stored scan metadata. Pending and unscanned files can preview without changing their inventory status; unsafe or unrecognized content remains a download.
+
+## [2.9.1] - 2026-09-12
+
+### Fixed
+
+- Normal directory scans now create run members only for newly discovered or pending inventory. Completed, failed, and active rows are not re-queued by another full scan. Force rescans retain their discovered scope.
+- A run member records queued and decoding work. The library row remains the last completed observation until a decode writes a new result. A retry or cancellation does not replace it with `pending` or `scanning`.
+- `/api/scan-status` returns the durable scan UUID, the stored root list, and the stored force-rescan flag. The root list is always an array.
+- Dashboard totals use the full inventory. Integrity rechecks distinguish recorded successes, attempts, errors, and unavailable files. The card explains why legacy recheck coverage is unavailable.
+- Mobile result cards keep labeled two-column actions and touch-sized selection controls. Media previews fit their viewport, and report details wrap long values.
+- Status badges retain their outcome accents. Report filters align on desktop, and trend panels give charts more space. Tunables no longer show Changed badges.
+
+## [2.9.0] - 2026-09-12
+
+### Changed
+
+- New scans retain durable root evidence, file membership, task ownership, and result snapshots. Scope, cancellation, and reports can be verified without mutable library rows.
+- Docker Compose now defaults to the 2.9.0 image and runs application containers as non-root. Media remains read-only, with documented writable-instance ownership and resource limits.
+- The CSV deletion helper now uses `csv.DictReader`, canonical allowed-root checks, and an explicit `--apply` flag; dry-run is the default.
+- Project onboarding now includes the MIT license, contributor workflow, and operational evidence limits.
+- Frontend dependencies use audited releases pinned by a committed lockfile. Local setup, CI, and the container frontend stage require Node 22.22.2 or later.
+
+### Fixed
+
+- Scan workers retain an authorized no-follow file descriptor through metadata, hashing, image decoding, and ffmpeg-family subprocesses. Replacing an ancestor or final pathname cannot redirect scanning to different bytes. Results retain the original pathname.
+- The CSV deletion helper traverses configured roots by no-follow directory descriptors. It deletes only regular entries relative to those descriptors. Explicit roots preserve whitespace, and control-character paths render unambiguously.
+- Routine cache and hash lifecycle logs are DEBUG-level; scan summaries, warnings, corruption findings, errors, and audit events remain visible at INFO or above.
+- File status, exports, and dashboard statistics keep unreadable, failed, unknown, attempted, successful, and unavailable outcomes distinct. Development CSS fallback loads the same three source stylesheets as the production bundle.
+- Integrity accounting distinguishes attempts from successful verification. Scan baseline writes require a complete successful read with a hash and modification time.
+- Scan cancellation records intent before revoking only tasks owned by that run. Global queue purge and unrelated task termination are no longer part of normal cancellation.
+- Post-decode writes re-check the active run, immutable member, and chunk owner under a short persistence fence. A cancelled or superseded worker cannot overwrite a newer observation after decoding. Selected-file cache writes use the same fence.
+- Scan dispatch records roots, chunks, and task intents before publication. It recovers stale non-chunk worker claims and revalidates current exclusions plus immutable roots before chunk decoding. Cancellation includes only queued, dispatched, and processing intents owned by that run.
+- Selected-file scans now retain immutable per-run result evidence and reject stale database rows as authorization for paths outside active media roots.
+- Scan completion now fails when requested roots, run members, or verification coverage are incomplete instead of reporting a successful terminal chunk as a successful scan.
+- Scan-completion notifications persist one target for every evaluated rule. Inactive rules and unmet conditions become terminal skips. Provider failures retry only their own target under a lease and stop at a bounded attempt count. A crash after provider acceptance can duplicate delivery, so notifications are at least once, not exactly once.
+- Scheduled orphan cleanup and file-change checks carry validated directory roots through the API. They query only records below those roots. Root boundaries plus path, extension, and filename exclusions are honored. Selected exact file paths retain their existing behavior. Background work validates roots again before touching records.
+- Orphan cleanup counts and keyset-pages bounded candidate batches instead of loading an entire library before dispatching checks. A starting high-watermark excludes newly discovered records from the current run. Final active tasks pause between polls, avoiding a busy loop at the tail.
+- Orphan cleanup persists each candidate's pending, held, returned, eligible, or removed-inventory decision in bounded batches. Cleanup reports keep a 100-path preview with totals and truncation. Complete JSON export streams the durable decision ledger without retaining the library in worker memory. Removing inventory never removes media.
+- Application startup creates and migrates schema only while holding the PostgreSQL advisory lock. It verifies every modeled table and column on the active search path before serving or releasing a waiting worker. Scheduler lease loss fences queued callbacks and pauses APScheduler. Shutdown stops lease renewal before executor shutdown.
+- Security audit actor identifiers retain historical account IDs without a live-user foreign key. Deleting an account cannot delete audit evidence or be blocked by it. The database default for new users is non-admin.
+- Startup repairs legacy rows whose completed status conflicts with the known `error` or `unsupported` scanner marker. It does not invent a hash or successful integrity timestamp. Integrity status distinguishes each run's attempted, verified, error, and unavailable outcomes. Coverage reports latest errors and unreadable outcomes independently of cumulative attempts.
+- Streaming inventory exports freeze an initial maximum ID and release the request read transaction before yielding. Report CSV and JSON exports stream immutable evidence. Generic, per-report, and combined PDFs use bounded detail and avoid loading scanner output they do not render.
+- Reports no longer label pending, scanning, unreadable, cancelled, or unknown observations as healthy. Legacy state alone no longer proves immutable history; a run member or root record is required.
+- Scheduled-scan healthchecks snapshot a durable target with the configured success or failure mode. Target delivery retries under its lease. An older target cannot mark a later reconfigured URL as delivered.
+- Maintenance root preflight now uses the authorized directory validator before filesystem access. Invalid-root responses no longer expose filesystem exception details.
+- Repository ignore rules now cover `.env.*`; the committed `.env.example` and `.env.test` remain sample configuration files.
+- Configured scan roots can opt into an administrator-approved required-mount baseline. A later filesystem type, source, or mount-root mismatch blocks discovery, cleanup, and integrity work before reading an underlying mountpoint. Ordinary directories keep their existing behavior. Replacing a baseline requires an explicit administrator request.
+- Login, setup, logout, schedule changes, log purges, and notification provider actions retain durable audit actor, target, and outcome evidence. Session-establishing and session-ending routes require CSRF even when a Bearer header is present.
+- Notification rule conditions now reject unsupported keys and invalid values. Rule and provider changes record audit evidence without logging provider secrets.
+- Compose rejects a missing media bind source. It gives the runtime tmpfs the app UID/GID and restrictive mode, passes shared output settings to workers, and keeps local runtime and diagnostic artifacts out of the image context.
+- The runtime image omits unused C headers and pip after dependency installation, removing known CVEs. Builds use pip 26.2.1; parser tests mount it only to install test dependencies.
+
+### Testing
+
+- Descriptor-bound scanner coverage verifies final and ancestor symlink replacement, supported-media success, and timed-out reader descriptor lifetime. CSV deletion coverage verifies final and ancestor symlink rejection.
+- Focused PostgreSQL and Redis/Celery regressions cover concurrent task claims, stale-intent recovery, cancellation isolation, worker-loss recovery, notification retries, and selected-file processing.
+- PostgreSQL regressions cover concurrent intent claims, stale intent replay, cancellation isolation, and an old decode released after cancellation. Linux prefork validation confirms directory completion, unrelated maintenance after cancellation, durable chunk replay, and report idempotency.
+- Maintenance coverage verifies root-only scheduling, sibling-boundary protection, exclusions, exact selected paths, API root validation, and cleanup keyset paging.
+- Cleanup-report coverage verifies bounded previews and complete streaming decision export for runs larger than the visible report limit.
+- PostgreSQL coverage verifies concurrent startup locking and lock release after an injected migration failure. Scheduler tests cover lease fencing and orderly shutdown.
+- PostgreSQL migration coverage verifies legacy scanner-marker repair. It does not manufacture successful verification history.
+- Sustained API-load coverage uses isolated PostgreSQL and Redis services instead of a shared in-memory SQLite connection.
+
+## [2.8.11] - 2026-09-08
+
+### Fixed
+
+- **A library with one file per folder could not clean up anything.** Deleting a film empties or removes its folder, so there was nothing left in it to read and every record was kept for confirmation: an ordinary deletion, held back as though the drive might be offline. On a real library that was 44 of 46 flagged files in one run. When a folder has nothing to say, the question now moves up a level, to whether the library above it is still the library. Its parent has to list folders, and one of those has to hold a file this scanner recorded. A listing alone proves nothing, since files written to a mountpoint while it was unmounted list just as well, but rows the scanner recorded could not have come from them. A tree that has gone entirely still has nothing above it to answer, and those records are still kept.
+- **The cross-worker start lock had never once been taken.** It reads the session's dialect to decide whether PostgreSQL advisory locks are available, through `db.session.bind`, which is `None` unless a session was bound explicitly. Every call raised, and the handler logs and returns True, so the guard against two workers starting the same operation waved through every caller it ever saw. Reading the bind the way the rest of the file does fixes it.
+- **A schedule waiting on a long scan was abandoned for waiting.** A skipped cron fire queues a retry, ten minutes apart, up to 144 of them, and a scan of a large library runs well past that day: live, a 27-hour scan with 15 hours still to go had one schedule at retry 106 of 144 and another at 87. Retries now only spend that budget on conflicts that are failures. Queueing behind a scan that is reporting progress costs nothing, while a scan that has gone quiet for half an hour spends the budget as before, so a wedged scan still cannot hold a schedule in a retry loop forever.
+- **Two log lines were 42 percent of everything the application logged.** `/api/scan-status` recorded the state it was about to return, twice, at INFO, on an endpoint every open tab polls every few seconds: measured at roughly 4,000 lines per 86 seconds against a `log_entries` table already holding a million rows. Both are DEBUG now.
+- The cleanup's completion message called kept records ones "whose folder could not be read". A folder emptied by a deletion reads perfectly well; what could not be read is what was in it. The message and the confirmation dialog now say the records could not be confirmed as deleted, and why.
+
+### Tests
+
+- 2 cleanup tests: the library above a vanished folder answering for it, and leftovers on an unmounted mountpoint failing to.
+- 7 scheduler tests: a recently updated scan reading as progressing and a long quiet one not, missing timestamps, a naive timestamp read as UTC, waiting on a working scan costing nothing across 500 retries, a real conflict still giving up at the cap, and a stuck scan still spending the budget.
+
+## [2.8.10] - 2026-09-08
+
+### Fixed
+
+- **The 2.8.9 migration named a table that does not exist, so cleanup status broke on every poll.** The new `records_kept` column was added to `cleanup_states`; the table is `cleanup_state`. The ALTER failed, the failure was logged and swallowed as migrations here are written to be, and the column never arrived, while the model went on selecting it: `/api/cleanup-status` returned 500 on every poll of a deployed 2.8.9. The migration now takes the table name from the model, and a test rejects any migration naming a table the models do not define.
+
+## [2.8.9] - 2026-09-08
+
+### Fixed
+
+- **Long audio files were passing without being checked.** The full-file audio pass ran under a fixed 120 second deadline while the video pass scaled its deadline with file size and playing time. A two-hour podcast episode does not decode in 120 seconds on contended storage, so it timed out, recorded "Audio decode test timeout" as a warning, and moved on without ever validating the file. That was 44 of 185 scanned episodes in one archive, all of them over 62 MB. The audio deadline now scales the way the video one does: a base, plus whichever of size (2048 seconds per GB) and playing time (4x realtime) asks for more, plus a 20 percent buffer, capped at one hour. Both media types compute it through one helper now, with their own coefficients; the video deadline is unchanged. The three audio passes share a single per-file budget rather than each getting a fresh deadline, so a file on stalled storage cannot hold a worker for three of them; once the budget is spent the later passes are skipped rather than started and killed, which would have reported the spent budget as more findings against the file. A `flac -t` timeout is also recorded as a warning now instead of being swallowed, where the silence read as a passed CRC check.
+
+- **Orphan cleanup could not tell a deleted file from an unreachable one, so it judged the whole run at once.** It aborted when too much of what it checked read as missing, on the theory that a vanished mount makes every record under it look like an orphan. As a property of the whole run that is the wrong question, in both directions. An operator who deletes 331 corrupted files and then cleans up their records finds 96 percent of the run missing by design, and could never finish a cleanup. A mount dropping underneath a scan path that holds several keeps the fraction low and passed. Each file is now confirmed on its own, by reading its directory and finding other files in it. Something is there, so this storage is present and the file is not, and the record goes. An empty directory proves nothing, since an unmounted mountpoint reverts to an empty directory that stats perfectly well. Neither does a directory that is gone: a deleted folder and a folder inside a mount that came down are the same ENOENT. Those records are kept and counted. Flagged files are re-checked before deletion too, hours after the sweep that flagged them, so a mount that dropped mid-run and came back cannot have its library deleted; anything short of a clean "not there" keeps the record. Nothing unconfirmed is deleted here, so a run no longer aborts. It does the work it can prove, says what it kept, and calls out a share large enough to look like an outage.
+- **Records the cleanup keeps are now yours to confirm.** Whether a folder was deleted or went offline is a question only an operator can answer, so the run asks instead of guessing: after a cleanup that kept records, the UI offers to remove them, and `POST /api/cleanup-orphaned` accepts `trust_unreadable_dirs: true` to say the files really were deleted. A scheduled cleanup never sets it, and the offer is only made to whoever started the run. A confirmed run that finds more unreadable records than the previous run kept stops without deleting: an answer given about 331 records cannot cover a mount that dropped since.
+- **An aborted cleanup said "Removed 331 orphaned records" while deleting nothing.** The progress view read the aborted run's phase as completion and rendered the orphan count as a deletion count, with the reason sitting unread in the status payload. A run that stopped early now reports its reason as an error, refreshes the table it may have half-changed, and hands the progress view back to a media scan still running underneath it. It also writes a report, as does a cancelled run, counting only what phase 3 actually deleted, so a run that did nothing leaves evidence rather than a count that did not move. `/api/cleanup-status` and `/api/scan-status` carry `error_message` for that.
+
+### Added
+
+- `timeouts.audio_decode_base_secs` (default 120 seconds), under System > Tunables with the other timeouts.
+- `cleanup_states.records_kept`, added at startup, recording how many entries a cleanup kept because it could not confirm them. `/api/cleanup-status` returns it, and both that endpoint and `/api/scan-status` now return `error_message`.
+
+### Tests
+
+- 15 cleanup tests: an occupied folder settling it; an empty folder and a missing folder both keeping records instead of deleting them; the operator confirming those; a file that came back and a file that reads back an error both left alone; one dead tree not holding up a healthy one; the kept-records reason staying inside its column; the outage note firing on most of a run and not on a handful; the confirmation ceiling coming from the previous run; and reports for an aborted run and for a phase 3 that stopped part way.
+- 7 audio-timeout tests: the one hour cap, size-only scaling when the container reports no duration, the video deadline surviving the shared helper unchanged, the scaled deadline reaching the ffmpeg call, the three passes drawing down one budget, a spent budget skipping the later passes instead of warning again, and a timeout naming the deadline it hit.
+
 ## [2.8.8] - 2026-08-26
 
 ### Changed
@@ -427,9 +556,14 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 
 ### Fixed (reliability hardening - phase 2: silent / dropped work)
 
-- **Scheduled scans no longer silently drop a cron fire.** Closes the gap behind the missed Integrity scan: (a) when `scan_lock` is held by another schedule firing at the same instant, the loser now queues a retry instead of returning; (b) `_execute_scan_request` returns its status and a shared `_handle_scan_response` queues a retry on a 409 (a scan slipped into the check->POST window) or a connection error -- now unified across scheduled, periodic, and cleanup fires; (c) `last_run`/`next_run` advance only after a confirmed HTTP 200 (on a freshly re-fetched row), so a failed fire is retried rather than recorded as a successful run that skips a full interval; (d) the healthcheck start ping is sent only after a confirmed start, so a conflicted/failed fire no longer leaves a dangling "start" that trips a false down-alert; (e) cron/interval jobs now set `misfire_grace_time=3600` and `coalesce=True` so a fire missed during a brief scheduler restart still runs. The retry counter is cleared on benign no-op fires (no paths / disabled schedule) so it cannot drift upward.
+- **Scheduled scans no longer silently drop a cron fire.**
+  - A schedule that loses `scan_lock` now queues a retry instead of returning.
+  - `_execute_scan_request` returns its status. `_handle_scan_response` retries a 409 caused by the check-to-POST gap or a connection error for scheduled, periodic, and cleanup fires.
+  - `last_run` and `next_run` advance only after a confirmed HTTP 200 from a freshly fetched row. A failed fire is retried instead of recorded as successful.
+  - The healthcheck start ping follows a confirmed start, so a conflict or failed request cannot leave a dangling start ping.
+  - Cron and interval jobs use `misfire_grace_time=3600` and `coalesce=True`. Benign no-op fires clear the retry counter.
 - **Parallel discovery no longer reports completion on a truncated file set.** `discover_directory_task` now returns a structured `{files, complete, error}` result; a walk timeout or error marks the directory incomplete. The orchestrator aborts the scan with an error (instead of scanning a partial set and reporting it complete) when a discovery target did not finish; a spurious result-collection error where every task actually completed does not abort. The discovery wait is env-overridable via `DISCOVERY_RESULT_TIMEOUT_SECS` (default 3600s).
-- **A file that cannot be hashed is no longer reported as unchanged.** `calculate_file_hash_task` now returns `changed=True` (change_type `error`) after exhausting retries, so the file is re-examined by a full scan instead of being silently treated as unchanged -- which previously masked the corruption the integrity check exists to catch.
+- **A file that cannot be hashed is no longer reported as unchanged.** `calculate_file_hash_task` now returns `changed=True` (change_type `error`) after exhausting retries, so the file is re-examined by a full scan instead of being silently treated as unchanged. The old behavior could mask corruption.
 - **Incomplete deep media checks are surfaced.** Swallowed exceptions in the temporal-outlier and multi-point sampling checks are now logged at warning level (and multi-point sampling adds a "did not complete" warning detail) instead of being hidden at debug level, so a deep check that did not run is visible rather than implicitly passing.
 
 ## [2.6.44] - 2026-06-01
@@ -439,7 +573,10 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 - **Orphan cleanup could delete valid database rows when a mount flapped.** `check_file_exists_task` used `os.path.exists()`, which swallows `OSError` and returns `False`, so a down/stale NFS mount made every file read as absent and orphan cleanup irreversibly deleted its `ScanResult` row. Existence is now classified as a tri-state (`exists` / `absent` / `unknown`) via the new `classify_path_existence()` helper, which uses `os.stat()` (raises on error) and only treats `ENOENT`/`ENOTDIR` as absent; transient/IO errors return `unknown` and are skipped, never deleted. `maintenance_service` now also aborts the whole cleanup (deleting nothing) when an implausibly large fraction of checked files read as absent (defaults: >=100 files and >=50%, env-overridable via `ORPHAN_CLEANUP_ABORT_FLOOR` / `ORPHAN_CLEANUP_MAX_DELETE_FRACTION`), as a safety net against a disappeared mount.
 - **ffprobe metadata reads could hang a scan worker forever.** `ffmpeg-python`'s `probe()` calls `Popen.communicate()` with no timeout, so a stalled mount or crafted container permanently consumed a scan thread. Probing now goes through the new `_ffprobe_with_timeout()` helper (env-overridable `FFPROBE_TIMEOUT_SECS`, default 120s) backed by `safe_subprocess_run`; a timeout flags the file rather than wedging the worker.
 - **Subprocess timeouts now isolate the child session.** `safe_subprocess_run` starts media subprocesses with `start_new_session=True` (POSIX) so subprocess.run's timeout-kill targets the child without signalling PixelProbe's own process group. (The audio probe path now also handles the resulting `TimeoutExpired`, so an ffprobe timeout flags the file instead of raising.)
-- **Scheduler distributed-lock heartbeat no longer abandons the lock on a Redis blip.** The heartbeat thread previously `break`-ed out of its loop forever on the first exception, silently abandoning the 60s-TTL lock. It now retries indefinitely; when Redis recovers, the next refresh re-establishes the TTL. A full Redis outage expires the lock for every container (no sibling can acquire it either), so this process simply resumes ownership on recovery -- it does not shut the scheduler down, since a `BackgroundScheduler` cannot be restarted and a single-container deployment has no sibling to take over.
+- **Scheduler distributed-lock heartbeat no longer abandons the lock on a Redis blip.**
+  - The heartbeat used to `break` forever on its first exception, abandoning the 60-second TTL lock.
+  - It now retries indefinitely. The next successful Redis refresh restores the TTL.
+  - A full Redis outage expires every container's lock. This process resumes ownership after recovery instead of stopping the scheduler, because `BackgroundScheduler` cannot restart and a single-container deployment has no sibling.
 - **Files left stuck in `scanning` by a dead worker are now reclaimed.** A chunk marks files `scanning` before processing; if its worker died they were never re-selected (retry only picks `pending`) and the scan reported complete with them unscanned. The stuck-scan check (every 5 min) now resets orphaned `scanning` rows to `pending` whenever no scan is active. The stuck-scan handler also rolls back its session on error.
 
 ## [2.6.43] - 2026-05-25
@@ -451,7 +588,10 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 
 ### Fixed
 
-- **Weekly schedule silently dropped when a long-running AddNew scan was concurrent**. On 2026-05-25 the Sunday 02:00 EDT cleanup (`schedule_10`) was skipped six times in a row and then abandoned because the 6-hour AddNew scan that started at 00:00 took 3h 5m (vs the typical <35 min) and was still in `phase=scanning` at 03:00 -- the queue-on-conflict retry window introduced in v2.6.39 was capped at `DEFAULT_RETRY_MAX_COUNT=6 * DEFAULT_RETRY_DELAY_MINUTES=10 min = 60 min`. The conflicting scan finished four minutes after the cap expired, so the weekly schedule was lost until the next cron fire one week later. Raised `DEFAULT_RETRY_MAX_COUNT` from 6 to 144, giving a 24-hour retry window that safely covers any realistic scan duration. Per-schedule retry counters (`pending_retries[f"schedule_{schedule_id}"]`) remain isolated, and the env override `SCHEDULE_RETRY_MAX_COUNT` is unchanged for operators who want tighter behavior.
+- **Weekly schedule silently dropped when a long-running AddNew scan was concurrent.**
+  - On 2026-05-25, the Sunday 02:00 EDT cleanup (`schedule_10`) was skipped six times. A 6-hour AddNew scan started at 00:00, ran for 3h 5m instead of the typical <35 min, and was still `scanning` at 03:00.
+  - The v2.6.39 queue-on-conflict window was capped at `DEFAULT_RETRY_MAX_COUNT=6 * DEFAULT_RETRY_DELAY_MINUTES=10 min = 60 min`. The conflicting scan finished four minutes after the cap, so the cleanup waited for the next weekly fire.
+  - `DEFAULT_RETRY_MAX_COUNT` is now 144, for a 24-hour retry window. Per-schedule `pending_retries` remain isolated, and `SCHEDULE_RETRY_MAX_COUNT` remains available for tighter operator limits.
 
 ## [2.6.42] - 2026-05-01
 
@@ -510,7 +650,10 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 
 ### Fixed
 
-- **Fix newly discovered files marked completed without being scanned**: Parallel chunk scanning (v2.6.32+) passed the parent `PixelProbe` instance to all chunk worker threads. Each `PixelProbe` uses a `StaticPool` with a single DB connection -- when 3+ chunk threads shared it concurrently, `_save_to_cache()` writes were silently lost due to transaction interference. Files ended up with `scan_status='completed'` but `scan_date=NULL` and `scan_tool=NULL`. Fixed by creating a per-thread `PixelProbe` instance in each chunk worker, giving each its own isolated DB connection. The v2.6.36 raw SQL `UPDATE SET scan_status = 'completed'` fix masked the issue by marking unscanned files as done.
+- **Fix newly discovered files marked completed without being scanned.**
+  - Parallel chunk scanning (v2.6.32+) passed one parent `PixelProbe` instance to all chunk worker threads. Its `StaticPool` has one database connection, so concurrent `_save_to_cache()` writes were lost.
+  - Affected files had `scan_status='completed'` with `scan_date=NULL` and `scan_tool=NULL`.
+  - Each chunk worker now has its own `PixelProbe` and database connection. The v2.6.36 raw SQL `UPDATE SET scan_status = 'completed'` had masked the issue by marking unscanned files as complete.
 
 ---
 
@@ -550,7 +693,7 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 
 ### Fixed
 
-- **Fix scan startup crash from dead `offset` variable**: `_create_scanning_chunks()` crashed every scan with `UnboundLocalError: cannot access local variable 'offset'`. Leftover from the offset-to-keyset pagination migration -- the function uses `last_path` to advance through results, but `offset += chunk_size` was never removed.
+- **Fix scan startup crash from dead `offset` variable**: `_create_scanning_chunks()` crashed every scan with `UnboundLocalError: cannot access local variable 'offset'`. It was left over from the offset-to-keyset pagination migration. The function uses `last_path` to advance through results, but `offset += chunk_size` was never removed.
 - **Fix IndexError on scan_state and scan_chunks ORM queries**: `db.create_all()` creates new tables but does not add columns to existing ones. Columns added to models (`num_workers`, `files_added`, `files_updated` on scan_state; `files_processed`, `is_complete`, `celery_task_id`, `files_added` on scan_chunks) were missing from the production database, causing `IndexError: tuple index out of range` when SQLAlchemy tried to load rows with fewer columns than the mapper expected. Added startup migration to sync missing columns.
 
 ---
@@ -572,7 +715,9 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 - **Fix scan worker death on 500K+ pending files**: `_create_scanning_chunks()` loaded all file paths into memory at once via `.all()`, consuming ~200MB+ for 600K files. Replaced with `yield_per()` streaming that holds only one chunk (~1000 paths) in memory at a time. Added `cancel_futures=True` to ThreadPoolExecutor shutdown to prevent indefinite hangs. Added composite index `(scan_status, file_path)` for optimal query performance on pending file lookups.
 - **Fix "0 of 0 files" progress display during scanning phase**: The scan status API returned `estimated_total=0` during the gap between phase transition and chunk counting. Added explicit Redis update after DB commit and a fallback to `phase_total` in the API when `estimated_total` is 0.
 - **Filter black frame false positives from freeze detection**: Freeze events that overlap with black sections (scene transitions, studio logos, end credits) are now filtered out. Uses FFmpeg `blackdetect` filter chained with `freezedetect` in a single decode pass.
-- **Fix scan stuck as active after completion**: Two issues -- (1) `_mark_scan_completed()` used raw SQL UPDATE but the ORM identity map still held stale `is_active=True`; when `_create_scan_report()` committed, it overwrote the completed state. Added `db.session.expire_all()` after the raw SQL commit. (2) Recovery endpoint and new scans didn't clear stale Redis progress keys, causing the API to return contradictory state (running + completed). Added `clear_scan_progress_redis()` to recovery and scan start.
+- **Fix scan stuck as active after completion.**
+  - `_mark_scan_completed()` used raw SQL UPDATE while the ORM identity map still held `is_active=True`. A later `_create_scan_report()` commit overwrote the completed state. The raw SQL path now calls `db.session.expire_all()`.
+  - The recovery endpoint and new scans did not clear stale Redis progress keys, so the API could report both running and completed. Recovery and scan start now call `clear_scan_progress_redis()`.
 
 ---
 
@@ -631,7 +776,7 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 - **Flask 2.3.3 -> 3.1.3**: Major upgrade required for Werkzeug 3.x compatibility
 - **Werkzeug safe_join import**: Moved from `werkzeug.security` to `werkzeug.utils` (Werkzeug 3.x)
 - **Pillow transpose API**: Updated `Image.FLIP_LEFT_RIGHT` to `Image.Transpose.FLIP_LEFT_RIGHT` (Pillow 12 deprecation)
-- **Replaced all `Model.query.get(id)` with `db.session.get(Model, id)`**: 43 occurrences across 12 files -- `query.get()` is deprecated in SQLAlchemy 2.x / Flask-SQLAlchemy 3.x
+- **Replaced all `Model.query.get(id)` with `db.session.get(Model, id)`**: 43 occurrences across 12 files. `query.get()` is deprecated in SQLAlchemy 2.x / Flask-SQLAlchemy 3.x.
 - **Upgraded Flask ecosystem**: Flask-SQLAlchemy 3.1.1, Flask-CORS 5.0.1, Flask-Limiter 3.9.0, Flask-WTF 1.2.2, flask-restx 1.3.2
 - **Upgraded supporting packages**: pillow-heif 0.22.0, SQLAlchemy 2.0.41, psycopg2-binary 2.9.10, celery 5.4.0, redis 5.2.1, reportlab 4.2.5, PyYAML 6.0.2, bcrypt 4.3.0, APScheduler 3.11.0
 - **Upgraded test dependencies**: pytest 8.3.5, pytest-cov 6.1.1, types-requests 2.32.x
@@ -645,7 +790,7 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 ### Fixed
 
 - **Fix stuck scan bug**: Scans could get permanently stuck as "active" after a Celery task crash (e.g., `psycopg2.DatabaseError`). The crash recovery handler in `scan_service.py` attempted to mark the scan as crashed but failed because the DB session was in a rolled-back state. Added `db.session.rollback()` before recovery writes and re-query the scan state with a fresh session.
-- **Fix stuck scan detection for lost Celery tasks**: When Celery task state is `None` (task lost/unreachable), the `is_scan_running()` check previously assumed the scan was still running indefinitely. Now falls through to time-based detection -- if no update for over 1 hour with unknown task state, marks as crashed.
+- **Fix stuck scan detection for lost Celery tasks**: When Celery task state is `None` (task lost/unreachable), the `is_scan_running()` check previously assumed the scan was still running indefinitely. It now falls through to time-based detection. If no update arrives for over 1 hour with unknown task state, it marks the scan as crashed.
 - **Fix scheduler stuck scan checker**: The `_check_stuck_scans` scheduler job now also verifies Celery task state. If a Celery task is gone AND no progress update for 5+ minutes, the scan is marked as crashed (previously only relied on 30-minute time threshold).
 - **Fix Phase 3 progress display appearing frozen**: The scan-status API endpoint now reads real-time progress from Redis (instead of only PostgreSQL) when a scan is active. Redis is updated by the Celery scan worker on every file, while PostgreSQL lagged behind, causing the UI to show stale values like "97/397" or appear stuck.
 - **Fix final progress not reflected in DB on scan completion**: All scan completion paths now write `files_processed` and `estimated_total` in the same SQL UPDATE that marks the scan as completed. Previously, the completion UPDATE only set `phase` and `is_active`, leaving stale progress values in PostgreSQL.
@@ -738,9 +883,9 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 - **Deduplicate Bearer token extraction in auth.py**: Extracted `_extract_bearer_token()` helper, replaced 4 inline copies, removed `token = token` no-ops
 - **Unify file extension lists**: Removed divergent inline sets from `helpers.py`, now imports from `pixelprobe/constants.py`
 - **Break up `app.py`**: Extracted 600+ lines into focused modules:
-  - `pixelprobe/migrations/startup.py` -- all DB migration functions
-  - `pixelprobe/scheduler_lock.py` -- Redis distributed lock management
-  - `pixelprobe/startup.py` -- startup cleanup routines
+  - `pixelprobe/migrations/startup.py`: all DB migration functions
+  - `pixelprobe/scheduler_lock.py`: Redis distributed lock management
+  - `pixelprobe/startup.py`: startup cleanup routines
   - Reduced `app.py` from 1137 to 541 lines
 - **Deduplicate `check_celery_available()`**: Moved to `pixelprobe/utils/celery_utils.py`, replaced copies in `scan_routes.py` and `scan_routes_parallel.py`
 - **Deduplicate `ContextTask` in `celery_config.py`**: Extracted `_make_context_task()` factory, replaced 3 identical class definitions
@@ -762,7 +907,7 @@ External code audit remediation (21 findings: 4 High, 9 Medium, 8 Low) plus conv
 ### Bug Fixes
 
 - **Fix PostgreSQL CREATE INDEX race condition on container startup**: Replace `fcntl.flock` file lock with PostgreSQL advisory lock (`pg_advisory_lock`) for migration coordination
-  - File locks only work within a single container's `/tmp` filesystem -- the app and celery-worker containers each have their own `/tmp`, so they raced against each other
+  - File locks only work within a single container's `/tmp` filesystem. The app and celery-worker containers each have their own `/tmp`, so they raced against each other.
   - Advisory locks work across ALL connections to the same PostgreSQL database, preventing the `duplicate key value violates unique constraint "pg_class_relname_nsp_index"` errors seen on every container restart (~8 errors per restart event)
   - Winner process acquires the lock and runs migrations; other processes block until complete then skip
   - Falls back to uncoordinated execution if advisory lock fails (each DDL statement already has its own idempotency handling via `IF NOT EXISTS` / `try/except`)

@@ -44,7 +44,7 @@ class HealthcheckService:
 
             # Healthchecks.io uses /start slug for start signals
             start_url = f"{healthcheck_url.rstrip('/')}/start"
-            logger.info(f"Sending healthcheck start ping to: {start_url}")
+            logger.info("Sending healthcheck start ping")
 
             response = self.session.get(start_url, timeout=10)
             response.raise_for_status()
@@ -53,13 +53,13 @@ class HealthcheckService:
             return True
 
         except requests.exceptions.Timeout:
-            logger.error(f"Healthcheck start ping timed out for URL: {healthcheck_url}")
+            logger.error("Healthcheck start ping timed out")
             return False
         except requests.exceptions.RequestException as e:
-            logger.error(f"Healthcheck start ping failed for URL {healthcheck_url}: {e}")
+            logger.error("Healthcheck start ping failed")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error in healthcheck start ping for URL {healthcheck_url}: {e}")
+            logger.error("Unexpected error in healthcheck start ping")
             return False
 
     def ping_success(self, healthcheck_url: str, report_data: Optional[Dict] = None) -> bool:
@@ -83,7 +83,7 @@ class HealthcheckService:
                 logger.warning(f"Healthcheck success ping blocked (SSRF): {error}")
                 return False
 
-            logger.info(f"Sending healthcheck success ping to: {healthcheck_url}")
+            logger.info("Sending healthcheck success ping")
 
             # Format report data if provided
             if report_data:
@@ -124,13 +124,13 @@ class HealthcheckService:
             return True
 
         except requests.exceptions.Timeout:
-            logger.error(f"Healthcheck success ping timed out for URL: {healthcheck_url}")
+            logger.error("Healthcheck success ping timed out")
             return False
         except requests.exceptions.RequestException as e:
-            logger.error(f"Healthcheck success ping failed for URL {healthcheck_url}: {e}")
+            logger.error("Healthcheck success ping failed")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error in healthcheck success ping for URL {healthcheck_url}: {e}")
+            logger.error("Unexpected error in healthcheck success ping")
             return False
 
     def ping_fail(self, healthcheck_url: str, error_message: Optional[str] = None) -> bool:
@@ -156,7 +156,7 @@ class HealthcheckService:
 
             # Healthchecks.io uses /fail slug for failure signals
             fail_url = f"{healthcheck_url.rstrip('/')}/fail"
-            logger.info(f"Sending healthcheck failure ping to: {fail_url}")
+            logger.info("Sending healthcheck failure ping")
 
             if error_message:
                 # POST with error message
@@ -176,13 +176,13 @@ class HealthcheckService:
             return True
 
         except requests.exceptions.Timeout:
-            logger.error(f"Healthcheck failure ping timed out for URL: {healthcheck_url}")
+            logger.error("Healthcheck failure ping timed out")
             return False
         except requests.exceptions.RequestException as e:
-            logger.error(f"Healthcheck failure ping failed for URL {healthcheck_url}: {e}")
+            logger.error("Healthcheck failure ping failed")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error in healthcheck failure ping: {e}")
+            logger.error("Unexpected error in healthcheck failure ping")
             return False
 
     def _format_duration(self, duration_seconds: Optional[float]) -> str:
@@ -258,6 +258,6 @@ class HealthcheckService:
         # Supports both public hc-ping.com and self-hosted instances
         # Public: https://hc-ping.com/UUID
         # Self-hosted: https://your-domain.com/ping/UUID (or custom paths)
-        logger.debug(f"Validating healthcheck URL: {healthcheck_url}")
+        logger.debug("Validating healthcheck URL")
 
         return True, None

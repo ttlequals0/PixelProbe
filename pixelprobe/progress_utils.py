@@ -8,6 +8,7 @@ v2.5.54: Added reset_redis_pool() for connection pool recovery
 
 import logging
 import time
+import json
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 _PROGRESS_KEY_PREFIX = 'scan_progress'
 _FILE_CHANGES_PROGRESS_KEY_PREFIX = 'file_changes_progress'
+MAX_ACTIVE_SCAN_FILES = 8
 
 # Connection pool to reuse connections
 _redis_connection_pool = None
@@ -60,7 +62,7 @@ def get_redis_client(retry_count=3, retry_delay=1.0):
 
     # Parse redis://host:port/db format
     if not broker_url.startswith('redis://'):
-        logger.error(f"Invalid Redis URL format: {broker_url}")
+        logger.error("Invalid Redis URL format")
         return None
 
     url = broker_url.replace('redis://', '')
@@ -213,13 +215,34 @@ def get_scan_progress_redis(scan_id):
             'current_file': decoded.get('current_file', ''),
             'last_update': decoded.get('last_update', ''),
         }
+        try:
+            active_files = json.loads(decoded.get('active_files', '[]'))
+        except (TypeError, ValueError):
+            active_files = []
+        if not isinstance(active_files, list):
+            active_files = []
+        valid_active_files = [
+            {'file': item['file'], 'directory': item['directory']}
+            for item in active_files[:MAX_ACTIVE_SCAN_FILES]
+            if (isinstance(item, dict) and isinstance(item.get('file'), str)
+                and isinstance(item.get('directory'), str))
+        ]
+        result['active_files'] = valid_active_files
+        try:
+            result['active_file_count'] = max(0, int(decoded.get('active_file_count', 0)))
+        except (TypeError, ValueError):
+            result['active_file_count'] = 0
+        if len(valid_active_files) != min(len(active_files), MAX_ACTIVE_SCAN_FILES):
+            result['active_file_count'] = 0
+        result['active_files_truncated'] = result['active_file_count'] > len(result['active_files'])
         return result
     except Exception as e:
         logger.warning(f"Failed to read Redis progress for scan {scan_id}: {e}")
         return None
 
 
-def update_scan_progress_redis(scan_id, files_processed=0, estimated_total=0, phase='scanning', current_file=''):
+def update_scan_progress_redis(scan_id, files_processed=0, estimated_total=0, phase='scanning', current_file='',
+                               active_files=None, active_file_count=None):
     """
     Update scan progress in Redis for the UI worker to read.
 
@@ -243,6 +266,16 @@ def update_scan_progress_redis(scan_id, files_processed=0, estimated_total=0, ph
         'current_file': current_file,
         'last_update': datetime.now(timezone.utc).isoformat()
     }
+    if active_files is not None:
+        normalized = [
+            {'file': item['file'], 'directory': item['directory']}
+            for item in active_files
+            if (isinstance(item, dict) and isinstance(item.get('file'), str)
+                and isinstance(item.get('directory'), str))
+        ]
+        count = len(normalized) if active_file_count is None else max(0, int(active_file_count))
+        progress_data['active_files'] = json.dumps(normalized[:MAX_ACTIVE_SCAN_FILES])
+        progress_data['active_file_count'] = str(count)
 
     try:
         pipe = redis_client.pipeline()

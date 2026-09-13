@@ -92,8 +92,9 @@ class DatabaseLogHandler(logging.Handler):
 
     def _refresh_exclude_cache(self):
         """Refresh the exclude list from AppConfig. Called from writer thread only (has app context)."""
+        db = None
         try:
-            from pixelprobe.models import AppConfig
+            from pixelprobe.models import AppConfig, db
             config = AppConfig.query.filter_by(key=CONFIG_LOG_EXCLUDE_LOGGERS).first()
             if config and config.value:
                 self._exclude_loggers = {
@@ -101,6 +102,12 @@ class DatabaseLogHandler(logging.Handler):
                 }
         except Exception:
             pass  # Keep existing cache on failure
+        finally:
+            if db is not None:
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
 
     def _writer_loop(self):
         """Background thread that batch-inserts queued log records.

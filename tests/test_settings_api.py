@@ -1,13 +1,14 @@
 """Tests for the scanner settings registry, resolution, and API."""
 
 import pytest
+import threading
 from unittest.mock import patch
 
 from pixelprobe.constants import SCANNER_SETTINGS, SCANNER_SETTINGS_BY_KEY, SETTING_GROUPS
 from pixelprobe.models import db, AppConfig
 from pixelprobe.services.settings_service import (
     coerce_setting, resolve_settings, describe_settings, invalidate_cache,
-    SettingValueError)
+    scanner_setting, scanner_settings_snapshot, SettingValueError)
 
 
 class TestRegistry:
@@ -124,6 +125,27 @@ class TestResolution:
             described = {s['key']: s for s in describe_settings()}
         assert described['detection.freeze_min_duration_secs']['is_default'] is False
         assert described['detection.freeze_uncorroborated_min_secs']['is_default'] is True
+
+    def test_snapshot_supplies_stored_value_to_raw_worker_thread(self, app):
+        with app.app_context():
+            db.create_all()
+            AppConfig.query.delete()
+            db.session.add(AppConfig(
+                key='timeouts.temporal_sample_timeout_secs', value='120'))
+            db.session.commit()
+            values = resolve_settings(use_cache=False)
+
+        observed = []
+
+        def read_setting():
+            with scanner_settings_snapshot(values):
+                observed.append(scanner_setting('timeouts.temporal_sample_timeout_secs'))
+
+        worker = threading.Thread(target=read_setting)
+        worker.start()
+        worker.join()
+
+        assert observed == [120]
 
 
 class TestSettingsApi:

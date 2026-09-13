@@ -135,8 +135,8 @@ pip install --upgrade pip
 
 2. **Install system dependencies first:**
 ```bash
-# Ubuntu/Debian
-sudo apt-get install python3-dev build-essential libpq-dev
+# Ubuntu 24.04
+sudo apt-get install python3.12-dev build-essential libpq-dev
 
 # macOS
 brew install postgresql
@@ -144,10 +144,12 @@ brew install postgresql
 
 3. **Use virtual environment:**
 ```bash
-python3 -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+On a distribution without Python 3.12 packages, install Python 3.12 and its venv package first or use Docker.
 
 ## Database issues
 
@@ -421,7 +423,7 @@ docker exec pixelprobe-redis valkey-cli FLUSHDB
 A sweeper job runs every 5 minutes and handles stalled scans automatically. Its branches, in order:
 
 1. **Backstop finalize:** if all chunks completed but the finalize step died, the sweeper finishes the scan.
-2. **Revival:** if the heartbeat is older than `CHUNK_REVIVE_STALENESS_SECS` (default 600 seconds) and the scan still has active chunk rows, the sweeper re-dispatches the orphaned chunks instead of crashing the scan (up to 3 attempts per scan). Discovery-phase scans are not revivable.
+2. **Revival:** if the heartbeat is older than `CHUNK_REVIVE_STALENESS_SECS` (default 600 seconds) and the scan still has active chunk rows, the sweeper re-dispatches orphaned chunks. It does not crash the scan. It makes up to 3 attempts per scan. Discovery-phase scans are not revivable.
 3. **Crash:** the scan is marked crashed when any of these hold:
    - no update for more than 30 minutes, or
    - no update for more than 5 minutes and the Celery task is gone, or
@@ -434,7 +436,7 @@ Log lines to grep for:
 docker-compose logs celery-worker pixelprobe | grep -E "Revived scan|Marking stuck scan|Reclaimed"
 ```
 
-At startup, active scans are given `STUCK_SCAN_STARTUP_GRACE_SECS` (default 1800 seconds) before being marked crashed, so a scan that was healthy just before a restart is left running for the sweeper to revive.
+At startup, active scans get `STUCK_SCAN_STARTUP_GRACE_SECS`, 1800 seconds by default, before being marked crashed. A scan healthy just before a restart is left running for the sweeper to revive.
 
 ### High false positive rate
 
@@ -590,11 +592,9 @@ volumes:
   - /mnt/ssd/postgres_data:/var/lib/postgresql/data
 ```
 
-4. **Increase batch size:**
-```bash
-BATCH_SIZE=200  # Increase from 100
-```
-Note: `BATCH_SIZE`, `MAX_OUTPUT_SIZE`, and `OUTPUT_ROTATION_ENABLED` must be set on the celery-worker service to affect scans; setting them only on the pixelprobe service has no effect on scanning.
+4. **Check the active worker settings:**
+
+`BATCH_SIZE` affects only the legacy media-checker discovery lookup. It does not tune parallel discovery inserts or scan chunk commits. `MAX_OUTPUT_SIZE` and `OUTPUT_ROTATION_ENABLED` must be set on the `celery-worker` service to bound stored scan output.
 
 5. **Allocate more resources:**
 ```yaml
@@ -704,8 +704,7 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c \
 
 2. **Reset admin password** (if locked out):
 
-First-run setup only works before any user exists. If a user already exists,
-generate a bcrypt hash and update the users table directly:
+First-run setup only works before any user exists. If a user already exists, generate a bcrypt hash and update the users table directly:
 ```bash
 # Generate a bcrypt hash for the new password
 docker exec pixelprobe-app python -c \
@@ -806,16 +805,16 @@ docker system df
 1. **Set user in docker-compose.yml:**
 ```yaml
 pixelprobe:
-  user: "${PUID:-1000}:${PGID:-1000}"
+  user: "${PUID:-10001}:${PGID:-10001}"
 
 celery-worker:
-  user: "${PUID:-1000}:${PGID:-1000}"
+  user: "${PUID:-10001}:${PGID:-10001}"
 ```
 
 2. **Check file permissions on host:**
 ```bash
 ls -la /path/to/media
-# Files should be readable by user 1000
+# Files should be readable by the configured PUID and PGID
 ```
 
 3. **Fix ownership if needed:**

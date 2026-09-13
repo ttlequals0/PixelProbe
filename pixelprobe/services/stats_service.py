@@ -31,11 +31,11 @@ class StatsService:
                         SUM(CASE WHEN scan_status = 'completed' THEN 1 ELSE 0 END) as completed_files,
                         SUM(CASE WHEN scan_status = 'pending' THEN 1 ELSE 0 END) as pending_files,
                         SUM(CASE WHEN scan_status = 'scanning' THEN 1 ELSE 0 END) as scanning_files,
-                        SUM(CASE WHEN scan_status = 'error' THEN 1 ELSE 0 END) as error_files,
-                        SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good = FALSE THEN 1 ELSE 0 END) as corrupted_files,
-                        SUM(CASE WHEN (is_corrupted = FALSE OR is_corrupted IS NULL OR marked_as_good = TRUE) AND (has_warnings = FALSE OR has_warnings IS NULL) AND scan_status = 'completed' THEN 1 ELSE 0 END) as healthy_files,
+                        SUM(CASE WHEN scan_status IN ('error', 'failed', 'unreadable') OR (scan_status = 'completed' AND scan_tool = 'error') THEN 1 ELSE 0 END) as error_files,
+                        SUM(CASE WHEN is_corrupted = TRUE AND marked_as_good IS NOT TRUE AND scan_status = 'completed' AND (scan_tool IS NULL OR scan_tool NOT IN ('error', 'unsupported')) THEN 1 ELSE 0 END) as corrupted_files,
+                        SUM(CASE WHEN (marked_as_good = TRUE OR ((is_corrupted = FALSE OR is_corrupted IS NULL) AND (has_warnings = FALSE OR has_warnings IS NULL))) AND scan_status = 'completed' AND (scan_tool IS NULL OR scan_tool NOT IN ('error', 'unsupported')) THEN 1 ELSE 0 END) as healthy_files,
                         SUM(CASE WHEN marked_as_good = TRUE THEN 1 ELSE 0 END) as marked_as_good,
-                        SUM(CASE WHEN has_warnings = TRUE AND marked_as_good = FALSE AND (is_corrupted = FALSE OR is_corrupted IS NULL) THEN 1 ELSE 0 END) as warning_files
+                        SUM(CASE WHEN has_warnings = TRUE AND marked_as_good IS NOT TRUE AND (is_corrupted = FALSE OR is_corrupted IS NULL) AND scan_status = 'completed' AND (scan_tool IS NULL OR scan_tool NOT IN ('error', 'unsupported')) THEN 1 ELSE 0 END) as warning_files
                     FROM scan_results
                 """)
             ).fetchone()
@@ -62,10 +62,12 @@ class StatsService:
 
         The integrity check sweeps the library stalest-first in budgeted
         slices, so no single run report answers "has every file been
-        verified?". Coverage counts files by last_integrity_check_date:
+        verified?". Attempts and successful verification are distinct:
         checked ever and within the last 30 days, plus the oldest check date
         (every checked file has been verified at least once since then) and
-        how many files have never been checked.
+        how many files have never been successfully verified. ``never_checked``
+        is retained as the compatibility name for that successful-verification
+        count; ``never_attempted`` distinguishes files the worker never tried.
         """
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(days=30)
@@ -73,9 +75,12 @@ class StatsService:
                 text("""
                     SELECT
                         COUNT(*) as total_files,
-                        SUM(CASE WHEN last_integrity_check_date IS NOT NULL THEN 1 ELSE 0 END) as checked_files,
-                        SUM(CASE WHEN last_integrity_check_date >= :cutoff THEN 1 ELSE 0 END) as checked_last_30_days,
-                        MIN(last_integrity_check_date) as oldest_check,
+                        SUM(CASE WHEN last_integrity_success_at IS NOT NULL THEN 1 ELSE 0 END) as checked_files,
+                        SUM(CASE WHEN last_integrity_success_at >= :cutoff THEN 1 ELSE 0 END) as checked_last_30_days,
+                        MIN(last_integrity_success_at) as oldest_check,
+                        SUM(CASE WHEN last_integrity_attempt_at IS NOT NULL THEN 1 ELSE 0 END) as attempted_files,
+                        SUM(CASE WHEN last_integrity_outcome = 'error' THEN 1 ELSE 0 END) as error_files,
+                        SUM(CASE WHEN last_integrity_outcome = 'unreadable' THEN 1 ELSE 0 END) as unavailable_files,
                         SUM(CASE WHEN bitrot_suspected = TRUE THEN 1 ELSE 0 END) as bitrot_suspected
                     FROM scan_results
                 """),
@@ -93,8 +98,13 @@ class StatsService:
                 'checked_percent': round(checked / total * 100, 1) if total else 0.0,
                 'checked_last_30_days': row[2] or 0,
                 'never_checked': total - checked,
+                'never_successfully_verified': total - checked,
                 'oldest_check_date': oldest,
-                'bitrot_suspected': row[4] or 0,
+                'attempted_files': row[4] or 0,
+                'never_attempted': total - (row[4] or 0),
+                'integrity_error_files': row[5] or 0,
+                'integrity_unavailable_files': row[6] or 0,
+                'bitrot_suspected': row[7] or 0,
             }
         except Exception as e:
             logger.error(f"Error getting integrity coverage: {e}")
@@ -118,7 +128,7 @@ class StatsService:
                 'timezone': str(self.tz),
                 'current_time': datetime.now(self.tz).isoformat(),
                 'database': {
-                    'type': 'sqlite',
+                    'type': db.engine.dialect.name,
                     **file_stats,
                     'performance': db_perf
                 },
@@ -178,25 +188,37 @@ class StatsService:
             completed_files = ScanResult.query.filter_by(scan_status='completed').count()
             pending_files = ScanResult.query.filter_by(scan_status='pending').count()
             scanning_files = ScanResult.query.filter_by(scan_status='scanning').count()
-            error_files = ScanResult.query.filter_by(scan_status='error').count()
+            error_files = ScanResult.query.filter(
+                ScanResult.scan_status.in_(['error', 'failed', 'unreadable']) |
+                ((ScanResult.scan_status == 'completed') & (ScanResult.scan_tool == 'error'))
+            ).count()
             
             corrupted_files = ScanResult.query.filter(
                 (ScanResult.is_corrupted == True) &
-                (ScanResult.marked_as_good == False)
+                ((ScanResult.marked_as_good == False) | (ScanResult.marked_as_good == None)) &
+                (ScanResult.scan_status == 'completed') &
+                ((ScanResult.scan_tool == None) |
+                 ScanResult.scan_tool.notin_(['error', 'unsupported']))
             ).count()
 
             warning_files = ScanResult.query.filter(
                 (ScanResult.has_warnings == True) &
-                (ScanResult.marked_as_good == False) &
-                ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None))
+                ((ScanResult.marked_as_good == False) | (ScanResult.marked_as_good == None)) &
+                ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None)) &
+                (ScanResult.scan_status == 'completed') &
+                ((ScanResult.scan_tool == None) |
+                 ScanResult.scan_tool.notin_(['error', 'unsupported']))
             ).count()
 
             marked_as_good = ScanResult.query.filter_by(marked_as_good=True).count()
 
             healthy_files = ScanResult.query.filter(
-                ((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None) | (ScanResult.marked_as_good == True)) &
-                ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None)) &
-                (ScanResult.scan_status == 'completed')
+                (ScanResult.marked_as_good == True) |
+                (((ScanResult.is_corrupted == False) | (ScanResult.is_corrupted == None)) &
+                 ((ScanResult.has_warnings == False) | (ScanResult.has_warnings == None))),
+                ScanResult.scan_status == 'completed',
+                (ScanResult.scan_tool == None) |
+                ScanResult.scan_tool.notin_(['error', 'unsupported'])
             ).count()
             
             return {

@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 
 from pixelprobe.models import db, HealthcheckConfig, ScanSchedule
-from pixelprobe.auth import auth_required
+from pixelprobe.auth import admin_required
 from pixelprobe.services.healthcheck_service import HealthcheckService
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ healthcheck_bp = Blueprint('healthcheck', __name__, url_prefix='/api/healthcheck
 
 
 @healthcheck_bp.route('', methods=['GET'])
-@auth_required
+@admin_required
 def get_all_healthcheck_configs():
     """Get all healthcheck configurations
 
@@ -44,7 +44,7 @@ def get_all_healthcheck_configs():
 
 
 @healthcheck_bp.route('/<int:config_id>', methods=['GET'])
-@auth_required
+@admin_required
 def get_healthcheck_config(config_id):
     """Get a specific healthcheck configuration
 
@@ -75,7 +75,7 @@ def get_healthcheck_config(config_id):
 
 
 @healthcheck_bp.route('/schedule/<int:schedule_id>', methods=['GET'])
-@auth_required
+@admin_required
 def get_healthcheck_by_schedule(schedule_id):
     """Get healthcheck configuration for a specific schedule
 
@@ -105,7 +105,7 @@ def get_healthcheck_by_schedule(schedule_id):
 
 
 @healthcheck_bp.route('', methods=['POST'])
-@auth_required
+@admin_required
 def create_healthcheck_config():
     """Create a new healthcheck configuration
 
@@ -183,7 +183,7 @@ def create_healthcheck_config():
 
 
 @healthcheck_bp.route('/<int:config_id>', methods=['PUT'])
-@auth_required
+@admin_required
 def update_healthcheck_config(config_id):
     """Update an existing healthcheck configuration
 
@@ -260,7 +260,7 @@ def update_healthcheck_config(config_id):
 
 
 @healthcheck_bp.route('/<int:config_id>', methods=['DELETE'])
-@auth_required
+@admin_required
 def delete_healthcheck_config(config_id):
     """Delete a healthcheck configuration
 
@@ -283,7 +283,7 @@ def delete_healthcheck_config(config_id):
 
         logger.info(f"Deleted healthcheck config {config_id} for schedule {schedule_id}")
 
-        return jsonify({'message': 'Healthcheck configuration deleted successfully'}), 200
+        return jsonify({'message': 'Healthcheck configuration deleted'}), 200
 
     except Exception as e:
         db.session.rollback()
@@ -292,7 +292,7 @@ def delete_healthcheck_config(config_id):
 
 
 @healthcheck_bp.route('/<int:config_id>/test', methods=['POST'])
-@auth_required
+@admin_required
 def test_healthcheck(config_id):
     """Test a healthcheck configuration by sending a ping
 
@@ -322,14 +322,14 @@ def test_healthcheck(config_id):
             logger.info(f"Test ping successful for healthcheck config {config_id}")
             return jsonify({
                 'success': True,
-                'message': 'Test ping sent successfully',
+                'message': 'Test ping sent',
                 'last_ping_time': config.last_ping_time.isoformat()
             }), 200
         else:
             logger.warning(f"Test ping failed for healthcheck config {config_id}")
             return jsonify({
                 'success': False,
-                'message': 'Test ping failed - check URL and network connectivity',
+                'message': 'Test ping failed. Check the URL and network connection.',
                 'last_ping_time': config.last_ping_time.isoformat()
             }), 200
 

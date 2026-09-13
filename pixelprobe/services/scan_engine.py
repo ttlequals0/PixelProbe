@@ -10,10 +10,10 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List
 
-from sqlalchemy import text, update
+from sqlalchemy import select, text, update
 
 from pixelprobe.constants import SCAN_PHASES, TERMINAL_SCAN_PHASES
-from pixelprobe.models import db, ScanState, ScanResult, ScanChunk
+from pixelprobe.models import db, ScanState, ScanResult, ScanChunk, ScanRunFile, ScanRunRoot, ScanNotificationOutbox, ScanReport
 from pixelprobe.progress_utils import clear_scan_progress_redis
 from pixelprobe.services.scan_reporting import create_scan_report
 
@@ -42,12 +42,33 @@ def claim_scan_slot(scan_id, scan_type='full'):
     Returns (ok, error_payload, error_status); error fields are None on success.
     """
     try:
-        scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
+        # Serialize reservations while the requested run row is being created.
+        # The unique scan_id constraint then provides the second line of
+        # defense for concurrent API/Celery reservations.
+        # Production requires PostgreSQL, where this is the cross-process
+        # reservation. SQLite is retained only for unit tests and has no
+        # distributed-concurrency guarantee.
+        if db.session.get_bind().dialect.name == 'postgresql':
+            db.session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                               {'key': 'pixelprobe:scan:global-slot'})
+        # A run owns one immutable ScanState row. Never recycle the most
+        # recent row for a new run: reports, membership, and cancellation all
+        # depend on stable run identity.
+        scan_state = (db.session.query(ScanState)
+                      .filter(ScanState.scan_id == scan_id)
+                      .with_for_update(nowait=True).first())
         if not scan_state:
             scan_state = ScanState()
+            scan_state.scan_id = scan_id
             db.session.add(scan_state)
             db.session.flush()
-            scan_state = db.session.query(ScanState).with_for_update(nowait=True).first()
+            scan_state = (db.session.query(ScanState)
+                          .filter(ScanState.scan_id == scan_id)
+                          .with_for_update(nowait=True).first())
+
+        if scan_state.phase != SCAN_PHASES['IDLE']:
+            db.session.rollback()
+            return False, {'error': 'Scan ID has already been reserved.'}, 409
 
         if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
             phase_info = f" (Phase: {scan_state.phase}, Files processed: {scan_state.files_processed})"
@@ -71,7 +92,6 @@ def claim_scan_slot(scan_id, scan_type='full'):
                          f'Please wait for it to complete or use /api/cancel-scan to stop it.'
             }, 409
 
-        scan_state.scan_id = scan_id
         scan_state.is_active = True
         scan_state.phase = SCAN_PHASES['INITIALIZING']
         scan_state.scan_type = scan_type
@@ -79,6 +99,7 @@ def claim_scan_slot(scan_id, scan_type='full'):
         # claim by the previous scan's timestamps or dead Celery task
         scan_state.last_update = datetime.now(timezone.utc)
         scan_state.celery_task_id = None
+        scan_state.dispatch_generation = (scan_state.dispatch_generation or 0) + 1
         db.session.commit()
         return True, None, None
 
@@ -111,34 +132,73 @@ def finalize_scan(scan_state):
     """
     scan_id = scan_state.scan_id
 
+    if scan_state.phase == SCAN_PHASES['CANCELLED']:
+        return False
+    existing_report = ScanReport.query.filter_by(scan_id=scan_id).first()
+    existing_outbox = ScanNotificationOutbox.query.filter_by(
+        scan_id=scan_id, event='scan_completed').first()
+    if existing_report and existing_outbox:
+        return False
+
     sync_progress_from_chunks(scan_state, scan_id)
 
     error_chunks = ScanChunk.query.filter_by(scan_id=scan_id, status='error').count()
 
-    # Corrupted count scoped to this scan's window (ScanResult has no scan_id)
-    corrupted = 0
-    try:
-        if scan_state.start_time:
-            corrupted = ScanResult.query.filter(
-                ScanResult.scan_date >= scan_state.start_time,
-                ScanResult.is_corrupted == True
-            ).count()
-    except Exception as e:
-        logger.error(f"Failed to count corrupted files for scan {scan_id}: {e}")
-
-    # Rows left in 'scanning' by a dead chunk worker go back to pending
-    reclaimed = ScanResult.reclaim_scanning()
+    stranded_ids = select(ScanRunFile.scan_result_id).where(
+        ScanRunFile.scan_id == scan_id,
+        ScanRunFile.status == 'processing',
+        ScanRunFile.scan_result_id.isnot(None),
+    )
+    # Clear only legacy global claims; new claims do not write this status.
+    ScanResult.query.filter(ScanResult.id.in_(stranded_ids),
+                            ScanResult.scan_status == 'scanning').update(
+        {'scan_status': 'pending'}, synchronize_session=False)
+    reclaimed = ScanRunFile.query.filter_by(scan_id=scan_id, status='processing').update(
+        {'status': 'pending', 'claimed_at': None}, synchronize_session=False)
     if reclaimed:
         logger.warning(f"Scan {scan_id}: reclaimed {reclaimed} files stuck in 'scanning'")
 
+    # Completion is a claim about this run's members and requested roots, not
+    # a claim about whatever happens to be in ScanResult today. A terminal
+    # chunk only says the worker returned; every member must have a successful
+    # stable-content observation and every root must have been observed.
+    member_total = ScanRunFile.query.filter_by(scan_id=scan_id).count()
+    completed_members = ScanRunFile.query.filter_by(scan_id=scan_id, status='completed').count()
+    pending_members = ScanRunFile.query.filter(
+        ScanRunFile.scan_id == scan_id,
+        ScanRunFile.status.in_(['pending', 'processing'])
+    ).count()
+    failed_members = ScanRunFile.query.filter(
+        ScanRunFile.scan_id == scan_id,
+        ~ScanRunFile.status.in_(['completed', 'pending', 'processing'])
+    ).count()
+    failed_roots = ScanRunRoot.query.filter(
+        ScanRunRoot.scan_id == scan_id,
+        ScanRunRoot.status != 'completed'
+    ).count()
+    expected_members = scan_state.estimated_total or 0
+    coverage_gap = max(expected_members - member_total, 0)
+    corrupted = ScanRunFile.query.filter_by(scan_id=scan_id, is_corrupted=True).count()
+    failure_parts = []
+    if scan_state.phase in (SCAN_PHASES['ERROR'], SCAN_PHASES['CRASHED'], 'interrupted'):
+        failure_parts.append('scan execution ended before verification completed')
     if error_chunks:
+        failure_parts.append(f'{error_chunks} chunks failed')
+    if failed_roots:
+        failure_parts.append(f'{failed_roots} roots were not completely observed')
+    if pending_members:
+        failure_parts.append(f'{pending_members} members remain pending')
+    if failed_members:
+        failure_parts.append(f'{failed_members} members were not successfully verified')
+    if coverage_gap:
+        failure_parts.append(f'{coverage_gap} expected members have no run membership')
+
+    if failure_parts:
         scan_state.phase = SCAN_PHASES['ERROR']
-        scan_state.error_message = (
-            f'{error_chunks} chunks failed; their unscanned files were returned to pending'
-        )
+        scan_state.error_message = '; '.join(failure_parts)
         scan_state.progress_message = (
             f"Scan finished with errors: {scan_state.files_processed} files processed, "
-            f"{corrupted} corrupted, {error_chunks} chunks failed"
+            f"{completed_members} successfully verified, {corrupted} corrupted"
         )
     else:
         scan_state.phase = SCAN_PHASES['COMPLETED']
@@ -148,11 +208,24 @@ def finalize_scan(scan_state):
     scan_state.is_active = False
     scan_state.end_time = datetime.now(timezone.utc)
     scan_state.last_update = datetime.now(timezone.utc)
+    report = create_scan_report(scan_state, commit=False)
+    outbox = ScanNotificationOutbox(scan_id=scan_id, event='scan_completed')
+    db.session.add(outbox)
+    db.session.flush()
+    if not isinstance(report, ScanReport):
+        raise RuntimeError(f'Could not create a report for scan {scan_id}')
+    from pixelprobe.services.notification_service import snapshot_scan_notification_outbox
+    snapshot_scan_notification_outbox(outbox, report)
     db.session.commit()
+    try:
+        from pixelprobe.tasks import deliver_scan_notification_outbox
+        outbox = ScanNotificationOutbox.query.filter_by(scan_id=scan_id).first()
+        deliver_scan_notification_outbox.apply_async(args=(outbox.id,))
+    except Exception as exc:
+        logger.warning(f"Scan {scan_id}: notification dispatch queued for recovery: {exc}")
     logger.info(f"Scan {scan_id} finalized: {scan_state.files_processed} files, "
-                f"{corrupted} corrupted, {error_chunks} failed chunks")
+                f"{corrupted} corrupted, {len(failure_parts)} completion gaps")
 
-    create_scan_report(scan_state)
     try:
         clear_scan_progress_redis(scan_id)
     except Exception as e:
@@ -195,7 +268,7 @@ def maybe_finalize_scan(scan_id: str):
         return False
 
 
-def build_scan_chunks(scan_id: str) -> List[Dict]:
+def build_scan_chunks(scan_id: str, commit: bool = True) -> List[Dict]:
     """Build disjoint FCP path-range chunks over all pending rows.
 
     A window query returns only the chunk boundary rows (first/last path per
@@ -203,7 +276,9 @@ def build_scan_chunks(scan_id: str) -> List[Dict]:
     of 1.2M. Returns plain dicts ({'id', 'files_discovered'}) so the caller
     never touches expired ORM attributes after the commit.
     """
-    total_pending = ScanResult.query.filter_by(scan_status='pending').count()
+    total_pending = ScanRunFile.query.filter_by(scan_id=scan_id, status='pending').count()
+    if not ScanState.query.filter_by(scan_id=scan_id).first():
+        raise ValueError(f'Cannot build chunks for unreserved scan run {scan_id}')
     if total_pending == 0:
         return []
 
@@ -222,12 +297,12 @@ def build_scan_chunks(scan_id: str) -> List[Dict]:
         SELECT file_path, rn FROM (
             SELECT file_path,
                    row_number() OVER (ORDER BY file_path) AS rn
-            FROM scan_results
-            WHERE scan_status = 'pending'
+            FROM scan_run_files
+            WHERE scan_id = :scan_id AND status = 'pending'
         ) t
         WHERE rn % :size = 1 OR rn % :size = 0 OR rn = :total
         ORDER BY rn
-    """), {'size': chunk_size, 'total': total_pending}).fetchall()
+    """), {'size': chunk_size, 'total': total_pending, 'scan_id': scan_id}).fetchall()
 
     chunks = []
     chunk_index = 0
@@ -257,6 +332,7 @@ def build_scan_chunks(scan_id: str) -> List[Dict]:
 
     db.session.flush()
     chunk_dicts = [{'id': c.id, 'files_discovered': c.files_discovered} for c in chunks]
-    db.session.commit()
+    if commit:
+        db.session.commit()
     logger.info(f"Created {len(chunk_dicts)} chunks for {total_pending} pending files (size {chunk_size})")
     return chunk_dicts

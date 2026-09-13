@@ -2,6 +2,8 @@
 Security utilities for PixelProbe
 """
 import os
+import stat
+import json
 import re
 import socket
 import ipaddress
@@ -13,11 +15,37 @@ from typing import Optional, Set, Tuple, Union
 from flask import request, jsonify, current_app
 from werkzeug.utils import safe_join
 from pixelprobe.models import db, ScanConfiguration
+from pixelprobe.constants import SUPPORTED_EXTENSIONS
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 logger = logging.getLogger(__name__)
+
+_AUDIT_SECRET_KEYS = frozenset({
+    'authorization', 'cookie', 'password', 'token', 'token_digest', 'secret',
+    'api_key', 'api_token', 'webhook_url', 'healthcheck_url',
+})
+
+
+def _redact_audit_details(value):
+    """Remove credentials from structured audit details before logging."""
+    if isinstance(value, str):
+        parsed = urllib.parse.urlsplit(value)
+        if parsed.scheme in {'http', 'https'} and parsed.hostname:
+            return f'{parsed.scheme}://{parsed.hostname}/[redacted]'
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): '[redacted]' if str(key).lower() in _AUDIT_SECRET_KEYS
+            else _redact_audit_details(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_audit_details(item) for item in value]
+    return value
 
 
 # Trusted internal hosts cache (lazy-loaded from TRUSTED_INTERNAL_HOSTS env var)
@@ -174,14 +202,7 @@ def validate_file_path(file_path, allowed_paths=None):
     if allowed_paths is None:
         allowed_paths = get_allowed_scan_paths()
 
-    # Rescan operation: trust the DB record. Do not touch the filesystem with
-    # the raw user-supplied path here -- the downstream scanner runs its own
-    # existence check and reports failures cleanly.
     if not allowed_paths:
-        from pixelprobe.models import ScanResult
-        existing = ScanResult.query.filter_by(file_path=normalized).first()
-        if existing:
-            return normalized
         raise PathTraversalError("No allowed scan paths configured")
 
     # Resolve symlinks, then re-derive a safe path via werkzeug.utils.safe_join
@@ -195,29 +216,161 @@ def validate_file_path(file_path, allowed_paths=None):
         return normalized
     raise PathTraversalError(f"File not found or not readable: {file_path}")
 
+
+def resolve_authorized_media_file(file_path, allowed_paths=None, required_paths=None):
+    """Resolve a readable supported regular media file under an active root.
+
+    A database result is metadata, not permission to read a path. The returned
+    canonical path must still be opened through ``open_authorized_media_file``
+    when serving it so a replacement race cannot redirect the response.
+    """
+    if not isinstance(file_path, str) or not file_path:
+        raise PathTraversalError("Invalid file path")
+    roots = get_allowed_scan_paths() if allowed_paths is None else allowed_paths
+    if not roots:
+        raise PathTraversalError("No active scan roots configured")
+    canonical = os.path.realpath(os.path.abspath(file_path))
+    safe_path = _safe_join_under_any(canonical, roots)
+    if safe_path is None or os.path.realpath(safe_path) != canonical:
+        raise PathTraversalError("Path outside active scan roots")
+    if required_paths is not None and _safe_join_under_any(canonical, required_paths) is None:
+        raise PathTraversalError("Path outside this scan's authorized roots")
+    if os.path.splitext(canonical)[1].lower() not in SUPPORTED_EXTENSIONS:
+        raise PathTraversalError("Unsupported media file type")
+    try:
+        file_stat = os.stat(safe_path, follow_symlinks=False)
+    except OSError as exc:
+        raise PathTraversalError("File not available") from exc
+    if not stat.S_ISREG(file_stat.st_mode) or not os.access(safe_path, os.R_OK):
+        raise PathTraversalError("File is not a readable regular file")
+    return safe_path
+
+
+def open_authorized_media_file(file_path, allowed_paths=None, required_paths=None):
+    """Open an authorized file by descriptor and verify its stable identity."""
+    canonical = resolve_authorized_media_file(file_path, allowed_paths, required_paths)
+    roots = get_allowed_scan_paths() if allowed_paths is None else allowed_paths
+    root = next(
+        (os.path.realpath(candidate) for candidate in roots
+         if _safe_join_under_any(canonical, [candidate]) is not None),
+        None,
+    )
+    if root is None:
+        raise PathTraversalError("Path outside active scan roots")
+    relative = os.path.relpath(canonical, root)
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    directory_flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    directory_flags |= getattr(os, 'O_DIRECTORY', 0)
+    if not hasattr(os, 'O_DIRECTORY') or not hasattr(os, 'O_NOFOLLOW'):
+        raise PathTraversalError("Secure descriptor traversal is unavailable")
+    try:
+        directory_fd = os.open(os.path.sep, directory_flags)
+        for component in filter(None, root.strip(os.path.sep).split(os.path.sep)):
+            next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        parts = relative.split(os.sep)
+        for part in parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        fd = os.open(parts[-1], flags, dir_fd=directory_fd)
+        os.close(directory_fd)
+        opened = os.fstat(fd)
+    except OSError as exc:
+        try:
+            os.close(fd)
+        except (UnboundLocalError, OSError):
+            pass
+        try:
+            os.close(directory_fd)
+        except (UnboundLocalError, OSError):
+            pass
+        raise PathTraversalError("File changed or is unavailable") from exc
+    if not stat.S_ISREG(opened.st_mode):
+        os.close(fd)
+        raise PathTraversalError("File changed while opening")
+    return os.fdopen(fd, 'rb'), canonical, opened
+
+
+def authorized_fd_path(fd):
+    """Return the current-process pathname for an already-authorized fd.
+
+    The descriptor remains the authority.  Callers that pass this path to a
+    child must use ``safe_subprocess_run`` so the descriptor is inherited by
+    that child rather than resolving the original mutable pathname again.
+    """
+    if not isinstance(fd, int) or fd < 0:
+        raise ValueError("Invalid authorized file descriptor")
+    if os.path.isdir('/proc/self/fd'):
+        return f'/proc/self/fd/{fd}'
+    if os.path.isdir('/dev/fd'):
+        return f'/dev/fd/{fd}'
+    raise PathTraversalError("Descriptor-backed media paths are unavailable")
+
+
+def rewind_authorized_fd_path(path):
+    """Rewind a descriptor-backed pathname before a fresh full-file reader.
+
+    Linux procfd opens have independent offsets.  Darwin's /dev/fd duplicates
+    the file description instead, so PIL or a child decoder advances the
+    scan-owned descriptor unless it is rewound before the next reader.
+    """
+    match = re.fullmatch(r'/(?:proc/self|dev)/fd/(\d+)', str(path))
+    if match:
+        os.lseek(int(match.group(1)), 0, os.SEEK_SET)
+
+def _validate_readable_directory(safe_path):
+    """Confirm a sanitized directory is readable without a TOCTOU access check."""
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+    if hasattr(os, 'O_DIRECTORY'):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    try:
+        directory_fd = os.open(safe_path, flags)
+    except OSError as exc:
+        raise PathTraversalError("Directory is not readable") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+            raise PathTraversalError("Path is not a directory")
+    finally:
+        os.close(directory_fd)
+    return safe_path
+
+
+def validate_admin_root_registration(dir_path):
+    """Validate an existing root an administrator is explicitly registering."""
+    if not isinstance(dir_path, str) or not dir_path:
+        raise PathTraversalError("Empty directory path")
+    if '..' in dir_path or '~' in dir_path:
+        raise PathTraversalError("Directory path contains suspicious patterns")
+    resolved = os.path.realpath(os.path.abspath(dir_path))
+    safe_path = safe_join(os.path.sep, resolved.lstrip(os.path.sep))
+    if safe_path is None:
+        raise PathTraversalError("Directory path is invalid")
+    return _validate_readable_directory(safe_path)
+
+
 def validate_directory_path(dir_path, allowed_paths=None):
     """
     Validate that a directory path is safe.
 
-    When ``allowed_paths`` is ``None`` (default), the configured scan paths
-    are used as the allowlist and the resolved real path must sit within one
-    of them. Callers that need to register a new allowlist entry (e.g. the
-    admin add-configuration endpoint) pass ``allowed_paths=[]`` to skip the
-    allowlist check. The suspicious-pattern check and symlink resolution
-    always run.
+    Configured scan paths are the allowlist and an empty allowlist fails
+    closed. Administrators registering a root use
+    ``validate_admin_root_registration`` instead.
 
     Args:
         dir_path: The directory path to validate
-        allowed_paths: Explicit allowlist; ``[]`` disables the allowlist check,
-            ``None`` uses ``get_allowed_scan_paths()``.
+        allowed_paths: Explicit allowlist, or ``None`` for active scan roots.
 
     Returns:
-        Normalized absolute path if valid
+        Sanitized canonical path if valid
 
     Raises:
         PathTraversalError: If the path is unsafe or outside the allowlist.
     """
-    if not dir_path:
+    if not isinstance(dir_path, str) or not dir_path:
         raise PathTraversalError("Empty directory path")
 
     # Reject traversal/home-expansion tokens before touching the filesystem.
@@ -229,22 +382,14 @@ def validate_directory_path(dir_path, allowed_paths=None):
     if allowed_paths is None:
         allowed_paths = get_allowed_scan_paths()
 
-    # Admin add-configuration path: caller is defining a new allowlist entry,
-    # so the allowlist cannot be applied. Skip the filesystem check too --
-    # validating an unallowlisted path against the filesystem is exactly the
-    # tainted-sink CodeQL rejects, and the scheduler will surface a real
-    # error later if the directory does not exist.
     if not allowed_paths:
-        return normalized
+        raise PathTraversalError("No allowed scan paths configured")
 
     real_input = os.path.realpath(normalized)
     safe_path = _safe_join_under_any(real_input, allowed_paths)
     if safe_path is None:
         raise PathTraversalError(f"Path outside allowed directories: {dir_path}")
-    if os.path.exists(safe_path) and not os.path.isdir(safe_path):
-        raise PathTraversalError("Path is not a directory")
-
-    return normalized
+    return _validate_readable_directory(safe_path)
 
 def sanitize_filename(filename):
     """
@@ -340,6 +485,23 @@ def safe_subprocess_run(args, **kwargs):
     # Force shell=False
     kwargs['shell'] = False
 
+    # A /proc/self/fd or /dev/fd input is only meaningful in a child when its
+    # source descriptor survives exec.  Add those descriptors automatically so
+    # every existing ffmpeg, ffprobe and ImageMagick call remains descriptor
+    # backed without each call site having to duplicate this contract.
+    descriptor_fds = set(kwargs.pop('pass_fds', ()) or ())
+    if os.name == 'posix':
+        for arg in validated_args:
+            match = re.fullmatch(r'/(?:proc/self|dev)/fd/(\d+)', arg)
+            if match:
+                descriptor_fds.add(int(match.group(1)))
+        if descriptor_fds:
+            for fd in descriptor_fds:
+                os.lseek(fd, 0, os.SEEK_SET)
+            kwargs['pass_fds'] = tuple(sorted(descriptor_fds))
+    elif descriptor_fds:
+        raise ValueError("Descriptor inheritance is unavailable on this platform")
+
     # Isolate the child in its own session so a timeout-kill targets it (and not
     # the parent), and orphaned helpers don't share PixelProbe's process group.
     if os.name == 'posix':
@@ -353,7 +515,7 @@ class AuditLogger:
     """Handle security audit logging"""
     
     @staticmethod
-    def log_action(action, details=None, user=None, ip_address=None):
+    def log_action(action, details=None, user=None, ip_address=None, target=None, outcome='success'):
         """
         Log a security-relevant action
         
@@ -365,20 +527,50 @@ class AuditLogger:
         """
         if ip_address is None and request:
             ip_address = request.remote_addr
-        
-        log_entry = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'action': action,
-            'user': user or 'anonymous',
-            'ip_address': ip_address,
-            'details': details or {}
-        }
-        
-        # Log to security logger
+        safe_details = _redact_audit_details(details or {})
+        actor_id = None
+        if user is None:
+            try:
+                from flask_login import current_user
+                request_user = getattr(request, 'current_user', None)
+                principal = request_user if getattr(request_user, 'is_authenticated', False) else current_user
+                if principal.is_authenticated:
+                    user = principal.username
+                    actor_id = principal.id
+                else:
+                    user = 'anonymous'
+            except Exception:
+                user = 'anonymous'
+        elif hasattr(user, 'id'):
+            actor_id = user.id
+            user = getattr(user, 'username', str(actor_id))
+        # Keep arbitrary audit values out of routine logs.
         security_logger = logging.getLogger('security_audit')
-        security_logger.info(f"AUDIT: {log_entry}")
-        
-        # TODO: In production, also log to database or external audit system
+        security_logger.info("AUDIT action=%s outcome=%s", action, outcome)
+        AuditLogger._persist(actor_id, action, target, outcome, safe_details, ip_address)
+
+    @staticmethod
+    def _persist(actor_id, action, target, outcome, details, ip_address):
+        """Persist independently so routine LogEntry retention cannot erase it."""
+        try:
+            from sqlalchemy import text
+            with db.engine.begin() as conn:
+                details_value = json.dumps(details)
+                details_sql = 'CAST(:details AS json)' if conn.dialect.name == 'postgresql' else ':details'
+                conn.execute(text("""
+                    INSERT INTO security_audit_events
+                    (actor_id, action, target, outcome, details, ip_address, created_at)
+                    VALUES (:actor_id, :action, :target, :outcome, """ + details_sql + ", :ip_address, :created_at)"), {
+                    'actor_id': actor_id,
+                    'action': action,
+                    'target': target,
+                    'outcome': outcome,
+                    'details': details_value,
+                    'ip_address': ip_address,
+                    'created_at': datetime.now(timezone.utc),
+                })
+        except Exception:
+            logging.getLogger('security_audit').exception('Failed to persist security audit event')
         
     @staticmethod
     def log_security_event(event_type, message, severity='warning'):
@@ -393,7 +585,7 @@ class AuditLogger:
         log_entry = {
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'event_type': event_type,
-            'message': message,
+            'message': _redact_audit_details({'message': message})['message'],
             'severity': severity,
             'ip_address': request.remote_addr if request else None
         }
@@ -401,20 +593,7 @@ class AuditLogger:
         security_logger = logging.getLogger('security_audit')
         log_method = getattr(security_logger, severity, security_logger.warning)
         log_method(f"SECURITY_EVENT: {log_entry}")
-
-# Rate limiting decorator
-def apply_rate_limit(limit_string):
-    """
-    Apply rate limiting to an endpoint
-    
-    Args:
-        limit_string: Rate limit string (e.g., "10 per minute", "100 per hour")
-    """
-    def decorator(f):
-        # This will be applied by Flask-Limiter when the decorator is used
-        f._rate_limit = limit_string
-        return f
-    return decorator
+        AuditLogger.log_action(event_type, {'message': message}, outcome=severity)
 
 # Input validation decorators
 def validate_json_input(schema):
@@ -487,6 +666,75 @@ _CLOUD_METADATA_IPS = frozenset({
 })
 
 
+def _canonical_ip(ip_str):
+    ip = ipaddress.ip_address(ip_str)
+    return getattr(ip, 'ipv4_mapped', None) or ip
+
+
+def _is_blocked_outbound_ip(ip_str):
+    ip = _canonical_ip(ip_str)
+    return str(ip) in _CLOUD_METADATA_IPS or any(ip in network for network in _BLOCKED_NETWORKS)
+
+
+def _safe_resolved_address(host, port):
+    """Resolve and select a permitted literal address for the actual socket."""
+    try:
+        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise OSError('Outbound host could not be resolved') from exc
+    for address in addresses:
+        literal = address[4][0]
+        try:
+            _canonical_ip(literal)
+        except ValueError:
+            continue
+        if _is_blocked_outbound_ip(literal):
+            if str(_canonical_ip(literal)) in _CLOUD_METADATA_IPS:
+                continue
+            if not _is_trusted(host, literal):
+                continue
+        return literal
+    raise OSError('Outbound host resolved only to blocked addresses')
+
+
+class _BoundHTTPConnection(HTTPConnection):
+    def _new_conn(self):
+        hostname = self._dns_host
+        self._dns_host = _safe_resolved_address(hostname, self.port)
+        try:
+            return super()._new_conn()
+        finally:
+            self._dns_host = hostname
+
+
+class _BoundHTTPSConnection(HTTPSConnection):
+    def _new_conn(self):
+        hostname = self._dns_host
+        self._dns_host = _safe_resolved_address(hostname, self.port)
+        try:
+            return super()._new_conn()
+        finally:
+            self._dns_host = hostname
+
+
+class _BoundHTTPConnectionPool(HTTPConnectionPool):
+    ConnectionCls = _BoundHTTPConnection
+
+
+class _BoundHTTPSConnectionPool(HTTPSConnectionPool):
+    ConnectionCls = _BoundHTTPSConnection
+
+
+class _BoundAddressAdapter(HTTPAdapter):
+    """Connect to the vetted IP literal while retaining the URL host for TLS."""
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+        self.poolmanager.pool_classes_by_scheme = {
+            'http': _BoundHTTPConnectionPool,
+            'https': _BoundHTTPSConnectionPool,
+        }
+
+
 def validate_outbound_host(host: str, port: int = 0) -> Tuple[bool, Optional[str]]:
     """Validate a bare operator-configured service hostname (no URL scheme).
 
@@ -514,8 +762,11 @@ def validate_outbound_host(host: str, port: int = 0) -> Tuple[bool, Optional[str
 
     host = host.strip().strip('[]')
 
-    if host in _CLOUD_METADATA_IPS:
-        return False, f"Host is a blocked cloud metadata address ({host})"
+    try:
+        if str(_canonical_ip(host)) in _CLOUD_METADATA_IPS:
+            return False, f"Host is a blocked cloud metadata address ({host})"
+    except ValueError:
+        pass
 
     try:
         addr_infos = socket.getaddrinfo(host, port or None, proto=socket.IPPROTO_TCP)
@@ -525,7 +776,7 @@ def validate_outbound_host(host: str, port: int = 0) -> Tuple[bool, Optional[str
 
     for addr_info in addr_infos:
         ip_str = addr_info[4][0]
-        if ip_str in _CLOUD_METADATA_IPS:
+        if _is_blocked_outbound_ip(ip_str) and str(_canonical_ip(ip_str)) in _CLOUD_METADATA_IPS:
             AuditLogger.log_security_event(
                 'ssrf_blocked',
                 f"Blocked outbound connection to cloud metadata IP: {host} resolved to {ip_str}",
@@ -533,7 +784,7 @@ def validate_outbound_host(host: str, port: int = 0) -> Tuple[bool, Optional[str
             )
             return False, f"Host resolves to a blocked cloud metadata address ({ip_str})"
         try:
-            ip = ipaddress.ip_address(ip_str)
+            ip = _canonical_ip(ip_str)
         except ValueError:
             continue
         if ip.is_link_local:
@@ -585,9 +836,17 @@ def validate_safe_url(url: str) -> Tuple[bool, Optional[str]]:
     for addr_info in addr_infos:
         ip_str = addr_info[4][0]
         try:
-            ip = ipaddress.ip_address(ip_str)
+            ip = _canonical_ip(ip_str)
         except ValueError:
             continue
+
+        if str(ip) in _CLOUD_METADATA_IPS:
+            AuditLogger.log_security_event(
+                'ssrf_blocked',
+                f"Blocked outbound request to cloud metadata IP: {hostname} resolved to {ip}",
+                severity='warning'
+            )
+            return False, f"URL resolves to a private/reserved IP address ({ip})"
 
         for network in _BLOCKED_NETWORKS:
             if ip in network:
@@ -622,6 +881,7 @@ def create_safe_session(max_redirects: int = 5) -> requests.Session:
         A requests.Session configured with SSRF-safe redirect handling
     """
     session = requests.Session()
+    session.trust_env = False
     session.max_redirects = max_redirects
 
     # Retry transient failures (connection errors, 429, 5xx) with backoff so a
@@ -638,7 +898,7 @@ def create_safe_session(max_redirects: int = 5) -> requests.Session:
         allowed_methods=frozenset(['GET']),
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry)
+    adapter = _BoundAddressAdapter(max_retries=retry)
     session.mount('http://', adapter)
     session.mount('https://', adapter)
 

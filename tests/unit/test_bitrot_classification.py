@@ -367,8 +367,8 @@ class TestBaselineHelpers:
         mtime = NOW.replace(tzinfo=None)
         row = seed_row(db, last_modified=mtime, mtime_baseline_utc=True)
 
-        assert apply_scan_baseline(row, HASH_B, None) is True
-        assert row.file_hash == HASH_B
+        assert apply_scan_baseline(row, HASH_B, None) is False
+        assert row.file_hash == HASH_A
         assert row.last_modified == mtime
         assert row.mtime_baseline_utc is True
 

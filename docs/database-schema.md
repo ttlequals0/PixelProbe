@@ -1,9 +1,8 @@
 # Database schema
 
-PixelProbe uses PostgreSQL exclusively (since v2.2.0; SQLite is not supported).
-All 17 models live in `pixelprobe/models.py`. Tables are created by
-`db.create_all()` at startup and evolved by idempotent migrations in
-`pixelprobe/migrations/startup.py` (see Migration notes below).
+PixelProbe uses PostgreSQL exclusively (since v2.2.0; SQLite is not supported). Models live in `pixelprobe/models.py`. Tables are created by `db.create_all()` at startup and evolved by idempotent migrations in `pixelprobe/migrations/startup.py` (see Migration notes below).
+
+This page summarizes durable contracts used by operators. Consult the models and startup migrations for the complete current schema.
 
 Type notes:
 
@@ -15,13 +14,14 @@ Type notes:
 
 ## Entity relationship diagram
 
-Only three real foreign keys exist in the schema:
+Selected foreign-key relationships in the current schema include:
 
 ```mermaid
 erDiagram
     users ||--o{ api_tokens : "user_id (CASCADE via ORM)"
     scan_schedules ||--o| healthcheck_configs : "schedule_id (unique, ON DELETE CASCADE)"
     notification_providers ||--o{ notification_rules : "provider_id (ON DELETE CASCADE)"
+    scan_notification_outbox ||--o{ scan_notification_deliveries : "outbox_id (ON DELETE CASCADE)"
 
     users {
         integer id PK
@@ -31,7 +31,7 @@ erDiagram
     api_tokens {
         integer id PK
         integer user_id FK
-        string token UK
+        string token_digest UK
     }
     scan_schedules {
         integer id PK
@@ -52,9 +52,19 @@ erDiagram
         integer provider_id FK
         string event_type
     }
+    scan_notification_outbox {
+        integer id PK
+        string scan_id UK
+        string event
+    }
+    scan_notification_deliveries {
+        integer id PK
+        integer outbox_id FK
+        string status
+    }
 ```
 
-Everything else is unrelated at the database level. In particular:
+Other important loose references include:
 
 - `scan_reports.scan_id` is a loose string reference to `scan_state.scan_id`,
   NOT a foreign key. No constraint enforces it, and reports outlive scan state
@@ -66,8 +76,7 @@ Everything else is unrelated at the database level. In particular:
 
 ### ScanResult (`scan_results`)
 
-One row per discovered media file; the largest table (millions of rows on big
-libraries).
+One row per discovered media file; the largest table (millions of rows on big libraries).
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -102,15 +111,11 @@ libraries).
 | deep_scan | Boolean | yes | Legacy, kept for backward compatibility |
 | output_rotation_enabled | Boolean | yes | Per-record rotation override |
 
-Composite indexes declared in the model (`__table_args__`):
-`idx_status_corrupted (scan_status, is_corrupted)`,
-`idx_scan_date_corrupted (scan_date, is_corrupted)`,
-`idx_exists_status (file_exists, scan_status)`.
+Composite indexes declared in the model (`__table_args__`): `idx_status_corrupted (scan_status, is_corrupted)`, `idx_scan_date_corrupted (scan_date, is_corrupted)`, `idx_exists_status (file_exists, scan_status)`.
 
 ### ScanState (`scan_state`)
 
-Progress and lifecycle of a scan run. One row per scan; the active scan has
-`is_active = TRUE`.
+Progress and lifecycle of a scan run. One row per scan; the active scan has `is_active = TRUE`.
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -141,17 +146,11 @@ Progress and lifecycle of a scan run. One row per scan; the active scan has
 | files_added | Integer | no | Default 0 |
 | files_updated | Integer | no | Default 0 |
 
-`last_update` semantics changed in v2.7.3: chunk tasks now heartbeat it
-periodically while working, so it is a liveness signal, not the time the last
-file finished. Stuck-scan detection and stale-scan cleanup
-(`create_new_scan()` deactivates active scans only when `last_update` is older
-than 30 minutes) rely on this.
+`last_update` semantics changed in v2.7.3: chunk tasks now heartbeat it periodically while working, so it is a liveness signal, not the time the last file finished. Stuck-scan detection and stale-scan cleanup (`create_new_scan()` deactivates active scans only when `last_update` is older than 30 minutes) rely on this.
 
 ### ScanChunk (`scan_chunks`)
 
-Unit of work for the chunked scan engine. Chunk tasks outlive the
-orchestrator task; `ScanChunk.has_active()` is the source of truth for
-"scan still running".
+Unit of work for the chunked scan engine. Chunk tasks outlive the orchestrator task; `ScanChunk.has_active()` is the source of truth for "scan still running".
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -250,8 +249,7 @@ Unique constraint: `_type_value_uc (exclusion_type, value)`.
 
 ### ScanSchedule (`scan_schedules`)
 
-Schedules are cron-only (`cron_expression`); there are no interval/period
-columns.
+Schedules are cron-only (`cron_expression`); there are no interval/period columns.
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -270,8 +268,7 @@ columns.
 
 ### HealthcheckConfig (`healthcheck_configs`)
 
-1:1 with a schedule (unique FK, ON DELETE CASCADE). Pings a healthcheck URL
-around scheduled runs.
+1:1 with a schedule (unique FK, ON DELETE CASCADE). Pings a healthcheck URL around scheduled runs.
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -303,8 +300,7 @@ Application-level key/value settings stored in the database.
 
 ## State tables
 
-Both use an integer PK plus a separate UUID string column for external
-reference (the UUID is not the primary key).
+Both use an integer PK plus a separate UUID string column for external reference (the UUID is not the primary key).
 
 ### CleanupState (`cleanup_state`)
 
@@ -361,11 +357,12 @@ reference (the UUID is not the primary key).
 | username | String(80) | no | Unique, indexed |
 | email | String(120) | no | Unique, indexed |
 | password_hash | String(128) | no | bcrypt |
-| is_admin | Boolean | no | Default TRUE (all users are admins) |
+| is_admin | Boolean | no | Default FALSE. The first setup creates the administrator explicitly. |
 | created_at | DateTime(tz) | no | |
 | last_login | DateTime(tz) | yes | |
 | is_active | Boolean | no | Default TRUE |
 | first_setup_required | Boolean | no | Default FALSE |
+| session_generation | Integer | no | Increments to invalidate existing sessions. |
 
 ### APIToken (`api_tokens`)
 
@@ -373,12 +370,30 @@ reference (the UUID is not the primary key).
 |---|---|---|---|
 | id | Integer | PK | |
 | user_id | Integer | no | FK -> users.id (delete cascades via ORM relationship) |
-| token | String(64) | no | Unique, indexed. `secrets.token_urlsafe(48)` |
+| token_digest | String(64) | no | Unique SHA-256 digest. The plaintext token exists only when newly created in memory. |
 | description | String(200) | yes | |
 | created_at | DateTime(tz) | no | |
 | last_used | DateTime(tz) | yes | Write throttled to once per 5 minutes per token |
 | expires_at | DateTime(tz) | yes | NULL = never expires |
 | is_active | Boolean | no | Default TRUE |
+
+### SecurityAuditEvent (`security_audit_events`)
+
+| Column | Type | Nullable | Notes |
+|---|---|---|---|
+| actor_id | Integer | yes | Historical numeric actor identifier. No live-user foreign key. |
+| action | String(100) | no | Indexed security action name. |
+| target | String(300) | yes | Affected object reference. |
+| outcome | String(30) | no | Result classification. |
+| details | JSON | no | Redacted event details. |
+| ip_address | String(64) | yes | Request source when available. |
+| created_at | DateTime(tz) | no | Indexed event time. |
+
+## Immutable run and delivery records
+
+`scan_run_roots` records each requested root and its observed status. `scan_run_files` records immutable per-run membership and observed outcomes; an absent member list is valid only when root evidence exists. `scan_tasks` stores the Celery task identifier, generation, status, dispatch attempts, and lease time for one run-owned task.
+
+`scan_notification_outbox` stores one durable terminal-scan event. Its `scan_notification_deliveries` rows snapshot a rule and provider destination, then retain independent attempts, leases, outcome, error, and delivery time. Deleting a provider or rule does not erase an already-snapshotted delivery.
 
 ## Notification tables
 
@@ -402,7 +417,7 @@ reference (the UUID is not the primary key).
 |---|---|---|---|
 | id | Integer | PK | |
 | provider_id | Integer | no | FK -> notification_providers.id, indexed, ON DELETE CASCADE |
-| event_type | String(50) | no | Indexed. scan_start, scan_complete, scan_failed, scan_missed, corruption_found, bitrot_suspected, user_added, user_deleted, api_key_added, api_key_deleted, auth_failed |
+| event_type | String(50) | no | Indexed. Supported values are `scan_completed` and `bitrot_suspected`. |
 | is_active | Boolean | no | Default TRUE |
 | priority | String(10) | no | low, normal, high. Default 'normal' |
 | conditions | JSON | yes | Optional, e.g. `{"corrupted_count": ">0"}` |
@@ -413,8 +428,7 @@ reference (the UUID is not the primary key).
 
 ### LogEntry (`log_entries`)
 
-Persistent log storage for the View Logs feature. Indexes are created by
-migration, not by the model.
+Persistent log storage for the View Logs feature. Indexes are created by migration, not by the model.
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
@@ -429,9 +443,7 @@ migration, not by the model.
 
 ## Indexes
 
-Single-column indexes declared with `index=True` in the models use
-SQLAlchemy's default naming (`ix_<table>_<column>`). In addition, the
-migrations in `pixelprobe/migrations/startup.py` create these named indexes:
+Single-column indexes declared with `index=True` in the models use SQLAlchemy's default naming (`ix_<table>_<column>`). In addition, the migrations in `pixelprobe/migrations/startup.py` create these named indexes:
 
 `create_performance_indexes()` on `scan_results`:
 
@@ -459,7 +471,7 @@ Other migration-created indexes:
 | idx_scan_results_integrity_queue | scan_results | bitrot_suspected DESC, last_integrity_check_date ASC NULLS FIRST, id ASC |
 | idx_users_username | users | username |
 | idx_users_email | users | email |
-| idx_api_tokens_token | api_tokens | token |
+| idx_api_tokens_token_digest | api_tokens | token_digest |
 | idx_api_tokens_user_id | api_tokens | user_id |
 | idx_log_scan_timestamp | log_entries | scan_id, timestamp |
 | idx_log_timestamp | log_entries | timestamp |
@@ -469,8 +481,7 @@ Other migration-created indexes:
 
 ## Example queries (PostgreSQL)
 
-`is_corrupted` is tri-state, so always decide how NULL (never scanned) should
-be treated.
+`is_corrupted` is tri-state, so always decide how NULL (never scanned) should be treated.
 
 ```sql
 -- Corrupted files not marked as good
@@ -508,8 +519,7 @@ WHERE is_active = TRUE;
 
 ## Migration notes
 
-There is no Alembic. Schema changes are hand-written, idempotent migrations in
-`pixelprobe/migrations/startup.py`, executed at every startup.
+There is no Alembic. Schema changes are hand-written, idempotent migrations in `pixelprobe/migrations/startup.py`, executed at every startup.
 
 To add a column:
 
@@ -544,9 +554,6 @@ Engine options from `pixelprobe/config.py` (`SQLALCHEMY_ENGINE_OPTIONS`):
 | pool_recycle | 3600 s | Recycles idle connections hourly |
 | pool_timeout | 30 s | Wait for a pooled connection |
 
-Pool math must stay under PostgreSQL `max_connections` (default 100):
-4 gunicorn workers x (5 + 10) = 60 maximum for the web app, plus Celery
-prefork children and checker connections. The session timezone is pinned to
-UTC via `connect_args` so naive `TIMESTAMP` columns always hold UTC wall time.
+Pool math must stay under PostgreSQL `max_connections` (default 100): 4 gunicorn workers x (5 + 10) = 60 maximum for the web app, plus Celery prefork children and checker connections. The session timezone is pinned to UTC via `connect_args` so naive `TIMESTAMP` columns always hold UTC wall time.
 
 [< Documentation index](README.md)

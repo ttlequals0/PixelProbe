@@ -1,8 +1,6 @@
 # Test Media Samples
 
-This directory contains media files for testing PixelProbe's corruption
-detection: real samples from the FFmpeg sample corpus plus locally
-synthesized files (see "Synthesized fixtures" below).
+This directory contains media files for testing PixelProbe's corruption detection: real samples from the FFmpeg sample corpus plus locally synthesized files (see "Synthesized fixtures" below).
 
 ## Valid Files (18 formats)
 ### Video
@@ -59,27 +57,11 @@ synthesized files (see "Synthesized fixtures" below).
 
 ## Synthesized fixtures
 
-The originally committed `valid.3gp`, `valid.flv`, `valid.mpg`, and
-`valid.wmv` were 189-byte HTML error pages from failed downloads. They and
-their corrupted counterparts (plus `corrupted.mkv`, `corrupted.opus`,
-`corrupted.heic`, `corrupted.heif`) are now generated locally by
-`generate_corrupted_fixtures.py`. The corrupted mp3/aiff/jpg/png/gif/bmp
-samples originally came from the FFmpeg bug tracker, but the bugs they
-exercised were in old FFmpeg rather than in the files - modern decoders
-accept all six without error - so they are also generated locally by
-`generate_corrupted_fixtures.py` with deterministic damage recipes; run it
-from the repository root to regenerate. `valid.3g2`, `valid.mpe`,
-`valid.mpeg`, and `valid.mpv` remain symlinks to their sibling formats.
+The originally committed `valid.3gp`, `valid.flv`, `valid.mpg`, and `valid.wmv` were 189-byte HTML error pages from failed downloads. They and their corrupted counterparts, plus `corrupted.mkv`, `corrupted.opus`, `corrupted.heic`, and `corrupted.heif`, are now generated locally by `generate_corrupted_fixtures.py`. The corrupted mp3/aiff/jpg/png/gif/bmp samples came from the FFmpeg bug tracker. Their bugs were in old FFmpeg, not in the files. Modern decoders accept all six without error. `generate_corrupted_fixtures.py` now creates them with deterministic damage recipes; run it from the repository root to regenerate. `valid.3g2`, `valid.mpe`, `valid.mpeg`, and `valid.mpv` remain symlinks to their sibling formats.
 
-Detection expectations: every synthesized `corrupted.*` file produces a
-corruption verdict except `corrupted.mpg` - MPEG-1 decoders conceal even
-heavy scattered damage and exit cleanly, so PixelProbe's only signal for
-that format is the frame-count-vs-metadata warning.
+Detection expectations: every synthesized `corrupted.*` file produces a corruption verdict except `corrupted.mpg`. MPEG-1 decoders conceal even heavy scattered damage and exit cleanly. PixelProbe's only signal for that format is the frame-count-vs-metadata warning.
 
-`valid.mov` is a sparse-video QuickTime sample: 244 real video frames over
-240 seconds while container metadata declares 25fps. It is kept
-deliberately as the regression case proving frame-count mismatches must
-never produce a corruption verdict.
+`valid.mov` is a sparse-video QuickTime sample: 244 real video frames over 240 seconds while container metadata declares 25fps. It is kept deliberately as the regression case proving frame-count mismatches must never produce a corruption verdict.
 
 ## Sources
 - Valid files: https://samples.ffmpeg.org/

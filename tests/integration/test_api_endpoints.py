@@ -4,8 +4,10 @@ Integration tests for API endpoints
 
 import pytest
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch
+
+from pixelprobe.models import ScanResult, ScanState, db
 
 class TestScanEndpoints:
     """Test scan-related API endpoints"""
@@ -62,6 +64,103 @@ class TestScanEndpoints:
         assert 'total' in data
         assert 'is_running' in data
 
+    def test_scan_status_returns_durable_id_and_stored_scope(self, authenticated_client, app, db):
+        with app.app_context():
+            state = ScanState(scan_id='durable-status-id', is_active=True, phase='scanning',
+                              directories='["/media/one"]', force_rescan=True)
+            db.session.add(state)
+            db.session.commit()
+
+        response = authenticated_client.get('/api/scan-status')
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['scan_id'] == 'durable-status-id'
+        assert data['directories'] == ['/media/one']
+        assert data['force_rescan'] is True
+
+    @patch('pixelprobe.api.scan_routes.get_scan_progress_redis')
+    def test_scan_status_returns_active_files_and_eta_without_current_file(
+            self, progress_redis, authenticated_client, app, db):
+        with app.app_context():
+            state = ScanState(scan_id='active-status', is_active=True, phase='scanning',
+                              files_processed=1, estimated_total=3,
+                              start_time=datetime.now(timezone.utc) - timedelta(seconds=10),
+                              current_file='')
+            db.session.add(state)
+            db.session.commit()
+        progress_redis.return_value = {
+            'files_processed': 1,
+            'estimated_total': 3,
+            'phase': 'scanning',
+            'current_file': '',
+            'active_files': [{'file': '/media/one.mp4', 'directory': '/media'}],
+            'active_file_count': 1,
+            'active_files_truncated': False,
+        }
+
+        response = authenticated_client.get('/api/scan-status')
+
+        data = response.get_json()
+        assert data['file'] == ''
+        assert data['active_files'] == progress_redis.return_value['active_files']
+        assert data['active_file_count'] == 1
+        assert data['eta'] is not None
+
+    def test_scan_status_uses_newest_active_run_for_running_and_eta(
+            self, authenticated_client, app, db):
+        with app.app_context():
+            ScanState.query.delete()
+            db.session.add(ScanState(
+                scan_id='older-completed', is_active=False, phase='completed',
+                files_processed=1, estimated_total=1,
+            ))
+            db.session.add(ScanState(
+                scan_id='newer-active', is_active=True, phase='scanning',
+                files_processed=1, estimated_total=3,
+                start_time=datetime.now(timezone.utc) - timedelta(seconds=10),
+            ))
+            db.session.commit()
+
+        response = authenticated_client.get('/api/scan-status')
+
+        data = response.get_json()
+        assert data['scan_id'] == 'newer-active'
+        assert data['is_running'] is True
+        assert data['status'] == 'scanning'
+        assert data['eta'] is not None
+
+    def test_scan_status_uses_newest_cancelled_run(self, authenticated_client, app, db):
+        with app.app_context():
+            ScanState.query.delete()
+            db.session.add(ScanState(
+                scan_id='older-completed', is_active=False, phase='completed',
+                files_processed=1, estimated_total=1,
+            ))
+            db.session.add(ScanState(
+                scan_id='newer-cancelled', is_active=False, phase='cancelled',
+                files_processed=1, estimated_total=3,
+            ))
+            db.session.commit()
+
+        response = authenticated_client.get('/api/scan-status')
+
+        data = response.get_json()
+        assert data['scan_id'] == 'newer-cancelled'
+        assert data['is_running'] is False
+        assert data['status'] == 'idle'
+        assert data['eta'] is None
+
+    @pytest.mark.parametrize(('stored', 'expected'), [
+        (None, []),
+        ('not-json', []),
+        ('"/media/one"', []),
+        ('{"path":"/media/one"}', []),
+        ('"[\\"/media/one\\"]"', ['/media/one']),
+    ])
+    def test_scan_status_scope_is_always_an_array(self, stored, expected):
+        assert ScanState(directories=stored).to_dict()['directories'] == expected
+
 
 class TestStatsEndpoints:
     """Test statistics API endpoints"""
@@ -79,6 +178,39 @@ class TestStatsEndpoints:
         
         # Should count our mock data
         assert data['total_files'] >= 1
+
+    def test_completed_marked_good_warning_is_healthy(self, authenticated_client, db):
+        result = ScanResult(
+            file_path='/test/marked-good-warning.mp4', file_size=1,
+            scan_status='completed', is_corrupted=False, has_warnings=True,
+            marked_as_good=True,
+        )
+        db.session.add(result)
+        db.session.commit()
+
+        response = authenticated_client.get('/api/stats')
+
+        assert response.status_code == 200
+        assert response.get_json()['healthy_files'] >= 1
+
+    def test_completed_null_corruption_warning_is_a_warning(self, authenticated_client, db):
+        result = ScanResult(
+            file_path='/test/legacy-null-warning.mp4', file_size=1,
+            scan_status='completed', is_corrupted=None, has_warnings=True,
+            marked_as_good=False,
+        )
+        db.session.add(result)
+        db.session.commit()
+
+        stats = authenticated_client.get('/api/stats')
+        exported = authenticated_client.post('/api/export', json={
+            'format': 'json', 'filter': 'warning',
+        })
+
+        assert stats.status_code == 200
+        assert stats.get_json()['warning_files'] >= 1
+        assert exported.status_code == 200
+        assert any(row['file_path'] == result.file_path for row in exported.get_json())
     
     def test_get_system_info(self, authenticated_client, db):
         """Test GET /api/system-info endpoint"""

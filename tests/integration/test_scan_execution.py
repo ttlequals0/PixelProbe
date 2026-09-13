@@ -3,47 +3,68 @@ Integration tests for actual scan execution and state management.
 These tests verify that scans can actually start, run, and complete properly.
 """
 
+import os
+import sys
+import types
 import pytest
-import time
-from unittest.mock import patch, Mock
-from pixelprobe.models import db, ScanState, ScanResult, ScanChunk
+from unittest.mock import Mock
+from uuid import uuid4
+
+from flask import Flask
+from sqlalchemy import create_engine, text
+
+from pixelprobe.models import db, ScanConfiguration, ScanState, ScanResult, ScanTask
+from pixelprobe.services.scan_engine import claim_scan_slot
+from pixelprobe.services.scan_service import ScanService
+
+
+POSTGRES_URI = os.environ.get('PIXELPROBE_TEST_POSTGRES_URI')
+
+
+@pytest.fixture
+def postgres_scan_app():
+    """Use PostgreSQL because scan-slot locking is a PostgreSQL contract."""
+    schema = f'scan_execution_{uuid4().hex[:12]}'
+    engine = create_engine(POSTGRES_URI)
+    with engine.begin() as conn:
+        conn.execute(text(f'CREATE SCHEMA {schema}'))
+    app = Flask(__name__)
+    app.config.update(
+        SQLALCHEMY_DATABASE_URI=POSTGRES_URI,
+        SQLALCHEMY_ENGINE_OPTIONS={'connect_args': {'options': f'-csearch_path={schema}'}},
+        SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    )
+    db.init_app(app)
+    with app.app_context():
+        db.create_all()
+    try:
+        yield app
+    finally:
+        with app.app_context():
+            db.session.remove()
+        with engine.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA {schema} CASCADE'))
+        engine.dispose()
 
 
 class TestScanExecution:
     """Test actual scan execution, not just endpoint availability"""
     
-    @pytest.mark.skip(reason="Test incompatible with improved scan state detection - scan_service uses separate :memory: database")
-    def test_scan_can_start_when_no_active_scan(self, authenticated_client, app, db, test_data_dir):
-        """Test that a scan can start when no scan is active
-
-        NOTE: This test is skipped because the scan_service uses a separate :memory: database
-        (see conftest.py line 119) which is independent from the test database. The improved
-        is_scan_running() detection now correctly finds scans in 'initializing' phase, but
-        this test cannot properly clean up the separate scan_service database, causing 409 errors.
-        """
-        with app.app_context():
-            # Ensure no active scans - delete all scan states to avoid stale test data
-            ScanState.query.delete()
-            db.session.commit()
-
-            # Also reset the scan service's internal thread state
-            app.scan_service.current_scan_thread = None
-
-            # Try to start a scan with an actual test directory
-            response = authenticated_client.post('/api/scan-all',
-                                  json={'directories': [test_data_dir['test_dir']], 'force_rescan': False})
-
-            # Should succeed (200) or return that Celery is not available (503)
-            assert response.status_code in [200, 503], \
-                f"Expected 200 or 503, got {response.status_code}: {response.get_json()}"
-
-            if response.status_code == 200:
-                data = response.get_json()
-                assert 'scan_id' in data or 'message' in data
+    @pytest.mark.postgres
+    @pytest.mark.skipif(not POSTGRES_URI, reason='PIXELPROBE_TEST_POSTGRES_URI not set')
+    def test_scan_can_start_when_no_active_scan(self, postgres_scan_app):
+        """The durable PostgreSQL slot claim starts a new run atomically."""
+        with postgres_scan_app.app_context():
+            ok, error, status = claim_scan_slot('postgres-start')
+            assert (ok, error, status) == (True, None, None)
+            state = ScanState.query.filter_by(scan_id='postgres-start').one()
+            assert state.is_active is True
+            assert state.phase == 'initializing'
     
     def test_scan_prevents_concurrent_execution(self, authenticated_client, app, db, test_data_dir):
         """Test that only one scan can run at a time"""
         with app.app_context():
+            db.session.add(ScanConfiguration(path=test_data_dir['test_dir'], is_active=True))
             # Create an active scan
             active_scan = ScanState(
                 scan_id='test-scan-1',
@@ -93,119 +114,60 @@ class TestScanExecution:
                                       json={'directories': [test_data_dir['test_dir']]})
                 assert response.status_code in [200, 503]
     
-    @pytest.mark.skip(reason="Test incompatible with improved scan state detection - scan_service uses separate :memory: database")
-    def test_scan_cancel_actually_stops_scan(self, authenticated_client, app, db, test_data_dir):
-        """Test that cancel-scan actually stops the running scan
-
-        NOTE: This test is skipped because the scan_service uses a separate :memory: database
-        (see conftest.py line 119) which is independent from the test database. The improved
-        is_scan_running() detection now correctly finds scans in 'initializing' phase, but
-        this test cannot properly clean up the separate scan_service database, causing 409 errors.
-        """
-        with app.app_context():
-            # Clean up any existing scans first
-            ScanState.query.delete()
+    @pytest.mark.postgres
+    @pytest.mark.skipif(not POSTGRES_URI, reason='PIXELPROBE_TEST_POSTGRES_URI not set')
+    def test_scan_cancel_actually_stops_scan(self, postgres_scan_app, monkeypatch):
+        """Cancellation terminalizes only the active run's durable intent."""
+        with postgres_scan_app.app_context():
+            state = ScanState(scan_id='postgres-cancel', phase='scanning', is_active=True)
+            db.session.add(state)
+            db.session.flush()
+            task = ScanTask(scan_id=state.scan_id, purpose='continuation',
+                            celery_task_id='postgres-cancel-task', status='dispatched')
+            db.session.add(task)
             db.session.commit()
 
-            # Also reset the scan service's internal thread state
-            app.scan_service.current_scan_thread = None
+            revoke = Mock()
+            fake_celery = types.ModuleType('pixelprobe.celery_config')
+            fake_celery.celery_app = types.SimpleNamespace(
+                control=types.SimpleNamespace(revoke=revoke))
+            monkeypatch.setitem(sys.modules, 'pixelprobe.celery_config', fake_celery)
+            result = ScanService(POSTGRES_URI).cancel_scan()
 
-            # Create an active scan
-            active_scan = ScanState(
-                scan_id='test-cancel',
-                phase='scanning',
-                is_active=True
-            )
-            db.session.add(active_scan)
-            db.session.commit()
-
-            # Cancel the scan
-            response = authenticated_client.post('/api/cancel-scan')
-            assert response.status_code == 200
-
-            # Verify scan is no longer active
-            scan = ScanState.query.filter_by(scan_id='test-cancel').first()
-            assert scan is not None
-            assert scan.is_active is False
-
-            # Now a new scan should be able to start
-            response = authenticated_client.post('/api/scan-all',
-                                  json={'directories': [test_data_dir['test_dir']]})
-            assert response.status_code in [200, 503]
+            assert result['cancelled'] is True
+            assert result['owned_task_count'] == 1
+            revoke.assert_called_once_with('postgres-cancel-task', terminate=False)
+            state = ScanState.query.filter_by(scan_id='postgres-cancel').one()
+            assert state.phase == 'cancelled'
+            assert state.is_active is False
+            assert ScanTask.query.filter_by(scan_id=state.scan_id).one().status == 'cancelled'
     
-    @pytest.mark.skip(reason="Test incompatible with improved scan state detection - scan_service uses separate :memory: database")
-    def test_scan_phase_transitions(self, authenticated_client, app, db, test_data_dir):
-        """Test that scan phases transition correctly
-
-        NOTE: This test is skipped because the scan_service uses a separate :memory: database
-        (see conftest.py line 119) which is independent from the test database. The improved
-        is_scan_running() detection now correctly finds scans in 'initializing' phase, but
-        this test cannot properly clean up the separate scan_service database, causing 409 errors.
-        """
-        with app.app_context():
-            # Clean up any existing scans first
-            ScanState.query.delete()
+    @pytest.mark.postgres
+    @pytest.mark.skipif(not POSTGRES_URI, reason='PIXELPROBE_TEST_POSTGRES_URI not set')
+    def test_scan_phase_transitions(self, postgres_scan_app):
+        """Run phase records transition in one PostgreSQL-backed state row."""
+        with postgres_scan_app.app_context():
+            ok, _, _ = claim_scan_slot('postgres-phase')
+            assert ok
+            scan = ScanState.query.filter_by(scan_id='postgres-phase').one()
+            scan.start_scan(['/tmp/phase-root'])
+            assert scan.phase == 'discovering'
+            scan.phase = 'adding'
+            scan.estimated_total = 1
             db.session.commit()
-
-            # Also reset the scan service's internal thread state
-            app.scan_service.current_scan_thread = None
-
-            # Create a scan in discovering phase
-            scan = ScanState(
-                scan_id='phase-test',
-                phase='discovering',
-                is_active=True,
-                files_processed=0,
-                estimated_total=0
-            )
-            db.session.add(scan)
+            scan.phase = 'scanning'
             db.session.commit()
-
-            # Check scan status
-            response = authenticated_client.get('/api/scan-status')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['phase'] == 'discovering'
-
-            # Simulate phase transition to adding
-            # Use direct query to update to avoid session issues
-            ScanState.query.filter_by(scan_id='phase-test').update({
-                'phase': 'adding',
-                'estimated_total': 1000
-            })
+            scan.phase = 'completed'
+            scan.is_active = False
             db.session.commit()
-
-            response = authenticated_client.get('/api/scan-status')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['phase'] == 'adding'
-
-            # Simulate phase transition to scanning
-            ScanState.query.filter_by(scan_id='phase-test').update({
-                'phase': 'scanning'
-            })
-            db.session.commit()
-
-            response = authenticated_client.get('/api/scan-status')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['phase'] == 'scanning'
-
-            # Complete the scan
-            ScanState.query.filter_by(scan_id='phase-test').update({
-                'phase': 'completed',
-                'is_active': False
-            })
-            db.session.commit()
-
-            # Now a new scan should be able to start
-            response = authenticated_client.post('/api/scan-all',
-                                  json={'directories': [test_data_dir['test_dir']]})
-            assert response.status_code in [200, 503]
+            persisted = ScanState.query.filter_by(scan_id='postgres-phase').one()
+            assert (persisted.phase, persisted.is_active, persisted.estimated_total) == (
+                'completed', False, 1)
     
     def test_scan_parallel_endpoint_execution(self, authenticated_client, app, db, test_data_dir):
         """Test the parallel scan endpoint can actually execute"""
         with app.app_context():
+            db.session.add(ScanConfiguration(path=test_data_dir['test_dir'], is_active=True))
             # Ensure no active scans
             ScanState.query.update({'is_active': False})
             db.session.commit()
@@ -224,6 +186,7 @@ class TestScanExecution:
     def test_scan_parallel_v2_endpoint_execution(self, authenticated_client, app, db, test_data_dir):
         """Test the enhanced parallel scan v2 endpoint"""
         with app.app_context():
+            db.session.add(ScanConfiguration(path=test_data_dir['test_dir'], is_active=True))
             # Ensure no active scans
             ScanState.query.update({'is_active': False})
             db.session.commit()

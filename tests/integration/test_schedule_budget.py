@@ -92,6 +92,37 @@ class TestScheduleBudgetValidation:
             assert response.status_code == 200
             assert response.get_json()['time_budget_minutes'] is None
 
+    def test_unknown_schedule_type_is_rejected_without_a_budget(self, authenticated_client, app, db):
+        with app.app_context():
+            response = authenticated_client.post('/api/schedules', json={
+                'name': 'Unknown Type',
+                'cron_expression': '0 2 * * *',
+                'scan_type': 'not-a-scan-type',
+            })
+            assert response.status_code == 400
+            assert 'scan_type' in response.get_json()['error']
+            assert ScanSchedule.query.filter_by(name='Unknown Type').first() is None
+
+    def test_update_rejects_unrepresentable_interval_without_mutation(self, authenticated_client, app, db):
+        with app.app_context():
+            schedule = ScanSchedule(
+                name='Stable Schedule',
+                cron_expression='0 3 * * *',
+                scan_type='normal',
+                is_active=True,
+            )
+            db.session.add(schedule)
+            db.session.commit()
+            schedule_id = schedule.id
+
+            response = authenticated_client.put(f'/api/schedules/{schedule_id}', json={
+                'cron_expression': 'interval:days:999999999999999999999999999999999999999999999999999999999999',
+            })
+            assert response.status_code == 400
+            assert 'cron_expression' in response.get_json()['error']
+            db.session.expire_all()
+            assert db.session.get(ScanSchedule, schedule_id).cron_expression == '0 3 * * *'
+
 
 class TestManualRunBudgetValidation:
 

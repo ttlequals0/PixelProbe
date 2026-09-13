@@ -2,9 +2,9 @@
 
 ## Overview
 
-PixelProbe uses pytest with unit, integration, and top-level feature tests.
-`pytest.ini` sets `testpaths = tests scripts`, so test files under `scripts/`
-(currently `scripts/test_database.py`) are collected too.
+PixelProbe uses pytest with unit, integration, and top-level feature tests. `pytest.ini` sets `testpaths = tests scripts`, so test files under `scripts/` (currently `scripts/test_database.py`) are collected too.
+
+Tests require Python 3.12. Create the virtual environment with `python3.12 -m venv venv`.
 
 ## Test structure
 
@@ -15,7 +15,7 @@ tests/
 |-- test_authentication.py         # Auth and API token tests
 |-- test_bulk_reports.py           # Bulk report generation
 |-- test_concurrency.py            # Concurrent operation behavior
-|-- test_frontend_build.py         # Runs npm install / npm run build
+|-- test_frontend_build.py         # Runs npm ci / npm run build
 |-- test_gunicorn_conf.py          # gunicorn.conf.py env handling
 |-- test_jpeg_pixel.py             # JPEG pixel-level validation
 |-- test_logs.py                   # Log endpoints and log capture
@@ -59,15 +59,11 @@ tests/
 
 Two files deserve a call-out:
 
-- `test_real_media_samples.py` and `test_synthetic_corruption.py` are gated
-  behind the `real_media` marker. They exercise the FFmpeg/ImageMagick
-  validation paths against the sample corpus (plus fixtures synthesized at
-  test time) and are sensitive to tool versions, so they are excluded from
-  the default local run; CI runs them on the Python 3.12 matrix leg.
+- `test_real_media_samples.py` and `test_synthetic_corruption.py` are gated behind the `real_media` marker. They exercise the FFmpeg/ImageMagick validation paths against the sample corpus (plus fixtures synthesized at test time) and are sensitive to tool versions. The full test suite includes them, and CI runs them in the Python 3.12 job.
   Committed synthesized fixtures are regenerated with
   `tests/fixtures/media_samples/generate_corrupted_fixtures.py`.
-- `test_frontend_build.py` actually runs `npm install` and `npm run build`,
-  so it needs Node.js 20 and npm available.
+- `test_frontend_build.py` actually runs `npm ci` and `npm run build`,
+  so it needs Node.js 22.22.2 and npm available.
 
 ## Running tests
 
@@ -78,9 +74,12 @@ Two files deserve a call-out:
 pip install -r requirements-test.txt
 
 # Build the frontend once (test_frontend_build.py and the app expect it)
-npm install && npm run build
+npm ci && npm run build
 
-# Default local run: everything except the real_media tests
+# Full local run
+pytest
+
+# Fast local run: exclude the real_media tests
 pytest -m "not real_media"
 
 # Run with verbose output
@@ -117,8 +116,7 @@ Markers are declared in `pytest.ini`:
 | `integration` | Integration tests |
 | `timeout` | Sets a per-test execution timeout |
 
-There is no `benchmark` marker and no dedicated benchmark suite;
-`test_performance.py` contains ordinary tests with timing assertions.
+There is no `benchmark` marker and no dedicated benchmark suite; `test_performance.py` contains ordinary tests with timing assertions.
 
 ### Test coverage
 
@@ -131,8 +129,7 @@ pytest -m "not real_media" --cov=pixelprobe --cov-report=html
 # Open htmlcov/index.html in browser
 ```
 
-Coverage targets (aspirational - nothing enforces them; there is no
-`--cov-fail-under` and Codecov runs with `fail_ci_if_error: false`):
+Coverage targets (aspirational - nothing enforces them; there is no `--cov-fail-under` and Codecov runs with `fail_ci_if_error: false`):
 
 - Overall: 80%
 - Core modules (scan_service, media_checker): 90%
@@ -143,11 +140,7 @@ Coverage targets (aspirational - nothing enforces them; there is no
 
 ### Unit tests
 
-Unit tests validate individual components in isolation using mocks and
-fixtures: services (business logic without database/filesystem
-dependencies), repositories against a mocked database, utilities (helper
-functions, validators, decorators), and database model methods and
-properties.
+Unit tests validate components in isolation with mocks and fixtures. They cover services without database or filesystem dependencies, repositories against a mocked database, utilities, and database model methods and properties.
 
 Example:
 ```python
@@ -161,10 +154,7 @@ def test_scan_service_discovery(scan_service, mock_media_files):
 
 ### Integration tests
 
-Integration tests validate API endpoints and full request/response
-cycles: all routes with various input scenarios, access control and
-permissions, real database operations, and 4xx/5xx responses and error
-messages.
+Integration tests validate API endpoints and full request/response cycles: all routes with various input scenarios, access control and permissions, real database operations, and 4xx/5xx responses and error messages.
 
 Example:
 ```python
@@ -182,12 +172,7 @@ def test_scan_endpoint(client, db):
 
 ## Test fixtures
 
-All shared fixtures live in `tests/conftest.py`. There is no `create_app`
-factory in the codebase; the conftest builds its own test application with
-`create_test_app()`, which registers the real blueprints against an
-in-memory SQLite database, disables CSRF, and replicates the `/healthz`,
-`/health`, and `/api/version` routes from `app.py`. This avoids importing
-`app.py` itself (and its PostgreSQL startup) during tests.
+All shared fixtures live in `tests/conftest.py`. There is no `create_app` factory in the codebase. The conftest builds its own test application with `create_test_app()`. It registers the real blueprints against an in-memory SQLite database, disables CSRF, and replicates the `/healthz`, `/health`, and `/api/version` routes from `app.py`. This avoids importing `app.py` and its PostgreSQL startup during tests.
 
 Key fixtures:
 
@@ -202,13 +187,7 @@ Key fixtures:
 | `mock_scan_result` | function | Single ScanResult row with canned values |
 | `tasks_parallel_mod` | function | Imports `pixelprobe.tasks_parallel` with the app/celery circular import stubbed out |
 
-The in-memory SQLite database is shared across the whole session (the `app`
-fixture is session-scoped); the function-scoped `db` fixture creates and
-drops tables around each test. Production runs PostgreSQL only, so
-PostgreSQL-specific behavior (advisory locks, dialect differences) is not
-covered by the local suite; the CI image job runs tests inside the
-production Docker image to catch environment-specific regressions such as
-tool-version changes.
+The in-memory SQLite database is shared across the whole session because the `app` fixture is session-scoped. The function-scoped `db` fixture creates and drops tables around each test. Production runs PostgreSQL only, so the local suite does not cover advisory locks or dialect differences. The CI image job runs tests inside the production Docker image to catch environment-specific regressions such as tool-version changes.
 
 ## Testing best practices
 
@@ -275,24 +254,16 @@ ffmpeg -f lavfi -i testsrc=duration=1:size=320x240:rate=30 \
 
 ### Test database
 
-Tests use an in-memory SQLite database (`sqlite:///:memory:`) created by the
-session-scoped `app` fixture in `tests/conftest.py`:
+Tests use an in-memory SQLite database (`sqlite:///:memory:`) created by the session-scoped `app` fixture in `tests/conftest.py`:
 - Shared across the session; the `db` fixture resets tables per test
 - Same SQLAlchemy models as production
 - No external database or environment variable required
 
 ## Continuous integration
 
-CI is defined in
-[.github/workflows/test.yml](../.github/workflows/test.yml) with two jobs:
+CI is defined in [.github/workflows/test.yml](../.github/workflows/test.yml) with two jobs:
 
-- `test`: runs on every push and pull request across a Python matrix of
-  3.10, 3.11, and 3.12 (`actions/checkout@v4`, `actions/setup-python@v5`).
-  It sets up Node.js 20, installs `ffmpeg imagemagick libmagic1` via apt,
-  installs `requirements-test.txt`, runs `npm install && npm run build`,
-  then executes `pytest -m "not real_media" --cov=pixelprobe`. Coverage is
-  uploaded to Codecov (`codecov/codecov-action@v5`) with
-  `fail_ci_if_error: false`, so a Codecov outage cannot fail the build.
+- `test`: runs on every push and pull request with Python 3.12 (`actions/checkout@v4`, `actions/setup-python@v5`). It sets up Node.js 22.22.2, installs `ffmpeg imagemagick libmagic1` via apt, installs `requirements-test.txt`, runs `npm ci && npm run build`, then executes `pytest -m "not real_media" --cov=pixelprobe` and the `real_media` tests. Codecov uploads coverage with `fail_ci_if_error: false`, so an outage cannot fail the build.
 - `image-integration`: builds the production Docker image, runs the
   `real_media` tests (`tests/test_real_media_samples.py`) inside that image
   so the stderr parsers are exercised against the exact FFmpeg/ImageMagick
@@ -300,8 +271,7 @@ CI is defined in
   fail soft (zero events rather than exceptions), so this is the job that
   catches regressions from a base-image bump.
 
-CodeQL analysis runs via GitHub's default setup; there is no `codeql.yml`
-workflow file in the repository.
+CodeQL analysis runs via GitHub's default setup; there is no `codeql.yml` workflow file in the repository.
 
 ## Debugging tests
 
@@ -321,7 +291,7 @@ pytest -l
 
 - Import errors: ensure PYTHONPATH includes project root
 - Database errors: check fixtures are properly scoped
-- Frontend errors: run `npm install && npm run build` first
+- Frontend errors: run `npm ci && npm run build` first
 - File not found: use absolute paths in fixtures
 
 ## Adding new tests
