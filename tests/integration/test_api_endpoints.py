@@ -107,6 +107,50 @@ class TestScanEndpoints:
         assert data['active_file_count'] == 1
         assert data['eta'] is not None
 
+    def test_scan_status_uses_newest_active_run_for_running_and_eta(
+            self, authenticated_client, app, db):
+        with app.app_context():
+            ScanState.query.delete()
+            db.session.add(ScanState(
+                scan_id='older-completed', is_active=False, phase='completed',
+                files_processed=1, estimated_total=1,
+            ))
+            db.session.add(ScanState(
+                scan_id='newer-active', is_active=True, phase='scanning',
+                files_processed=1, estimated_total=3,
+                start_time=datetime.now(timezone.utc) - timedelta(seconds=10),
+            ))
+            db.session.commit()
+
+        response = authenticated_client.get('/api/scan-status')
+
+        data = response.get_json()
+        assert data['scan_id'] == 'newer-active'
+        assert data['is_running'] is True
+        assert data['status'] == 'scanning'
+        assert data['eta'] is not None
+
+    def test_scan_status_uses_newest_cancelled_run(self, authenticated_client, app, db):
+        with app.app_context():
+            ScanState.query.delete()
+            db.session.add(ScanState(
+                scan_id='older-completed', is_active=False, phase='completed',
+                files_processed=1, estimated_total=1,
+            ))
+            db.session.add(ScanState(
+                scan_id='newer-cancelled', is_active=False, phase='cancelled',
+                files_processed=1, estimated_total=3,
+            ))
+            db.session.commit()
+
+        response = authenticated_client.get('/api/scan-status')
+
+        data = response.get_json()
+        assert data['scan_id'] == 'newer-cancelled'
+        assert data['is_running'] is False
+        assert data['status'] == 'idle'
+        assert data['eta'] is None
+
     @pytest.mark.parametrize(('stored', 'expected'), [
         (None, []),
         ('not-json', []),

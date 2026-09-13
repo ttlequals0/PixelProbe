@@ -470,18 +470,14 @@ def get_scan_status():
         db.session.close()
         db.session.remove()
 
-        # First try to get active scan with fresh session
-        scan_state = db.session.query(ScanState).filter_by(is_active=True).first()
+        # First try to get the newest active scan with a fresh session.
+        scan_state = (db.session.query(ScanState).filter_by(is_active=True)
+                      .order_by(ScanState.id.desc()).first())
         if scan_state:
             # Force refresh from database to get latest state
             db.session.refresh(scan_state)
         else:
-            # No active scan, get the most recent COMPLETED scan for status display
-            # IMPORTANT: Only show completed scans to avoid showing partial/interrupted scans
-            scan_state = db.session.query(ScanState).filter_by(phase='completed').order_by(ScanState.id.desc()).first()
-            if not scan_state:
-                # If no completed scan, get the most recent one regardless of phase
-                scan_state = db.session.query(ScanState).order_by(ScanState.id.desc()).first()
+            scan_state = db.session.query(ScanState).order_by(ScanState.id.desc()).first()
 
             if scan_state:
                 db.session.refresh(scan_state)
@@ -506,9 +502,8 @@ def get_scan_status():
                  f"estimated_total={scan_state.estimated_total}, current_file={scan_state.current_file}, "
                  f"start_time={scan_state.start_time}")
     
-    # Prioritize database values when available, fall back to service values
-    is_running = current_app.scan_service.is_scan_running()
-    logger.debug(f"Service is_running: {is_running}")
+    is_running = bool(scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES)
+    logger.debug(f"Durable is_running: {is_running}")
     logger.debug(f"Service status: {service_status}")
     logger.debug(f"Database state_dict phase: {state_dict.get('phase', 'idle')}")
 

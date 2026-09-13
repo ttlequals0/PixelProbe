@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Parallel selected-file workers use a settings snapshot resolved by their parent task. Saved scanner tunables no longer fall back to defaults outside Flask application context.
 - Scan status reports bounded in-flight selected files through the progress mirror. ETA remains available when no single current file is shown.
+- Scan status follows the newest durable run. A cancelled run no longer displays an older completed scan.
 - Cancelling a selected run clears only claims owned by that run. It no longer resets unrelated inventory rows.
 
 ## [2.9.2] - 2026-09-12
