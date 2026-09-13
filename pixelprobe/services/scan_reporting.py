@@ -9,7 +9,7 @@ import os
 from datetime import datetime, timezone
 from typing import List, Tuple
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.dialects.postgresql import insert
 
 from pixelprobe.models import db, ScanResult, ScanReport, ScanState, ScanRunFile
@@ -139,6 +139,17 @@ def add_files_batch_to_db(file_paths: List[str], scan_id: str = None) -> Tuple[i
                 'last_modified': datetime.now(timezone.utc)
             })
 
+    error_candidates = [
+        file_data['file_path'] for file_data in files_to_insert
+        if file_data['scan_status'] == 'error'
+    ]
+    known_error_paths = set()
+    if scan_id and error_candidates:
+        known_error_paths = {
+            path for (path,) in db.session.query(ScanResult.file_path).filter(
+                ScanResult.file_path.in_(error_candidates)).all()
+        }
+
     if files_to_insert:
         try:
             stmt = insert(ScanResult).values(files_to_insert)
@@ -169,7 +180,19 @@ def add_files_batch_to_db(file_paths: List[str], scan_id: str = None) -> Tuple[i
             db.session.commit()
 
     if scan_id and file_paths:
-        rows = ScanResult.query.filter(ScanResult.file_path.in_(file_paths)).all()
+        scan_state = ScanState.query.filter_by(scan_id=scan_id).first()
+        force_rescan = bool(scan_state and scan_state.force_rescan)
+        rows_query = ScanResult.query.filter(ScanResult.file_path.in_(file_paths))
+        if not force_rescan:
+            new_error_paths = [path for path in error_candidates if path not in known_error_paths]
+            # Normal scans queue pending inventory and newly discovered paths
+            # whose metadata could not be read before discovery completed.
+            membership_filter = ScanResult.scan_status == 'pending'
+            if new_error_paths:
+                membership_filter = or_(
+                    membership_filter, ScanResult.file_path.in_(new_error_paths))
+            rows_query = rows_query.filter(membership_filter)
+        rows = rows_query.all()
         membership = [
             {'scan_id': scan_id, 'scan_result_id': row.id,
              'file_path': row.file_path, 'status': 'pending'}

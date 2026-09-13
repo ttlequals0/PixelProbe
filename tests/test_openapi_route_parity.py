@@ -65,6 +65,18 @@ def test_openapi_covers_all_registered_operations(app):
     _assert_complete_parity(_registered_operations(app), _documented_operations(spec))
 
 
+def test_scan_status_schema_uses_durable_run_fields():
+    spec = yaml.safe_load(Path('openapi.yaml').read_text(encoding='utf-8'))
+    properties = spec['components']['schemas']['ScanStatus']['properties']
+    assert properties['scan_id'] == {
+        'type': 'string', 'format': 'uuid', 'nullable': True,
+        'description': 'Durable scan UUID, or null when no scan exists',
+    }
+    assert properties['directories']['type'] == 'array'
+    assert properties['directories']['items']['type'] == 'string'
+    assert properties['force_rescan']['type'] == 'boolean'
+
+
 @pytest.mark.postgres
 @pytest.mark.skipif(
     not os.environ.get('PIXELPROBE_TEST_POSTGRES_URI'),

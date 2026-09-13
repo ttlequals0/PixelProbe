@@ -132,36 +132,9 @@ def _claim_chunk_members(scan_id, first_path, last_path, checker):
         member.claimed_at = now
         if member.scan_result_id is not None:
             claimed_ids.append(member.scan_result_id)
-    if claimed_ids:
-        db.session.execute(
-            update(ScanResult)
-            .where(ScanResult.id.in_(claimed_ids))
-            .values(scan_status='scanning')
-        )
+    # Run members track queue activity; global results change after decoding.
     db.session.commit()
     return claimed_ids
-
-
-def _reset_run_member_results(scan_id, checker, commit=True):
-    """Reset only current-policy members, never broad directory inventory."""
-    member_ids = []
-    for member in ScanRunFile.query.filter_by(scan_id=scan_id, status='pending').all():
-        if not checker._is_supported_file(member.file_path):
-            continue
-        try:
-            resolve_authorized_media_file(
-                member.file_path, checker.allowed_paths, checker.required_paths)
-        except PathTraversalError:
-            continue
-        if member.scan_result_id is not None:
-            member_ids.append(member.scan_result_id)
-    if member_ids:
-        ScanResult.query.filter(
-            ScanResult.id.in_(member_ids),
-            ScanResult.scan_status.in_(['completed', 'error', 'scanning']),
-        ).update({'scan_status': 'pending'}, synchronize_session=False)
-        if commit:
-            db.session.commit()
 
 
 def _set_scan_output(result, output):
@@ -424,6 +397,7 @@ def _reclaim_chunk_range(scan_id: str, first_path: str, last_path: str):
         ScanRunFile.file_path <= last_path,
         ScanRunFile.status == 'processing',
     ).update({'status': 'pending', 'claimed_at': None}, synchronize_session=False)
+    # Clear only legacy global claims; new claims do not write this status.
     if member_ids:
         ScanResult.query.filter(ScanResult.id.in_(member_ids),
                                 ScanResult.scan_status == 'scanning').update(
@@ -1112,9 +1086,6 @@ def resume_scan_after_discovery(self, scan_id, force_rescan=False):
     if not state or not state.is_active or state.phase != SCAN_PHASES['ADDING']:
         db.session.commit()
         return {'status': 'SKIPPED', 'scan_id': scan_id}
-    checker = _build_chunk_checker(scan_id)
-    if force_rescan:
-        _reset_run_member_results(scan_id, checker, commit=False)
     chunks = build_scan_chunks(scan_id, commit=False)
     state.phase = SCAN_PHASES['SCANNING']
     state.phase_number = 3
@@ -1260,9 +1231,6 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         scan_state.progress_message = 'Preparing scan chunks...'
         scan_state.last_update = datetime.now(timezone.utc)
 
-        checker = _build_chunk_checker(scan_id)
-        if force_rescan:
-            _reset_run_member_results(scan_id, checker, commit=False)
         chunks = build_scan_chunks(scan_id, commit=False)  # list of {'id', 'files_discovered'}
         total_to_scan = sum(c['files_discovered'] for c in chunks)
 

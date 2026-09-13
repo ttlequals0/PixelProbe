@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.9.1] - 2026-09-12
+
+### Fixed
+
+- Normal directory scans now create run members only for newly discovered or pending inventory. Completed, failed, and active rows are not re-queued by another full scan. Force rescans retain their discovered scope.
+- A run member records queued and decoding work. The library row remains the last completed observation until a decode writes a new result. A retry or cancellation does not replace it with `pending` or `scanning`.
+- `/api/scan-status` returns the durable scan UUID, the stored root list, and the stored force-rescan flag. The root list is always an array.
+- Dashboard totals use the full inventory. Integrity rechecks distinguish recorded successes, attempts, errors, and unavailable files. The card explains why legacy recheck coverage is unavailable.
+- Mobile result cards keep labeled two-column actions and touch-sized selection controls. Media previews fit their viewport, and report details wrap long values.
+- Status badges retain their outcome accents. Report filters align on desktop, and trend panels give charts more space. Tunables no longer show Changed badges.
+
 ## [2.9.0] - 2026-09-12
 
 ### Changed

@@ -144,13 +144,12 @@ def finalize_scan(scan_state):
 
     error_chunks = ScanChunk.query.filter_by(scan_id=scan_id, status='error').count()
 
-    # Rows left in 'scanning' by a dead chunk worker go back to pending, but
-    # only when they belong to this run.
     stranded_ids = select(ScanRunFile.scan_result_id).where(
         ScanRunFile.scan_id == scan_id,
         ScanRunFile.status == 'processing',
         ScanRunFile.scan_result_id.isnot(None),
     )
+    # Clear only legacy global claims; new claims do not write this status.
     ScanResult.query.filter(ScanResult.id.in_(stranded_ids),
                             ScanResult.scan_status == 'scanning').update(
         {'scan_status': 'pending'}, synchronize_session=False)

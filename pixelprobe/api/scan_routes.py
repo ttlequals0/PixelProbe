@@ -779,7 +779,7 @@ def get_scan_status():
         'is_running': is_running,
         'is_scanning': is_running,  # Legacy compatibility
         'is_active': state_dict.get('is_active', False),  # Database active state
-        'scan_id': state_dict.get('id'),
+        'scan_id': state_dict.get('scan_id'),
         'start_time': start_time_tz,
         'end_time': end_time_tz,
         'directories': state_dict.get('directories'),

@@ -9,6 +9,7 @@ import pytest
 from pixelprobe.models import (
     ScanConfiguration, ScanResult, ScanState, ScanChunk, ScanRunFile, ScanRunRoot, ScanTask,
 )
+from pixelprobe.services.scan_reporting import add_files_batch_to_db
 
 
 @pytest.fixture
@@ -70,6 +71,74 @@ def _authorized_media_root(db, tmp_path, *names):
         paths.append(str(path))
     db.session.commit()
     return paths
+
+
+class TestDiscoveryMembership:
+
+    def test_nonforce_discovery_members_only_new_or_pending_inventory(self, app, db, tmp_path):
+        with app.app_context():
+            paths = [str(tmp_path / name) for name in ('new.mkv', 'pending.mkv', 'done.mkv',
+                                                       'error.mkv', 'processing.mkv')]
+            discovery_error_path = str(tmp_path / 'new-error.mkv')
+            for path in paths:
+                with open(path, 'wb') as media:
+                    media.write(b'media')
+            db.session.add_all([
+                ScanResult(file_path=paths[1], scan_status='pending'),
+                ScanResult(file_path=paths[2], scan_status='completed'),
+                ScanResult(file_path=paths[3], scan_status='error'),
+                ScanResult(file_path=paths[4], scan_status='scanning'),
+                ScanState(scan_id='incremental-members', force_rescan=False),
+            ])
+            db.session.commit()
+
+            add_files_batch_to_db(paths + [discovery_error_path], scan_id='incremental-members')
+
+            members = {member.file_path for member in ScanRunFile.query.filter_by(
+                scan_id='incremental-members').all()}
+            assert members == set(paths[:2] + [discovery_error_path])
+            assert ScanResult.query.filter_by(file_path=discovery_error_path).one().scan_status == 'error'
+
+    def test_forced_discovery_members_all_inventory_and_is_idempotent(self, app, db, tmp_path):
+        with app.app_context():
+            paths = [str(tmp_path / name) for name in ('done.mkv', 'error.mkv', 'processing.mkv')]
+            for path in paths:
+                with open(path, 'wb') as media:
+                    media.write(b'media')
+            db.session.add_all([
+                ScanResult(file_path=paths[0], scan_status='completed'),
+                ScanResult(file_path=paths[1], scan_status='error'),
+                ScanResult(file_path=paths[2], scan_status='scanning'),
+                ScanState(scan_id='forced-members', force_rescan=True),
+            ])
+            db.session.commit()
+
+            add_files_batch_to_db(paths, scan_id='forced-members')
+            add_files_batch_to_db(paths, scan_id='forced-members')
+
+            assert ScanRunFile.query.filter_by(scan_id='forced-members').count() == len(paths)
+
+    def test_forced_claim_and_reclaim_preserve_prior_observation(self, tp, app, db, tmp_path):
+        with app.app_context():
+            (file_path,) = _authorized_media_root(db, tmp_path, 'completed.mkv')
+            result = ScanResult(file_path=file_path, scan_status='completed')
+            state = ScanState(scan_id='forced-reclaim', force_rescan=True,
+                              phase='scanning', is_active=True)
+            db.session.add_all([result, state])
+            db.session.flush()
+            db.session.add(ScanRunFile(scan_id=state.scan_id, scan_result_id=result.id,
+                                       file_path=file_path, status='pending'))
+            db.session.commit()
+
+            claimed = tp._claim_chunk_members(state.scan_id, file_path, file_path,
+                                               tp._build_chunk_checker(state.scan_id))
+            assert claimed == [result.id]
+            assert db.session.get(ScanResult, result.id).scan_status == 'completed'
+
+            tp._reclaim_chunk_range(state.scan_id, file_path, file_path)
+            assert db.session.get(ScanResult, result.id).scan_status == 'completed'
+            assert ScanRunFile.query.filter_by(scan_id=state.scan_id,
+                                                file_path=file_path).one().status == 'pending'
 
 
 class TestBuildScanChunks:

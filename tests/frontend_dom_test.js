@@ -25,6 +25,28 @@ let invoked = false;
 window.app.viewFile = () => { invoked = true; };
 row.querySelector('.action-buttons button').click();
 assert.equal(invoked, true);
+assert.equal(row.querySelector('.action-buttons button').classList.contains('btn-primary'), true);
+assert.equal(row.querySelector('.file-checkbox-control input').getAttribute('aria-label'), `Select ${payload}`);
+
+const statusCases = [
+  [{ scan_status: 'pending' }, 'neutral', 'Pending'],
+  [{ scan_status: 'scanning' }, 'info', 'Scanning'],
+  [{ scan_status: 'unreadable' }, 'danger', 'Unreadable'],
+  [{ scan_status: 'error' }, 'danger', 'Scan Error'],
+  [{ scan_status: 'completed' }, 'success', 'Healthy'],
+  [{ scan_status: 'completed', has_warnings: true }, 'warning', 'Warning'],
+  [{ scan_status: 'completed', is_corrupted: true }, 'danger', 'Corrupted']
+];
+for (const [statusFile, statusClass, statusText] of statusCases) {
+  const file = { id: 100, file_path: payload, file_size: 0, ...statusFile };
+  const desktopStatus = table.renderRow(file).children[1].querySelector('.badge');
+  const mobileStatus = table.renderMobileCard(file).querySelector('.badge');
+  assert.equal(desktopStatus.classList.contains(`badge-${statusClass}`), true);
+  assert.equal(mobileStatus.classList.contains(`badge-${statusClass}`), true);
+  assert.equal(desktopStatus.textContent, statusText);
+  assert.equal(mobileStatus.textContent, statusText);
+  assert.equal(mobileStatus.closest('.result-card').querySelector('img'), null);
+}
 
 const reportsDom = new JSDOM('<table id="scan-reports-table"><tbody></tbody></table><div id="scan-reports-cards"></div><div id="scan-reports-pagination"></div>', { runScripts: 'outside-only' });
 const reportsWindow = reportsDom.window;
@@ -51,12 +73,38 @@ setImmediate(() => {
   assert.equal(reportsWindow.document.querySelector('#scan-reports-cards [onclick]'), null);
 });
 
+const viewerDom = new JSDOM(`
+  <div id="media-viewer-modal"><div class="modal-content">
+    <div class="modal-header"><h3 class="modal-title"></h3><button class="modal-close"></button></div>
+    <div class="modal-body"></div>
+  </div></div>`, { runScripts: 'outside-only' });
+const viewerWindow = viewerDom.window;
+viewerWindow.Chart = function () {};
+let viewerSource = fs.readFileSync('static/js/app.js', 'utf8');
+viewerSource = viewerSource.replace('document.addEventListener(\'DOMContentLoaded\'', 'document.addEventListener(\'testDOMContentLoaded\'');
+viewerSource += '\nwindow.__PixelProbeApp = PixelProbeApp;';
+viewerWindow.eval(viewerSource);
+const viewerApp = Object.create(viewerWindow.__PixelProbeApp.prototype);
+viewerApp.closeModal = () => {};
+const unsafeFilename = '<img src=x onerror=alert(1)> movie.bin';
+viewerApp.showMediaViewerModal({ id: 42, file_path: `/media/${unsafeFilename}`, file_type: 'application/octet-stream' });
+const viewerBody = viewerWindow.document.querySelector('#media-viewer-modal .modal-body');
+assert.equal(viewerBody.querySelector('.media-preview-unavailable').textContent, 'Preview not available for this file type.');
+assert.equal(viewerBody.textContent.includes('<p style='), false);
+assert.equal(viewerWindow.document.querySelector('#media-viewer-modal img'), null);
+assert.equal(viewerWindow.document.querySelector('#media-viewer-modal .modal-title').textContent, unsafeFilename);
+viewerApp.showMediaViewerModal({ id: 43, file_path: '/media/portrait.mp4', file_type: 'video/mp4' });
+assert.equal(viewerBody.querySelector('.media-preview video').controls, true);
+assert.equal(viewerWindow.document.querySelectorAll('#media-viewer-modal .media-viewer-footer').length, 1);
+assert.equal(viewerWindow.document.querySelector('#media-viewer-modal .media-viewer-footer a').textContent, 'Download');
+
 (async () => {
   const statsDom = new JSDOM(`
     <div id="total-files"></div><div id="healthy-files"></div><div id="corrupted-files"></div>
     <div id="warning-files"></div><div id="bitrot-files"></div><div id="pending-files"></div>
     <div id="scanning-files"></div><div id="integrity-checked"></div>
-    <div id="integrity-details"></div><div id="integrity-refresh-status"></div>`,
+    <button id="integrity-details-toggle" aria-expanded="false"></button>
+    <div id="integrity-detail-panel" hidden><div id="integrity-details"></div><div id="integrity-refresh-status"></div></div>`,
   { runScripts: 'outside-only' });
   const statsWindow = statsDom.window;
   statsWindow.Chart = function () {};
@@ -77,20 +125,28 @@ setImmediate(() => {
   const dashboard = new statsWindow.__StatsDashboard({
     getStats: async () => {
       if (shouldFail) throw new Error('network');
-      return { completed_files: 5, healthy_files: 3, corrupted_files: 1, warning_files: 0,
+      return { total_files: 8, completed_files: 5, healthy_files: 3, corrupted_files: 1, warning_files: 0,
         pending_files: 0, scanning_files: 0, integrity: { total_files: 5, checked_percent: 40,
           attempted_files: 3, checked_files: 2, integrity_error_files: 1,
           integrity_unavailable_files: 1, never_attempted: 2, bitrot_suspected: 0 } };
     }
   });
   await dashboard.updateStats();
-  assert.match(statsWindow.document.querySelector('#integrity-details').textContent, /Attempted 3, successful 2, errors 1, unavailable 1, never attempted 2/);
+  assert.equal(statsWindow.document.querySelector('#integrity-detail-panel').hidden, true);
+  statsWindow.document.querySelector('#integrity-details-toggle').click();
+  assert.equal(statsWindow.document.querySelector('#integrity-detail-panel').hidden, false);
+  assert.equal(statsWindow.document.querySelector('#integrity-details-toggle').getAttribute('aria-expanded'), 'true');
+  assert.equal(statsWindow.document.querySelector('#total-files').textContent, '8');
+  assert.match(statsWindow.document.querySelector('#integrity-details').textContent, /Successful integrity rechecks 2/);
+  assert.match(statsWindow.document.querySelector('#integrity-details').textContent, /with no recorded recheck attempt 2/);
+  assert.match(statsWindow.document.querySelector('#integrity-details').textContent, /Legacy integrity outcomes were not recorded/);
   assert.match(statsWindow.document.querySelector('#integrity-refresh-status').textContent, /Last refreshed/);
   shouldFail = true;
   dashboard.startAutoRefresh();
   await dashboard._statsPoll();
   assert.match(statsWindow.document.querySelector('#integrity-refresh-status').textContent, /Refresh failed.*Showing data from/);
   assert.equal(statsWindow.document.querySelector('#integrity-refresh-status').classList.contains('is-stale'), true);
+  assert.equal(statsWindow.document.querySelector('#integrity-details-toggle').classList.contains('is-stale'), true);
   assert.equal(dashboard.statsPollDelay, 60000);
   dashboard.stopAutoRefresh();
   global.setTimeout = originalSetTimeout;

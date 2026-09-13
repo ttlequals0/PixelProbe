@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 from unittest.mock import Mock, patch
 
-from pixelprobe.models import ScanResult, db
+from pixelprobe.models import ScanResult, ScanState, db
 
 class TestScanEndpoints:
     """Test scan-related API endpoints"""
@@ -63,6 +63,31 @@ class TestScanEndpoints:
         assert 'current' in data
         assert 'total' in data
         assert 'is_running' in data
+
+    def test_scan_status_returns_durable_id_and_stored_scope(self, authenticated_client, app, db):
+        with app.app_context():
+            state = ScanState(scan_id='durable-status-id', is_active=True, phase='scanning',
+                              directories='["/media/one"]', force_rescan=True)
+            db.session.add(state)
+            db.session.commit()
+
+        response = authenticated_client.get('/api/scan-status')
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['scan_id'] == 'durable-status-id'
+        assert data['directories'] == ['/media/one']
+        assert data['force_rescan'] is True
+
+    @pytest.mark.parametrize(('stored', 'expected'), [
+        (None, []),
+        ('not-json', []),
+        ('"/media/one"', []),
+        ('{"path":"/media/one"}', []),
+        ('"[\\"/media/one\\"]"', ['/media/one']),
+    ])
+    def test_scan_status_scope_is_always_an_array(self, stored, expected):
+        assert ScanState(directories=stored).to_dict()['directories'] == expected
 
 
 class TestStatsEndpoints:

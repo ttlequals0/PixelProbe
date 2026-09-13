@@ -385,7 +385,7 @@ Get the current scan progress and status.
   "is_running": true,
   "is_scanning": true,
   "is_active": true,
-  "scan_id": 123,
+  "scan_id": "0c5e0afd-743b-422e-b349-50a8ed6da2bb",
   "start_time": "2025-01-20T12:00:00Z",
   "end_time": null,
   "directories": ["/media/photos"],
@@ -412,6 +412,7 @@ Get the current scan progress and status.
 
 Field notes:
 - `is_scanning` mirrors `is_running` (legacy compatibility); `is_active` reflects the database scan-state row.
+- `scan_id` is the durable scan UUID. `directories` is always an array from the stored scan scope, and `force_rescan` is the stored run flag.
 - `eta` is an ISO-8601 timestamp (or `null`); `files_per_second` is a float.
 - `chunks` is only present during the `scanning` phase and lists per-worker chunk progress.
 

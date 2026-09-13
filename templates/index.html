@@ -206,9 +206,17 @@
                     </div>
                     <div class="stat-card" role="group" aria-label="Integrity coverage">
                         <div class="stat-value" id="integrity-checked" aria-live="polite">-</div>
-                        <div class="stat-label">Integrity Checked</div>
-                        <div class="stat-detail" id="integrity-details" aria-live="polite"></div>
-                        <div class="stat-detail" id="integrity-refresh-status" aria-live="polite"></div>
+                        <div class="stat-label">Integrity Rechecks</div>
+                        <button class="integrity-details-toggle" id="integrity-details-toggle" type="button"
+                                aria-expanded="false" aria-controls="integrity-detail-panel">
+                            <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                            <i class="fas fa-exclamation-circle integrity-refresh-warning" aria-hidden="true" hidden></i>
+                            <span>Details</span>
+                        </button>
+                        <div id="integrity-detail-panel" hidden>
+                            <div class="stat-detail" id="integrity-details" aria-live="polite"></div>
+                            <div class="stat-detail" id="integrity-refresh-status" aria-live="polite"></div>
+                        </div>
                     </div>
                 </div>
                 
@@ -253,7 +261,7 @@
                         <!-- Selection Actions -->
                         <div class="d-flex justify-content-between align-items-center mb-3">
                             <div class="d-flex gap-2 align-items-center">
-                                <label class="d-flex align-items-center gap-1">
+                                <label class="selection-checkbox-control d-flex align-items-center gap-1">
                                     <input type="checkbox" id="select-all">
                                     Select All
                                 </label>
@@ -596,12 +604,12 @@
 
     <!-- Media Viewer Modal -->
     <div id="media-viewer-modal" class="modal">
-        <div class="modal-content" style="max-width: 90%; width: 90%;">
+        <div class="modal-content">
             <div class="modal-header">
                 <h3 class="modal-title">Media Viewer</h3>
                 <button class="modal-close">&times;</button>
             </div>
-            <div class="modal-body" style="text-align: center; padding: 2rem;">
+            <div class="modal-body">
                 <!-- Media content will be loaded here -->
             </div>
         </div>

@@ -383,6 +383,19 @@ class StatsDashboard {
         this.refreshInterval = null;
         this.lastIntegrity = null;
         this.lastSuccessfulRefresh = null;
+        this.setupIntegrityDetailsToggle();
+    }
+
+    setupIntegrityDetailsToggle() {
+        const toggle = document.querySelector('#integrity-details-toggle');
+        const panel = document.querySelector('#integrity-detail-panel');
+        if (!toggle || !panel || toggle.dataset.bound) return;
+        toggle.dataset.bound = 'true';
+        toggle.addEventListener('click', () => {
+            const expanded = toggle.getAttribute('aria-expanded') === 'true';
+            toggle.setAttribute('aria-expanded', String(!expanded));
+            panel.hidden = expanded;
+        });
     }
 
     async init() {
@@ -409,9 +422,8 @@ class StatsDashboard {
     }
 
     renderStats(stats) {
-        // Update stat cards
-        // Show completed files as total so math adds up: healthy + corrupted + warnings = total
-        this.updateStatCard('total-files', stats.completed_files);
+        // Total files and integrity coverage use the same full inventory population.
+        this.updateStatCard('total-files', stats.total_files);
         this.updateStatCard('healthy-files', stats.healthy_files);
         this.updateStatCard('corrupted-files', stats.corrupted_files);
         this.updateStatCard('warning-files', stats.warning_files || 0);
@@ -438,9 +450,10 @@ class StatsDashboard {
         const successful = integrity.checked_files || 0;
         const errors = integrity.integrity_error_files || 0;
         const unavailable = integrity.integrity_unavailable_files || 0;
-        let title = `${attempted.toLocaleString()} ever attempted; ${successful.toLocaleString()} ever successfully verified; ` +
+        let title = `${successful.toLocaleString()} successful integrity rechecks; ${attempted.toLocaleString()} attempts; ` +
             `${errors.toLocaleString()} latest errors; ${unavailable.toLocaleString()} latest unavailable; ` +
-            `${(integrity.never_attempted || 0).toLocaleString()} never attempted`;
+            `${(integrity.never_attempted || 0).toLocaleString()} with no recorded recheck attempt. ` +
+            'Legacy integrity outcomes were not recorded.';
         if (integrity.oldest_check_date) {
             title += `; oldest successful verification ${new Date(integrity.oldest_check_date).toLocaleString()}`;
         }
@@ -450,16 +463,25 @@ class StatsDashboard {
         element.title = title;
         const details = document.querySelector('#integrity-details');
         if (details) {
-            details.textContent = `Attempted ${attempted.toLocaleString()}, successful ${successful.toLocaleString()}, ` +
-                `errors ${errors.toLocaleString()}, unavailable ${unavailable.toLocaleString()}, ` +
-                `never attempted ${(integrity.never_attempted || 0).toLocaleString()}`;
+            details.textContent = `Successful integrity rechecks ${successful.toLocaleString()}. ` +
+                `Attempts ${attempted.toLocaleString()}, errors ${errors.toLocaleString()}, ` +
+                `unavailable ${unavailable.toLocaleString()}, with no recorded recheck attempt ${(integrity.never_attempted || 0).toLocaleString()}. ` +
+                'Legacy integrity outcomes were not recorded.';
         }
     }
 
     renderRefreshStatus(error = null) {
         const element = document.querySelector('#integrity-refresh-status');
         if (!element) return;
+        const toggle = document.querySelector('#integrity-details-toggle');
+        const warning = document.querySelector('.integrity-refresh-warning');
         element.classList.toggle('is-stale', Boolean(error));
+        if (toggle) {
+            toggle.classList.toggle('is-stale', Boolean(error));
+            toggle.title = error ? 'Stats refresh failed. Open details for the last successful refresh.' :
+                'Show integrity recheck details';
+        }
+        if (warning) warning.hidden = !error;
         if (error) {
             this.renderIntegrityCoverage(this.lastIntegrity, true);
             const previous = this.lastSuccessfulRefresh ?
@@ -1491,7 +1513,7 @@ class TableManager {
         const status = document.createElement('div');
         const verdict = fileStatus(file);
         status.className = `badge badge-${verdict.cls}`;
-        status.textContent = verdict.text.toUpperCase();
+        status.textContent = verdict.text;
         const path = document.createElement('div');
         path.className = 'file-path';
         path.textContent = file.file_path;
@@ -1510,7 +1532,11 @@ class TableManager {
 
     renderRow(file) {
         const row = document.createElement('tr');
-        const values = [this.createFileCheckbox(file), fileStatus(file).text, file.file_path, this.formatFileSize(file.file_size), file.file_type || 'N/A', file.scan_tool || 'N/A', fileDetails(file), this.formatDate(file.scan_date)];
+        const verdict = fileStatus(file);
+        const status = document.createElement('span');
+        status.className = `badge badge-${verdict.cls}`;
+        status.textContent = verdict.text;
+        const values = [this.createFileCheckbox(file), status, file.file_path, this.formatFileSize(file.file_size), file.file_type || 'N/A', file.scan_tool || 'N/A', fileDetails(file), this.formatDate(file.scan_date)];
         values.forEach((value, index) => {
             const cell = document.createElement('td');
             if (value instanceof Element) cell.appendChild(value);
@@ -1524,10 +1550,14 @@ class TableManager {
     }
 
     createFileCheckbox(file) {
+        const control = document.createElement('label');
+        control.className = 'file-checkbox-control';
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox'; checkbox.className = 'file-checkbox'; checkbox.value = file.id;
         checkbox.checked = this.selectedFiles.has(file.id);
-        return checkbox;
+        checkbox.setAttribute('aria-label', `Select ${file.file_path}`);
+        control.appendChild(checkbox);
+        return control;
     }
 
     appendFileDetails(container, file) {
@@ -1543,12 +1573,12 @@ class TableManager {
 
     createFileActions(file, compact) {
         const actions = document.createElement('div'); actions.className = 'action-buttons';
-        const id = Number(file.id); const make = (text, icon, handler) => {
-            const button = document.createElement('button'); button.className = `btn ${compact ? 'btn-sm ' : ''}btn-secondary`;
+        const id = Number(file.id); const make = (text, icon, handler, variant = 'btn-secondary') => {
+            const button = document.createElement('button'); button.className = `btn ${compact ? 'btn-sm ' : ''}${variant}`;
             button.title = text; button.innerHTML = `<i class="fas ${icon}"></i>`; button.append(` ${text}`);
             button.addEventListener('click', handler); return button;
         };
-        actions.appendChild(make('View', 'fa-eye', () => app.viewFile(id)));
+        actions.appendChild(make('View', 'fa-eye', () => app.viewFile(id), 'btn-primary'));
         const dropdown = document.createElement('div'); dropdown.className = 'action-dropdown';
         const menu = document.createElement('ul'); menu.className = 'dropdown-menu'; menu.style.display = 'none';
         const toggle = make('Actions', 'fa-tasks', (event) => this.toggleActionDropdown(event, menu.id));
@@ -2354,27 +2384,23 @@ class PixelProbeApp {
         // Determine file type and create appropriate viewer
         const fileType = file.file_type?.toLowerCase() || '';
         const filePath = file.file_path;
-        let content = '';
-        
         if (fileType.startsWith('image/')) {
             const image = document.createElement('img');
+            image.className = 'media-preview-image';
             image.src = `/api/view/${encodeURIComponent(file.id)}`;
             image.alt = filePath;
-            image.style.cssText = 'max-width: 100%; max-height: 60vh; height: auto; object-fit: contain; display: block; margin: 0 auto;';
             modalBody.replaceChildren(image);
-            content = '';
         } else if (fileType.startsWith('video/')) {
             // Match v1.x implementation more closely
             const videoUrl = `/api/view/${file.id}`;
             
             const wrapper = document.createElement('div');
-            wrapper.style.cssText = 'position: relative; width: 100%; max-width: 800px; margin: 0 auto;';
+            wrapper.className = 'media-preview';
             const video = document.createElement('video');
             video.id = `video-player-${file.id}`;
             video.className = 'video-player';
             video.controls = true;
             video.preload = 'metadata';
-            video.style.cssText = 'width: 100%; display: block;';
             video.addEventListener('loadedmetadata', () => { video.volume = 1.0; });
             video.addEventListener('error', () => this.handleVideoError(file.id));
             [fileType, 'video/mp4', 'video/webm', 'video/ogg'].forEach(type => {
@@ -2397,33 +2423,36 @@ class PixelProbeApp {
             error.appendChild(errorText);
             wrapper.append(video, error);
             modalBody.replaceChildren(wrapper);
-            content = '';
         } else if (fileType.startsWith('audio/')) {
             const audio = document.createElement('audio');
+            audio.className = 'media-preview-audio';
             audio.id = `audio-player-${file.id}`;
             audio.controls = true;
-            audio.style.cssText = 'width: 100%; display: block; margin: 0 auto;';
             audio.addEventListener('loadedmetadata', () => { audio.volume = 1.0; });
             const source = document.createElement('source');
             source.src = `/api/view/${encodeURIComponent(file.id)}`;
             source.type = fileType;
             audio.append(source, document.createTextNode('Your browser does not support the audio element.'));
             modalBody.replaceChildren(audio);
-            content = '';
         } else {
-            content = `<p style="text-align: center;">Preview not available for this file type.</p>`;
+            const message = document.createElement('p');
+            message.className = 'media-preview-unavailable';
+            message.textContent = 'Preview not available for this file type.';
+            modalBody.replaceChildren(message);
         }
-        
-        if (content) modalBody.textContent = content;
-        const downloadWrap = document.createElement('div');
-        downloadWrap.style.marginTop = '1rem';
+        const modalContent = modal.querySelector('.modal-content');
+        let downloadWrap = modal.querySelector('.media-viewer-footer');
+        if (!downloadWrap) {
+            downloadWrap = document.createElement('div');
+            downloadWrap.className = 'media-viewer-footer';
+            modalContent.appendChild(downloadWrap);
+        }
         const download = document.createElement('a');
         download.href = `/api/download/${encodeURIComponent(file.id)}`;
         download.className = 'btn btn-primary';
         download.download = '';
         download.textContent = 'Download';
-        downloadWrap.appendChild(download);
-        modalBody.appendChild(downloadWrap);
+        downloadWrap.replaceChildren(download);
         modal.style.display = 'block';
         
         // Setup close handlers
@@ -3710,7 +3739,7 @@ class PixelProbeApp {
             
             // Show in a simple alert for now (could be improved with a modal)
             const detailModal = document.createElement('div');
-            detailModal.className = 'modal';
+            detailModal.className = 'modal scan-report-details-modal';
             detailModal.style.display = 'block';
             detailModal.innerHTML = `
                 <div class="modal-content">
@@ -4844,10 +4873,6 @@ class PixelProbeApp {
             ? '<span></span>'
             : `<button type="button" class="tunable-reset" title="Restore the default"
                    data-tunable-reset="${escapeAttribute(key)}">Reset</button>`;
-        const badge = setting.is_default
-            ? ''
-            : '<span class="tunable-changed" title="Changed from the default">Changed</span>';
-
         const control = setting.type === 'bool'
             ? `<label class="tunable-switch">
                    <input type="checkbox" id="${id}" data-key="${escapeAttribute(key)}"
@@ -4865,7 +4890,7 @@ class PixelProbeApp {
         return `
             <div class="tunable-row">
                 <div class="tunable-text">
-                    <label class="tunable-label" for="${id}">${this.escapeHtml(setting.label)}${badge}</label>
+                    <label class="tunable-label" for="${id}">${this.escapeHtml(setting.label)}</label>
                     <p class="tunable-help">${this.escapeHtml(setting.help)}</p>
                 </div>
                 <div class="tunable-control${type === 'bool' ? ' tunable-control-switch' : ''}">

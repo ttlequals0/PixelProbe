@@ -389,7 +389,21 @@ class ScanState(db.Model):
     def to_dict(self):
         # Import here to avoid circular imports
         from pixelprobe.utils.helpers import create_state_dict
-        return create_state_dict(self, extra_fields=['estimated_total', 'discovery_count'])
+        result = create_state_dict(self, extra_fields=[
+            'estimated_total', 'discovery_count', 'directories', 'force_rescan',
+        ])
+        directories = []
+        if result['directories']:
+            try:
+                directories = json.loads(result['directories'])
+                if isinstance(directories, str):
+                    directories = json.loads(directories)
+                if not isinstance(directories, list):
+                    directories = []
+            except (TypeError, ValueError):
+                directories = []
+        result['directories'] = directories
+        return result
     
     @staticmethod
     def get_or_create():

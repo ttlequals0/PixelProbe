@@ -333,12 +333,25 @@ components:
         is_running:
           type: boolean
           description: Whether a scan is actively running
+        is_scanning:
+          type: boolean
+          description: Legacy alias of is_running
         is_active:
           type: boolean
           description: Whether scan is active
         scan_id:
-          type: integer
-          description: Database id of the scan state row
+          type: string
+          format: uuid
+          nullable: true
+          description: Durable scan UUID, or null when no scan exists
+        directories:
+          type: array
+          items:
+            type: string
+          description: Stored scan root paths
+        force_rescan:
+          type: boolean
+          description: Stored force-rescan flag
         start_time:
           type: string
           format: date-time

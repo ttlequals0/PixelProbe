@@ -2,6 +2,21 @@
 
 /* Mobile-specific variables */
 @media (max-width: 768px) {
+    #media-viewer-modal .modal-content {
+        width: calc(100% - 1rem);
+        max-width: none;
+        height: calc(100dvh - 1rem);
+        margin: 0.5rem;
+    }
+
+    #media-viewer-modal .modal-body {
+        padding: 0.75rem;
+    }
+
+    #media-viewer-modal .media-viewer-footer {
+        padding: 0.5rem 0.75rem calc(0.5rem + env(safe-area-inset-bottom));
+    }
+
     :root {
         --sidebar-width: 280px;
         --header-height: 56px;
@@ -112,8 +127,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 2.5rem;
-        height: 2.5rem;
+        width: 2.75rem;
+        height: 2.75rem;
         padding: 0.5rem;
         margin-right: 0.5rem;
         flex-shrink: 0;
@@ -126,6 +141,8 @@
     }
     
     .header-actions .btn {
+        min-width: 2.75rem;
+        min-height: 2.75rem;
         padding: 0.5rem 0.75rem;
         font-size: 0.875rem;
     }
@@ -298,9 +315,8 @@
     
     .result-card .action-buttons {
         display: grid;
-        grid-auto-flow: column;
-        grid-auto-columns: 1fr;
-        gap: 0.25rem;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.5rem;
         margin-top: 0.75rem;
     }
 
@@ -319,8 +335,10 @@
     }
 
     .result-card .action-buttons .btn {
-        font-size: 1.1rem;
+        min-height: 2.75rem;
+        font-size: 0.875rem;
         padding: 0.65rem 0.5rem;
+        white-space: normal;
     }
 
     .result-card .action-buttons .action-dropdown {
@@ -331,13 +349,14 @@
         width: 100% !important;
         height: 100% !important;
         padding: 0.65rem 0.5rem !important;
-        font-size: 1.1rem !important;
+        font-size: 0.875rem !important;
     }
     
-    .result-card .file-checkbox {
+    .result-card .file-checkbox-control {
         position: absolute;
-        top: 1rem;
-        right: 1rem;
+        top: 0.5rem;
+        right: 0.5rem;
+        margin: 0;
     }
     
     /* Buttons mobile */
@@ -673,10 +692,11 @@
 
 /* Mobile video player styles - match v1.x */
 @media (max-width: 768px) {
-    .video-player {
-        width: 100%;
-        max-width: 100%;
+    #media-viewer-modal .video-player {
+        width: auto;
         height: auto;
+        max-width: 100%;
+        max-height: 100%;
         display: block;
     }
     
@@ -968,6 +988,21 @@
         min-width: 0;
     }
 
+    .modal.scan-report-details-modal .modal-content {
+        width: calc(100% - 1rem);
+        max-width: none;
+        margin: 0.5rem;
+    }
+
+    .scan-report-details th {
+        width: 9rem;
+        padding: 0.75rem 0.5rem;
+        white-space: normal;
+        word-break: normal;
+        overflow-wrap: normal;
+        vertical-align: top;
+    }
+
     /* Make filter controls more compact and icon-only on mobile */
     .filter-controls {
         gap: 0.375rem;
@@ -1018,6 +1053,7 @@
     }
 
     .results-actions .btn {
+        min-height: 2.75rem;
         padding: 0.4rem 0.625rem;
         font-size: 0.95rem;
     }
@@ -1031,6 +1067,7 @@
     .results-actions .export-dropdown .btn {
         width: 100% !important;
         height: 100% !important;
+        min-height: 2.75rem;
         padding: 0.4rem 0.625rem !important;
         font-size: 0.95rem !important;
     }
@@ -1057,6 +1094,12 @@
     .filter-controls select {
         font-size: 0.875rem;
         padding: 0.4rem 0.5rem;
+    }
+
+    #select-all {
+        width: 1.375rem;
+        height: 1.375rem;
+        accent-color: var(--primary-green);
     }
 
     /* Extra small button size for compact layouts */
