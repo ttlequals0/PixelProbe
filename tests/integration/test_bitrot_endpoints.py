@@ -58,22 +58,35 @@ class TestIntegrityCoverageStats:
     def test_stats_include_rolling_coverage(self, authenticated_client, app, db):
         with app.app_context():
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            seed(db, '/m/checked_recent.mkv', last_integrity_check_date=now)
+            seed(db, '/m/checked_recent.mkv', last_integrity_check_date=now,
+                 last_integrity_attempt_at=now, last_integrity_success_at=now,
+                 last_integrity_outcome='success')
             seed(db, '/m/checked_old.mkv',
-                 last_integrity_check_date=datetime(2025, 1, 1, 12, 0, 0))
+                 last_integrity_check_date=datetime(2025, 1, 1, 12, 0, 0),
+                 last_integrity_attempt_at=datetime(2025, 1, 1, 12, 0, 0),
+                 last_integrity_success_at=datetime(2025, 1, 1, 12, 0, 0),
+                 last_integrity_outcome='success')
             seed(db, '/m/never.mkv')
             seed(db, '/m/rotten.mkv', bitrot_suspected=True,
-                 last_integrity_check_date=now)
+                last_integrity_check_date=now, last_integrity_attempt_at=now,
+                last_integrity_outcome='error')
+            seed(db, '/m/unavailable.mkv', last_integrity_attempt_at=now,
+                 last_integrity_outcome='unreadable')
 
             response = authenticated_client.get('/api/stats')
             assert response.status_code == 200
             integrity = response.get_json()['integrity']
 
-            assert integrity['total_files'] == 4
-            assert integrity['checked_files'] == 3
-            assert integrity['checked_percent'] == 75.0
-            assert integrity['never_checked'] == 1
-            assert integrity['checked_last_30_days'] == 2
+            assert integrity['total_files'] == 5
+            assert integrity['checked_files'] == 2
+            assert integrity['checked_percent'] == 40.0
+            assert integrity['never_checked'] == 3
+            assert integrity['never_successfully_verified'] == 3
+            assert integrity['checked_last_30_days'] == 1
+            assert integrity['attempted_files'] == 4
+            assert integrity['never_attempted'] == 1
+            assert integrity['integrity_error_files'] == 1
+            assert integrity['integrity_unavailable_files'] == 1
             assert integrity['bitrot_suspected'] == 1
             assert integrity['oldest_check_date'].startswith('2025-01-01')
 

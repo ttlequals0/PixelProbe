@@ -8,10 +8,12 @@ is up-to-date. Each migration is idempotent (safe to re-run).
 import os
 import logging
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 from sqlalchemy import text, inspect, exc
 from pixelprobe.constants import (CONFIG_LOG_RETENTION_DAYS, CONFIG_LOG_EXCLUDE_LOGGERS,
                                   DEFAULT_LOG_EXCLUDE_LOGGERS, SCANNER_SETTINGS)
+from pixelprobe.models import CleanupState
 from pixelprobe.utils.helpers import env_int
 from pixelprobe.utils.overrides import classify_findings, encode_verdict
 
@@ -25,6 +27,7 @@ MIGRATION_ADVISORY_LOCK_ID = 7283945162
 # Migrations are idempotent: a timed-out one is retried on the next boot.
 MIGRATION_LOCK_TIMEOUT_MS = env_int('MIGRATION_LOCK_TIMEOUT_MS', 10000, floor=1000)
 MIGRATION_STATEMENT_TIMEOUT_MS = env_int('MIGRATION_STATEMENT_TIMEOUT_MS', 300000, floor=10000)
+_migration_owner_connection = ContextVar('migration_owner_connection', default=None)
 
 
 def set_ddl_timeouts(conn):
@@ -41,9 +44,28 @@ def set_ddl_timeouts(conn):
 @contextmanager
 def migration_connection(db):
     """Engine connection with fail-fast DDL timeouts applied."""
+    owner_connection = _migration_owner_connection.get()
+    if owner_connection is not None:
+        set_ddl_timeouts(owner_connection)
+        try:
+            yield owner_connection
+        except Exception:
+            owner_connection.rollback()
+            raise
+        return
     with db.engine.connect() as conn:
         set_ddl_timeouts(conn)
         yield conn
+
+
+@contextmanager
+def migration_owner_connection(connection):
+    """Make all startup migration helpers use the advisory-lock connection."""
+    token = _migration_owner_connection.set(connection)
+    try:
+        yield
+    finally:
+        _migration_owner_connection.reset(token)
 
 
 def run_auth_migration(db):
@@ -60,7 +82,7 @@ def run_auth_migration(db):
                         username VARCHAR(80) UNIQUE NOT NULL,
                         email VARCHAR(120) UNIQUE NOT NULL,
                         password_hash VARCHAR(128) NOT NULL,
-                        is_admin BOOLEAN NOT NULL DEFAULT TRUE,
+                        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
                         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
                         last_login TIMESTAMP WITH TIME ZONE,
                         is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -70,6 +92,10 @@ def run_auth_migration(db):
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"))
                 logger.info("Created users table via migration")
+
+            conn.execute(text(
+                "ALTER TABLE users ALTER COLUMN is_admin SET DEFAULT FALSE"
+            ))
 
             if 'api_tokens' not in existing_tables:
                 conn.execute(text("""
@@ -93,6 +119,7 @@ def run_auth_migration(db):
 
     except Exception as e:
         logger.warning(f"Authentication migration encountered issues: {e}")
+        raise
 
 
 def run_v2_4_35_migrations(db):
@@ -129,6 +156,7 @@ def run_v2_4_35_migrations(db):
 
     except Exception as e:
         logger.error(f"Migration v2.4.35 failed: {e}")
+        raise
 
 
 def run_v2_4_113_migrations(db):
@@ -169,6 +197,7 @@ def run_v2_4_113_migrations(db):
 
     except Exception as e:
         logger.error(f"Migration v2.4.113 failed: {e}")
+        raise
 
 
 def run_v2_6_0_migrations(db):
@@ -245,6 +274,7 @@ def run_v2_6_0_migrations(db):
 
     except Exception as e:
         logger.error(f"Migration v2.6.0 failed: {e}")
+        raise
 
 
 def run_v2_6_33_migrations(db):
@@ -282,6 +312,7 @@ def run_v2_6_33_migrations(db):
             logger.info("v2.6.33 schema sync completed")
     except Exception as e:
         logger.error(f"Migration v2.6.33 failed: {e}")
+        raise
 
 
 def run_v2_6_49_migrations(db):
@@ -317,6 +348,7 @@ def run_v2_6_49_migrations(db):
             logger.info("v2.6.49 schema sync completed")
     except Exception as e:
         logger.error(f"Migration v2.6.49 failed: {e}")
+        raise
 
 
 def run_v2_6_53_migrations(db):
@@ -339,6 +371,7 @@ def run_v2_6_53_migrations(db):
             logger.info("v2.6.53 log-exclusion backfill completed")
     except Exception as e:
         logger.error(f"Migration v2.6.53 failed: {e}")
+        raise
 
 
 def run_v2_6_60_migrations(db):
@@ -362,6 +395,7 @@ def run_v2_6_60_migrations(db):
             logger.info("v2.6.60 schedule budget migration completed")
     except Exception as e:
         logger.error(f"Migration v2.6.60 failed: {e}")
+        raise
 
 
 def run_v2_6_61_migrations(db):
@@ -410,6 +444,7 @@ def run_v2_6_61_migrations(db):
             logger.info("v2.6.61 bitrot classification migration completed")
     except Exception as e:
         logger.error(f"Migration v2.6.61 failed: {e}")
+        raise
 
 
 def run_v2_8_7_migrations(db):
@@ -453,6 +488,7 @@ def run_v2_8_7_migrations(db):
 
     except Exception as e:
         logger.error(f"Migration v2.8.7 failed: {e}")
+        raise
 
 
 def run_v2_8_8_migrations(db):
@@ -501,6 +537,54 @@ def run_v2_8_8_migrations(db):
 
     except Exception as e:
         logger.error(f"Migration v2.8.8 failed: {e}")
+        raise
+
+
+def run_v2_8_12_lifecycle_migrations(db):
+    """Persist scan scope, task ownership, immutable results, and integrity outcomes."""
+    statements = (
+        "ALTER TABLE scan_state ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE scan_state ADD COLUMN IF NOT EXISTS dispatch_generation INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE scan_results ADD COLUMN IF NOT EXISTS last_integrity_attempt_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE scan_results ADD COLUMN IF NOT EXISTS last_integrity_success_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE scan_results ADD COLUMN IF NOT EXISTS last_integrity_outcome VARCHAR(32)",
+        "ALTER TABLE file_changes_state ADD COLUMN IF NOT EXISTS integrity_attempted INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE file_changes_state ADD COLUMN IF NOT EXISTS integrity_successful INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE file_changes_state ADD COLUMN IF NOT EXISTS integrity_errors INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE file_changes_state ADD COLUMN IF NOT EXISTS integrity_unavailable INTEGER NOT NULL DEFAULT 0",
+        "CREATE TABLE IF NOT EXISTS scan_run_roots (id SERIAL PRIMARY KEY, scan_id VARCHAR(64) NOT NULL, root_path TEXT NOT NULL, resolved_path TEXT, status VARCHAR(20) NOT NULL DEFAULT 'pending', error_message TEXT, discovered_count INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMP WITH TIME ZONE, CONSTRAINT uq_scan_run_roots_scan_root UNIQUE (scan_id, root_path))",
+        "CREATE TABLE IF NOT EXISTS scan_run_files (id SERIAL PRIMARY KEY, scan_id VARCHAR(64) NOT NULL, scan_result_id INTEGER, file_path TEXT NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending', outcome VARCHAR(32), file_hash VARCHAR(64), file_size BIGINT, last_modified TIMESTAMP WITH TIME ZONE, is_corrupted BOOLEAN, has_warnings BOOLEAN, corruption_details TEXT, warning_details TEXT, file_type VARCHAR(100), scan_tool VARCHAR(50), scan_output TEXT, marked_as_good BOOLEAN, error_message TEXT, claimed_at TIMESTAMP WITH TIME ZONE, completed_at TIMESTAMP WITH TIME ZONE, CONSTRAINT uq_scan_run_files_scan_path UNIQUE (scan_id, file_path))",
+        "CREATE TABLE IF NOT EXISTS scan_tasks (id SERIAL PRIMARY KEY, scan_id VARCHAR(64) NOT NULL, chunk_id INTEGER, purpose VARCHAR(32) NOT NULL, celery_task_id VARCHAR(64) NOT NULL UNIQUE, generation INTEGER NOT NULL DEFAULT 0, status VARCHAR(20) NOT NULL DEFAULT 'queued', payload JSONB, dispatch_attempts INTEGER NOT NULL DEFAULT 0, dispatch_lease_expires_at TIMESTAMP WITH TIME ZONE, error_message TEXT, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMP WITH TIME ZONE)",
+        "ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS payload JSONB",
+        "ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS dispatch_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS dispatch_lease_expires_at TIMESTAMP WITH TIME ZONE",
+        "CREATE INDEX IF NOT EXISTS idx_scan_tasks_recovery ON scan_tasks (status, dispatch_lease_expires_at, id)",
+        "CREATE TABLE IF NOT EXISTS scan_notification_outbox (id SERIAL PRIMARY KEY, scan_id VARCHAR(64) NOT NULL UNIQUE, event VARCHAR(64) NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, error_message TEXT, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, delivered_at TIMESTAMP WITH TIME ZONE, payload JSONB, targets_initialized BOOLEAN NOT NULL DEFAULT false, terminal_reason VARCHAR(64))",
+        "ALTER TABLE scan_notification_outbox ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMP WITH TIME ZONE",
+        "ALTER TABLE scan_notification_outbox ADD COLUMN IF NOT EXISTS payload JSONB",
+        "ALTER TABLE scan_notification_outbox ADD COLUMN IF NOT EXISTS targets_initialized BOOLEAN NOT NULL DEFAULT false",
+        "ALTER TABLE scan_notification_outbox ADD COLUMN IF NOT EXISTS terminal_reason VARCHAR(64)",
+        "CREATE TABLE IF NOT EXISTS scan_notification_deliveries (id SERIAL PRIMARY KEY, outbox_id INTEGER NOT NULL REFERENCES scan_notification_outbox(id) ON DELETE CASCADE, rule_id INTEGER, provider_id INTEGER, provider_type VARCHAR(20), provider_config JSONB, conditions JSONB, priority VARCHAR(10) NOT NULL DEFAULT 'normal', status VARCHAR(20) NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, lease_expires_at TIMESTAMP WITH TIME ZONE, lease_token VARCHAR(36), outcome VARCHAR(32), error_message TEXT, skip_reason VARCHAR(64), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, delivered_at TIMESTAMP WITH TIME ZONE, CONSTRAINT uq_scan_notification_delivery_rule UNIQUE (outbox_id, rule_id))",
+        "ALTER TABLE scan_notification_deliveries ADD COLUMN IF NOT EXISTS conditions JSONB",
+        "CREATE INDEX IF NOT EXISTS idx_scan_notification_delivery_claim ON scan_notification_deliveries (outbox_id, status, lease_expires_at, id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_run_files_claim ON scan_run_files (scan_id, status, id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_results_integrity_attempt ON scan_results (last_integrity_attempt_at ASC NULLS FIRST, id ASC)",
+        "ALTER TABLE scan_run_files ADD COLUMN IF NOT EXISTS file_type VARCHAR(100)",
+        "ALTER TABLE scan_run_files ADD COLUMN IF NOT EXISTS scan_tool VARCHAR(50)",
+        "ALTER TABLE scan_run_files ADD COLUMN IF NOT EXISTS scan_output TEXT",
+        "ALTER TABLE scan_run_files ADD COLUMN IF NOT EXISTS marked_as_good BOOLEAN",
+        """UPDATE scan_results
+           SET scan_status = CASE lower(trim(coalesce(scan_tool, '')))
+               WHEN 'error' THEN 'error'
+               WHEN 'unsupported' THEN 'unsupported'
+           END
+           WHERE scan_status = 'completed'
+             AND lower(trim(coalesce(scan_tool, ''))) IN ('error', 'unsupported')""",
+    )
+    with migration_connection(db) as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+        conn.commit()
 
 
 def create_performance_indexes(db):
@@ -524,8 +608,9 @@ def create_performance_indexes(db):
     created_count = 0
     for index_sql in indexes:
         try:
-            with db.engine.begin() as conn:
+            with migration_connection(db) as conn:
                 conn.execute(text(index_sql))
+                conn.commit()
             created_count += 1
         except Exception as e:
             if 'already exists' not in str(e).lower() and 'does not exist' not in str(e).lower():
@@ -537,94 +622,166 @@ def create_performance_indexes(db):
         logger.debug("All performance indexes already exist")
 
 
-def _run_all_migrations(db):
+def run_v2_8_9_migrations(db):
+    """Record how many entries a cleanup kept because it could not confirm them.
+
+    A cleanup that holds records back has to be able to say so afterwards, and
+    the count is what the UI offers to act on.
+    """
+    # From the model, not spelled out: naming the wrong table here adds nothing,
+    # logs the failure, and leaves every query for a column the model declares
+    # failing against a database that does not have it.
+    table = CleanupState.__tablename__
+    try:
+        with migration_connection(db) as conn:
+            existing = {c['name'] for c in inspect(conn).get_columns(table)}
+            if 'records_kept' not in existing:
+                conn.execute(text(
+                    f'ALTER TABLE {table} ADD COLUMN records_kept INTEGER DEFAULT 0'))
+                logger.info(f"Added {table}.records_kept")
+            conn.commit()
+    except Exception:
+        logger.exception("Migration v2.8.9 failed")
+        raise
+
+
+def run_v2_8_13_cleanup_decision_migrations(db):
+    """Persist cleanup decisions without retaining an unbounded path list."""
+    statements = (
+        """CREATE TABLE IF NOT EXISTS cleanup_file_decisions (
+            id SERIAL PRIMARY KEY,
+            cleanup_run_id VARCHAR(36) NOT NULL,
+            scan_result_id INTEGER,
+            file_path TEXT NOT NULL,
+            decision VARCHAR(20) NOT NULL DEFAULT 'pending',
+            reason VARCHAR(64),
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            decided_at TIMESTAMP WITH TIME ZONE,
+            CONSTRAINT uq_cleanup_file_decision_run_result
+                UNIQUE (cleanup_run_id, scan_result_id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_cleanup_file_decision_run_state ON cleanup_file_decisions (cleanup_run_id, decision, id)",
+        "CREATE INDEX IF NOT EXISTS ix_cleanup_file_decisions_cleanup_run_id ON cleanup_file_decisions (cleanup_run_id)",
+        "CREATE INDEX IF NOT EXISTS ix_cleanup_file_decisions_scan_result_id ON cleanup_file_decisions (scan_result_id)",
+        "ALTER TABLE scan_reports ADD COLUMN IF NOT EXISTS cleanup_run_id VARCHAR(36)",
+        "ALTER TABLE scan_reports ADD COLUMN IF NOT EXISTS cleanup_details_total INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE scan_reports ADD COLUMN IF NOT EXISTS cleanup_details_truncated BOOLEAN NOT NULL DEFAULT FALSE",
+        "CREATE INDEX IF NOT EXISTS ix_scan_reports_cleanup_run_id ON scan_reports (cleanup_run_id)",
+    )
+    try:
+        with migration_connection(db) as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+            conn.commit()
+    except Exception:
+        logger.exception("Migration v2.8.13 cleanup decision schema failed")
+        raise
+
+
+def run_v2_8_14_mount_policy_migrations(db):
+    """Persist administrator-approved mount baselines for scan roots."""
+    statements = (
+        "ALTER TABLE scan_configurations ADD COLUMN IF NOT EXISTS require_mount BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE scan_configurations ADD COLUMN IF NOT EXISTS mount_filesystem_type VARCHAR(100)",
+        "ALTER TABLE scan_configurations ADD COLUMN IF NOT EXISTS mount_source TEXT",
+        "ALTER TABLE scan_configurations ADD COLUMN IF NOT EXISTS mount_root TEXT",
+    )
+    with migration_connection(db) as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+        conn.commit()
+
+
+def verify_schema_ready(db, connection):
+    """Verify every model table and column through the migration connection."""
+    inspector = inspect(connection)
+    table_names = set(inspector.get_table_names())
+    missing = []
+    for table_name, table in db.metadata.tables.items():
+        if table_name not in table_names:
+            missing.append(table_name)
+            continue
+        actual = {column['name'] for column in inspector.get_columns(table_name)}
+        missing.extend(f'{table_name}.{column.name}' for column in table.columns
+                       if column.name not in actual)
+    if missing:
+        raise RuntimeError(f'Schema is not ready after migrations: {", ".join(missing[:10])}')
+    users = {column['name']: column for column in inspector.get_columns('users')}
+    admin_default = str(users['is_admin'].get('default') or '').lower()
+    if 'false' not in admin_default and '0' not in admin_default:
+        raise RuntimeError('Schema is not ready: users.is_admin server default is not false')
+
+
+def _run_all_migrations(db, connection):
     """Execute all database migrations. Called by migrate_database() after acquiring lock."""
     from tools.app_startup_migration import run_startup_migrations
 
     logger.info("Running startup migrations...")
-    try:
-        run_startup_migrations(db)
-        logger.info("Startup migrations completed successfully")
-    except Exception as e:
-        logger.error(f"Startup migration failed: {e}")
+    run_startup_migrations(db, connection=connection)
+    logger.info("Startup migrations completed successfully")
+
+    logger.info("Recording cleanup records kept...")
+    run_v2_8_9_migrations(db)
 
     logger.info("Scoping mark-as-good overrides...")
-    try:
-        run_v2_8_8_migrations(db)
-    except Exception as e:
-        logger.error(f"v2.8.8 migration failed: {e}")
+    run_v2_8_8_migrations(db)
 
     logger.info("Adopting scanner settings from the environment...")
-    try:
-        run_v2_8_7_migrations(db)
-    except Exception as e:
-        logger.error(f"v2.8.7 migration failed: {e}")
+    run_v2_8_7_migrations(db)
 
     logger.info("Checking authentication tables...")
-    try:
-        run_auth_migration(db)
-        logger.info("Authentication tables verified")
-    except Exception as e:
-        logger.error(f"Authentication migration failed: {e}")
+    run_auth_migration(db)
+    logger.info("Authentication tables verified")
+
+    # This runs while migrate_database holds the PostgreSQL advisory lock.
+    # Do not defer it to request-time authentication: token storage changes
+    # must be complete before any worker can accept credentials.
+    from pixelprobe.migrations.security import migrate_security_schema
+    migrate_security_schema(db, connection=connection)
+    from pixelprobe.migrations.security_audit import migrate_security_audit_schema
+    migrate_security_audit_schema(db, connection=connection)
 
     logger.info("Running v2.4.35 migration...")
-    try:
-        run_v2_4_35_migrations(db)
-        logger.info("v2.4.35 migration completed successfully")
-    except Exception as e:
-        logger.error(f"v2.4.35 migration failed: {e}")
+    run_v2_4_35_migrations(db)
+    logger.info("v2.4.35 migration completed successfully")
 
     logger.info("Running v2.4.113 migration...")
-    try:
-        run_v2_4_113_migrations(db)
-        logger.info("v2.4.113 migration completed successfully")
-    except Exception as e:
-        logger.error(f"v2.4.113 migration failed: {e}")
+    run_v2_4_113_migrations(db)
+    logger.info("v2.4.113 migration completed successfully")
 
     logger.info("Running v2.6.0 migration...")
-    try:
-        run_v2_6_0_migrations(db)
-        logger.info("v2.6.0 migration completed successfully")
-    except Exception as e:
-        logger.error(f"v2.6.0 migration failed: {e}")
+    run_v2_6_0_migrations(db)
+    logger.info("v2.6.0 migration completed successfully")
 
     logger.info("Running v2.6.33 migration (schema sync)...")
-    try:
-        run_v2_6_33_migrations(db)
-    except Exception as e:
-        logger.error(f"v2.6.33 migration failed: {e}")
+    run_v2_6_33_migrations(db)
 
     logger.info("Running v2.6.49 migration (chunk engine schema)...")
-    try:
-        run_v2_6_49_migrations(db)
-    except Exception as e:
-        logger.error(f"v2.6.49 migration failed: {e}")
+    run_v2_6_49_migrations(db)
 
     logger.info("Running v2.6.53 migration (log-exclusion backfill)...")
-    try:
-        run_v2_6_53_migrations(db)
-    except Exception as e:
-        logger.error(f"v2.6.53 migration failed: {e}")
+    run_v2_6_53_migrations(db)
 
     logger.info("Running v2.6.60 migration (schedule time budget)...")
-    try:
-        run_v2_6_60_migrations(db)
-    except Exception as e:
-        logger.error(f"v2.6.60 migration failed: {e}")
+    run_v2_6_60_migrations(db)
 
     logger.info("Running v2.6.61 migration (bitrot classification)...")
-    try:
-        run_v2_6_61_migrations(db)
-    except Exception as e:
-        logger.error(f"v2.6.61 migration failed: {e}")
+    run_v2_6_61_migrations(db)
+
+    logger.info("Running v2.8.12 lifecycle migration...")
+    run_v2_8_12_lifecycle_migrations(db)
+
+    logger.info("Running v2.8.13 cleanup decision migration...")
+    run_v2_8_13_cleanup_decision_migrations(db)
+
+    logger.info("Running v2.8.14 mount policy migration...")
+    run_v2_8_14_mount_policy_migrations(db)
 
     logger.info("Creating performance indexes...")
-    try:
-        create_performance_indexes(db)
-        logger.info("Performance indexes created successfully")
-    except Exception as e:
-        logger.error(f"Failed to create performance indexes: {e}")
+    create_performance_indexes(db)
+    logger.info("Performance indexes created successfully")
 
+    verify_schema_ready(db, connection)
     logger.info("Database initialization completed")
 
 
@@ -647,10 +804,22 @@ def migrate_database(db):
         if acquired:
             logger.info(f"Acquired PostgreSQL advisory lock in process {os.getpid()}, running migrations")
             try:
-                _run_all_migrations(db)
+                with migration_owner_connection(lock_conn):
+                    # New installations must be created by the lock owner too.
+                    # create_all alone does not evolve old schemas, so it is
+                    # followed by the complete migration sequence below.
+                    db.metadata.create_all(bind=lock_conn)
+                    lock_conn.commit()
+                    _run_all_migrations(db, lock_conn)
+                    verify_schema_ready(db, lock_conn)
             except Exception as mig_err:
                 logger.error(f"Migration error (lock held): {mig_err}")
+                raise
             finally:
+                # A failed DDL statement leaves PostgreSQL's transaction
+                # aborted. Advisory locks are session-scoped, so roll back
+                # first and then release the lock on this same connection.
+                lock_conn.rollback()
                 lock_conn.execute(
                     text("SELECT pg_advisory_unlock(:lock_id)"),
                     {"lock_id": MIGRATION_ADVISORY_LOCK_ID}
@@ -667,6 +836,7 @@ def migrate_database(db):
                 text("SELECT pg_advisory_lock(:lock_id)"),
                 {"lock_id": MIGRATION_ADVISORY_LOCK_ID}
             )
+            verify_schema_ready(db, lock_conn)
             lock_conn.execute(
                 text("SELECT pg_advisory_unlock(:lock_id)"),
                 {"lock_id": MIGRATION_ADVISORY_LOCK_ID}
@@ -674,8 +844,8 @@ def migrate_database(db):
             logger.info(f"Migrations completed by another process, continuing startup in process {os.getpid()}")
 
     except Exception as e:
-        logger.warning(f"Could not use advisory lock ({e}), running migrations without coordination")
-        _run_all_migrations(db)
+        logger.error(f"Migration lock/readiness failed: {e}")
+        raise
 
     finally:
         if lock_conn is not None:

@@ -6,14 +6,19 @@ from pixelprobe.models import db, ScanSchedule, IgnoredErrorPattern
 class TestScheduleEndpoints:
     """Test schedule management endpoints"""
     
-    def test_create_schedule(self, authenticated_client, app, db):
+    def test_create_schedule(self, authenticated_client, app, db, tmp_path):
         """Test creating a new schedule"""
         with app.app_context():
-            response = authenticated_client.post('/api/schedules', 
+            from pixelprobe.models import ScanConfiguration
+            root = tmp_path / 'media'
+            root.mkdir()
+            db.session.add(ScanConfiguration(path=str(root), is_active=True))
+            db.session.commit()
+            response = authenticated_client.post('/api/schedules',
                 json={
                     'name': 'Test Schedule',
                     'cron_expression': '0 2 * * *',
-                    'scan_paths': ['/test/path'],
+                    'scan_paths': [str(root)],
                     'scan_type': 'full_scan'
                 })
             assert response.status_code == 201
@@ -240,7 +245,7 @@ class TestExclusionEndpoints:
             response = authenticated_client.post('/api/exclusions/path',
                 json={'item': '/test/excluded/path'})
             assert response.status_code == 200
-            assert 'Path added successfully' in response.get_json()['message']
+            assert 'Path added' in response.get_json()['message']
             
             # Verify exclusion was created in database
             exclusion = Exclusion.query.filter_by(
@@ -258,7 +263,7 @@ class TestExclusionEndpoints:
             response = authenticated_client.post('/api/exclusions/extension',
                 json={'item': '.tmp'})
             assert response.status_code == 200
-            assert 'Extension added successfully' in response.get_json()['message']
+            assert 'Extension added' in response.get_json()['message']
             
             # Verify exclusion was created in database
             exclusion = Exclusion.query.filter_by(
@@ -306,7 +311,7 @@ class TestExclusionEndpoints:
             response = authenticated_client.delete('/api/exclusions/path',
                 json={'item': '/test/path'})
             assert response.status_code == 200
-            assert 'Path removed successfully' in response.get_json()['message']
+            assert 'Path removed' in response.get_json()['message']
             
             # Verify it was soft deleted
             exclusion = Exclusion.query.filter_by(
@@ -386,7 +391,7 @@ class TestIgnoredPatternsEndpoints:
             # Delete pattern
             response = authenticated_client.delete(f'/api/ignored-patterns/{pattern_id}')
             assert response.status_code == 200
-            assert 'deleted successfully' in response.get_json()['message']
+            assert 'Pattern deleted' in response.get_json()['message']
             
             # Verify soft deleted
             pattern = db.session.get(IgnoredErrorPattern, pattern_id)

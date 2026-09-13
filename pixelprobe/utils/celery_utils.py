@@ -21,7 +21,10 @@ def check_celery_available():
 
     if celery_enabled:
         try:
-            current_app.celery.control.ping(timeout=1.0)
+            replies = current_app.celery.control.ping(timeout=1.0)
+            if not replies:
+                logger.warning("Celery broker responded but no workers replied to ping.")
+                celery_enabled = False
         except Exception as e:
             logger.warning(f"Celery broker connection failed: {e}. Falling back to direct execution.")
             celery_enabled = False

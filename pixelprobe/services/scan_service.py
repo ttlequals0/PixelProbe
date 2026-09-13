@@ -6,6 +6,7 @@ import os
 import json
 import threading
 import logging
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import time
 from typing import List, Dict, Optional
@@ -13,8 +14,11 @@ from typing import List, Dict, Optional
 from flask import current_app
 from pixelprobe.constants import SCAN_PHASES
 from pixelprobe.media_checker import PixelProbe, load_exclusions_with_patterns
-from pixelprobe.models import db, ScanResult, ScanState, ScanChunk
+from pixelprobe.models import db, ScanResult, ScanState, ScanChunk, ScanRunFile
 from pixelprobe.utils.helpers import ProgressTracker
+from pixelprobe.utils.security import get_allowed_scan_paths
+from pixelprobe.services.settings_service import resolve_settings, scanner_settings_snapshot
+from pixelprobe.progress_utils import clear_scan_progress_redis, update_scan_progress_redis
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 import hashlib
@@ -39,6 +43,17 @@ class ScanService:
         # Get chunk size from environment or use default
         import os
         self.chunk_size = int(os.environ.get('CHUNK_SIZE', '10000'))  # Files per chunk
+
+    def _selected_result_persistence_guard(self, scan_id):
+        """Fence checker cache writes after decode, using its cache session."""
+        def guard(session, result):
+            state = (session.query(ScanState).filter_by(scan_id=scan_id)
+                     .with_for_update().first())
+            member = (session.query(ScanRunFile).filter_by(
+                scan_id=scan_id, scan_result_id=result.id).with_for_update().first())
+            return bool(state and state.is_active and state.phase == SCAN_PHASES['SCANNING']
+                        and member and member.status in ('pending', 'processing'))
+        return guard
         
     def is_scan_running(self) -> bool:
         """Check if a scan is currently running"""
@@ -75,6 +90,36 @@ class ScanService:
                 'file': file_path,
                 'status': status
             })
+
+    def _publish_selected_active_files(self, scan_id, files_processed, total_files, paths):
+        state = db.session.query(ScanState).filter_by(scan_id=scan_id).populate_existing().first()
+        if not state or not state.is_active or state.phase != SCAN_PHASES['SCANNING']:
+            db.session.commit()
+            clear_scan_progress_redis(scan_id)
+            return False
+        db.session.commit()
+        update_scan_progress_redis(
+            scan_id,
+            files_processed=files_processed,
+            estimated_total=total_files,
+            phase=SCAN_PHASES['SCANNING'],
+            active_files=[
+                {'file': path, 'directory': os.path.dirname(path)}
+                for path in paths
+            ],
+            active_file_count=len(paths))
+        if not self._selected_run_is_active(state.id):
+            clear_scan_progress_redis(scan_id)
+            return False
+        return True
+
+    def _selected_run_is_active(self, scan_state_id, heartbeat=False):
+        state = db.session.get(ScanState, scan_state_id, populate_existing=True)
+        active = bool(state and state.is_active and state.phase == SCAN_PHASES['SCANNING'])
+        if active and heartbeat:
+            state.last_update = datetime.now(timezone.utc)
+        db.session.commit()
+        return active
     
     def scan_single_file(self, file_path: str, force_rescan: bool = False,
                          scan_id: Optional[str] = None) -> Dict:
@@ -86,8 +131,8 @@ class ScanService:
         ScanState is created here and the UI's progress monitor briefly sees
         no active scan and flips to "done" before the new row appears.
         """
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
+        from pixelprobe.utils.security import resolve_authorized_media_file
+        file_path = resolve_authorized_media_file(file_path)
 
         # Single file rescans are allowed to run independently
         # They don't check for other running scans since they're quick operations
@@ -121,6 +166,20 @@ class ScanService:
         scan_state.end_time = None
         db.session.commit()
 
+        result_row = ScanResult.query.filter_by(file_path=file_path).first()
+        if result_row is None:
+            result_row = ScanResult(file_path=file_path, scan_status='pending',
+                                    discovered_date=datetime.now(timezone.utc),
+                                    is_corrupted=None)
+            db.session.add(result_row)
+            db.session.flush()
+        if not ScanRunFile.query.filter_by(scan_id=scan_state.scan_id,
+                                           file_path=file_path).first():
+            db.session.add(ScanRunFile(scan_id=scan_state.scan_id,
+                                       scan_result_id=result_row.id,
+                                       file_path=file_path, status='pending'))
+        db.session.commit()
+
         # Capture scan ID for UI progress tracking
         scan_state_id = scan_state.id
         scan_id = scan_state.scan_id
@@ -150,16 +209,19 @@ class ScanService:
                         database_path=self.database_uri,
                         excluded_paths=excluded_paths,
                         excluded_extensions=excluded_extensions,
-                        excluded_patterns=excluded_patterns
+                        excluded_patterns=excluded_patterns,
+                        allowed_paths=get_allowed_scan_paths(),
+                        result_persistence_guard=self._selected_result_persistence_guard(
+                            scan_state.scan_id),
                     )
-                    result = checker.scan_file(file_path, force_rescan=force_rescan)
+                    self._publish_selected_active_files(scan_state.scan_id, 0, 1, [file_path])
+                    try:
+                        result = checker.scan_file(file_path, force_rescan=force_rescan)
+                    finally:
+                        self._publish_selected_active_files(scan_state.scan_id, 0, 1, [])
+                    self._snapshot_run_member(scan_state.scan_id, file_path, result)
 
-                    # Update scan state to completed
-                    scan_state.files_processed = 1
-                    scan_state.phase = 'completed'
-                    scan_state.progress_message = 'Single file scan completed'
-                    scan_state.is_active = False
-                    db.session.commit()
+                    self._mark_scan_completed(scan_state_id, 1, 1)
 
                     self.update_progress(1, 1, file_path, 'completed')
                     return result
@@ -193,10 +255,13 @@ class ScanService:
         return {'status': 'started', 'message': 'Scan started', 'file_path': file_path, 'scan_id': scan_id}
     
     def scan_files(self, file_paths: List[str], force_rescan: bool = False,
-                   num_workers: int = 1, async_mode: bool = True) -> Dict:
+                   num_workers: int = 1, async_mode: bool = True,
+                   scan_id: Optional[str] = None) -> Dict:
         """Scan specific files only"""
         if self.is_scan_running():
-            raise RuntimeError("Another scan is already in progress")
+            own_run = ScanState.query.filter_by(scan_id=scan_id, is_active=True).first() if scan_id else None
+            if not own_run:
+                raise RuntimeError("Another scan is already in progress")
 
         # Validate files exist - with comprehensive debugging
         import pwd
@@ -225,13 +290,20 @@ class ScanService:
                 except Exception as e:
                     logger.warning(f"  - Could not stat: {e}")
 
-        valid_files = [f for f in file_paths if os.path.exists(f)]
-        invalid_count = len(file_paths) - len(valid_files)
+        from pixelprobe.utils.security import resolve_authorized_media_file
+        valid_files = []
+        invalid_paths = []
+        for path in file_paths:
+            try:
+                valid_files.append(resolve_authorized_media_file(path))
+            except Exception:
+                invalid_paths.append(path)
+        invalid_count = len(invalid_paths)
 
         if invalid_count > 0:
             logger.error(f"{invalid_count}/{len(file_paths)} files failed existence check")
             # Log first 3 invalid paths
-            invalid_samples = [f for f in file_paths if not os.path.exists(f)][:3]
+            invalid_samples = invalid_paths[:3]
             for inv_path in invalid_samples:
                 logger.error(f"  Invalid path: {inv_path}")
 
@@ -246,11 +318,40 @@ class ScanService:
         self.scan_cancelled = False
         
         # Save scan state
-        scan_state = ScanState.get_or_create()
-        scan_state.start_scan(["selected_files"], force_rescan)
+        scan_state = (ScanState.query.filter_by(scan_id=scan_id).first()
+                      if scan_id else None)
+        if scan_state is None:
+            scan_state = ScanState.create_new_scan(scan_id=scan_id)
+        scan_state = (ScanState.query.filter_by(id=scan_state.id)
+                      .populate_existing().with_for_update().one())
+        if scan_state.phase in ('cancelled', 'completed', 'error', 'crashed'):
+            db.session.commit()
+            return {
+                'status': scan_state.phase,
+                'message': f'Scan is already {scan_state.phase}',
+                'files': len(valid_files),
+                'force_rescan': force_rescan,
+                'num_workers': num_workers,
+            }
+        scan_state.start_scan(["selected_files"], force_rescan, commit=False)
+        scan_state.scan_type = 'selected'
         # Safely set num_workers if column exists
         if hasattr(scan_state, 'num_workers'):
             scan_state.num_workers = num_workers  # Track the number of workers used
+        from pixelprobe.models import ScanResult, ScanRunFile
+        for path in valid_files:
+            result = ScanResult.query.filter_by(file_path=path).first()
+            if result is None:
+                result = ScanResult(file_path=path, scan_status='pending',
+                                    discovered_date=datetime.now(timezone.utc),
+                                    is_corrupted=None)
+                db.session.add(result)
+                db.session.flush()
+            if result and not ScanRunFile.query.filter_by(scan_id=scan_state.scan_id,
+                                                          file_path=path).first():
+                db.session.add(ScanRunFile(scan_id=scan_state.scan_id,
+                                           scan_result_id=result.id, file_path=path,
+                                           status='pending'))
         db.session.commit()
         
         # Capture scan ID
@@ -264,24 +365,46 @@ class ScanService:
             checker = None
             with app.app_context():
                 try:
-                    # Get fresh ScanState object in worker thread
-                    scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
-                    if not scan_state:
-                        logger.error(f"Could not find scan state with ID {scan_state_id}")
+                    scan_state = db.session.get(ScanState, scan_state_id, populate_existing=True)
+                    if (not scan_state or not scan_state.is_active
+                            or scan_state.phase in ('cancelled', 'completed', 'error', 'crashed')):
                         return
-                    
                     excluded_paths, excluded_extensions, excluded_patterns = load_exclusions_with_patterns()
                     checker = PixelProbe(
                         database_path=self.database_uri,
                         max_workers=num_workers,  # sizes the checker's DB connection pool
                         excluded_paths=excluded_paths,
                         excluded_extensions=excluded_extensions,
-                        excluded_patterns=excluded_patterns
+                        excluded_patterns=excluded_patterns,
+                        allowed_paths=get_allowed_scan_paths(),
+                        result_persistence_guard=self._selected_result_persistence_guard(
+                            scan_state.scan_id),
                     )
 
                     # Skip discovery phase - we already have the files
                     total_files = len(valid_files)
                     logger.info(f"Scanning {total_files} specific files")
+
+                    def start_scanning(chunks=None):
+                        state = (ScanState.query.filter_by(id=scan_state_id)
+                                 .populate_existing().with_for_update().first())
+                        if (not state or not state.is_active
+                                or state.phase in ('cancelled', 'completed', 'error', 'crashed')):
+                            db.session.commit()
+                            return None
+                        if chunks:
+                            db.session.add_all(chunks)
+                        state.phase = 'scanning'
+                        state.phase_number = 3
+                        state.phase_current = 0
+                        state.phase_total = total_files
+                        state.total_chunks = len(chunks or [])
+                        state.start_time = datetime.now(timezone.utc)
+                        state.progress_message = (
+                            f'Scanning {total_files} files in {len(chunks)} dirs'[:200]
+                            if chunks else f'Scanning {total_files} selected files for corruption...')
+                        db.session.commit()
+                        return state
                     
                     # For large file lists, use chunking
                     if total_files > 100:
@@ -304,26 +427,17 @@ class ScanService:
                                 chunk_id=chunk_id,
                                 directory_path=dir_path,
                                 phase='scanning',
-                                status='pending'
+                                status='pending',
+                                files_discovered=len(files)
                             )
-                            db.session.add(chunk)
                             chunks.append(chunk)
-                        db.session.commit()
-                        
+
+                        scan_state = start_scanning(chunks)
+                        if not scan_state:
+                            return
                         logger.info(f"Created {len(chunks)} chunks for {total_files} files")
 
-                        # Update scan state
-                        # IMPORTANT: Use total_files (not len(chunks)) so UI shows correct file count
                         self.update_progress(0, total_files, '', 'scanning')
-                        scan_state.phase = 'scanning'
-                        scan_state.phase_number = 3
-                        scan_state.phase_current = 0
-                        scan_state.phase_total = total_files
-                        scan_state.total_chunks = len(chunks)
-                        scan_state.start_time = datetime.now(timezone.utc)
-                        # Truncate message to avoid VARCHAR limit
-                        scan_state.progress_message = f'Scanning {total_files} files in {len(chunks)} dirs'[:200]
-                        db.session.commit()
                         
                         # For selected files, we need a special chunk processor
                         if num_workers > 1:
@@ -331,20 +445,19 @@ class ScanService:
                         else:
                             self._sequential_scan_selected_chunks(checker, chunks, valid_files, force_rescan, scan_state, scan_state_id)
                     else:
-                        # For small file lists, use the original method
+                        scan_state = start_scanning()
+                        if not scan_state:
+                            return
                         self.update_progress(0, total_files, '', 'scanning')
-                        scan_state.phase = 'scanning'
-                        scan_state.phase_number = 3
-                        scan_state.phase_current = 0
-                        scan_state.phase_total = total_files
-                        scan_state.start_time = datetime.now(timezone.utc)
-                        scan_state.progress_message = f'Scanning {total_files} selected files for corruption...'
-                        db.session.commit()
                         
                         if num_workers > 1:
                             self._parallel_scan(checker, valid_files, force_rescan, num_workers, scan_state, scan_state_id)
                         else:
                             self._sequential_scan(checker, valid_files, force_rescan, scan_state, scan_state_id)
+
+                    scan_state = db.session.get(ScanState, scan_state_id)
+                    if scan_state and scan_state.is_active:
+                        self._mark_scan_completed(scan_state_id, total_files, total_files)
                         
                 except Exception as e:
                     logger.error(f"Error during file scan: {e}")
@@ -378,36 +491,18 @@ class ScanService:
             try:
                 run_scan()
                 # Get final scan state for results
-                final_scan_state = db.session.get(ScanState, scan_state_id)
+                db.session.expire_all()
+                final_scan_state = db.session.get(
+                    ScanState, scan_state_id, populate_existing=True)
                 if final_scan_state:
-                    # Get corrupted file count from ScanResult table with retry logic
-                    # Note: ScanResult doesn't have scan_id, so we query all corrupted files
-                    from pixelprobe.models import ScanResult
-
-                    # Retry logic for database connection issues
-                    max_retries = 3
-                    retry_delay = 1  # seconds
-                    corrupted_found = 0
-
-                    for attempt in range(max_retries):
-                        try:
-                            corrupted_found = db.session.query(ScanResult).filter_by(
-                                is_corrupted=True
-                            ).count()
-                            break  # Success, exit retry loop
-                        except OperationalError as e:
-                            if attempt < max_retries - 1:
-                                logger.warning(f"Database connection lost (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s: {e}")
-                                time.sleep(retry_delay)
-                                db.session.rollback()
-                                db.session.close()
-                                retry_delay *= 2  # Exponential backoff
-                            else:
-                                logger.error(f"Database connection failed after {max_retries} attempts: {e}")
-                                corrupted_found = 0
+                    corrupted_found = ScanRunFile.query.filter_by(
+                        scan_id=final_scan_state.scan_id, is_corrupted=True).count()
+                    phase = final_scan_state.phase
+                    completed = phase == SCAN_PHASES['COMPLETED']
                     return {
-                        'status': 'completed',
-                        'message': f'Scan completed for {len(valid_files)} files',
+                        'status': 'completed' if completed else phase,
+                        'message': (f'Scan completed for {len(valid_files)} files' if completed
+                                    else f'Scan finished with {phase} state'),
                         'files': len(valid_files),
                         'force_rescan': force_rescan,
                         'num_workers': num_workers,
@@ -419,95 +514,86 @@ class ScanService:
                     }
                 else:
                     return {
-                        'status': 'completed',
-                        'message': f'Scan completed for {len(valid_files)} files',
+                        'status': 'error',
+                        'message': 'Scan result evidence was not persisted',
                         'files': len(valid_files),
                         'force_rescan': force_rescan,
-                                'num_workers': num_workers
+                        'num_workers': num_workers,
                     }
             finally:
                 # Ensure thread reference is cleared even in sync mode
                 self.current_scan_thread = None
     
-    def cancel_scan(self) -> Dict:
-        """Cancel the current scan - nuclear option: kill everything"""
-        logger.info("cancel_scan() method called - NUCLEAR OPTION")
+    def cancel_scan(self, expected_scan_id: Optional[str] = None) -> Dict:
+        """Cancel only work durably owned by the active scan."""
         
-        # Get current scan state
-        scan_state = ScanState.get_or_create()
+        active_phases = ['initializing', 'discovering', 'adding', 'scanning']
+        query = ScanState.query.filter(
+            ScanState.is_active == True,
+            ScanState.phase.in_(active_phases),
+        )
+        if expected_scan_id:
+            query = query.filter(ScanState.scan_id == expected_scan_id)
+        scan_state = query.order_by(ScanState.id.desc()).with_for_update().first()
+        if not scan_state:
+            return {'message': 'No matching active scan is running', 'cancelled': False,
+                    'tasks_killed': 0, 'owned_task_count': 0, 'revoked_task_count': 0,
+                    'failures': ['no matching active scan']}
         
         logger.info(f"Cancel scan - scan_id: {scan_state.scan_id}, phase: {scan_state.phase}")
         
-        # Step 1: Kill ALL Celery tasks (nuclear option)
+        failures = []
+        # Persist intent first. Workers check this state before claims and
+        # between batches, so cancellation remains correct if the broker is down.
+        try:
+            from pixelprobe.models import ScanChunk, ScanRunFile, ScanTask
+            now = datetime.now(timezone.utc)
+            scan_state.cancel_requested_at = now
+            scan_state.phase = 'cancelled'
+            scan_state.is_active = False
+            scan_state.end_time = now
+            ScanChunk.query.filter(ScanChunk.scan_id == scan_state.scan_id,
+                                   ScanChunk.status.in_(['pending', 'processing'])).update(
+                {'status': 'cancelled', 'is_complete': True, 'end_time': now},
+                synchronize_session=False)
+            owned_ids = [row[0] for row in db.session.query(ScanRunFile.scan_result_id).filter(
+                ScanRunFile.scan_id == scan_state.scan_id,
+                ScanRunFile.status == 'processing').all() if row[0]]
+            ScanRunFile.query.filter_by(scan_id=scan_state.scan_id, status='processing').update(
+                {'status': 'pending', 'claimed_at': None}, synchronize_session=False)
+            if owned_ids:
+                ScanResult.query.filter(ScanResult.id.in_(owned_ids),
+                                        ScanResult.scan_status == 'scanning').update(
+                    {'scan_status': 'pending'}, synchronize_session=False)
+            task_ids = [row[0] for row in db.session.query(ScanTask.celery_task_id).filter(
+                ScanTask.scan_id == scan_state.scan_id,
+                ScanTask.status.in_(['queued', 'dispatched', 'processing'])).all()]
+            ScanTask.query.filter(ScanTask.scan_id == scan_state.scan_id,
+                                  ScanTask.status.in_(['queued', 'dispatched', 'processing'])).update(
+                {'status': 'cancelled', 'completed_at': now}, synchronize_session=False)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            return {'message': 'Scan cancellation was not persisted', 'cancelled': False,
+                    'failures': [str(e)]}
+
+        # Revoke exactly the persisted task owners. No inspect(), terminate(),
+        # or purge: those APIs affect unrelated maintenance work.
+        revoked_task_ids = []
         try:
             from pixelprobe.celery_config import celery_app
-            
-            logger.info("Step 1: Killing ALL Celery tasks")
-            
-            # Get inspection object
-            inspect = celery_app.control.inspect()
-            
-            # Kill ALL active tasks on ALL workers
-            active = inspect.active()
-            if active:
-                task_count = 0
-                for worker_name, tasks in active.items():
-                    logger.info(f"Killing {len(tasks)} tasks on worker {worker_name}")
-                    for task in tasks:
-                        task_id = task.get('id')
-                        celery_app.control.revoke(task_id, terminate=True, signal='SIGKILL')
-                        task_count += 1
-                logger.info(f"Killed {task_count} active tasks")
-            
-            # Revoke ALL reserved/queued tasks
-            reserved = inspect.reserved()
-            if reserved:
-                task_count = 0
-                for worker_name, tasks in reserved.items():
-                    logger.info(f"Revoking {len(tasks)} reserved tasks on worker {worker_name}")
-                    for task in tasks:
-                        task_id = task.get('id')
-                        celery_app.control.revoke(task_id, terminate=False)
-                        task_count += 1
-                logger.info(f"Revoked {task_count} reserved tasks")
-            
-            # Purge the entire queue
-            celery_app.control.purge()
-            logger.info("Purged entire Celery queue")
-            
         except Exception as e:
-            logger.error(f"Error killing Celery tasks: {e}")
-        
-        # Step 2: Clean up database state
-        logger.info("Step 2: Cleaning up database state")
-        
-        try:
-            from pixelprobe.models import ScanChunk
-            
-            # Mark ALL chunks as cancelled
-            chunks_updated = db.session.query(ScanChunk).filter(
-                ScanChunk.scan_id == scan_state.scan_id,
-                ScanChunk.status.in_(['pending', 'processing', 'queued'])
-            ).update({
-                'status': 'cancelled',
-                'end_time': datetime.now(timezone.utc)
-            }, synchronize_session=False)
-            
-            logger.info(f"Marked {chunks_updated} chunks as cancelled")
-            
-            # Reset any files stuck in 'scanning' status
-            files_reset = ScanResult.reclaim_scanning()
-
-            logger.info(f"Reset {files_reset} files from 'scanning' to 'pending'")
-        
-            # Cancel the scan state
-            scan_state.cancel_scan()
-            
-            # Commit all changes
-            db.session.commit()
-            
-        except Exception as e:
-            logger.error(f"Error cleaning up database: {e}")
+            celery_app = None
+            failures.append(f'broker control unavailable: {e}')
+        for task_id in task_ids:
+            try:
+                if celery_app is None:
+                    continue
+                celery_app.control.revoke(task_id, terminate=False)
+                revoked_task_ids.append(task_id)
+            except Exception as e:
+                logger.error(f"Failed revoking owned scan task {task_id}: {e}")
+                failures.append(f'{task_id}: {e}')
         
         # Step 3: Set cancellation flag and update progress
         self.scan_cancelled = True
@@ -526,12 +612,15 @@ class ScanService:
             logger.info("Cleaning up scan thread reference")
             self.current_scan_thread = None
         
-        logger.info("=== SCAN CANCELLATION COMPLETE (NUCLEAR) ===")
-        
         return {
-            'message': 'Scan cancellation completed - all tasks killed',
-            'tasks_killed': True,
-            'database_cleaned': True
+            'message': (f'Cancellation intent recorded; revoke requested for '
+                        f'{len(revoked_task_ids)} of {len(task_ids)} owned task(s)'),
+            'cancelled': True,
+            'tasks_killed': 0,
+            'owned_task_count': len(task_ids),
+            'revoked_task_count': len(revoked_task_ids),
+            'revoke_failures': failures,
+            'failures': failures,
         }
     
     def reset_stuck_scans(self) -> Dict:
@@ -560,11 +649,17 @@ class ScanService:
                 break
             
             self.update_progress(i, total_files, file_path, 'scanning')
+            self._publish_selected_active_files(
+                scan_state.scan_id, i, total_files, [file_path])
             
             try:
-                checker.scan_file(file_path, force_rescan=force_rescan)
+                result = checker.scan_file(file_path, force_rescan=force_rescan)
+                self._snapshot_run_member(scan_state.scan_id, file_path, result)
             except Exception as e:
                 logger.error(f"Error scanning file {file_path}: {e}")
+            finally:
+                self._publish_selected_active_files(
+                    scan_state.scan_id, i, total_files, [])
             
             # Update scan state progress with error recovery
             try:
@@ -600,7 +695,7 @@ class ScanService:
             self._handle_scan_cancellation(scan_state)
         else:
             # Retry any files that are still pending before marking complete
-            remaining_pending = self._retry_pending_files(checker, force_rescan)
+            remaining_pending = self._retry_pending_files(checker, force_rescan, scan_state.scan_id)
 
             self.update_progress(total_files, total_files, '', 'completed')
 
@@ -623,7 +718,6 @@ class ScanService:
     def _parallel_scan(self, checker: PixelProbe, files: List[str],
                       force_rescan: bool, num_workers: int, scan_state: ScanState, scan_state_id: int):
         """Perform parallel scan of files"""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading
 
         total_files = len(files)
@@ -635,66 +729,116 @@ class ScanService:
         # Thread lock for database operations to prevent concurrent session access
         db_lock = threading.Lock()
 
-        def scan_file(file_path):
+        def scan_file(file_path, settings):
             if self.scan_cancelled:
                 return None
             try:
-                return checker.scan_file(file_path, force_rescan=force_rescan)
+                with scanner_settings_snapshot(settings):
+                    return checker.scan_file(file_path, force_rescan=force_rescan)
             except Exception as e:
                 logger.error(f"Error scanning {file_path}: {e}")
                 return None
 
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            # Submit all files for scanning
-            future_to_file = {executor.submit(scan_file, f): f for f in files}
+        scan_id = scan_state.scan_id
+        with ThreadPoolExecutor(max_workers=min(num_workers, total_files)) as executor:
+            path_iterator = iter(files)
+            future_to_file = {}
 
-            # Process completed scans
-            for future in as_completed(future_to_file):
-                if self.scan_cancelled:
-                    executor.shutdown(wait=False)
+            def write_active_files():
+                active_paths = [
+                    path for future, path in future_to_file.items() if future.running()
+                ]
+                self._publish_selected_active_files(
+                    scan_id, completed, total_files, active_paths)
+
+            def submit_next():
+                if self.scan_cancelled or not self._selected_run_is_active(scan_state_id):
+                    self.scan_cancelled = True
+                    return False
+                try:
+                    file_path = next(path_iterator)
+                except StopIteration:
+                    return False
+                future_to_file[executor.submit(
+                    scan_file, file_path, resolve_settings(use_cache=False))] = file_path
+                db.session.commit()
+                return True
+
+            for _ in range(min(num_workers, total_files)):
+                if not submit_next():
                     break
+            write_active_files()
 
-                file_path = future_to_file[future]
-                completed += 1
+            try:
+                while future_to_file:
+                    done, _ = wait(future_to_file, timeout=30, return_when=FIRST_COMPLETED)
+                    if not done:
+                        if not self._selected_run_is_active(scan_state_id, heartbeat=True):
+                            self.scan_cancelled = True
+                            break
+                        write_active_files()
+                        continue
+                    for future in done:
+                        file_path = future_to_file.pop(future)
+                        if self.scan_cancelled:
+                            continue
 
-                self.update_progress(completed, total_files, file_path, 'scanning')
-
-                # Update scan state progress with thread-safe database access
-                with db_lock:
-                    try:
-                        scan_state.update_progress(completed, total_files, current_file=file_path)
-
-                        # Update progress message with current file and ETA
-                        scan_state.progress_message = progress_tracker.get_progress_message(
-                            f'Phase 3 of 3: Scanning {total_files} files for corruption',
-                            completed,
-                            total_files,
-                            os.path.basename(file_path)
-                        )
-                        db.session.commit()
-                    except Exception as e:
-                        logger.error(f"Failed to update progress for file {file_path}: {e}")
-                        # Try to recover the database session
                         try:
-                            db.session.rollback()
-                            # Re-get scan state and try again
-                            scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
-                            if scan_state:
-                                scan_state.update_progress(completed, total_files, current_file=file_path)
+                            result = future.result()
+                        except Exception as e:
+                            logger.error(f"Error scanning {file_path}: {e}")
+                            result = None
+                        with db_lock:
+                            self._snapshot_run_member(scan_state.scan_id, file_path, result)
+                            state = (ScanState.query.filter_by(id=scan_state_id)
+                                     .populate_existing().with_for_update().first())
+                            if (not state or not state.is_active
+                                    or state.phase != SCAN_PHASES['SCANNING']):
+                                self.scan_cancelled = True
                                 db.session.commit()
-                        except Exception as e2:
-                            logger.error(f"Failed to recover progress update: {e2}")
+                                continue
+                            completed += 1
+                            self.update_progress(completed, total_files, file_path, 'scanning')
+                            try:
+                                state.update_progress(completed, total_files, current_file='')
 
-                # Log progress every 10 files for UI debugging
-                if completed % 10 == 0:
-                    logger.info(f"Parallel scan progress: {completed}/{total_files} files processed")
+                                # Update progress message with current file and ETA
+                                state.progress_message = progress_tracker.get_progress_message(
+                                    f'Phase 3 of 3: Scanning {total_files} files for corruption',
+                                    completed,
+                                    total_files,
+                                    os.path.basename(file_path)
+                                )
+                                db.session.commit()
+                            except Exception as e:
+                                logger.error(f"Failed to update progress for file {file_path}: {e}")
+                                # Try to recover the database session
+                                try:
+                                    db.session.rollback()
+                                    # Re-get scan state and try again
+                                    state = (ScanState.query.filter_by(id=scan_state_id)
+                                             .populate_existing().with_for_update().first())
+                                    if (state and state.is_active
+                                            and state.phase == SCAN_PHASES['SCANNING']):
+                                        state.update_progress(completed, total_files, current_file='')
+                                        db.session.commit()
+                                except Exception as e2:
+                                    logger.error(f"Failed to recover progress update: {e2}")
+
+                        # Log progress every 10 files for UI debugging
+                        if completed % 10 == 0:
+                            logger.info(f"Parallel scan progress: {completed}/{total_files} files processed")
+                        submit_next()
+                        write_active_files()
+            finally:
+                clear_scan_progress_redis(scan_id)
 
         # Complete scan
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
         else:
             # Retry any files that are still pending before marking complete
-            remaining_pending = self._retry_pending_files(checker, force_rescan)
+            remaining_pending = self._retry_pending_files(checker, force_rescan, scan_state.scan_id)
 
             self.update_progress(total_files, total_files, '', 'completed')
 
@@ -715,31 +859,91 @@ class ScanService:
                 logger.info(f"=== END SCAN ===")
 
     def _mark_scan_completed(self, scan_state_id, files_processed, estimated_total):
-        """Thread-safe scan completion using direct SQL update."""
-        db.session.execute(
-            text("""UPDATE scan_state SET phase = 'completed', is_active = false, end_time = :end_time,
-                    files_processed = :files_processed, estimated_total = :estimated_total,
-                    progress_message = 'Scan completed'
-                WHERE id = :id"""),
-            {
-                'end_time': datetime.now(timezone.utc),
-                'id': scan_state_id,
-                'files_processed': files_processed,
-                'estimated_total': estimated_total,
-            }
-        )
-        db.session.commit()
-        # Expire all cached ORM objects so subsequent queries/commits
-        # read the updated state from PostgreSQL instead of writing
-        # stale is_active=True back from the identity map
+        """Finalize against this run's immutable member outcomes."""
+        from pixelprobe.services.scan_engine import finalize_scan
+
+        scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).with_for_update().first()
+        if not scan_state:
+            raise RuntimeError('Scan state disappeared before completion')
+        scan_state.files_processed = files_processed
+        scan_state.estimated_total = estimated_total
+        scan_state.phase_total = estimated_total
+        finalize_scan(scan_state)
+        try:
+            clear_scan_progress_redis(scan_state.scan_id)
+        except Exception as e:
+            logger.warning(f"Failed to clear scan progress for {scan_state.scan_id}: {e}")
         db.session.expire_all()
+
+    def _snapshot_run_member(self, scan_id: str, file_path: str, observed=None):
+        """Copy the one observed result into the selected run's immutable row."""
+        state = (ScanState.query.filter_by(scan_id=scan_id)
+                 .populate_existing().with_for_update().first())
+        member = (ScanRunFile.query.filter_by(scan_id=scan_id, file_path=file_path)
+                  .populate_existing().with_for_update().first())
+        if (not state or not member or not state.is_active
+                or state.phase != SCAN_PHASES['SCANNING']
+                or member.status not in ('pending', 'processing')):
+            db.session.commit()
+            return False
+        if observed is None:
+            member.status = 'error'
+            member.outcome = 'no_result'
+            member.error_message = 'Scanner did not return a result'
+            member.completed_at = datetime.now(timezone.utc)
+            db.session.commit()
+            return True
+        row = (ScanResult.query.filter_by(file_path=file_path)
+               .populate_existing().first())
+        if not row:
+            member.status = 'error'
+            member.outcome = 'no_result'
+            member.error_message = 'Scanner did not persist a result'
+        else:
+            outcome = (observed or {}).get('outcome') or row.scan_status or 'error'
+            if outcome == 'completed' and not (observed or {}).get('file_hash', row.file_hash):
+                outcome = 'error'
+            source = observed or row
+            member.scan_result_id = row.id
+            member.status = outcome
+            member.outcome = outcome
+            get_value = source.get if isinstance(source, dict) else lambda name, default=None: getattr(source, name, default)
+            member.file_hash = get_value('file_hash')
+            member.file_size = get_value('file_size')
+            member.last_modified = get_value('last_modified')
+            member.is_corrupted = get_value('is_corrupted')
+            member.has_warnings = get_value('has_warnings', False)
+            member.corruption_details = get_value('corruption_details')
+            member.warning_details = get_value('warning_details')
+            member.file_type = get_value('file_type')
+            member.scan_tool = get_value('scan_tool')
+            member.scan_output = get_value('scan_output')
+            member.marked_as_good = row.marked_as_good
+            member.error_message = row.error_message
+        member.completed_at = datetime.now(timezone.utc)
+        db.session.commit()
+        return True
+
+    def _mark_selected_member_error(self, scan_id: str, file_path: str, message: str):
+        state = (ScanState.query.filter_by(scan_id=scan_id)
+                 .populate_existing().with_for_update().first())
+        member = (ScanRunFile.query.filter_by(scan_id=scan_id, file_path=file_path)
+                  .populate_existing().with_for_update().first())
+        if (state and state.is_active and state.phase == SCAN_PHASES['SCANNING']
+                and member and member.status in ('pending', 'processing')):
+            member.status = 'error'
+            member.outcome = 'error'
+            member.error_message = message[:1000]
+            member.completed_at = datetime.now(timezone.utc)
+        db.session.commit()
 
     def _create_scan_report(self, scan_state: ScanState, scan_type: str = 'full_scan'):
         """Create a scan report (delegates to shared scan_reporting module)"""
         from pixelprobe.services.scan_reporting import create_scan_report
         create_scan_report(scan_state, scan_type)
 
-    def _retry_pending_files(self, checker: PixelProbe, force_rescan: bool) -> int:
+    def _retry_pending_files(self, checker: PixelProbe, force_rescan: bool,
+                             scan_id: str) -> int:
         """Retry scanning files that are still in 'pending' status.
 
         This ensures all files get processed in the current scan run before
@@ -752,14 +956,16 @@ class ScanService:
         Returns:
             int: Number of files that remain pending after retries
         """
-        from pixelprobe.models import ScanResult
+        from pixelprobe.models import ScanResult, ScanRunFile
 
         max_retries = 2
 
         # Count pending files first (cheap) before deciding to load them
-        pending_count = db.session.query(ScanResult).filter(
-            ScanResult.scan_status == 'pending'
-        ).count()
+        pending_query = (db.session.query(ScanResult)
+                         .join(ScanRunFile, ScanRunFile.scan_result_id == ScanResult.id)
+                         .filter(ScanRunFile.scan_id == scan_id,
+                                 ScanRunFile.status == 'pending'))
+        pending_count = pending_query.count()
 
         if pending_count == 0:
             return 0
@@ -767,12 +973,10 @@ class ScanService:
         # Skip retry for large pending sets -- they'll be picked up on the next scan.
         # Loading 90K+ ORM objects blocks completion for hours.
         if pending_count > 1000:
-            logger.info(f"{pending_count} files still pending after scan -- will be processed on next scheduled run")
+            logger.info(f"{pending_count} files remain pending for a later scan")
             return pending_count
 
-        pending_files = db.session.query(ScanResult).filter(
-            ScanResult.scan_status == 'pending'
-        ).limit(1000).all()
+        pending_files = pending_query.limit(1000).all()
 
         initial_pending = len(pending_files)
         logger.warning(f"Found {initial_pending} files still pending after initial scan pass - starting retry")
@@ -790,9 +994,12 @@ class ScanService:
                         pending_file.scan_status = 'error'
                         pending_file.scan_output = 'File not found during retry'
                         pending_file.file_exists = False
+                        pending_file.error_message = 'File not found during retry'
+                        self._snapshot_run_member(scan_id, pending_file.file_path)
                         continue
 
-                    checker.scan_file(pending_file.file_path, force_rescan=True)
+                    result = checker.scan_file(pending_file.file_path, force_rescan=True)
+                    self._snapshot_run_member(scan_id, pending_file.file_path, result)
                     files_retried += 1
                 except Exception as e:
                     logger.error(f"Retry failed for {pending_file.file_path}: {e}")
@@ -801,9 +1008,10 @@ class ScanService:
             logger.info(f"Retry {retry + 1}: Attempted to rescan {files_retried} files")
 
             # Re-check for pending files
-            pending_files = db.session.query(ScanResult).filter(
-                ScanResult.scan_status == 'pending'
-            ).all()
+            pending_files = (db.session.query(ScanResult)
+                             .join(ScanRunFile, ScanRunFile.scan_result_id == ScanResult.id)
+                             .filter(ScanRunFile.scan_id == scan_id,
+                                     ScanRunFile.status == 'pending').all())
 
             if not pending_files:
                 logger.info(f"All pending files successfully scanned on retry {retry + 1}")
@@ -835,14 +1043,28 @@ class ScanService:
             'cancelled'
         )
         
-        # Update scan state
-        scan_state.cancel_scan()
-        
-        # Clean up any files stuck in 'scanning' state
-        stuck_count = ScanResult.reclaim_scanning()
+        state = db.session.get(ScanState, scan_state.id, populate_existing=True)
+        if not state or state.phase in ('cancelled', 'completed', 'error', 'crashed', 'interrupted'):
+            clear_scan_progress_redis(scan_state.scan_id)
+            return
+        state.cancel_scan()
+        try:
+            clear_scan_progress_redis(scan_state.scan_id)
+        except Exception as e:
+            logger.warning(f"Failed to clear scan progress for {scan_state.scan_id}: {e}")
 
-        if stuck_count > 0:
-            logger.info(f"Reset {stuck_count} files from 'scanning' to 'pending' state")
+        owned_ids = [row[0] for row in db.session.query(ScanRunFile.scan_result_id).filter(
+            ScanRunFile.scan_id == scan_state.scan_id,
+            ScanRunFile.status == 'processing').all() if row[0]]
+        ScanRunFile.query.filter_by(scan_id=scan_state.scan_id, status='processing').update(
+            {'status': 'pending', 'claimed_at': None}, synchronize_session=False)
+        reclaimed = 0
+        if owned_ids:
+            reclaimed = ScanResult.query.filter(
+                ScanResult.id.in_(owned_ids), ScanResult.scan_status == 'scanning').update(
+                    {'scan_status': 'pending'}, synchronize_session=False)
+        if reclaimed:
+            logger.info(f"Reset {reclaimed} owned scan result(s) to pending")
         
         db.session.commit()
         logger.info(f"=== SCAN CANCELLATION COMPLETE (ID: {scan_state.scan_id}) ===")
@@ -851,8 +1073,9 @@ class ScanService:
                                        selected_files: List[str], force_rescan: bool, 
                                        scan_state: ScanState, scan_state_id: int):
         """Scan selected files organized by chunks"""
-        # Create a set for fast lookup
-        selected_files_set = set(selected_files)
+        files_by_directory = {}
+        for file_path in selected_files:
+            files_by_directory.setdefault(os.path.dirname(file_path), []).append(file_path)
         total_chunks = len(chunks)
         files_scanned = 0
         
@@ -862,8 +1085,15 @@ class ScanService:
         for i, chunk in enumerate(chunks):
             if self.scan_cancelled:
                 break
-            
-            # Update chunk status
+            state = (ScanState.query.filter_by(id=scan_state_id)
+                     .populate_existing().with_for_update().first())
+            chunk = (ScanChunk.query.filter_by(id=chunk.id)
+                     .populate_existing().with_for_update().first())
+            if (not state or not state.is_active
+                    or state.phase != SCAN_PHASES['SCANNING'] or not chunk):
+                self.scan_cancelled = True
+                db.session.commit()
+                break
             chunk.status = 'processing'
             chunk.phase = 'scanning'
             chunk.start_time = datetime.now(timezone.utc)
@@ -871,63 +1101,83 @@ class ScanService:
             
             # Scan only the selected files in this chunk
             chunk_scanned = 0
-            for file_path in selected_files:
+            chunk_failed = False
+            for file_path in files_by_directory[chunk.directory_path]:
                 if self.scan_cancelled:
                     break
-                    
-                # Check if file belongs to this chunk's directory
-                if file_path.startswith(chunk.directory_path + os.sep) or os.path.dirname(file_path) == chunk.directory_path:
-                    try:
-                        checker.scan_file(file_path, force_rescan=force_rescan)
-                        chunk_scanned += 1
-                        files_scanned += 1
-                        
-                        # Update progress
-                        self.update_progress(files_scanned, len(selected_files), file_path, 'scanning')
-                        
-                    except Exception as e:
-                        logger.error(f"Error scanning {file_path}: {e}")
-            
-            # Update chunk completion
-            chunk.files_scanned = chunk_scanned
-            chunk.status = 'completed'
-            chunk.end_time = datetime.now(timezone.utc)
-            
-            # Update scan state with error recovery
-            try:
-                scan_state.current_chunk_index = i + 1
-                scan_state.update_progress(files_scanned, len(selected_files), current_file='')
-                scan_state.progress_message = progress_tracker.get_progress_message(
+                state = db.session.get(ScanState, scan_state_id, populate_existing=True)
+                if not state or not state.is_active or state.phase != SCAN_PHASES['SCANNING']:
+                    self.scan_cancelled = True
+                    break
+                self._publish_selected_active_files(
+                    scan_state.scan_id, files_scanned, len(selected_files), [file_path])
+                try:
+                    result = checker.scan_file(file_path, force_rescan=force_rescan)
+                    recorded = self._snapshot_run_member(scan_state.scan_id, file_path, result)
+                    outcome = result.get('outcome') if isinstance(result, dict) else None
+                    if not recorded or outcome != 'completed':
+                        chunk_failed = True
+                    if not recorded:
+                        self._mark_selected_member_error(
+                            scan_state.scan_id, file_path,
+                            'Scanner result could not be recorded for this run')
+                except Exception as e:
+                    logger.error(f"Error scanning {file_path}: {e}")
+                    self._mark_selected_member_error(scan_state.scan_id, file_path, str(e))
+                    chunk_failed = True
+                finally:
+                    self._publish_selected_active_files(
+                        scan_state.scan_id, files_scanned, len(selected_files), [])
+                state = (ScanState.query.filter_by(id=scan_state_id)
+                         .populate_existing().with_for_update().first())
+                chunk = (ScanChunk.query.filter_by(id=chunk.id)
+                         .populate_existing().with_for_update().first())
+                if (not state or not state.is_active
+                        or state.phase != SCAN_PHASES['SCANNING'] or not chunk):
+                    self.scan_cancelled = True
+                    db.session.commit()
+                    break
+                chunk_scanned += 1
+                files_scanned += 1
+                self.update_progress(files_scanned, len(selected_files), file_path, 'scanning')
+                chunk.files_scanned += 1
+                chunk.files_processed += 1
+                state.current_chunk_index = i
+                state.update_progress(files_scanned, len(selected_files), current_file='')
+                state.progress_message = progress_tracker.get_progress_message(
                     f'Scanning {len(selected_files)} selected files',
                     files_scanned,
                     len(selected_files),
                     os.path.basename(chunk.directory_path) if chunk_scanned > 0 else "Processing..."
                 )
                 db.session.commit()
-            except Exception as e:
-                logger.error(f"Failed to update progress for chunk {chunk.directory_path}: {e}")
-                # Try to recover the database session
-                try:
-                    db.session.rollback()
-                    # Re-get scan state and try again
-                    scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
-                    if scan_state:
-                        scan_state.update_progress(files_scanned, len(selected_files), current_file='')
-                        db.session.commit()
-                except Exception as e2:
-                    logger.error(f"Failed to recover progress update: {e2}")
+
+            if not self.scan_cancelled:
+                state = (ScanState.query.filter_by(id=scan_state_id)
+                         .populate_existing().with_for_update().first())
+                chunk = (ScanChunk.query.filter_by(id=chunk.id)
+                         .populate_existing().with_for_update().first())
+                if (not state or not state.is_active
+                        or state.phase != SCAN_PHASES['SCANNING'] or not chunk):
+                    self.scan_cancelled = True
+                    db.session.commit()
+                    break
+                chunk.status = 'error' if chunk_failed else 'completed'
+                chunk.is_complete = True
+                chunk.end_time = datetime.now(timezone.utc)
+                state.current_chunk_index = i + 1
+                db.session.commit()
         
         # Complete scan
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
         else:
             # Retry any files that are still pending before marking complete
-            remaining_pending = self._retry_pending_files(checker, force_rescan)
+            remaining_pending = self._retry_pending_files(checker, force_rescan, scan_state.scan_id)
 
-            self.update_progress(len(selected_files), len(selected_files), '', 'completed')
+            self.update_progress(files_scanned, len(selected_files), '', 'completed')
 
-            # Thread-safe completion
-            self._mark_scan_completed(scan_state_id, len(selected_files), len(selected_files))
+            self._mark_scan_completed(scan_state_id, files_scanned, len(selected_files))
 
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
@@ -937,7 +1187,7 @@ class ScanService:
 
             logger.info(f"=== SCAN COMPLETED (SEQUENTIAL SELECTED CHUNKS) ===")
             logger.info(f"Scan ID: {scan_state_id}")
-            logger.info(f"Files scanned: {len(selected_files)}")
+            logger.info(f"Files scanned: {files_scanned}")
             if remaining_pending > 0:
                 logger.warning(f"Files still pending after retries: {remaining_pending}")
             logger.info(f"=== END SCAN ===")
@@ -946,107 +1196,150 @@ class ScanService:
                                      selected_files: List[str], force_rescan: bool, num_workers: int,
                                      scan_state: ScanState, scan_state_id: int):
         """Parallel scan of selected files organized by chunks"""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import threading
-
-        # Thread-safe counter and database lock
-        files_scanned_lock = threading.Lock()
-        db_lock = threading.Lock()
         files_scanned = 0
-        selected_files_set = set(selected_files)
-
-        # Create progress tracker
         progress_tracker = ProgressTracker('scan')
+        files_by_directory = {}
+        for file_path in selected_files:
+            files_by_directory.setdefault(os.path.dirname(file_path), []).append(file_path)
+        chunks_by_directory = {chunk.directory_path: chunk for chunk in chunks}
+        chunk_remaining = {directory: len(paths)
+                           for directory, paths in files_by_directory.items()}
+        chunk_failed = {directory: False for directory in files_by_directory}
+        scan_id = scan_state.scan_id
 
-        def scan_chunk_files(chunk):
-            nonlocal files_scanned
-            if self.scan_cancelled:
-                return 0
+        state = (ScanState.query.filter_by(id=scan_state_id)
+                 .populate_existing().with_for_update().first())
+        if not state or not state.is_active or state.phase != SCAN_PHASES['SCANNING']:
+            self.scan_cancelled = True
+            db.session.commit()
+            self._handle_scan_cancellation(scan_state)
+            return
+        with ThreadPoolExecutor(max_workers=min(num_workers, len(selected_files))) as executor:
+            path_iterator = iter(selected_files)
+            future_to_path = {}
 
-            # Update chunk status with thread-safe database access
-            with db_lock:
-                chunk.status = 'processing'
-                chunk.phase = 'scanning'
-                chunk.start_time = datetime.now(timezone.utc)
+            def write_active_files():
+                active_paths = [
+                    path for future, path in future_to_path.items() if future.running()
+                ]
+                self._publish_selected_active_files(
+                    scan_id, files_scanned, len(selected_files), active_paths)
+
+            def submit_next():
+                if self.scan_cancelled or not self._selected_run_is_active(scan_state_id):
+                    self.scan_cancelled = True
+                    return False
+                try:
+                    file_path = next(path_iterator)
+                except StopIteration:
+                    return False
+                state = (ScanState.query.filter_by(id=scan_state_id)
+                         .populate_existing().with_for_update().first())
+                chunk = (ScanChunk.query.filter_by(
+                    id=chunks_by_directory[os.path.dirname(file_path)].id)
+                    .populate_existing().with_for_update().first())
+                if (not chunk or not state or not state.is_active
+                        or state.phase != SCAN_PHASES['SCANNING']):
+                    self.scan_cancelled = True
+                    db.session.commit()
+                    return False
+                if chunk.status == 'pending':
+                    chunk.status = 'processing'
+                    chunk.phase = 'scanning'
+                    chunk.start_time = datetime.now(timezone.utc)
                 db.session.commit()
+                settings = resolve_settings(use_cache=False)
 
-            chunk_scanned = 0
-            # Scan only selected files in this chunk
-            for file_path in selected_files:
-                if self.scan_cancelled:
+                def scan_file(path=file_path, values=settings):
+                    with scanner_settings_snapshot(values):
+                        return checker.scan_file(path, force_rescan=force_rescan)
+
+                future_to_path[executor.submit(scan_file)] = file_path
+                db.session.commit()
+                return True
+
+            for _ in range(min(num_workers, len(selected_files))):
+                if not submit_next():
                     break
-
-                # Check if file belongs to this chunk
-                if file_path.startswith(chunk.directory_path + os.sep) or os.path.dirname(file_path) == chunk.directory_path:
-                    try:
-                        checker.scan_file(file_path, force_rescan=force_rescan)
-                        chunk_scanned += 1
-
-                        with files_scanned_lock:
-                            files_scanned += 1
-                            self.update_progress(files_scanned, len(selected_files), file_path, 'scanning')
-
-                    except Exception as e:
-                        logger.error(f"Error scanning {file_path}: {e}")
-
-            # Update chunk completion with thread-safe database access
-            with db_lock:
-                chunk.files_scanned = chunk_scanned
-                chunk.status = 'completed'
-                chunk.end_time = datetime.now(timezone.utc)
-                db.session.commit()
-
-            return chunk_scanned
-
-        # Process chunks in parallel
-        with ThreadPoolExecutor(max_workers=min(num_workers, len(chunks))) as executor:
-            future_to_chunk = {executor.submit(scan_chunk_files, chunk): chunk for chunk in chunks}
+            write_active_files()
 
             completed_chunks = 0
-            for future in as_completed(future_to_chunk):
-                if self.scan_cancelled:
-                    executor.shutdown(wait=False)
-                    break
-
-                chunk = future_to_chunk[future]
-                completed_chunks += 1
-
-                # Update scan state with thread-safe database access
-                with db_lock:
-                    try:
-                        scan_state.current_chunk_index = completed_chunks
-                        scan_state.update_progress(files_scanned, len(selected_files), current_file='')
-                        scan_state.progress_message = progress_tracker.get_progress_message(
-                            f'Scanning {len(selected_files)} selected files (parallel)',
-                            files_scanned,
-                            len(selected_files),
-                            f"Completed {completed_chunks}/{len(chunks)} directories"
-                        )
-                        db.session.commit()
-                    except Exception as e:
-                        logger.error(f"Failed to update progress for chunk {chunk.directory_path}: {e}")
-                        # Try to recover the database session
+            try:
+                while future_to_path:
+                    done, _ = wait(future_to_path, timeout=30, return_when=FIRST_COMPLETED)
+                    if not done:
+                        if not self._selected_run_is_active(scan_state_id, heartbeat=True):
+                            self.scan_cancelled = True
+                            break
+                        write_active_files()
+                        continue
+                    for future in done:
+                        file_path = future_to_path.pop(future)
+                        directory = os.path.dirname(file_path)
+                        chunk = chunks_by_directory[directory]
                         try:
-                            db.session.rollback()
-                            # Re-get scan state and try again
-                            scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
-                            if scan_state:
-                                scan_state.update_progress(files_scanned, len(selected_files), current_file='')
-                                db.session.commit()
-                        except Exception as e2:
-                            logger.error(f"Failed to recover progress update: {e2}")
+                            observed = future.result()
+                            error = None
+                        except Exception as exc:
+                            observed = None
+                            error = str(exc)
+
+                        if error:
+                            chunk_failed[directory] = True
+                            self._mark_selected_member_error(scan_state.scan_id, file_path, error)
+                        else:
+                            recorded = self._snapshot_run_member(
+                                scan_state.scan_id, file_path, observed)
+                            outcome = observed.get('outcome') if isinstance(observed, dict) else None
+                            if not recorded or outcome != 'completed':
+                                chunk_failed[directory] = True
+                            if not recorded:
+                                self._mark_selected_member_error(
+                                    scan_state.scan_id, file_path,
+                                    'Scanner result could not be recorded for this run')
+                        state = (ScanState.query.filter_by(id=scan_state_id)
+                                 .populate_existing().with_for_update().first())
+                        chunk = (ScanChunk.query.filter_by(id=chunk.id)
+                                 .populate_existing().with_for_update().first())
+                        if (not state or not state.is_active
+                                or state.phase != SCAN_PHASES['SCANNING'] or not chunk):
+                            self.scan_cancelled = True
+                            db.session.commit()
+                            continue
+
+                        files_scanned += 1
+                        self.update_progress(files_scanned, len(selected_files), file_path, 'scanning')
+
+                        chunk.files_scanned += 1
+                        chunk.files_processed += 1
+                        chunk_remaining[directory] -= 1
+                        if chunk_remaining[directory] == 0:
+                            completed_chunks += 1
+                            chunk.status = 'error' if chunk_failed[directory] else 'completed'
+                            chunk.is_complete = True
+                            chunk.end_time = datetime.now(timezone.utc)
+                        state.current_chunk_index = completed_chunks
+                        state.update_progress(files_scanned, len(selected_files), current_file='')
+                        state.progress_message = progress_tracker.get_progress_message(
+                            f'Scanning {len(selected_files)} selected files (parallel)',
+                            files_scanned, len(selected_files),
+                            f"Completed {completed_chunks}/{len(chunks)} directories")
+                        db.session.commit()
+                        submit_next()
+                        write_active_files()
+            finally:
+                clear_scan_progress_redis(scan_id)
         
         # Complete scan
         if self.scan_cancelled:
             self._handle_scan_cancellation(scan_state)
         else:
             # Retry any files that are still pending before marking complete
-            remaining_pending = self._retry_pending_files(checker, force_rescan)
+            remaining_pending = self._retry_pending_files(checker, force_rescan, scan_state.scan_id)
 
-            self.update_progress(len(selected_files), len(selected_files), '', 'completed')
+            self.update_progress(files_scanned, len(selected_files), '', 'completed')
 
-            # Thread-safe completion
-            self._mark_scan_completed(scan_state_id, len(selected_files), len(selected_files))
+            self._mark_scan_completed(scan_state_id, files_scanned, len(selected_files))
 
             # Create scan report
             completed_scan_state = db.session.query(ScanState).filter_by(id=scan_state_id).first()
@@ -1056,7 +1349,7 @@ class ScanService:
 
             logger.info(f"=== SCAN COMPLETED (PARALLEL SELECTED CHUNKS) ===")
             logger.info(f"Scan ID: {scan_state_id}")
-            logger.info(f"Files scanned: {len(selected_files)}")
+            logger.info(f"Files scanned: {files_scanned}")
             if remaining_pending > 0:
                 logger.warning(f"Files still pending after retries: {remaining_pending}")
             logger.info(f"=== END SCAN ===")

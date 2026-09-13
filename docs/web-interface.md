@@ -29,7 +29,7 @@ The mobile layout has a collapsible sidebar and shows scan results as cards inst
 
 ## Working with results
 
-1. Start a scan with "Scan All Files"; progress, ETA, and phase appear live.
+1. Start a scan with "Scan All Files". Live progress includes phase and ETA. Expand Active files for up to four files being checked. It clears when none remain.
 2. Filter with the buttons above the table (corrupted, warnings, bitrot, healthy, pending) or the path dropdown.
 3. Select files with checkboxes; Shift+click selects ranges.
 4. Per-file actions:
@@ -39,6 +39,8 @@ The mobile layout has a collapsible sidebar and shows scan results as cards inst
    - Mark as Good: clear false positives (bulk up to 1000 files)
    - Integrity Check: verify the file still exists and has not changed
    - Details: open the Scan Details modal - verdict sections first, with the raw tool transcript collapsed behind "Full scan transcript"
+
+Preview type comes from the authorized file content, not saved scan metadata. Supported pending and unscanned media can preview without changing scan status. Content that cannot be safely previewed remains available for download.
 
 ## Authentication and user management
 

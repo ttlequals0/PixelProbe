@@ -27,15 +27,15 @@ def test_advisory_lock_id_is_stable():
     assert int(match.group(1)) == 7283945162
 
 
-def test_migrate_database_falls_back_on_advisory_lock_failure(app):
-    """When advisory lock acquisition fails (e.g., SQLite test DB), migrations
-    still run via the fallback path."""
+def test_migrate_database_fails_closed_on_advisory_lock_failure(app):
+    """A process without coordination must never run schema changes."""
     mig_mod = _get_migrations_module()
     with app.app_context():
         with patch.object(mig_mod, '_run_all_migrations') as mock_migrations:
             from pixelprobe.models import db
-            mig_mod.migrate_database(db)
-            mock_migrations.assert_called_once()
+            with pytest.raises(Exception):
+                mig_mod.migrate_database(db)
+            mock_migrations.assert_not_called()
 
 
 def test_migrate_database_releases_lock_on_success(app):
@@ -54,10 +54,12 @@ def test_migrate_database_releases_lock_on_success(app):
         mock_db = MagicMock()
         mock_db.engine = mock_engine
 
-        with patch.object(mig_mod, '_run_all_migrations') as mock_migrations:
+        with patch.object(mig_mod, '_run_all_migrations') as mock_migrations, \
+                patch.object(mig_mod, 'verify_schema_ready') as verify_ready:
             mig_mod.migrate_database(mock_db)
 
             mock_migrations.assert_called_once()
+            verify_ready.assert_called_once_with(mock_db, mock_conn)
             assert mock_conn.execute.call_count == 2
             unlock_text_arg = mock_conn.execute.call_args_list[1][0][0]
             assert 'pg_advisory_unlock' in unlock_text_arg.text
@@ -81,7 +83,8 @@ def test_migrate_database_releases_lock_on_migration_failure(app):
         mock_db.engine = mock_engine
 
         with patch.object(mig_mod, '_run_all_migrations', side_effect=RuntimeError("migration boom")) as mock_migrations:
-            mig_mod.migrate_database(mock_db)
+            with pytest.raises(RuntimeError, match='migration boom'):
+                mig_mod.migrate_database(mock_db)
 
             mock_migrations.assert_called_once()
             assert mock_conn.execute.call_count == 2
@@ -91,7 +94,7 @@ def test_migrate_database_releases_lock_on_migration_failure(app):
 
 
 def test_migrate_database_waiter_path(app):
-    """When another process holds the lock, we wait then skip migrations."""
+    """A waiter verifies schema readiness after the migration owner releases."""
     mig_mod = _get_migrations_module()
     with app.app_context():
         mock_conn = MagicMock()
@@ -112,9 +115,12 @@ def test_migrate_database_waiter_path(app):
         mock_db = MagicMock()
         mock_db.engine = mock_engine
 
-        with patch.object(mig_mod, '_run_all_migrations') as mock_migrations:
+        with patch.object(mig_mod, '_run_all_migrations') as mock_migrations, \
+                patch.object(mig_mod, 'verify_schema_ready') as verify_ready:
             mig_mod.migrate_database(mock_db)
 
             mock_migrations.assert_not_called()
-            # try_lock + SET LOCAL statement_timeout (bounds the wait) + lock + unlock
+            # try_lock + bounded wait + unlock. Readiness checks every model
+            # table and column on the same connection rather than one table.
             assert call_count[0] == 4
+            verify_ready.assert_called_once_with(mock_db, mock_conn)

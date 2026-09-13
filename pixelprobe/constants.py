@@ -255,6 +255,20 @@ SCANNER_SETTINGS = [
         'legacy_env': 'FFPROBE_TIMEOUT_SECS',
     },
     {
+        'key': 'timeouts.audio_decode_base_secs',
+        'group': SETTING_GROUP_TIMEOUTS,
+        'label': 'Audio decode base timeout',
+        'help': 'Starting budget for checking one audio file, shared by its decode, container and '
+                'lossless passes. The real budget scales up with the file\'s size and playing '
+                'time, so a long episode is not cut short.',
+        'type': 'int',
+        'default': 120,
+        'min': 30,
+        'max': 3600,
+        'unit': 'seconds',
+        'legacy_env': 'AUDIO_DECODE_BASE_SECS',
+    },
+    {
         'key': 'timeouts.file_read_timeout_secs',
         'group': SETTING_GROUP_TIMEOUTS,
         'label': 'File read timeout',

@@ -16,6 +16,9 @@ from both the web process and the workers.
 import logging
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from types import MappingProxyType
 
 from pixelprobe.constants import SCANNER_SETTINGS, SCANNER_SETTINGS_BY_KEY
 
@@ -27,6 +30,7 @@ SETTINGS_CACHE_TTL_SECS = 60
 
 _cache = {'values': None, 'expires_at': 0.0}
 _cache_lock = threading.Lock()
+_scanner_settings_snapshot = ContextVar('scanner_settings_snapshot', default=None)
 
 
 class SettingValueError(ValueError):
@@ -116,6 +120,24 @@ def resolve_settings(use_cache=True):
             _cache['values'] = dict(values)
             _cache['expires_at'] = time.time() + SETTINGS_CACHE_TTL_SECS
     return values
+
+
+@contextmanager
+def scanner_settings_snapshot(values):
+    """Scope a resolved settings copy to one scanner execution."""
+    token = _scanner_settings_snapshot.set(MappingProxyType(dict(values)))
+    try:
+        yield
+    finally:
+        _scanner_settings_snapshot.reset(token)
+
+
+def scanner_setting(key):
+    """Read a scoped scanner value or resolve it for non-worker callers."""
+    values = _scanner_settings_snapshot.get()
+    if values is not None:
+        return values[key]
+    return resolve_settings()[key]
 
 
 def invalidate_cache():

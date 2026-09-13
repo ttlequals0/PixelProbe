@@ -1,3 +1,11 @@
+FROM node:22.22.2-bookworm-slim AS frontend
+
+WORKDIR /frontend
+COPY package.json package-lock.json webpack.config.js ./
+RUN npm ci
+COPY static ./static
+RUN npm run build
+
 FROM ubuntu:26.04
 
 # Prevent interactive prompts during package installation
@@ -16,11 +24,7 @@ RUN apt-get update && \
     apt-get install -y \
     # Python 3.12 (deadsnakes)
     python3.12 \
-    python3.12-dev \
     python3.12-venv \
-    # Node.js for frontend build \
-    nodejs \
-    npm \
     # Core utilities \
     ffmpeg \
     libmagic1 \
@@ -33,36 +37,23 @@ RUN apt-get update && \
     libmagickwand-7.q16-10 \
     # Image format libraries \
     libjpeg-turbo8 \
-    libjpeg-dev \
     libpng16-16t64 \
-    libpng-dev \
     libtiff6 \
-    libtiff-dev \
     libwebp7 \
-    libwebp-dev \
     libwebpmux3 \
     libwebpdemux2 \
     webp \
     libopenjp2-7 \
-    libopenjp2-7-dev \
     librsvg2-2 \
-    librsvg2-dev \
     libraw23 \
-    libraw-dev \
     libheif1 \
-    libheif-dev \
     ghostscript \
     # Additional libraries for better support \
     libexif12 \
-    libexif-dev \
     liblcms2-2 \
-    liblcms2-dev \
     libfftw3-double3 \
-    libfftw3-dev \
     libfreetype6 \
-    libfreetype6-dev \
     libfontconfig1 \
-    libfontconfig1-dev \
     && rm -rf /var/lib/apt/lists/* \
     # pebble ships in the ubuntu:26.04 OCI rootfs (not dpkg-owned); unused
     # here and its embedded Go deps carry unfixed HIGH CVEs, so drop it
@@ -72,6 +63,7 @@ RUN apt-get update && \
 # A venv avoids pip 26+ conflicts with the system 3.14 dist-packages.
 RUN python3.12 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip==26.2.1
 
 # Configure ImageMagick 7: raise resource limits for large media. The 26.04
 # default policy only sets disk=2GiB (no PDF/HEIC coder blocks to lift).
@@ -107,6 +99,11 @@ ENV FFMPEG_HTTP_TIMEOUT=30000000
 
 WORKDIR /app
 
+ARG APP_UID=10001
+ARG APP_GID=10001
+RUN groupadd --gid "${APP_GID}" pixelprobe && \
+    useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --shell /usr/sbin/nologin pixelprobe
+
 # Verify FFmpeg and ImageMagick installations
 RUN ffmpeg -version && \
     ffmpeg -decoders 2>/dev/null | grep -E "(hevc|h264|h265|av1|vp9)" && \
@@ -132,32 +129,33 @@ RUN ffmpeg -version && \
     echo "=== All image format tests passed ==="
 
 COPY requirements.txt .
-# After install, remove chardet (pulled in by reportlab) -- its 7.x version fails
+# After install, remove chardet pulled in by reportlab. Its 7.x version fails
 # requests' version check (requires <6.0.0). Our app uses charset_normalizer instead.
 RUN pip install --no-cache-dir -r requirements.txt \
-    && pip uninstall -y chardet 2>/dev/null; true
+    && (pip uninstall -y chardet 2>/dev/null || true) \
+    && python -m pip uninstall -y pip \
+    && test ! -e /opt/venv/bin/pip
 
-# Build headers were only needed for pip C-extension builds above; linux-libc-dev
-# otherwise ships a stream of unfixed kernel-header CVEs the runtime never touches.
-RUN apt-get purge -y linux-libc-dev python3.12-dev 2>/dev/null; \
-    apt-get autoremove -y 2>/dev/null; \
+# Keep build headers out of the runtime image. All Python dependencies above use
+# wheels, so the runtime does not need libc6-dev or linux-libc-dev.
+RUN set -eux; \
+    for package in linux-libc-dev libc6-dev; do \
+        if dpkg -s "$package" >/dev/null 2>&1; then \
+            echo "Unexpected build header package: $package" >&2; \
+            exit 1; \
+        fi; \
+    done; \
     rm -rf /var/lib/apt/lists/* /root/.cache
 
-COPY package.json webpack.config.js ./
-RUN npm install
-
 COPY . .
-
-# Build frontend assets, then drop the node toolchain. Webpack and its
-# transitive dev-only dependencies (picomatch, serialize-javascript, svgo,
-# etc.) are not needed at runtime and otherwise ship as CVEs in the image.
-RUN npm run build && \
-    rm -rf node_modules package-lock.json
+COPY --from=frontend /frontend/static/dist ./static/dist
 
 # Ensure the pixelprobe package is properly installed
 RUN mkdir -p /app/instance && \
     chmod -R 755 /app && \
-    find /app -type f -name "*.py" -exec chmod 644 {} \;
+    find /app -type f -name "*.py" -exec chmod 644 {} \; && \
+    mkdir -p /app/instance /app/runtime /app/logs && \
+    chown -R "${APP_UID}:${APP_GID}" /app/instance /app/runtime /app/logs /tmp
 
 # Set Python path to include the app directory
 ENV PYTHONPATH=/app
@@ -168,6 +166,8 @@ EXPOSE 5000
 
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
+
+USER pixelprobe
 
 # Don't set APP_VERSION here - let version.py be the single source of truth
 # The app will read the version from version.py directly

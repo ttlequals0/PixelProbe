@@ -13,169 +13,22 @@ PixelProbe uses 4 main containers:
 | **pixelprobe** | Web UI & API | 5000 | postgres, redis |
 | **celery-worker** | Background processing | None | postgres, redis |
 
-Only the web container publishes a port to the host. postgres and redis are
-reachable solely on the internal compose network.
+Only the web container publishes a port to the host. postgres and redis are reachable solely on the internal compose network.
 
-## Complete Docker Compose file
+## Effective Docker Compose file
 
-This example is abridged - see `docker-compose.yml` in the repo root for the
-full set of environment variables and comments.
+[`docker-compose.yml`](../docker-compose.yml) in the repository root is the only supported deployment file. It defines the current image tag, non-root identity, read-only media bind, writable runtime paths, resource limits, cookie settings, and scheduler ownership. Do not copy older Compose examples.
+
+Use a small override file only for local changes. It must preserve the same `PUID:PGID` and read-only media mount for both application services.
 
 ```yaml
 services:
-  # PostgreSQL Database - Stores all scan results and metadata
-  postgres:
-    image: postgres:18-alpine
-    container_name: pixelprobe-postgres
-    environment:
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-    volumes:
-      - postgres_data:/var/lib/postgresql
-    # Not published to the host: app and worker reach it on the compose
-    # network. For local debugging use: - "127.0.0.1:5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # Valkey (Redis-compatible) - Message broker for Celery task queue.
-  # noeviction is required: an eviction policy like allkeys-lru could
-  # silently drop queued task messages under memory pressure.
-  redis:
-    image: valkey/valkey:9-alpine
-    container_name: pixelprobe-redis
-    command: >
-      valkey-server
-      --maxmemory ${REDIS_MAX_MEMORY:-2gb}
-      --maxmemory-policy noeviction
-    # Not published to the host: the broker has no auth. For local
-    # debugging use: - "127.0.0.1:6379:6379"
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # Main Web Application - Serves UI and API
   pixelprobe:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
-    container_name: pixelprobe-app
-    ports:
-      - "5000:5000"  # Required: web interface access
     environment:
-      # Security
-      SECRET_KEY: ${SECRET_KEY}
-
-      # Scheduler runs in celery-worker; keep the web container out of the
-      # scheduler lock entirely (set to "true" only in single-container setups)
-      SCHEDULER_ENABLED: "false"
-
-      # Database Configuration
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      
-      # Celery Configuration
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      
-      # Application Settings
-      SCAN_PATHS: /media,/photos,/videos
-      EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
-      EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
-      MAX_WORKERS: 10
-      BATCH_SIZE: 100
-      OUTPUT_ROTATION_ENABLED: true
-      
-      # Timezone (optional)
-      TZ: America/New_York
-    volumes:
-      # Media directories (read-only for safety)
-      - /path/to/media:/media:ro
-      - /path/to/photos:/photos:ro
-      - /path/to/videos:/videos:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s  # migrations run before workers serve requests
-    restart: unless-stopped
-
-  # Celery Worker - Processes scan tasks in parallel
+      GUNICORN_WORKERS: 2
   celery-worker:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.8.0}
-    container_name: pixelprobe-celery-worker
-    command: python celery_worker.py
     environment:
-      # Security (config.py refuses to start without SECRET_KEY)
-      SECRET_KEY: ${SECRET_KEY}
-
-      # Database Configuration
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      
-      # Celery Configuration
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      CELERY_LOG_LEVEL: ${CELERY_LOG_LEVEL:-INFO}
-      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}  # Concurrent Celery tasks
-      
-      # Worker Settings
-      MAX_WORKERS: 10
-      
-      # Scan configuration (required for the scheduler, which runs here)
-      SCAN_PATHS: /media,/photos,/videos
-      EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
-      EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
-      
-      # Timezone (optional)
-      TZ: America/New_York
-    volumes:
-      # Same media directories as web container
-      - /path/to/media:/media:ro
-      - /path/to/photos:/photos:ro
-      - /path/to/videos:/videos:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    deploy:
-      # Budget roughly 1 CPU and 2 GB RAM per CELERY_CONCURRENCY slot.
-      # With the default CELERY_CONCURRENCY=4 that means cpus 4, memory 8G.
-      resources:
-        limits:
-          cpus: '4'
-          memory: 8G
-        reservations:
-          cpus: '2'
-          memory: 4G
-    restart: unless-stopped
-
-volumes:
-  postgres_data:
-    driver: local
-
-networks:
-  default:
-    name: pixelprobe-network
-    driver: bridge
+      CELERY_CONCURRENCY: 2
 ```
 
 ## Environment variables (.env file)
@@ -226,9 +79,7 @@ celery-worker:
     replicas: 3  # Run 3 worker containers
 ```
 
-Note: remove the `container_name:` line from the service before using
-`replicas` or `docker compose up --scale` - container names must be unique,
-so a fixed name prevents starting more than one instance.
+Note: remove the `container_name:` line before using `replicas` or `docker compose up --scale`. Container names must be unique, so a fixed name prevents more than one instance from starting.
 
 Or increase concurrency in a single container:
 
@@ -239,19 +90,18 @@ environment:
 
 ### Performance tuning
 
-Adjust these settings based on your system:
+Adjust these settings based on your system. They are operator starting points, not measured throughput or memory guarantees. Validate them against the media, storage, and database used by the deployment.
 
 | Setting | Default | Description | Recommendation |
 |---------|---------|-------------|----------------|
 | CELERY_CONCURRENCY | 4 | Concurrent Celery tasks per container | Budget roughly 1 CPU and 2 GB RAM per slot (the worker recycles children at --max-memory-per-child, about 1.9 GiB); raise only if the container has matching cpus/memory limits |
 | MAX_WORKERS | 10 | Threads for selected-file rescans only (Scan Selected); does not affect directory scans, which scale with CELERY_CONCURRENCY | Each thread holds one PostgreSQL connection. Leave at 10; raise toward 16-24 only for large hand-picked rescans with max_connections headroom. Not a function of CPU cores |
-| BATCH_SIZE | 100 | Paths per database lookup batch during file discovery | Leave at 100; does not control scan chunk size, which is automatic (see the chunk table in [performance-tuning.md](performance-tuning.md)) |
+| BATCH_SIZE | 100 | Legacy media-checker discovery lookup batch | Leave at 100. It does not control parallel discovery inserts or scan chunk commits. |
 | REDIS_MAX_MEMORY | 2gb | Task queue memory | 1-4gb for large libraries |
 
 ### PostgreSQL tuning
 
-There is no PixelProbe environment variable for PostgreSQL memory; tune the
-database on the `postgres` service itself, for example:
+There is no PixelProbe environment variable for PostgreSQL memory; tune the database on the `postgres` service itself, for example:
 
 ```yaml
 postgres:
@@ -263,10 +113,7 @@ postgres:
         memory: 4G
 ```
 
-Rule of thumb: `shared_buffers` about 25% of the container's memory limit,
-`effective_cache_size` about 75%. [configuration.md](configuration.md) shows
-an `ALTER SYSTEM` variant that changes the same settings on a running
-database.
+Rule of thumb: set `shared_buffers` to about 25% of the container's memory limit and `effective_cache_size` to about 75%. [configuration.md](configuration.md) shows an `ALTER SYSTEM` variant for a running database.
 
 ## Volume mounts
 
@@ -282,19 +129,20 @@ volumes:
   - /media/music:/music:ro
 ```
 
-**Important:** both the `pixelprobe` (web app) and `celery-worker` containers must run as the same user to access mounted media files. Add the `user:` directive to both services:
+**Important:** the root Compose file already runs both application services as
+the same configured user. Keep that setting in any override:
 
 ```yaml
 services:
   pixelprobe:
     # ... other settings ...
-    user: "1000:1000"  # Use your host user's UID:GID
+    user: "${PUID:-10001}:${PGID:-10001}"
     volumes:
       - /media/movies:/movies:ro
 
   celery-worker:
     # ... other settings ...
-    user: "1000:1000"  # MUST match pixelprobe user
+    user: "${PUID:-10001}:${PGID:-10001}"  # MUST match pixelprobe user
     volumes:
       - /media/movies:/movies:ro
 ```
@@ -307,10 +155,10 @@ id -g  # Shows GID (typically 1000)
 
 Or use environment variables:
 ```yaml
-user: "${PUID:-1000}:${PGID:-1000}"
+user: "${PUID:-10001}:${PGID:-10001}"
 ```
 
-If the web app and Celery worker run as different users, the worker gets "No valid files provided" errors even though files exist, because it can't read the mounted media directories.
+If the web app and Celery worker run as different users, the worker may not read the mounted media directories. It then reports "No valid files provided" even when the files exist.
 
 ### Database persistence
 
@@ -431,24 +279,11 @@ tar -czf pixelprobe_config_$(date +%Y%m%d).tar.gz docker-compose.yml .env
 
 ## PostgreSQL 15 to 18 migration (required for v2.7.0+)
 
-Starting with v2.7.0 the compose file defaults to `postgres:18-alpine`.
-PostgreSQL data directories are NOT portable across major versions: an
-existing `postgres_data` volume created by PostgreSQL 15 will refuse to start
-on the 18 image (the container crash-loops with a version mismatch error).
-Migrate BEFORE switching to the new compose file. If you are not ready to
-migrate, pin `image: postgres:15-alpine` in your compose file - the app works
-with both versions.
+Starting with v2.7.0 the compose file defaults to `postgres:18-alpine`. PostgreSQL data directories are not portable across major versions. A `postgres_data` volume created by PostgreSQL 15 will refuse to start on the 18 image and the container will crash-loop with a version mismatch error. Migrate before switching to the new compose file. If you are not ready to migrate, pin `image: postgres:15-alpine`; the app works with both versions.
 
-Also note: the postgres:18+ Docker images changed the expected volume mount
-point from `/var/lib/postgresql/data` to `/var/lib/postgresql` (data now lives
-in a major-version subdirectory so future upgrades can use `pg_upgrade
---link`). The 18 image refuses to start with a volume mounted at the old
-`/data` path. The bundled docker-compose.yml already uses the new mount; if
-you maintain your own compose file, update the postgres volume line to
-`- postgres_data:/var/lib/postgresql`.
+The postgres:18+ Docker images changed the expected volume mount from `/var/lib/postgresql/data` to `/var/lib/postgresql`. Data now lives in a major-version subdirectory so future upgrades can use `pg_upgrade --link`. The 18 image refuses a volume mounted at the old `/data` path. The bundled docker-compose.yml already uses the new mount. If you maintain your own compose file, update the postgres volume line to `- postgres_data:/var/lib/postgresql`.
 
-Downtime for the migration is roughly the dump plus restore time (a few
-minutes for typical libraries).
+Downtime for the migration is roughly the dump plus restore time (a few minutes for typical libraries).
 
 ```bash
 # 1. Dump while the OLD stack is still running
@@ -483,7 +318,4 @@ docker-compose up -d
 docker exec pixelprobe-postgres psql -U pixelprobe -d pixelprobe -c "SELECT COUNT(*) FROM scan_results;"
 ```
 
-Note: your compose project name may prefix the volume (e.g.
-`pixelprobe_postgres_data`); check with `docker volume ls`. Once you have
-verified the app against PostgreSQL 18, the `_pg15_backup` volume and the
-dump file can be deleted.
+Note: your compose project name may prefix the volume (e.g. `pixelprobe_postgres_data`); check with `docker volume ls`. Once you have verified the app against PostgreSQL 18, the `_pg15_backup` volume and the dump file can be deleted.

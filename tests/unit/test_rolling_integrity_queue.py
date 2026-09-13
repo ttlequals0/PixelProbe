@@ -9,7 +9,7 @@ explicitly.
 from datetime import datetime, timedelta
 
 from pixelprobe.models import ScanResult
-from pixelprobe.services.maintenance_service import fetch_integrity_batch
+from pixelprobe.services.maintenance_service import fetch_cleanup_batch, fetch_integrity_batch
 
 # Naive UTC datetimes, matching what the DateTime column stores.
 NOW = datetime(2026, 7, 1, 12, 0, 0)
@@ -105,6 +105,82 @@ class TestQueueBounds:
         ids = [b['id'] for b in fetch_integrity_batch(['/m/wanted.mkv'], WATERMARK, set(), 10)]
 
         assert ids == [wanted]
+
+    def test_scan_roots_scope_the_queue_without_matching_a_sibling(self, db):
+        wanted = seed(db, '/media/a/show/episode.mkv', checked=None)
+        seed(db, '/media/b/show/episode.mkv', checked=None)
+        seed(db, '/media/ab/not-a-child.mkv', checked=None)
+
+        batch = fetch_integrity_batch(
+            None, WATERMARK, set(), 10, scan_roots=['/media/a'],
+            excluded_paths=[],
+        )
+
+        assert [entry['id'] for entry in batch] == [wanted]
+
+    def test_scan_roots_honor_current_excluded_paths(self, db):
+        wanted = seed(db, '/media/a/kept/episode.mkv', checked=None)
+        seed(db, '/media/a/excluded/episode.mkv', checked=None)
+
+        batch = fetch_integrity_batch(
+            None, WATERMARK, set(), 10, scan_roots=['/media/a'],
+            excluded_paths=['/media/a/excluded'],
+        )
+
+        assert [entry['id'] for entry in batch] == [wanted]
+
+    def test_scan_roots_honor_extensions_and_filename_patterns(self, db):
+        wanted = seed(db, '/media/a/kept.mkv', checked=None)
+        seed(db, '/media/a/ignored.tmp', checked=None)
+        seed(db, '/media/a/._resource.mkv', checked=None)
+
+        batch = fetch_integrity_batch(
+            None, WATERMARK, set(), 10, scan_roots=['/media/a'],
+            excluded_paths=[], excluded_extensions=['.tmp'],
+            excluded_patterns=['._*'],
+        )
+
+        assert [entry['id'] for entry in batch] == [wanted]
+
+
+class TestCleanupCandidateQueue:
+
+    def test_root_scope_is_keyset_paged_and_does_not_match_siblings(self, db):
+        first = seed(db, '/media/a/one.mkv', checked=None)
+        second = seed(db, '/media/a/two.mkv', checked=None)
+        seed(db, '/media/b/other.mkv', checked=None)
+        seed(db, '/media/ab/sibling.mkv', checked=None)
+
+        first_batch = fetch_cleanup_batch(
+            None, ['/media/a'], [], None, batch_size=1,
+        )
+        second_batch = fetch_cleanup_batch(
+            None, ['/media/a'], [], first_batch[-1].id, batch_size=1,
+        )
+
+        assert [entry.id for entry in first_batch] == [first]
+        assert [entry.id for entry in second_batch] == [second]
+
+    def test_cleanup_batch_stops_at_initial_high_watermark(self, db):
+        first = seed(db, '/media/a/one.mkv', checked=None)
+        watermark = first
+        seed(db, '/media/a/later.mkv', checked=None)
+
+        batch = fetch_cleanup_batch(
+            None, ['/media/a'], [], None, batch_size=10, max_id=watermark,
+        )
+
+        assert [entry.id for entry in batch] == [first]
+
+    def test_selected_paths_remain_exact_for_cleanup(self, db):
+        wanted = seed(db, '/media/a/wanted.mkv', checked=None)
+        seed(db, '/media/a/other.mkv', checked=None)
+
+        batch = fetch_cleanup_batch(
+            ['/media/a/wanted.mkv'], None, None, None, batch_size=10,
+        )
+
+        assert [entry.id for entry in batch] == [wanted]
 
 
 class TestRollingSweep:

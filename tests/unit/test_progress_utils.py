@@ -3,10 +3,15 @@ Unit tests for progress_utils and ScanService completion helpers
 """
 
 import os
+import sys
+import json
+from types import ModuleType
 os.environ.setdefault('SECRET_KEY', 'test-secret-key')
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
+from pixelprobe.models import (db, ScanNotificationOutbox, ScanReport, ScanRunFile,
+                               ScanRunRoot, ScanState)
 
 
 class TestGetScanProgressRedis:
@@ -100,39 +105,97 @@ class TestGetScanProgressRedis:
         result = get_scan_progress_redis('scan-123')
         assert result is None
 
+    @patch('pixelprobe.progress_utils.get_redis_client')
+    def test_reads_bounded_active_files(self, mock_get_client):
+        from pixelprobe.progress_utils import get_scan_progress_redis
+        mock_client = Mock()
+        active_files = [
+            {'file': f'/media/{index}.mp4', 'directory': '/media'}
+            for index in range(10)
+        ]
+        mock_client.hgetall.return_value = {
+            b'active_files': json.dumps(active_files).encode(),
+            b'active_file_count': b'10',
+        }
+        mock_get_client.return_value = mock_client
+
+        result = get_scan_progress_redis('scan-123')
+
+        assert len(result['active_files']) == 8
+        assert result['active_file_count'] == 10
+        assert result['active_files_truncated'] is True
+
 
 
 class TestMarkScanCompleted:
     """Test ScanService._mark_scan_completed"""
 
-    @patch('pixelprobe.services.scan_service.db')
-    def test_executes_sql_update(self, mock_db, app):
-        """Should execute SQL UPDATE with correct params and commit"""
+    @staticmethod
+    def _stub_outbox_dispatch(monkeypatch):
+        task_module = ModuleType('pixelprobe.tasks')
+        task_module.deliver_scan_notification_outbox = Mock()
+        monkeypatch.setitem(sys.modules, 'pixelprobe.tasks', task_module)
+        return task_module.deliver_scan_notification_outbox.apply_async
+
+    def _create_complete_run(self, app, scan_id):
+        with app.app_context():
+            state = ScanState(scan_id=scan_id, is_active=True, phase='scanning',
+                              estimated_total=1, files_processed=0)
+            db.session.add(state)
+            db.session.add(ScanRunRoot(scan_id=scan_id, root_path='/media',
+                                       status='completed', discovered_count=1))
+            db.session.add(ScanRunFile(scan_id=scan_id, file_path='/media/one.mp4',
+                                       status='completed', outcome='completed'))
+            db.session.commit()
+            return state.id
+
+    def test_finalizes_run_with_atomic_report_and_outbox(self, app, db, monkeypatch):
+        """Completion persists terminal state, report, and durable outbox together."""
         from pixelprobe.services.scan_service import ScanService
         service = ScanService(':memory:')
+        mock_dispatch = self._stub_outbox_dispatch(monkeypatch)
+        scan_id = 'progress-finalize-success'
+        state_id = self._create_complete_run(app, scan_id)
 
         with app.app_context():
-            service._mark_scan_completed(scan_state_id=42, files_processed=100, estimated_total=200)
+            service._mark_scan_completed(scan_state_id=state_id, files_processed=1,
+                                         estimated_total=1)
+            state = db.session.get(ScanState, state_id)
+            report = ScanReport.query.filter_by(scan_id=scan_id).one()
+            outbox = ScanNotificationOutbox.query.filter_by(scan_id=scan_id).one()
 
-        mock_db.session.execute.assert_called_once()
-        call_args = mock_db.session.execute.call_args
-        params = call_args[0][1]
-        assert params['id'] == 42
-        assert params['files_processed'] == 100
-        assert params['estimated_total'] == 200
-        assert 'end_time' in params
-        mock_db.session.commit.assert_called_once()
+        assert state.phase == 'completed'
+        assert state.is_active is False
+        assert state.files_processed == 1
+        assert state.phase_total == 1
+        assert report.status == 'completed'
+        assert report.files_scanned == 1
+        assert outbox.event == 'scan_completed'
+        assert outbox.targets_initialized is True
+        mock_dispatch.assert_called_once_with(args=(outbox.id,))
 
-    @patch('pixelprobe.services.scan_service.db')
-    def test_sql_sets_phase_completed(self, mock_db, app):
-        """Should set phase to completed and is_active to false"""
+    def test_completion_requires_complete_root_and_member_evidence(
+            self, app, db, monkeypatch):
+        """An unavailable root is terminal evidence of an error, not a healthy run."""
         from pixelprobe.services.scan_service import ScanService
         service = ScanService(':memory:')
+        mock_dispatch = self._stub_outbox_dispatch(monkeypatch)
+        scan_id = 'progress-finalize-unavailable-root'
+        state_id = self._create_complete_run(app, scan_id)
 
         with app.app_context():
-            service._mark_scan_completed(scan_state_id=1, files_processed=0, estimated_total=0)
+            root = ScanRunRoot.query.filter_by(scan_id=scan_id).one()
+            root.status = 'unavailable'
+            db.session.commit()
+            service._mark_scan_completed(scan_state_id=state_id, files_processed=1,
+                                         estimated_total=1)
+            state = db.session.get(ScanState, state_id)
+            report = ScanReport.query.filter_by(scan_id=scan_id).one()
+            outbox = ScanNotificationOutbox.query.filter_by(scan_id=scan_id).one()
 
-        call_args = mock_db.session.execute.call_args
-        sql_text = str(call_args[0][0])
-        assert 'completed' in sql_text
-        assert 'is_active' in sql_text
+        assert state.phase == 'error'
+        assert state.is_active is False
+        assert 'roots were not completely observed' in state.error_message
+        assert report.status == 'error'
+        assert outbox.event == 'scan_completed'
+        mock_dispatch.assert_called_once_with(args=(outbox.id,))

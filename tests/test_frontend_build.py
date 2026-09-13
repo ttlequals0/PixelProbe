@@ -29,16 +29,16 @@ class TestWebpackBuild:
         webpack_config = Path(__file__).parent.parent / 'webpack.config.js'
         assert webpack_config.exists(), "webpack.config.js should exist"
 
-    def test_npm_install_succeeds(self):
-        """Test that npm install completes successfully"""
+    def test_npm_ci_succeeds(self):
+        """Test that the locked frontend install completes successfully"""
         project_root = Path(__file__).parent.parent
         result = subprocess.run(
-            ['npm', 'install'],
+            ['npm', 'ci'],
             cwd=project_root,
             capture_output=True,
             text=True
         )
-        assert result.returncode == 0, f"npm install failed: {result.stderr}"
+        assert result.returncode == 0, f"npm ci failed: {result.stderr}"
 
     def test_webpack_build_succeeds(self):
         """Test that webpack build completes successfully"""
@@ -75,7 +75,7 @@ class TestWebpackBuild:
         # Check that expected files are in manifest
         assert 'app.js' in manifest, "app.js should be in manifest"
         assert 'auth.js' in manifest, "auth.js should be in manifest"
-        assert 'state.js' in manifest, "state.js should be in manifest"
+        assert 'csrf.js' in manifest, "csrf.js should be in manifest"
         assert 'styles.css' in manifest, "styles.css should be in manifest"
         
         # Check that paths are correct format
@@ -149,29 +149,29 @@ class TestWebpackBuild:
 class TestAssetUrlHelper:
     """Test asset_url() template helper function"""
 
-    def test_asset_url_function_exists(self, app):
-        """Test that asset_url function is available in template context"""
-        # Note: This test is skipped because the test app in conftest.py
-        # doesn't include the asset_url context processor from the main app
-        pytest.skip("Test app doesn't include asset_url context processor")
+    def test_asset_url_function_exists(self):
+        project_root = Path(__file__).parent.parent
+        source = (project_root / 'app.py').read_text()
+        assert '@app.context_processor\ndef inject_assets()' in source
+        assert 'def asset_url(filename):' in source
 
-    def test_asset_url_returns_hashed_path(self, app):
-        """Test that asset_url returns hashed path from manifest"""
-        # Note: This test is skipped because the test app in conftest.py
-        # doesn't include the asset_url context processor from the main app
-        pytest.skip("Test app doesn't include asset_url context processor")
+    def test_asset_url_returns_hashed_path(self):
+        project_root = Path(__file__).parent.parent
+        manifest = json.loads((project_root / 'static' / 'dist' / 'manifest.json').read_text())
+        assert manifest['app.js'].startswith('/static/dist/')
+        assert (project_root / manifest['app.js'].lstrip('/')).is_file()
 
-    def test_asset_url_fallback_without_manifest(self, app):
-        """Test that asset_url falls back to version query param without manifest"""
-        # Note: This test is skipped because the test app in conftest.py
-        # doesn't include the asset_url context processor from the main app
-        pytest.skip("Test app doesn't include asset_url context processor")
+    def test_asset_url_fallback_without_manifest(self):
+        project_root = Path(__file__).parent.parent
+        source = (project_root / 'app.py').read_text()
+        assert "'login.js': 'js/login.js'" in source
+        assert "'api_docs.js': 'js/api_docs.js'" in source
+        assert "No built asset or development fallback" in source
 
-    def test_version_and_github_url_in_context(self, app):
-        """Test that version and github_url are available in template context"""
-        # Note: This test is skipped because the test app in conftest.py
-        # doesn't include the asset_url context processor from the main app
-        pytest.skip("Test app doesn't include asset_url context processor")
+    def test_version_and_github_url_in_context(self):
+        project_root = Path(__file__).parent.parent
+        source = (project_root / 'app.py').read_text()
+        assert 'version=__version__, github_url=__github_url__' in source
 
 
 class TestTemplateIntegration:
@@ -208,6 +208,38 @@ class TestTemplateIntegration:
             if '/static/css/' in line and 'asset_url' not in line:
                 if not line.strip().startswith('<!--') and 'cdn' not in line.lower():
                     pytest.fail(f"Found hardcoded /static/css/ path without asset_url: {line.strip()}")
+
+
+class TestFrontendSecurityContracts:
+    """Regression checks for browser security and polling contracts."""
+
+    def test_templates_provide_csrf_token_before_unsafe_requests(self):
+        project_root = Path(__file__).parent.parent
+        for template_name in ('index.html', 'login.html'):
+            content = (project_root / 'templates' / template_name).read_text()
+            assert 'name="csrf-token" content="{{ csrf_token() }}"' in content
+            assert "asset_url('csrf.js')" in content
+
+    def test_csrf_wrapper_limits_token_to_same_origin_unsafe_requests(self):
+        source = (Path(__file__).parent.parent / 'static' / 'js' / 'csrf.js').read_text()
+        assert "new Set(['POST', 'PUT', 'PATCH', 'DELETE'])" in source
+        assert 'url.origin !== window.location.origin' in source
+        assert "headers.set('X-CSRFToken', token)" in source
+
+    def test_state_poller_is_not_loaded_by_the_application(self):
+        content = (Path(__file__).parent.parent / 'templates' / 'index.html').read_text()
+        assert "asset_url('state.js')" not in content
+
+    def test_file_status_has_nonterminal_and_error_states(self):
+        source = (Path(__file__).parent.parent / 'static' / 'js' / 'app.js').read_text()
+        for status in ('pending', 'scanning', 'error', 'failed', 'unsupported', 'skipped'):
+            assert f"case '{status}':" in source
+
+    def test_stored_auth_values_use_text_nodes_and_event_listeners(self):
+        source = (Path(__file__).parent.parent / 'static' / 'js' / 'auth.js').read_text()
+        assert 'username.textContent = user.username' in source
+        assert 'description.textContent = token.description' in source
+        assert "deleteButton.addEventListener('click'" in source
 
 
 class TestGitignore:

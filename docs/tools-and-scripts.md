@@ -24,7 +24,7 @@ All tools and scripts available in PixelProbe v2.8.0+.
 ```bash
 python3 tools/fix_database_schema.py
 ```
-**When to use:** When tables are missing after a failed initialization. Note: it only repairs missing tables; its attempt to re-run migrations silently no-ops (the functions it imports from `app` no longer exist), which is harmless because migrations already run at every startup.
+**When to use:** When tables are missing after a failed initialization. It only repairs missing tables. Its migration call silently no-ops because the imported `app` functions no longer exist. That is harmless because migrations already run at startup.
 
 #### `scripts/fix_database_schema.py`
 **Purpose:** Legacy emergency schema fix script (v2.2.46-era column additions)
@@ -172,11 +172,7 @@ curl -X POST http://localhost:5000/api/reset-incomplete-scans \
 ```
 
 #### `scripts/setup_test_env.sh`
-**Purpose:** Set up the virtual environment and test database for running tests
-**Usage:**
-```bash
-./scripts/setup_test_env.sh
-```
+**Status:** Retired SQLite setup helper. Use [developer-guide.md](developer-guide.md) and [testing-guide.md](testing-guide.md) for the supported PostgreSQL test setup.
 
 ---
 
@@ -246,12 +242,14 @@ python3 tests/fixtures/media_samples/download_missing_samples.py
 ## Shell utilities
 
 #### `tools/delete_files_from_csv.sh`
-**Purpose:** Delete files listed in a CSV export
+**Purpose:** Python 3 utility, despite its historical `.sh` filename, for deleting regular files listed in a CSV export.
 **Usage:**
 ```bash
-./tools/delete_files_from_csv.sh corrupted_files.csv
+./tools/delete_files_from_csv.sh corrupted_files.csv --root /media
+# Review the default dry run, then explicitly apply:
+./tools/delete_files_from_csv.sh corrupted_files.csv --root /media --apply
 ```
-**Warning:** This permanently deletes files!
+The utility is dry-run by default. It accepts only paths under explicit repeatable `--root` values, or `SCAN_PATHS` when no root is supplied. `--apply` performs permanent deletion after confirmation. Application orphan cleanup removes inventory records only; it does not delete media files.
 
 #### `tools/reset_nal_files_direct.sh`
 **Purpose:** Direct database reset of NAL-flagged files
@@ -298,7 +296,7 @@ Tools that import the application (everything under `tools/` plus most of `scrip
 - `POSTGRES_PASSWORD` - Database password
 - `SECRET_KEY` - Flask secret key
 
-Legacy exception: `scripts/check_db_integrity.py`, `scripts/create_indexes.py`, and `scripts/test_database.py` are SQLite-era scripts that read a SQLite path from the environment (`DATABASE_PATH`, or `DATABASE_URL` for `create_indexes.py`). They do not work against PostgreSQL.
+Legacy exception: `scripts/check_db_integrity.py`, `scripts/create_indexes.py`, and `scripts/test_database.py` are SQLite-era scripts. They read a SQLite path from `DATABASE_PATH`, or `DATABASE_URL` for `create_indexes.py`. They do not work against PostgreSQL.
 
 ### Script categories
 
@@ -311,7 +309,7 @@ Legacy exception: `scripts/check_db_integrity.py`, `scripts/create_indexes.py`, 
 - Local setup scripts
 
 **Use with caution:**
-- `delete_files_from_csv.sh` - Deletes actual files
+- `delete_files_from_csv.sh` - Python 3 file-deletion utility; dry-run by default and requires `--apply`
 - Direct database manipulation scripts
 
 ---
@@ -321,5 +319,5 @@ Legacy exception: `scripts/check_db_integrity.py`, `scripts/create_indexes.py`, 
 For issues with any script:
 1. Check the script's docstring for usage
 2. Run with `--help` flag if available
-3. Check application logs via the web UI or `GET /api/logs` (logs are stored in the LogEntry database table); `GET /api/logs/runs` lists scan runs and `GET /api/logs/download` exports logs
+3. Check application logs in the web UI or through `GET /api/logs`. Logs are stored in the `LogEntry` database table. `GET /api/logs/runs` lists scan runs, and `GET /api/logs/download` exports logs.
 4. Report issues at https://github.com/ttlequals0/PixelProbe/issues

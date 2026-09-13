@@ -40,13 +40,11 @@ def main():
     logger.info("Starting PixelProbe Celery worker...")
     
     # Get configuration from environment
-    broker_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-    result_backend = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
     log_level = os.getenv('CELERY_LOG_LEVEL', 'INFO')
     concurrency = int(os.getenv('CELERY_CONCURRENCY', '4'))
     
-    logger.info(f"Broker: {broker_url}")
-    logger.info(f"Result Backend: {result_backend}")
+    logger.info("Broker configured")
+    logger.info("Result backend configured")
     logger.info(f"Log Level: {log_level}")
     logger.info(f"Concurrency: {concurrency}")
     

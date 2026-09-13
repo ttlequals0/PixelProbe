@@ -11,8 +11,9 @@ from sqlalchemy import func
 from flask import Blueprint, request, Response, stream_with_context
 
 from pixelprobe.models import db, LogEntry, AppConfig, ScanState
-from pixelprobe.auth import auth_required
+from pixelprobe.auth import auth_required, admin_required
 from pixelprobe.utils.rate_limiting import rate_limit
+from pixelprobe.utils.security import AuditLogger
 from pixelprobe.utils.timezone import from_utc_to_configured
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS, SYSTEM_LOG_ID
 
@@ -30,7 +31,7 @@ def _parse_iso(value):
         return None
     try:
         return datetime.fromisoformat(value.replace('Z', '+00:00'))
-    except (ValueError, TypeError):
+    except (AttributeError, ValueError, TypeError):
         return None
 
 
@@ -217,7 +218,7 @@ def download_logs():
 
 
 @log_bp.route('/logs/retention', methods=['GET', 'PUT'])
-@auth_required
+@admin_required
 def log_retention():
     """Get or set log retention configuration."""
     if request.method == 'GET':
@@ -246,7 +247,7 @@ def log_retention():
 
 @log_bp.route('/logs/purge', methods=['POST'])
 @rate_limit("2 per minute")
-@auth_required
+@admin_required
 def purge_logs():
     """Manually purge log entries.
 
@@ -257,12 +258,32 @@ def purge_logs():
         before   - purge logs older than this ISO timestamp
         level    - purge logs at or above this level
     """
-    data = request.get_json() or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return {'error': 'Request body must be a JSON object'}, 400
+
     scan_id = data.get('scan_id')
     before = data.get('before')
     level = data.get('level')
+    if 'scan_id' in data:
+        if not isinstance(scan_id, str) or not scan_id.strip():
+            return {'error': 'Invalid scan_id filter'}, 400
+        scan_id = scan_id.strip()
+    if 'before' in data:
+        if not isinstance(before, str) or not before.strip():
+            return {'error': 'Invalid "before" timestamp'}, 400
+        before = before.strip()
+        before_dt = _parse_iso(before)
+        if not before_dt:
+            return {'error': 'Invalid "before" timestamp'}, 400
+    else:
+        before_dt = None
+    if 'level' in data:
+        if not isinstance(level, str) or not level.strip() or level.upper() not in LEVEL_ORDER:
+            return {'error': 'Invalid log level'}, 400
+        level = level.upper()
 
-    if not scan_id and not before and not level:
+    if not scan_id and not before_dt and not level:
         return {'error': 'At least one filter (scan_id, before, or level) is required to prevent accidental full purge'}, 400
 
     # Build query with only the documented purge filters (scan_id, level)
@@ -275,16 +296,15 @@ def purge_logs():
         purge_filters['level'] = level
     query = _apply_log_filters(LogEntry.query, purge_filters)
 
-    if before:
-        before_dt = _parse_iso(before)
-        if not before_dt:
-            return {'error': 'Invalid "before" timestamp'}, 400
+    if before_dt:
         query = query.filter(LogEntry.timestamp < before_dt)
 
     count = query.delete(synchronize_session=False)
     db.session.commit()
 
     logger.info(f"Purged {count} log entries")
+    AuditLogger.log_action('logs_purged', {'deleted': count, 'filters': sorted(purge_filters)},
+                           target='logs')
     return {'deleted': count}
 
 

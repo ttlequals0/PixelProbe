@@ -13,11 +13,30 @@ from pixelprobe.utils.celery_utils import disable_dispatch_result_subscription
 
 
 def _make_context_task(celery_instance, flask_app):
-    """Create a ContextTask class that runs Celery tasks inside a Flask app context."""
+    """Create a ContextTask class with Flask and per-task log context."""
     class ContextTask(celery_instance.Task):
         def __call__(self, *args, **kwargs):
+            from pixelprobe.utils.log_context import current_celery_task_id, current_scan_id
+
+            scan_id = kwargs.get('scan_id')
+            if scan_id is None and self.name.endswith('process_chunk_task') and len(args) > 1:
+                scan_id = args[1]
+            elif scan_id is None and self.name.endswith('discover_directory_task') and len(args) > 1:
+                scan_id = args[1]
+            elif scan_id is None and self.name.endswith('resume_scan_after_discovery') and args:
+                scan_id = args[0]
+            elif scan_id is None and self.name.endswith('parallel_scan_orchestrator') and args:
+                scan_id = args[0]
+            elif scan_id is None and self.name.endswith(('scan_media_task', 'scan_files_task')) and args:
+                scan_id = args[0]
+            scan_token = current_scan_id.set(scan_id)
+            task_token = current_celery_task_id.set(self.request.id)
             with flask_app.app_context():
-                return self.run(*args, **kwargs)
+                try:
+                    return self.run(*args, **kwargs)
+                finally:
+                    current_scan_id.reset(scan_token)
+                    current_celery_task_id.reset(task_token)
     celery_instance.Task = ContextTask
 
 
@@ -202,8 +221,16 @@ def _setup_worker_process(**kwargs):
         )
         # Continue: a fresh connection on first session use is the fallback.
 
+    root_logger = logging.getLogger()
+    for inherited in list(root_logger.handlers):
+        if isinstance(inherited, DatabaseLogHandler):
+            root_logger.removeHandler(inherited)
+            try:
+                inherited.shutdown()
+            except Exception:
+                pass
     handler = DatabaseLogHandler(app)
     handler.setLevel(logging.INFO)
-    logging.getLogger().addHandler(handler)
+    root_logger.addHandler(handler)
     atexit.register(handler.shutdown)
     init_logger.info("_setup_worker_process: complete in worker pid=%s", pid)

@@ -1,16 +1,21 @@
-from flask import Blueprint, request, jsonify, send_file, make_response
+from flask import Blueprint, request, jsonify, send_file, make_response, Response, stream_with_context
 import os
+import csv
+import io
 import json
 import logging
+import uuid
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone_name
 from io import BytesIO
 import base64
 import pytz
+from xml.sax.saxutils import escape as escape_xml
 
-from pixelprobe.models import db, ScanReport
+from pixelprobe.models import db, CleanupFileDecision, ScanReport, ScanRunFile, ScanRunRoot, ScanState
 from pixelprobe.utils.security import validate_json_input
-from pixelprobe.auth import auth_required
+from pixelprobe.auth import auth_required, admin_required
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +28,181 @@ except pytz.exceptions.UnknownTimeZoneError:
     logger.warning(f"Unknown timezone '{APP_TIMEZONE}', falling back to UTC")
 
 reports_bp = Blueprint('reports', __name__, url_prefix='/api')
+MAX_REPORT_EXPORT_ROWS = 1000
+MAX_COMBINED_REPORTS = 20
+MAX_COMBINED_PDF_ROWS = 1000
+DEFAULT_RUN_FILES_LIMIT = 500
+MAX_RUN_FILES_LIMIT = 1000
+
+def _historical_files(report, limit=None):
+    """Return immutable run snapshots; never substitute current ScanResult rows."""
+    if not report.scan_id:
+        return None
+    query = ScanRunFile.query.filter_by(scan_id=report.scan_id).order_by(ScanRunFile.file_path)
+    return query.limit(limit).all() if limit else query.all()
+
+
+def _historical_pdf_files(report, limit):
+    """Load only immutable fields rendered by a bounded PDF report."""
+    return (ScanRunFile.query.filter_by(scan_id=report.scan_id)
+            .with_entities(
+                ScanRunFile.id, ScanRunFile.file_path, ScanRunFile.status,
+                ScanRunFile.outcome, ScanRunFile.file_size, ScanRunFile.file_type,
+                ScanRunFile.scan_tool, ScanRunFile.completed_at,
+                ScanRunFile.is_corrupted, ScanRunFile.marked_as_good,
+                ScanRunFile.has_warnings, ScanRunFile.corruption_details,
+                ScanRunFile.warning_details, ScanRunFile.error_message,
+            ).order_by(ScanRunFile.file_path).limit(limit).all())
+
+
+def _snapshot_count(scan_id):
+    return (db.session.query(db.func.count(ScanRunFile.id))
+            .filter(ScanRunFile.scan_id == scan_id).scalar() or 0)
+
+
+def _report_success_metrics(report):
+    successful = max(report.files_scanned - report.files_corrupted, 0)
+    observed = report.files_scanned + report.files_error
+    return successful, observed, round(successful / observed * 100, 2) if observed else 0
+
+def _historical_file_batches(report, batch_size=500):
+    """Yield immutable run snapshots without retaining a complete run in memory."""
+    last_id = 0
+    while True:
+        session = db.session.session_factory()
+        try:
+            batch = (ScanRunFile.query.with_session(session).filter_by(scan_id=report.scan_id)
+                     .filter(ScanRunFile.id > last_id).order_by(ScanRunFile.id)
+                     .limit(batch_size).all())
+        finally:
+            session.close()
+        if not batch:
+            return
+        last_id = batch[-1].id
+        yield from batch
+
+
+def _historical_csv_batches(report, batch_size=500):
+    """Stream immutable report CSV rows without scanner-output payloads."""
+    last_id = 0
+    columns = (
+        ScanRunFile.id, ScanRunFile.file_path, ScanRunFile.status,
+        ScanRunFile.outcome, ScanRunFile.file_size, ScanRunFile.file_type,
+        ScanRunFile.scan_tool, ScanRunFile.completed_at,
+        ScanRunFile.is_corrupted, ScanRunFile.has_warnings,
+        ScanRunFile.marked_as_good, ScanRunFile.corruption_details,
+        ScanRunFile.warning_details, ScanRunFile.error_message,
+    )
+    while True:
+        session = db.session.session_factory()
+        try:
+            batch = (ScanRunFile.query.with_session(session).filter_by(scan_id=report.scan_id)
+                     .filter(ScanRunFile.id > last_id).order_by(ScanRunFile.id)
+                     .with_entities(*columns).limit(batch_size).all())
+        finally:
+            session.close()
+        if not batch:
+            return
+        last_id = batch[-1].id
+        yield from batch
+
+def _cleanup_decision_batches(report, batch_size=500):
+    """Yield durable cleanup decisions without loading a complete run."""
+    last_id = 0
+    while True:
+        session = db.session.session_factory()
+        try:
+            batch = (CleanupFileDecision.query.with_session(session).filter(
+                CleanupFileDecision.cleanup_run_id == report.cleanup_run_id,
+                CleanupFileDecision.id > last_id,
+            ).order_by(CleanupFileDecision.id).limit(batch_size).all())
+        finally:
+            session.close()
+        if not batch:
+            return
+        last_id = batch[-1].id
+        yield from batch
+
+def _cleanup_decision_data(decision, report):
+    return {
+        'file_path': decision.file_path,
+        'status': decision.decision,
+        'action': 'inventory_record_removed' if decision.decision == 'deleted' else 'kept',
+        'reason': decision.reason,
+        'scan_date': convert_to_timezone(decision.decided_at or report.end_time),
+    }
+
+def _snapshot_available(report):
+    """Distinguish a valid empty run from a legacy report without evidence."""
+    if not report.scan_id:
+        return False
+    if (ScanRunFile.query.filter_by(scan_id=report.scan_id)
+            .with_entities(ScanRunFile.id).first() is not None):
+        return True
+    return (ScanRunRoot.query.filter_by(scan_id=report.scan_id)
+            .with_entities(ScanRunRoot.id).first() is not None)
+
+def _paragraph_text(value):
+    return escape_xml(str(value or '')).replace('\n', '<br/>')
+
+
+def _report_directories(value):
+    """Read current and historical double-encoded directory arrays."""
+    if not value:
+        return []
+    try:
+        directories = json.loads(value)
+        if isinstance(directories, str):
+            directories = json.loads(directories)
+        return directories if isinstance(directories, list) else []
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+def _snapshot_status(file):
+    status = (file.status or '').lower()
+    outcome = (file.outcome or '').lower()
+    if status in ('error', 'failed', 'exception', 'no_result') or outcome in (
+            'error', 'failed', 'exception', 'no_result'):
+        return 'error'
+    if status in ('unreadable', 'unavailable') or outcome in ('unreadable', 'unavailable'):
+        return 'unreadable'
+    if status in ('cancelled', 'canceled') or outcome in ('cancelled', 'canceled'):
+        return 'cancelled'
+    if status in ('pending', 'scanning'):
+        return status
+    if status in ('skipped', 'unsupported', 'excluded') or outcome in (
+            'skipped', 'unsupported', 'excluded'):
+        return 'skipped'
+    if status != 'completed' or outcome not in ('', 'completed'):
+        return 'unknown'
+    if file.is_corrupted and not file.marked_as_good:
+        return 'corrupted'
+    if file.has_warnings and not file.marked_as_good:
+        return 'warning'
+    return 'healthy'
+
+def _snapshot_export_data(file):
+    data = {'file_path': file.file_path, 'status': _snapshot_status(file),
+            'file_size': file.file_size, 'file_type': file.file_type,
+            'scan_tool': file.scan_tool,
+            'scan_date': convert_to_timezone(file.completed_at) if file.completed_at else None,
+            'is_corrupted': file.is_corrupted, 'has_warnings': file.has_warnings,
+            'marked_as_good': file.marked_as_good, 'corruption_details': file.corruption_details,
+            'warning_details': file.warning_details, 'error_message': file.error_message,
+            'scan_duration': None, 'file_hash': file.file_hash,
+            'last_modified': convert_to_timezone(file.last_modified) if file.last_modified else None}
+    if file.scan_output and not file.is_corrupted:
+        for line in file.scan_output.split('\n')[:5]:
+            if any(marker in line for marker in ('Duration:', 'Video:', 'Audio:')):
+                data['scan_output_summary'] = line.strip()
+                break
+    return data
 
 def convert_to_timezone(dt):
     """Convert datetime to configured timezone"""
     if dt is None:
         return None
-    
+
     # If datetime is naive, assume it's UTC
     if dt.tzinfo is None:
         dt = pytz.UTC.localize(dt)
@@ -100,6 +274,57 @@ def get_scan_reports():
         'pages': pagination.pages
     })
 
+
+@reports_bp.route('/scan-runs/<scan_id>/files')
+@auth_required
+def get_scan_run_files(scan_id):
+    """Return bounded immutable membership for one scan run."""
+    try:
+        uuid.UUID(scan_id)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Scan run not found'}), 404
+
+    run = ScanState.query.filter_by(scan_id=scan_id).first()
+    if run is None:
+        return jsonify({'error': 'Scan run not found'}), 404
+
+    try:
+        cursor = int(request.args.get('cursor', '0'))
+        limit = int(request.args.get('limit', str(DEFAULT_RUN_FILES_LIMIT)))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'cursor and limit must be integers'}), 400
+    if cursor < 0 or limit < 1 or limit > MAX_RUN_FILES_LIMIT:
+        return jsonify({'error': 'cursor or limit is out of range'}), 400
+
+    rows = (ScanRunFile.query.filter(
+        ScanRunFile.scan_id == scan_id,
+        ScanRunFile.id > cursor,
+    ).order_by(ScanRunFile.id).with_entities(
+        ScanRunFile.id,
+        ScanRunFile.scan_result_id,
+        ScanRunFile.file_path,
+        ScanRunFile.status,
+        ScanRunFile.outcome,
+        ScanRunFile.completed_at,
+    ).limit(limit + 1).all())
+    page = rows[:limit]
+    next_cursor = page[-1].id if len(rows) > limit else None
+    return jsonify({
+        'scan_id': scan_id,
+        'is_active': run.is_active,
+        'phase': run.phase,
+        'total_members': ScanRunFile.query.filter_by(scan_id=scan_id).count(),
+        'files': [{
+            'id': row.id,
+            'scan_result_id': row.scan_result_id,
+            'file_path': row.file_path,
+            'status': row.status,
+            'outcome': row.outcome,
+            'completed_at': convert_to_timezone(row.completed_at),
+        } for row in page],
+        'next_cursor': next_cursor,
+    })
+
 @reports_bp.route('/scan-reports/<report_id>')
 @auth_required
 def get_scan_report(report_id):
@@ -137,7 +362,9 @@ def get_scan_report(report_id):
             'corrupted_files': report.files_corrupted,
             'files_with_warnings': report.files_with_warnings,
             'error_files': report.files_error,
-            'success_rate': round((1 - (report.files_corrupted / report.files_scanned)) * 100, 2) if report.files_scanned > 0 else 100
+            'successful_observations': _report_success_metrics(report)[0],
+            'observed_terminal_files': _report_success_metrics(report)[1],
+            'success_rate': _report_success_metrics(report)[2],
         }
     elif report.scan_type == 'cleanup':
         report_dict['summary'] = {
@@ -168,12 +395,80 @@ def export_scan_report(report_id):
     report_dict['start_time'] = convert_to_timezone(report.start_time)
     report_dict['end_time'] = convert_to_timezone(report.end_time)
     report_dict['created_at'] = convert_to_timezone(report.created_at)
-    
-    # Add scan results - handle cleanup reports differently
-    from pixelprobe.models import ScanResult
 
-    if report.scan_type == 'cleanup' and report.directories_scanned:
-        # For cleanup reports, the orphaned files list is stored in directories_scanned field
+    if request.args.get('format', '').lower() == 'csv':
+        timestamp = from_utc_to_configured(report.start_time).strftime("%Y%m%d_%H%M%S")
+        stream_report = SimpleNamespace(
+            scan_id=report.scan_id, scan_type=report.scan_type,
+            cleanup_run_id=report.cleanup_run_id, end_time=report.end_time)
+        snapshot_available = _snapshot_available(stream_report)
+
+        def generate_csv():
+            output = BytesIO()
+            text = io.TextIOWrapper(output, encoding='utf-8', newline='', write_through=True)
+            writer = csv.writer(text)
+            if stream_report.scan_type == 'cleanup' and stream_report.cleanup_run_id:
+                writer.writerow(['File Path', 'Decision', 'Action', 'Reason', 'Decision Time'])
+                yield output.getvalue(); output.seek(0); output.truncate(0)
+                for decision in _cleanup_decision_batches(stream_report):
+                    data = _cleanup_decision_data(decision, stream_report)
+                    writer.writerow([data['file_path'], data['status'], data['action'],
+                                     data['reason'], data['scan_date']])
+                    yield output.getvalue(); output.seek(0); output.truncate(0)
+                return
+            writer.writerow(['File Path', 'Status', 'Size', 'Type', 'Tool', 'Corruption Details',
+                             'Warning Details', 'Error', 'Scan Date'])
+            yield output.getvalue(); output.seek(0); output.truncate(0)
+            if not snapshot_available:
+                return
+            for file in _historical_csv_batches(stream_report):
+                writer.writerow([file.file_path, _snapshot_status(file), file.file_size,
+                                 file.file_type, file.scan_tool, file.corruption_details,
+                                 file.warning_details, file.error_message,
+                                 convert_to_timezone(file.completed_at) if file.completed_at else ''])
+                yield output.getvalue(); output.seek(0); output.truncate(0)
+
+        db.session.rollback()
+        return Response(stream_with_context(generate_csv()), mimetype='text/csv', headers={
+            'Content-Disposition': f'attachment; filename=scan_report_{report_id}_{timestamp}.csv'})
+    complete = request.args.get('complete', '').lower() in ('1', 'true', 'yes')
+    # New cleanup reports have a durable decision ledger. The legacy JSON path
+    # preview is only for older reports that have no immutable cleanup run ID.
+    if report.scan_type == 'cleanup' and report.cleanup_run_id:
+        total = CleanupFileDecision.query.filter_by(cleanup_run_id=report.cleanup_run_id).count()
+        report_dict.update({
+            'total_files_in_report': total,
+            'cleanup_decisions_total': total,
+            'cleanup_decisions_truncated': not complete,
+        })
+        if complete:
+            report_dict.update({'export_metadata': {
+                'exported_at': convert_to_timezone(datetime.now(timezone.utc)),
+                'export_format': 'json', 'version': '2.0',
+                'includes_cleanup_decisions': True, 'complete': True,
+            }})
+            stream_report = SimpleNamespace(
+                cleanup_run_id=report.cleanup_run_id, end_time=report.end_time)
+            def generate_cleanup_complete():
+                prefix = json.dumps(report_dict, default=str)
+                yield prefix[:-1] + ', "scan_results": ['
+                first = True
+                for decision in _cleanup_decision_batches(stream_report):
+                    if not first:
+                        yield ','
+                    first = False
+                    yield json.dumps(_cleanup_decision_data(decision, stream_report), default=str)
+                yield ']}'
+            filename = f'attachment; filename=cleanup_report_{report_id}_{from_utc_to_configured(report.start_time).strftime("%Y%m%d_%H%M%S")}.json'
+            db.session.rollback()
+            return Response(stream_with_context(generate_cleanup_complete()),
+                            mimetype='application/json',
+                            headers={'Content-Disposition': filename})
+        decisions = (CleanupFileDecision.query.filter_by(cleanup_run_id=report.cleanup_run_id)
+                     .order_by(CleanupFileDecision.id).limit(MAX_REPORT_EXPORT_ROWS).all())
+        file_results = [_cleanup_decision_data(decision, report) for decision in decisions]
+        report_dict['cleanup_decisions_truncated'] = total > len(file_results)
+    elif report.scan_type == 'cleanup' and report.directories_scanned:
         file_results = []
         try:
             orphaned_files_list = json.loads(report.directories_scanned)
@@ -182,28 +477,52 @@ def export_scan_report(report_id):
                     file_results.append({
                         'file_path': file_path,
                         'status': 'orphaned',
-                        'action': 'deleted',
+                        'action': 'inventory_record_removed',
                         'scan_date': convert_to_timezone(report.end_time) if report.end_time else None
                     })
         except Exception as e:
             logger.warning(f"Could not parse orphaned files list: {e}")
     else:
-        # For other scan types, get actual scan results
-        scanned_files = ScanResult.query.filter(
-            ScanResult.scan_date >= report.start_time,
-            ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
-        ).order_by(ScanResult.file_path).all()
+        if complete and _snapshot_available(report):
+            total = _snapshot_count(report.scan_id)
+            report_dict.update({'total_files_in_report': total,
+                                'historical_results_available': True,
+                                'historical_results_total': total,
+                                'historical_results_truncated': False,
+                                'export_metadata': {'exported_at': convert_to_timezone(datetime.now(timezone.utc)),
+                                                    'export_format': 'json', 'version': '2.0',
+                                                    'includes_scan_results': True, 'complete': True}})
+            stream_report = SimpleNamespace(scan_id=report.scan_id)
+            def generate_complete():
+                prefix = json.dumps(report_dict, default=str)
+                yield prefix[:-1] + ', "scan_results": ['
+                first = True
+                for file in _historical_file_batches(stream_report):
+                    if not first: yield ','
+                    first = False
+                    yield json.dumps(_snapshot_export_data(file), default=str)
+                yield ']}'
+            filename = f'attachment; filename=scan_report_{report_id}_{from_utc_to_configured(report.start_time).strftime("%Y%m%d_%H%M%S")}.json'
+            db.session.rollback()
+            return Response(stream_with_context(generate_complete()), mimetype='application/json', headers={'Content-Disposition': filename})
+        scanned_files = _historical_files(report, MAX_REPORT_EXPORT_ROWS)
+        if not _snapshot_available(report):
+            report_dict['scan_results'] = []
+            report_dict['total_files_in_report'] = 0
+            report_dict['historical_results_available'] = False
+            report_dict['historical_results_note'] = 'This legacy report has no immutable scan-run snapshot.'
+            scanned_files = []
 
         # Include detailed file results
         file_results = []
         for file in scanned_files:
             file_data = {
                 'file_path': file.file_path,
-                'status': 'corrupted' if file.is_corrupted and not file.marked_as_good else ('warning' if file.has_warnings and not file.marked_as_good else 'healthy'),
+                'status': _snapshot_status(file),
                 'file_size': file.file_size,
                 'file_type': file.file_type,
                 'scan_tool': file.scan_tool,
-                'scan_date': convert_to_timezone(file.scan_date) if file.scan_date else None,
+                'scan_date': convert_to_timezone(file.completed_at) if file.completed_at else None,
                 'is_corrupted': file.is_corrupted,
                 'has_warnings': file.has_warnings,
                 'marked_as_good': file.marked_as_good,
@@ -227,15 +546,27 @@ def export_scan_report(report_id):
             file_results.append(file_data)
     
     report_dict['scan_results'] = file_results
-    report_dict['total_files_in_report'] = len(file_results)
+    if report.scan_type == 'cleanup' and report.cleanup_run_id:
+        report_dict['total_files_in_report'] = total
+        report_dict['historical_results_available'] = True
+        report_dict['historical_results_total'] = total
+        report_dict['historical_results_truncated'] = total > len(file_results)
+    else:
+        report_dict['total_files_in_report'] = len(file_results)
+        report_dict['historical_results_available'] = _snapshot_available(report)
+    if report.scan_id and _snapshot_available(report):
+        report_dict['historical_results_total'] = _snapshot_count(report.scan_id)
+        report_dict['historical_results_truncated'] = report_dict['historical_results_total'] > len(file_results)
     
     # Add metadata
     report_dict['export_metadata'] = {
         'exported_at': convert_to_timezone(datetime.now(timezone.utc)),
         'export_format': 'json',
         'version': '2.0',
-        'includes_scan_results': True
+        'includes_scan_results': True,
+        'includes_cleanup_decisions': bool(report.scan_type == 'cleanup' and report.cleanup_run_id),
     }
+    report_dict['export_metadata']['complete'] = request.args.get('complete', '').lower() in ('1', 'true', 'yes')
     
     # Create JSON file
     json_data = json.dumps(report_dict, indent=2, default=str)  # default=str handles any non-serializable types
@@ -312,35 +643,33 @@ def generate_pdf_report(scan_type, scan_id):
         # Add export info
         current_time = from_utc_to_configured(datetime.now(timezone.utc))
         timezone_name = get_configured_timezone_name()
-        info_text = f"Report Date: {current_time.strftime(f'%Y-%m-%d %H:%M:%S {timezone_name}')}<br/>"
-        info_text += f"Scan Type: {scan_type.replace('_', ' ').title()}<br/>"
-        info_text += f"Scan ID: {scan_id}"
+        info_text = f"Report Date: {_paragraph_text(current_time.strftime(f'%Y-%m-%d %H:%M:%S {timezone_name}'))}<br/>"
+        info_text += f"Scan Type: {_paragraph_text(scan_type.replace('_', ' ').title())}<br/>"
+        info_text += f"Scan ID: {_paragraph_text(scan_id)}"
         elements.append(Paragraph(info_text, styles['Normal']))
         elements.append(Spacer(1, 0.2*inch))
         
-        # Query scan results based on scan type
-        from pixelprobe.models import ScanResult
-        if scan_type == 'rescan' and '_' in scan_id:
-            # For rescan, parse the file path from scan_id
-            file_path = scan_id.replace('_', '/')
-            results = ScanResult.query.filter_by(file_path=file_path).all()
-        else:
-            # For other scan types, get recent results
-            results = ScanResult.query.filter(
-                ScanResult.scan_date.isnot(None)
-            ).order_by(ScanResult.scan_date.desc()).all()  # No limit - show all results
+        # Resolve the report snapshot by scan ID. Never reconstruct history from
+        # mutable current scan results.
+        linked_report = ScanReport.query.filter_by(scan_id=scan_id).first()
+        snapshot_available = bool(linked_report and _snapshot_available(linked_report))
+        snapshot_total = (_snapshot_count(scan_id)
+                          if snapshot_available else 0)
+        results = (_historical_pdf_files(linked_report, MAX_REPORT_EXPORT_ROWS)
+                   if snapshot_available else [])
         
         if not results:
-            elements.append(Paragraph("No scan results found.", styles['Normal']))
+            message = ("This legacy report has no immutable scan-run snapshot."
+                       if linked_report and not snapshot_available
+                       else "No scan results found.")
+            elements.append(Paragraph(_paragraph_text(message), styles['Normal']))
         else:
             # Create table header with all required fields
             table_data = [['Status', 'File Path', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
             
             for result in results:
                 # Determine status
-                status = 'Corrupted' if result.is_corrupted and not result.marked_as_good else 'Healthy'
-                if getattr(result, 'has_warnings', False) and not result.marked_as_good:
-                    status = 'Warning'
+                status = _snapshot_status(result).title()
                 
                 # Format file size
                 size = f"{result.file_size / (1024*1024):.2f} MB" if result.file_size else 'N/A'
@@ -351,39 +680,38 @@ def generate_pdf_report(scan_type, scan_id):
                 # Get scan tool - use actual tool from database
                 scan_tool = getattr(result, 'scan_tool', None) or 'N/A'
                 
-                # Get details - combine corruption details, warnings, and scan output
+                # Get details without loading unbounded scanner output into PDFs.
                 details = []
                 if result.corruption_details:
                     details.append(result.corruption_details)
                 if getattr(result, 'warning_details', None):
                     details.append(getattr(result, 'warning_details', ''))
-                if getattr(result, 'scan_output', None):
-                    # Extract key information from scan output
-                    scan_output = getattr(result, 'scan_output', '')
-                    if 'Video stream:' in scan_output:
-                        for line in scan_output.split('\\n'):
-                            if 'Video stream:' in line or 'Duration:' in line:
-                                details.append(line.strip())
-                                break
-                
                 details_text = ' '.join(details) if details else ''
                 
                 # Format scan date
-                scan_date = from_utc_to_configured(result.scan_date).strftime('%m/%d/%Y, %I:%M:%S %p') if result.scan_date else 'N/A'
+                scan_date = from_utc_to_configured(result.completed_at).strftime('%m/%d/%Y, %I:%M:%S %p') if result.completed_at else 'N/A'
                 
                 # Wrap file path and details in Paragraph for proper text wrapping
-                file_path_para = Paragraph(result.file_path, cell_style)
-                details_para = Paragraph(details_text, cell_style)
+                file_path_para = Paragraph(_paragraph_text(result.file_path), cell_style)
+                details_para = Paragraph(_paragraph_text(details_text), cell_style)
                 
                 table_data.append([
-                    status,
+                    Paragraph(_paragraph_text(status), cell_style),
                     file_path_para,
                     size,
-                    file_type,
-                    scan_tool,
+                    Paragraph(_paragraph_text(file_type), cell_style),
+                    Paragraph(_paragraph_text(scan_tool), cell_style),
                     details_para,
                     scan_date
                 ])
+
+            if snapshot_total > len(results):
+                elements.append(Spacer(1, 0.1*inch))
+                elements.append(Paragraph(
+                    _paragraph_text(
+                        f"Showing {len(results):,} of {snapshot_total:,} files. "
+                        "Use the JSON export for the complete snapshot."
+                    ), styles['Normal']))
             
             # Create table with proper column widths adjusted for landscape
             # Total width = 11 inches (landscape) - 1 inch margins = 10 inches available
@@ -406,7 +734,8 @@ def generate_pdf_report(scan_type, scan_id):
             # Show count for large result sets
             if len(results) >= 1000:
                 elements.append(Spacer(1, 0.1*inch))
-                elements.append(Paragraph(f"Total results: {len(results):,}", styles['Normal']))
+                elements.append(Paragraph(_paragraph_text(
+                    f"Total results: {len(results):,}"), styles['Normal']))
         
         # Build PDF
         doc.build(elements)
@@ -515,34 +844,8 @@ def export_scan_report_pdf(report_id):
         ]
         
         if report.directories_scanned:
-            try:
-                # Log the raw value for debugging
-                logger.debug(f"Raw directories_scanned: {report.directories_scanned}")
-                
-                dirs = json.loads(report.directories_scanned)
-                logger.debug(f"Parsed dirs type: {type(dirs)}, value: {dirs}")
-                
-                # Handle case where dirs might be a string instead of list
-                if isinstance(dirs, str):
-                    # Check if it looks like a comma-separated string
-                    if ',' in dirs:
-                        # Split by comma and clean up
-                        dirs_list = [d.strip() for d in dirs.split(',')]
-                        dirs_text = '\n'.join(dirs_list)
-                    else:
-                        dirs_text = dirs
-                elif isinstance(dirs, list):
-                    # If it's a list, join with newlines
-                    dirs_text = '\n'.join(str(d) for d in dirs)
-                else:
-                    # Fallback for other types
-                    dirs_text = str(dirs)
-                
-                report_info.append(['Directories:', dirs_text])
-            except (json.JSONDecodeError, TypeError) as e:
-                logger.warning(f"Failed to parse directories_scanned: {e}")
-                # If JSON parsing fails, use the raw value
-                report_info.append(['Directories:', report.directories_scanned])
+            directories = _report_directories(report.directories_scanned)
+            report_info.append(['Directories:', '\n'.join(str(path) for path in directories)])
         
         # Convert text fields to Paragraph objects for better formatting
         # Use smaller font for directories to prevent overflow
@@ -558,15 +861,14 @@ def export_scan_report_pdf(report_id):
         for row in report_info:
             label = row[0]
             value = row[1]
-            # Use Paragraph for multi-line text (directories) with smaller font
+            # Use Paragraph for untrusted report metadata and directory values.
             if '\n' in str(value):
                 # Limit directory list to prevent table overflow
                 dirs_list = str(value).split('\n')
                 if len(dirs_list) > 20:
                     # Show first 20 directories and indicate more
                     value = '\n'.join(dirs_list[:20]) + f'\n... and {len(dirs_list) - 20} more directories'
-                value = Paragraph(str(value).replace('\n', '<br/>'), cell_style_small)
-            formatted_info.append([label, value])
+            formatted_info.append([label, Paragraph(_paragraph_text(value), cell_style_small)])
 
         info_table = Table(formatted_info, colWidths=[2*inch, 4*inch])
         info_table.setStyle(TableStyle([
@@ -587,6 +889,7 @@ def export_scan_report_pdf(report_id):
         # Add scan statistics
         elements.append(Paragraph("Scan Statistics", heading_style))
         
+        stats_data = [['Metric', 'Value']]
         if report.scan_type in ['full_scan', 'rescan']:
             stats_data = [
                 ['Metric', 'Value'],
@@ -599,10 +902,9 @@ def export_scan_report_pdf(report_id):
                 ['Files with Errors', f"{report.files_error:,}"],
             ]
             
-            # Add success rate
-            if report.files_scanned > 0:
-                success_rate = (1 - (report.files_corrupted / report.files_scanned)) * 100
-                stats_data.append(['Success Rate', f"{success_rate:.2f}%"])
+            successful_observations, _observed_terminal_files, success_rate = _report_success_metrics(report)
+            stats_data.append(['Successful Observations', f"{successful_observations:,}"])
+            stats_data.append(['Success Rate', f"{success_rate:.2f}%"])
             
         elif report.scan_type == 'cleanup':
             stats_data = [
@@ -661,47 +963,32 @@ def export_scan_report_pdf(report_id):
                 elements.append(Paragraph("Scanned Files", heading_style))
             
             # Query files based on scan type
-            from pixelprobe.models import ScanResult
-
             if report.scan_type == 'cleanup':
-                # For cleanup reports, the orphaned files list is stored in directories_scanned field as JSON
                 scanned_files = []
 
-                if report.directories_scanned:
-                    try:
-                        # The directories_scanned field contains the list of orphaned files for cleanup reports
-                        orphaned_files_list = json.loads(report.directories_scanned)
+                class CleanupDecisionFile:
+                    def __init__(self, file_path, decision):
+                        self.file_path = file_path
+                        self.decision = decision
 
-                        # Create pseudo ScanResult objects for display
-                        class OrphanedFile:
-                            def __init__(self, file_path):
-                                self.file_path = file_path
-                                self.is_corrupted = False
-                                self.marked_as_good = False
-                                self.has_warnings = False
-                                self.file_size = 0
-                                self.file_type = 'Orphaned'
-                                self.scan_tool = 'Cleanup'
-                                self.corruption_details = None
-                                self.warning_details = None
-                                self.error_message = 'File no longer exists'
-                                self.scan_output = None
-                                self.scan_date = report.end_time
+                if report.cleanup_run_id:
+                    decisions = (CleanupFileDecision.query.filter_by(
+                        cleanup_run_id=report.cleanup_run_id).order_by(
+                            CleanupFileDecision.id).limit(MAX_REPORT_EXPORT_ROWS).all())
+                    scanned_files = [CleanupDecisionFile(row.file_path, row.decision)
+                                     for row in decisions]
 
-                        if isinstance(orphaned_files_list, list):
-                            scanned_files = [OrphanedFile(file_path) for file_path in orphaned_files_list]
-                        else:
-                            logger.warning(f"Unexpected type for orphaned_files_list: {type(orphaned_files_list)}")
-                    except Exception as e:
-                        logger.warning(f"Could not parse orphaned files list from cleanup report: {e}")
-                        # Fallback: try to get from scan_results during the period
-                        scanned_files = []
+                elif report.directories_scanned:
+                    orphaned_files_list = _report_directories(report.directories_scanned)
+                    scanned_files = [CleanupDecisionFile(file_path, 'deleted')
+                                     for file_path in orphaned_files_list]
             else:
-                # For other scan types, query normally
-                scanned_files = ScanResult.query.filter(
-                    ScanResult.scan_date >= report.start_time,
-                    ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
-                ).order_by(ScanResult.file_path).all()
+                scanned_files = _historical_pdf_files(report, MAX_REPORT_EXPORT_ROWS) or []
+            snapshot_total = (CleanupFileDecision.query.filter_by(
+                cleanup_run_id=report.cleanup_run_id).count()
+                if report.scan_type == 'cleanup' and report.cleanup_run_id else
+                _snapshot_count(report.scan_id)
+                if report.scan_id and _snapshot_available(report) else len(scanned_files))
             
             if scanned_files:
                 # Create files table header
@@ -715,24 +1002,23 @@ def export_scan_report_pdf(report_id):
                 for file in scanned_files:
                     if report.scan_type == 'cleanup':
                         # Simple row for cleanup reports
-                        file_path_para = Paragraph(file.file_path, cell_style)
+                        file_path_para = Paragraph(_paragraph_text(file.file_path), cell_style)
                         files_data.append([
                             file_path_para,
-                            'Orphaned',
-                            'Deleted'
+                            file.decision.title(),
+                            ('Inventory record removed' if file.decision == 'deleted'
+                             else 'Inventory record kept')
                         ])
                     else:
                         # Full details for other scan types
-                        status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
-                        if file.has_warnings and not file.marked_as_good:
-                            status = 'Warning'
+                        status = _snapshot_status(file).title()
 
                         size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
                         file_type = file.file_type or 'Unknown'
                         scan_tool = file.scan_tool or 'N/A'
-                        scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+                        scan_date = from_utc_to_configured(file.completed_at).strftime('%Y-%m-%d %H:%M') if file.completed_at else 'N/A'
 
-                        # Combine details from various fields - show all available information
+                        # Combine bounded detail fields without loading scanner output.
                         details = []
                         if file.corruption_details:
                             details.append(file.corruption_details)
@@ -740,26 +1026,18 @@ def export_scan_report_pdf(report_id):
                             details.append(file.warning_details)
                         if file.error_message:
                             details.append(file.error_message)
-                        # If no specific details but file is healthy, add a brief scan output excerpt
-                        if not details and file.scan_output and not file.is_corrupted:
-                            # Extract meaningful info from scan output
-                            output_lines = (file.scan_output or '').split('\n')
-                            for line in output_lines[:3]:  # Check first 3 lines
-                                if 'Duration:' in line or 'Video:' in line or 'Audio:' in line:
-                                    details.append(line.strip()[:50])
-                                    break
                         details_text = ' '.join(details)[:100] + '...' if len(' '.join(details)) > 100 else ' '.join(details) if details else ''
 
                         # Wrap file path in Paragraph for text wrapping
-                        file_path_para = Paragraph(file.file_path, cell_style)
-                        details_para = Paragraph(details_text, cell_style) if details_text else ''
+                        file_path_para = Paragraph(_paragraph_text(file.file_path), cell_style)
+                        details_para = Paragraph(_paragraph_text(details_text), cell_style) if details_text else ''
 
                         files_data.append([
                             file_path_para,  # Wrapped for proper text flow
-                            status,
+                            Paragraph(_paragraph_text(status), cell_style),
                             size,
-                            file_type,
-                            scan_tool,
+                            Paragraph(_paragraph_text(file_type), cell_style),
+                            Paragraph(_paragraph_text(scan_tool), cell_style),
                             details_para,
                             scan_date
                         ])
@@ -804,7 +1082,7 @@ def export_scan_report_pdf(report_id):
                         elements.append(PageBreak())
                 
                 # Show total count for large reports
-                if len(scanned_files) >= 1000:
+                if snapshot_total > len(scanned_files):
                     elements.append(Spacer(1, 0.1*inch))
                     # Define footer style here
                     footer_style = ParagraphStyle(
@@ -814,7 +1092,9 @@ def export_scan_report_pdf(report_id):
                         textColor=colors.HexColor('#7f8c8d'),
                         alignment=TA_CENTER
                     )
-                    elements.append(Paragraph(f"Total files in report: {len(scanned_files):,}", footer_style))
+                    elements.append(Paragraph(
+                        f"Showing {len(scanned_files):,} of {snapshot_total:,} files in report (PDF limit). Use JSON export for the complete snapshot.",
+                        footer_style))
             else:
                 elements.append(Paragraph("No files were scanned during this scan.", styles['Normal']))
         
@@ -905,14 +1185,18 @@ def export_scan_report_pdf(report_id):
         
         # Add scanned files list for scan reports
         if report.scan_type in ['full_scan', 'rescan']:
-            from pixelprobe.models import ScanResult
-            scanned_files = ScanResult.query.filter(
-                ScanResult.scan_date >= report.start_time,
-                ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
-            ).order_by(ScanResult.file_path).limit(1000).all()
+            snapshot_available = _snapshot_available(report)
+            snapshot_total = (_snapshot_count(report.scan_id)
+                              if snapshot_available else 0)
+            scanned_files = (_historical_files(report, MAX_REPORT_EXPORT_ROWS) or []) if snapshot_available else []
+            if not snapshot_available:
+                html_content += (
+                    '<p><em>This legacy report has no immutable scan-run snapshot; '
+                    'historical file details are unavailable.</em></p>'
+                )
             
             html_content += f"""
-                <h2>Scanned Files ({len(scanned_files)} files)</h2>
+                <h2>Scanned Files ({len(scanned_files)} of {snapshot_total} files)</h2>
                 <table>
                     <tr>
                         <th>File Path</th>
@@ -923,27 +1207,30 @@ def export_scan_report_pdf(report_id):
                     </tr>
             """
             
-            for file in scanned_files:  # Show ALL files, no limits
-                status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
+            for file in scanned_files:
+                status = _snapshot_status(file).title()
                 size = f"{file.file_size / (1024*1024):.2f} MB" if file.file_size else 'N/A'
                 file_type = file.file_type or 'Unknown'
-                scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
-                status_class = 'corrupted' if status == 'Corrupted' else 'healthy'
+                scan_date = from_utc_to_configured(file.completed_at).strftime('%Y-%m-%d %H:%M') if file.completed_at else 'N/A'
+                status_class = 'corrupted' if status in ('Corrupted', 'Error') else 'healthy'
                 
                 html_content += f"""
                     <tr>
-                        <td style="max-width: 400px; overflow: hidden; text-overflow: ellipsis;">{file.file_path}</td>
+                        <td style="max-width: 400px; overflow: hidden; text-overflow: ellipsis;">{escape_xml(str(file.file_path))}</td>
                         <td><span class="{status_class}">{status}</span></td>
                         <td>{size}</td>
-                        <td>{file_type}</td>
-                        <td>{scan_date}</td>
+                        <td>{escape_xml(str(file_type))}</td>
+                        <td>{escape_xml(str(scan_date))}</td>
                     </tr>
                 """
             
             html_content += "</table>"
             
-            if len(scanned_files) > 500:
-                html_content += f"<p><em>Total files in report: {len(scanned_files):,}</em></p>"
+            if snapshot_total > len(scanned_files):
+                html_content += (
+                    f"<p><em>Showing {len(scanned_files):,} of {snapshot_total:,} files. "
+                    "Use the JSON export for the complete snapshot.</em></p>"
+                )
         
         html_content += f"""
             <div class="footer">
@@ -1002,7 +1289,7 @@ def get_latest_scan_reports():
     return jsonify(latest_reports)
 
 @reports_bp.route('/scan-reports/<report_id>', methods=['DELETE'])
-@auth_required
+@admin_required
 def delete_scan_report(report_id):
     """Delete a scan report by ID"""
     report = ScanReport.query.filter_by(report_id=report_id).first()
@@ -1012,7 +1299,7 @@ def delete_scan_report(report_id):
     try:
         db.session.delete(report)
         db.session.commit()
-        return jsonify({'message': 'Report deleted successfully', 'report_id': report_id})
+        return jsonify({'message': 'Report deleted', 'report_id': report_id})
     except Exception as e:
         logger.error(f"Failed to delete report: {e}", exc_info=True)
         db.session.rollback()
@@ -1038,12 +1325,14 @@ def download_multiple_reports():
         if not report_ids:
             return jsonify({'error': 'No report IDs provided'}), 400
         
-        # Get reports from database
-        reports = []
-        for report_id in report_ids:
-            report = ScanReport.query.filter_by(report_id=report_id).first()
-            if report:
-                reports.append(report)
+        if len(report_ids) > MAX_COMBINED_REPORTS:
+            return jsonify({'error': f'At most {MAX_COMBINED_REPORTS} reports may be combined'}), 400
+
+        # Read requested reports in one query while retaining caller order.
+        reports_by_id = {report.report_id: report for report in ScanReport.query.filter(
+            ScanReport.report_id.in_(report_ids)).all()}
+        reports = [reports_by_id[report_id] for report_id in report_ids
+                   if report_id in reports_by_id]
         
         if not reports:
             return jsonify({'error': 'No valid reports found'}), 404
@@ -1093,6 +1382,7 @@ def download_multiple_reports():
                     elements.append(logo)
                     elements.append(Spacer(1, 0.3*inch))
                 
+                rendered_detail_rows = 0
                 # Add each report
                 for idx, report in enumerate(reports):
                     # Add page break between reports
@@ -1105,9 +1395,9 @@ def download_multiple_reports():
                     elements.append(Spacer(1, 0.2*inch))
                     
                     # Report info
-                    info_text = f"Report ID: {report.report_id}<br/>"
-                    info_text += f"Scan Type: {report.scan_type.replace('_', ' ').title()}<br/>"
-                    info_text += f"Status: {report.status}<br/>"
+                    info_text = f"Report ID: {_paragraph_text(report.report_id)}<br/>"
+                    info_text += f"Scan Type: {_paragraph_text(report.scan_type.replace('_', ' ').title())}<br/>"
+                    info_text += f"Status: {_paragraph_text(report.status)}<br/>"
                     info_text += f"Start Time: {from_utc_to_configured(report.start_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.start_time else 'N/A'}<br/>"
                     info_text += f"End Time: {from_utc_to_configured(report.end_time).strftime(f'%Y-%m-%d %H:%M:%S {get_configured_timezone_name()}') if report.end_time else 'N/A'}<br/>"
                     elements.append(Paragraph(info_text, styles['Normal']))
@@ -1148,12 +1438,13 @@ def download_multiple_reports():
                     
                     # Add scanned files if available for scan reports
                     if report.scan_type in ['full_scan', 'rescan']:
-                        # Query scan results for this report's time period
-                        from pixelprobe.models import ScanResult
-                        scanned_files = ScanResult.query.filter(
-                            ScanResult.scan_date >= report.start_time,
-                            ScanResult.scan_date <= (report.end_time or datetime.now(timezone.utc))
-                        ).limit(500).all()
+                        snapshot_total = (_snapshot_count(report.scan_id)
+                                          if report.scan_id and _snapshot_available(report) else 0)
+                        remaining_detail_rows = max(MAX_COMBINED_PDF_ROWS - rendered_detail_rows, 0)
+                        scanned_files = (_historical_pdf_files(
+                            report, min(500, remaining_detail_rows))
+                            if remaining_detail_rows else [])
+                        rendered_detail_rows += len(scanned_files)
                         
                         if scanned_files:
                             elements.append(Paragraph("Scanned Files", styles['Heading2']))
@@ -1162,12 +1453,10 @@ def download_multiple_reports():
                             # Create files table with all required fields
                             files_data = [['Status', 'File Path', 'Size', 'Type', 'Tool', 'Details', 'Scan Date']]
                             for file in scanned_files:
-                                status = 'Corrupted' if file.is_corrupted and not file.marked_as_good else 'Healthy'
-                                if file.has_warnings and not file.marked_as_good:
-                                    status = 'Warning'
+                                status = _snapshot_status(file).title()
                                 
                                 # Wrap file path in Paragraph for proper text wrapping
-                                file_path_para = Paragraph(file.file_path, cell_style)
+                                file_path_para = Paragraph(_paragraph_text(file.file_path), cell_style)
                                 
                                 size_str = f"{file.file_size / (1024*1024):.1f} MB" if file.file_size else 'N/A'
                                 file_type = file.file_type or 'N/A'
@@ -1181,16 +1470,16 @@ def download_multiple_reports():
                                     details = file.warning_details
                                 
                                 # Wrap details in Paragraph
-                                details_para = Paragraph(details, cell_style)
+                                details_para = Paragraph(_paragraph_text(details), cell_style)
                                 
-                                scan_date = from_utc_to_configured(file.scan_date).strftime('%Y-%m-%d %H:%M') if file.scan_date else 'N/A'
+                                scan_date = from_utc_to_configured(file.completed_at).strftime('%Y-%m-%d %H:%M') if file.completed_at else 'N/A'
                                 
                                 files_data.append([
-                                    status,
+                                    Paragraph(_paragraph_text(status), cell_style),
                                     file_path_para,
                                     size_str,
-                                    file_type,
-                                    scan_tool,
+                                    Paragraph(_paragraph_text(file_type), cell_style),
+                                    Paragraph(_paragraph_text(scan_tool), cell_style),
                                     details_para,
                                     scan_date
                                 ])
@@ -1213,9 +1502,17 @@ def download_multiple_reports():
                             
                             elements.append(table)
                             
-                            if len(scanned_files) >= 1000:
+                            if snapshot_total > len(scanned_files):
                                 elements.append(Spacer(1, 0.1*inch))
-                                elements.append(Paragraph(f"Total results: {len(results):,}", styles['Normal']))
+                                elements.append(Paragraph(
+                                    _paragraph_text(
+                                        f"Showing {len(scanned_files):,} of {snapshot_total:,} results in combined PDF; use individual CSV or JSON exports for complete snapshots."),
+                                    styles['Normal']))
+                        elif snapshot_total:
+                            elements.append(Paragraph(
+                                _paragraph_text(
+                                    "Combined PDF detail limit reached. Use individual CSV or JSON exports for complete snapshots."),
+                                styles['Normal']))
                 
                 # Build PDF
                 doc.build(elements)

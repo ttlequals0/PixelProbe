@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
@@ -42,7 +43,7 @@
                         <i class="fas fa-tachometer-alt"></i>
                         <span>Dashboard</span>
                     </a>
-                    <a href="#api-docs" class="nav-item" onclick="app.showApiDocs()" title="API Documentation">
+                    <a href="#api-docs" class="nav-item" data-action="showApiDocs" title="API Documentation">
                         <i class="fas fa-code"></i>
                         <span>API Documentation</span>
                     </a>
@@ -50,23 +51,23 @@
                 
                 <div class="nav-section">
                     <div class="nav-section-title">Tools</div>
-                    <a href="#" class="nav-item" onclick="app.startScan(); return false;" title="Start Scan">
+                    <a href="#" class="nav-item" data-action="startScan" title="Start Scan">
                         <i class="fas fa-play"></i>
                         <span>Start Scan</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.cleanupOrphaned(); return false;" title="Cleanup">
+                    <a href="#" class="nav-item admin-only" data-action="cleanupOrphaned" title="Cleanup">
                         <i class="fas fa-broom"></i>
                         <span>Cleanup</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.checkFileChanges(); return false;" title="Integrity Check">
+                    <a href="#" class="nav-item admin-only" data-action="checkFileChanges" title="Integrity Check">
                         <i class="fas fa-shield-alt"></i>
                         <span>Integrity Check</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showSchedules(); return false;" title="Manage Schedules">
+                    <a href="#" class="nav-item admin-only" data-action="showSchedules" title="Manage Schedules">
                         <i class="fas fa-clock"></i>
                         <span>Schedules</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showExclusions(); return false;" title="Manage Exclusions">
+                    <a href="#" class="nav-item admin-only" data-action="showExclusions" title="Manage Exclusions">
                         <i class="fas fa-ban"></i>
                         <span>Exclusions</span>
                     </a>
@@ -74,23 +75,23 @@
                 
                 <div class="nav-section">
                     <div class="nav-section-title">System</div>
-                    <a href="#" class="nav-item" onclick="app.showSystemStats(); return false;" title="System Stats">
+                    <a href="#" class="nav-item" data-action="showSystemStats" title="System Stats">
                         <i class="fas fa-server"></i>
                         <span>System Stats</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showTrends(); return false;" title="Trends">
+                    <a href="#" class="nav-item" data-action="showTrends" title="Trends">
                         <i class="fas fa-chart-line"></i>
                         <span>Trends</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showScanReports(); return false;" title="Scan Reports">
+                    <a href="#" class="nav-item" data-action="showScanReports" title="Scan Reports">
                         <i class="fas fa-file-alt"></i>
                         <span>Scan Reports</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showLogs(); return false;" title="View Logs">
+                    <a href="#" class="nav-item admin-only" data-action="showLogs" title="View Logs">
                         <i class="fas fa-scroll"></i>
                         <span>View Logs</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="app.showTunables(); return false;" title="Tunables">
+                    <a href="#" class="nav-item admin-only" data-action="showTunables" title="Tunables">
                         <i class="fas fa-toolbox"></i>
                         <span>Tunables</span>
                     </a>
@@ -103,15 +104,15 @@
 
                 <div class="nav-section">
                     <div class="nav-section-title">Account</div>
-                    <a href="#" class="nav-item" onclick="AuthManager.showUserManagement()" title="User Management">
+                    <a href="#" class="nav-item admin-only" data-action="auth-showUserManagement" title="User Management">
                         <i class="fas fa-users"></i>
                         <span>User Management</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="AuthManager.showApiTokens()" title="API Tokens">
+                    <a href="#" class="nav-item" data-action="auth-showApiTokens" title="API Tokens">
                         <i class="fas fa-key"></i>
                         <span>API Tokens</span>
                     </a>
-                    <a href="#" class="nav-item" onclick="AuthManager.showChangePassword()" title="Change Password">
+                    <a href="#" class="nav-item" data-action="auth-showChangePassword" title="Change Password">
                         <i class="fas fa-lock"></i>
                         <span>Change Password</span>
                     </a>
@@ -119,7 +120,7 @@
                         <i class="fas fa-user"></i>
                         <span id="currentUserDisplay" style="font-size: 12px;">Loading...</span>
                     </div>
-                    <a href="#" class="nav-item" onclick="AuthManager.logout()" title="Logout" style="color: var(--danger-color);">
+                    <a href="#" class="nav-item" data-action="auth-logout" title="Logout" style="color: var(--danger-color);">
                         <i class="fas fa-sign-out-alt"></i>
                         <span>Logout</span>
                     </a>
@@ -149,7 +150,7 @@
                     </button>
                     <h2 class="header-title">Media Integrity Scanner</h2>
                     <div class="header-actions">
-                        <button class="btn btn-primary" onclick="app.startScan()" aria-label="Start media scan">
+                        <button class="btn btn-primary" data-action="startScan" aria-label="Start media scan">
                             <i class="fas fa-play" aria-hidden="true"></i>
                             <span>Start Scan</span>
                         </button>
@@ -163,7 +164,7 @@
                 <div class="progress-container" style="display: none;" role="region" aria-label="Scan progress">
                     <div class="progress-header">
                         <h3 class="progress-title">Scan Progress</h3>
-                        <button class="cancel-button" onclick="app.cancelCurrentOperation()" title="Cancel operation" style="display: none;" aria-label="Cancel current operation">
+                        <button class="cancel-button" data-action="cancelCurrentOperation" title="Cancel operation" style="display: none;" aria-label="Cancel current operation">
                             <i class="fas fa-stop" aria-hidden="true"></i> Cancel
                         </button>
                     </div>
@@ -205,7 +206,17 @@
                     </div>
                     <div class="stat-card" role="group" aria-label="Integrity coverage">
                         <div class="stat-value" id="integrity-checked" aria-live="polite">-</div>
-                        <div class="stat-label">Integrity Checked</div>
+                        <div class="stat-label">Integrity Rechecks</div>
+                        <button class="integrity-details-toggle" id="integrity-details-toggle" type="button"
+                                aria-expanded="false" aria-controls="integrity-detail-panel">
+                            <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                            <i class="fas fa-exclamation-circle integrity-refresh-warning" aria-hidden="true" hidden></i>
+                            <span>Details</span>
+                        </button>
+                        <div id="integrity-detail-panel" hidden>
+                            <div class="stat-detail" id="integrity-details" aria-live="polite"></div>
+                            <div class="stat-detail" id="integrity-refresh-status" aria-live="polite"></div>
+                        </div>
                     </div>
                 </div>
                 
@@ -250,14 +261,14 @@
                         <!-- Selection Actions -->
                         <div class="d-flex justify-content-between align-items-center mb-3">
                             <div class="d-flex gap-2 align-items-center">
-                                <label class="d-flex align-items-center gap-1">
+                                <label class="selection-checkbox-control d-flex align-items-center gap-1">
                                     <input type="checkbox" id="select-all">
                                     Select All
                                 </label>
                                 <span class="selection-info text-muted"></span>
                             </div>
                             <div class="d-flex gap-2 results-actions">
-                                <button class="btn btn-secondary" onclick="app.markSelectedAsGood()"
+                                <button class="btn btn-secondary" data-action="markSelectedAsGood"
                                         id="mark-good-btn" disabled title="Mark as Good">
                                     <i class="fas fa-check"></i><span class="btn-text"> Mark as Good</span>
                                 </button>
@@ -265,37 +276,37 @@
                                 <div class="action-dropdown">
                                     <button class="btn btn-secondary" type="button"
                                             id="bulk-action-btn" disabled
-                                            onclick="app.toggleActionDropdown(event, 'bulk-action-menu')" title="Actions">
+                                            data-action="toggleActionDropdown" data-action-arg="bulk-action-menu" title="Actions">
                                         <i class="fas fa-tasks"></i><span class="btn-text"> Actions</span> <i class="fas fa-caret-down"></i>
                                     </button>
                                     <ul class="dropdown-menu" id="bulk-action-menu" style="display: none;">
-                                        <li><a class="dropdown-item" href="#" onclick="app.rescanSelected(); return false;">
+                                        <li><a class="dropdown-item" href="#" data-action="rescanSelected">
                                             <i class="fas fa-sync"></i> Rescan
                                         </a></li>
-                                        <li><a class="dropdown-item" href="#" onclick="app.orphanScanSelected(); return false;">
+                                        <li><a class="dropdown-item" href="#" data-action="orphanScanSelected">
                                             <i class="fas fa-search"></i> Cleanup
                                         </a></li>
-                                        <li><a class="dropdown-item" href="#" onclick="app.changeCheckSelected(); return false;">
+                                        <li><a class="dropdown-item" href="#" data-action="changeCheckSelected">
                                             <i class="fas fa-shield-alt"></i> Integrity Check
                                         </a></li>
                                     </ul>
                                 </div>
-                                <button class="btn btn-secondary" onclick="app.downloadSelected()"
+                                <button class="btn btn-secondary" data-action="downloadSelected"
                                         id="download-btn" disabled title="Download">
                                     <i class="fas fa-download"></i><span class="btn-text"> Download</span>
                                 </button>
                                 <div class="export-dropdown">
-                                    <button class="btn btn-secondary" onclick="app.toggleExportMenu(event)" title="Export">
+                                    <button class="btn btn-secondary" data-action="toggleExportMenu" title="Export">
                                         <i class="fas fa-file-export"></i><span class="btn-text"> Export</span> <i class="fas fa-caret-down"></i>
                                     </button>
                                     <div class="export-dropdown-menu" id="exportDropdownMenu">
-                                        <a href="#" onclick="app.exportData('csv'); return false;">
+                                        <a href="#" data-action="exportData" data-action-arg="csv">
                                             <i class="fas fa-file-csv"></i> Export as CSV
                                         </a>
-                                        <a href="#" onclick="app.exportData('json'); return false;">
+                                        <a href="#" data-action="exportData" data-action-arg="json">
                                             <i class="fas fa-file-code"></i> Export as JSON
                                         </a>
-                                        <a href="#" onclick="app.exportData('pdf'); return false;">
+                                        <a href="#" data-action="exportData" data-action-arg="pdf">
                                             <i class="fas fa-file-pdf"></i> Export as PDF
                                         </a>
                                     </div>
@@ -417,26 +428,26 @@
                                 <option value="cancelled">Cancelled</option>
                             </select>
                         </div>
-                        <button class="btn btn-primary" onclick="app.loadScanReports()" title="Refresh">
+                        <button class="btn btn-primary" data-action="loadScanReports" title="Refresh">
                             <i class="fas fa-sync"></i><span class="btn-text"> Refresh</span>
                         </button>
                         <div class="dropdown" style="display: inline-block;">
-                            <button class="btn btn-primary dropdown-toggle" onclick="app.toggleDropdown(event, 'bulk-download-menu')" disabled id="downloadBtn" title="Download Selected">
+                            <button class="btn btn-primary dropdown-toggle" data-action="toggleDropdown" data-action-arg="bulk-download-menu" disabled id="downloadBtn" title="Download Selected">
                                 <i class="fas fa-download"></i><span class="btn-text"> Download Selected</span>
                             </button>
                             <div id="bulk-download-menu" class="dropdown-menu" style="display: none; position: absolute; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 1000; min-width: 150px; right: 0;">
-                                <a class="dropdown-item" onclick="app.downloadSelectedReports('json')" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
+                                <a class="dropdown-item" data-action="downloadSelectedReports" data-action-arg="json" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
                                     <i class="fas fa-file-code"></i> Download as JSON
                                 </a>
-                                <a class="dropdown-item" onclick="app.downloadSelectedReports('zip')" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
+                                <a class="dropdown-item" data-action="downloadSelectedReports" data-action-arg="zip" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
                                     <i class="fas fa-file-archive"></i> Download as ZIP
                                 </a>
-                                <a class="dropdown-item" onclick="app.downloadSelectedReports('pdf')" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
+                                <a class="dropdown-item" data-action="downloadSelectedReports" data-action-arg="pdf" style="display: block; padding: 10px 15px; cursor: pointer; color: var(--text-primary);">
                                     <i class="fas fa-file-pdf"></i> Download as PDF
                                 </a>
                             </div>
                         </div>
-                        <button class="btn btn-danger" onclick="app.deleteSelectedReports()" disabled id="deleteBtn" title="Delete Selected">
+                        <button class="btn btn-danger" data-action="deleteSelectedReports" disabled id="deleteBtn" title="Delete Selected">
                             <i class="fas fa-trash"></i><span class="btn-text"> Delete Selected</span>
                         </button>
                     </div>
@@ -467,7 +478,7 @@
                             <thead>
                                 <tr>
                                     <th style="width: 40px;">
-                                        <input type="checkbox" id="select-all-reports" onchange="app.toggleAllReports(this.checked)">
+                                        <input type="checkbox" id="select-all-reports" data-action="toggleAllReports">
                                     </th>
                                     <th>Start Time</th>
                                     <th>Type</th>
@@ -499,10 +510,10 @@
             <div class="modal-header">
                 <h3 class="modal-title">View Logs</h3>
                 <div class="modal-header-actions">
-                    <button class="btn btn-secondary btn-sm" onclick="app.downloadLogs()" title="Download">
+                    <button class="btn btn-secondary btn-sm" data-action="downloadLogs" title="Download">
                         <i class="fas fa-download"></i><span class="btn-text"> Download</span>
                     </button>
-                    <button class="btn btn-danger btn-sm" onclick="app.purgeLogs()" title="Purge">
+                    <button class="btn btn-danger btn-sm" data-action="purgeLogs" title="Purge">
                         <i class="fas fa-trash"></i><span class="btn-text"> Purge</span>
                     </button>
                     <button class="modal-close">&times;</button>
@@ -582,7 +593,7 @@
                     <!-- Load More / Pagination -->
                     <div class="d-flex justify-content-between align-items-center mt-2">
                         <span id="logs-count" class="text-muted"></span>
-                        <button class="btn btn-secondary btn-sm" id="logs-load-more" onclick="app.logViewer.loadMore()" style="display: none;">
+                        <button class="btn btn-secondary btn-sm" id="logs-load-more" data-action="logViewer-loadMore" style="display: none;">
                             Load More
                         </button>
                     </div>
@@ -593,12 +604,12 @@
 
     <!-- Media Viewer Modal -->
     <div id="media-viewer-modal" class="modal">
-        <div class="modal-content" style="max-width: 90%; width: 90%;">
+        <div class="modal-content">
             <div class="modal-header">
                 <h3 class="modal-title">Media Viewer</h3>
                 <button class="modal-close">&times;</button>
             </div>
-            <div class="modal-body" style="text-align: center; padding: 2rem;">
+            <div class="modal-body">
                 <!-- Media content will be loaded here -->
             </div>
         </div>
@@ -618,7 +629,7 @@
             </div>
             <div class="modal-body">
                 <div class="schedules-header">
-                    <button class="btn btn-primary" onclick="app.showAddSchedule()">
+                    <button class="btn btn-primary" data-action="showAddSchedule">
                         <i class="fas fa-plus"></i> Add Schedule
                     </button>
                 </div>
@@ -644,7 +655,7 @@
                     </div>
                     <div class="form-group">
                         <label for="schedule-type">Schedule Type</label>
-                        <select id="schedule-type" class="form-control" onchange="app.toggleScheduleInput()">
+                        <select id="schedule-type" class="form-control" data-action="toggleScheduleInput">
                             <option value="cron">Cron Expression</option>
                             <option value="interval">Interval</option>
                         </select>
@@ -667,7 +678,7 @@
                     </div>
                     <div class="form-group">
                         <label for="scan-type">Scan Type</label>
-                        <select id="scan-type" class="form-control" onchange="app.toggleBudgetInput()">
+                        <select id="scan-type" class="form-control" data-action="toggleBudgetInput">
                             <option value="normal">Normal Scan (Scan All Files)</option>
                             <option value="orphan">Cleanup</option>
                             <option value="file_changes">Integrity Scan</option>
@@ -686,7 +697,7 @@
                     </div>
                     <div class="form-actions">
                         <button type="submit" class="btn btn-primary">Create Schedule</button>
-                        <button type="button" class="btn btn-secondary" onclick="app.closeModal('add-schedule-modal')">Cancel</button>
+                        <button type="button" class="btn btn-secondary" data-action="closeModal" data-action-arg="add-schedule-modal">Cancel</button>
                     </div>
                 </form>
             </div>
@@ -709,7 +720,7 @@
                     </div>
                     <div class="form-group">
                         <label for="edit-schedule-type">Schedule Type</label>
-                        <select id="edit-schedule-type" class="form-control" onchange="app.toggleEditScheduleInput()">
+                        <select id="edit-schedule-type" class="form-control" data-action="toggleEditScheduleInput">
                             <option value="cron">Cron Expression</option>
                             <option value="interval">Interval</option>
                         </select>
@@ -732,7 +743,7 @@
                     </div>
                     <div class="form-group">
                         <label for="edit-scan-type">Scan Type</label>
-                        <select id="edit-scan-type" class="form-control" onchange="app.toggleBudgetInput('edit-')">
+                        <select id="edit-scan-type" class="form-control" data-action="toggleBudgetInput" data-action-arg="edit-">
                             <option value="normal">Normal Scan (Scan All Files)</option>
                             <option value="orphan">Cleanup</option>
                             <option value="file_changes">Integrity Scan</option>
@@ -761,7 +772,7 @@
                     </div>
                     <div class="form-actions">
                         <button type="submit" class="btn btn-primary">Update Schedule</button>
-                        <button type="button" class="btn btn-secondary" onclick="app.closeModal('edit-schedule-modal')">Cancel</button>
+                        <button type="button" class="btn btn-secondary" data-action="closeModal" data-action-arg="edit-schedule-modal">Cancel</button>
                     </div>
                 </form>
             </div>
@@ -786,7 +797,7 @@
                 </div>
                 <div class="tunables-actions">
                     <span id="tunables-status" class="tunables-status" role="status" aria-live="polite"></span>
-                    <button class="btn btn-primary" id="tunables-save" onclick="app.saveTunables()">
+                    <button class="btn btn-primary" id="tunables-save" data-action="saveTunables">
                         <i class="fas fa-check"></i> Save changes
                     </button>
                 </div>
@@ -805,7 +816,7 @@
                     <h4>Excluded Paths</h4>
                     <div class="exclusion-input-group">
                         <input type="text" id="new-excluded-path" class="form-control" placeholder="/media/temp">
-                        <button class="btn btn-primary" onclick="app.addExclusion('path')">
+                        <button class="btn btn-primary" data-action="addExclusion" data-action-arg="path">
                             <i class="fas fa-plus"></i> Add
                         </button>
                     </div>
@@ -818,7 +829,7 @@
                     <h4>Excluded Extensions</h4>
                     <div class="exclusion-input-group">
                         <input type="text" id="new-excluded-extension" class="form-control" placeholder=".tmp">
-                        <button class="btn btn-primary" onclick="app.addExclusion('extension')">
+                        <button class="btn btn-primary" data-action="addExclusion" data-action-arg="extension">
                             <i class="fas fa-plus"></i> Add
                         </button>
                     </div>
@@ -841,8 +852,8 @@
                 <p id="confirm-message"></p>
             </div>
             <div class="modal-footer" style="display: flex; gap: 10px; justify-content: flex-end; padding: 1rem;">
-                <button class="btn btn-secondary" onclick="app.hideConfirmModal(false)">Cancel</button>
-                <button class="btn btn-primary" onclick="app.hideConfirmModal(true)">Confirm</button>
+                <button class="btn btn-secondary" data-action="hideConfirmModal" data-action-arg="false">Cancel</button>
+                <button class="btn btn-primary" data-action="hideConfirmModal" data-action-arg="true">Confirm</button>
             </div>
         </div>
     </div>
@@ -897,7 +908,7 @@
                                 Send success ping
                             </label>
                             <small class="form-text" style="display: block; margin-left: 1.5rem; margin-bottom: 0.75rem;">
-                                Ping when scan completes successfully
+                                Ping after a successful scan
                             </small>
 
                             <label style="display: block; margin-bottom: 0.5rem;">
@@ -927,7 +938,7 @@
                 <div>
                     <button id="healthcheck-delete-btn"
                             class="btn btn-danger"
-                            onclick="app.deleteHealthcheckConfig()"
+                            data-action="deleteHealthcheckConfig"
                             style="display: none;">
                         Delete
                     </button>
@@ -935,19 +946,19 @@
                 <div style="display: flex; gap: 10px;">
                     <button type="button"
                             class="btn btn-secondary"
-                            onclick="app.closeModal('healthcheck-modal')">
+                            data-action="closeModal" data-action-arg="healthcheck-modal">
                         Cancel
                     </button>
                     <button id="healthcheck-test-btn"
                             type="button"
                             class="btn btn-warning"
-                            onclick="app.testHealthcheck()"
+                            data-action="testHealthcheck"
                             style="display: none;">
                         Test
                     </button>
                     <button type="button"
                             class="btn btn-primary"
-                            onclick="app.saveHealthcheckConfig()">
+                            data-action="saveHealthcheckConfig">
                         Save
                     </button>
                 </div>
@@ -956,19 +967,9 @@
     </div>
 
     <!-- Scripts -->
+    <script src="{{ asset_url('csrf.js') }}"></script>
     <script src="{{ asset_url('app.js') }}"></script>
     <script src="{{ asset_url('auth.js') }}"></script>
-    <script src="{{ asset_url('state.js') }}"></script>
     
-    <!-- Initialize version info -->
-    <script>
-        // Load version info
-        fetch('/api/version')
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('version-info').textContent = `v${data.version}`;
-            })
-            .catch(error => console.error('Failed to load version:', error));
-    </script>
 </body>
 </html>

@@ -9,11 +9,11 @@ from pixelprobe.media_checker import PixelProbe, load_exclusions
 from pixelprobe.models import db, ScanResult, ScanState, ScanChunk
 from pixelprobe.constants import TERMINAL_SCAN_PHASES
 from pixelprobe.version import __version__
-from pixelprobe.auth import auth_required
+from pixelprobe.auth import auth_required, admin_required
 from pixelprobe.progress_utils import get_scan_progress_redis, clear_scan_progress_redis
 
 from pixelprobe.utils.security import (
-    validate_file_path, validate_directory_path,
+    resolve_authorized_media_file, validate_directory_path,
     PathTraversalError, AuditLogger, validate_json_input
 )
 from pixelprobe.utils.helpers import get_configured_scan_paths
@@ -348,24 +348,12 @@ def scan_file():
     data = request.get_json()
     file_path = data['file_path']
 
-    # Normalize path
-    normalized_path = os.path.normpath(os.path.abspath(file_path))
-
-    # For rescan operations: if file already exists in database, skip path validation
-    # since it was already validated during initial scan
-    existing_result = ScanResult.query.filter_by(file_path=normalized_path).first()
-    if existing_result:
-        # File already in database from previous scan - trust it
-        validated_path = normalized_path
+    try:
+        validated_path = resolve_authorized_media_file(file_path)
         AuditLogger.log_action('rescan_file', {'file_path': validated_path})
-    else:
-        # New file - must validate against allowed paths
-        try:
-            validated_path = validate_file_path(file_path)
-            AuditLogger.log_action('scan_file', {'file_path': validated_path})
-        except PathTraversalError as e:
-            AuditLogger.log_security_event('path_traversal_attempt', str(e), 'warning')
-            return {'error': 'Invalid file path'}, 400
+    except PathTraversalError as e:
+        AuditLogger.log_security_event('path_traversal_attempt', str(e), 'warning')
+        return {'error': 'Invalid file path'}, 400
     
     # P1 Implementation: Use Celery task queue for single file scans
     try:
@@ -374,33 +362,42 @@ def scan_file():
         
         if celery_enabled:
             # Use Celery task queue
-            from pixelprobe.tasks import scan_media_task
             from uuid import uuid4
 
             # Generate scan ID
             scan_id = str(uuid4())
 
-            # Create ScanState record for UI progress tracking
-            scan_state = ScanState.create_new_scan()
-            scan_state.scan_id = scan_id
-            scan_state.start_scan([validated_path], force_rescan=True)
+            from pixelprobe.models import ScanTask
+            from pixelprobe.services.scan_engine import claim_scan_slot
 
-            # Queue the single file scan task
-            task = scan_media_task.delay(
-                scan_id=scan_id,
-                paths=[validated_path],
-                scan_type='single',
-                force_rescan=True
+            ok, error_payload, error_status = claim_scan_slot(scan_id, 'selected')
+            if not ok:
+                return error_payload, error_status
+            task_id = str(uuid4())
+            state = ScanState.query.filter_by(scan_id=scan_id).with_for_update().first()
+            intent = ScanTask(
+                scan_id=scan_id, purpose='single', celery_task_id=task_id,
+                generation=state.dispatch_generation,
+                payload={'scan_id': scan_id, 'paths': [validated_path], 'scan_type': 'single',
+                         'force_rescan': True},
             )
+            state.celery_task_id = task_id
+            db.session.add(intent)
+            db.session.commit()
 
-            logger.info(f"Queued single file scan task {task.id} for {validated_path}")
+            from pixelprobe.tasks_parallel import dispatch_scan_task_intent
+            if not dispatch_scan_task_intent(intent):
+                return {'status': 'pending_dispatch', 'scan_id': scan_id, 'task_id': task_id,
+                        'message': 'Scan request saved. Dispatch will retry automatically.'}, 202
+
+            logger.info(f"Queued single file scan task {task_id} for {validated_path}")
 
             return {
                 'status': 'queued',
                 'scan_id': scan_id,
-                'task_id': task.id,
+                'task_id': task_id,
                 'file_path': validated_path,
-                'message': 'Single file scan queued successfully using Celery task queue',
+                'message': 'Single-file scan queued',
                 'celery_enabled': True
             }
         else:
@@ -473,18 +470,14 @@ def get_scan_status():
         db.session.close()
         db.session.remove()
 
-        # First try to get active scan with fresh session
-        scan_state = db.session.query(ScanState).filter_by(is_active=True).first()
+        # First try to get the newest active scan with a fresh session.
+        scan_state = (db.session.query(ScanState).filter_by(is_active=True)
+                      .order_by(ScanState.id.desc()).first())
         if scan_state:
             # Force refresh from database to get latest state
             db.session.refresh(scan_state)
         else:
-            # No active scan, get the most recent COMPLETED scan for status display
-            # IMPORTANT: Only show completed scans to avoid showing partial/interrupted scans
-            scan_state = db.session.query(ScanState).filter_by(phase='completed').order_by(ScanState.id.desc()).first()
-            if not scan_state:
-                # If no completed scan, get the most recent one regardless of phase
-                scan_state = db.session.query(ScanState).order_by(ScanState.id.desc()).first()
+            scan_state = db.session.query(ScanState).order_by(ScanState.id.desc()).first()
 
             if scan_state:
                 db.session.refresh(scan_state)
@@ -501,15 +494,16 @@ def get_scan_status():
     
     state_dict = scan_state.to_dict()
     
-    # Debug logging - changed to INFO for visibility in production logs
-    logger.info(f"API scan-status: scan_id={scan_state.id}, phase={scan_state.phase}, "
-                f"is_active={scan_state.is_active}, files_processed={scan_state.files_processed}, "
-                f"estimated_total={scan_state.estimated_total}, current_file={scan_state.current_file}, "
-                f"start_time={scan_state.start_time}")
+    # Every open tab polls this every few seconds, so at INFO these two lines
+    # were 42% of everything the application logged, and every one of them is a
+    # row in log_entries. The state they print is what the response returns.
+    logger.debug(f"API scan-status: scan_id={scan_state.id}, phase={scan_state.phase}, "
+                 f"is_active={scan_state.is_active}, files_processed={scan_state.files_processed}, "
+                 f"estimated_total={scan_state.estimated_total}, current_file={scan_state.current_file}, "
+                 f"start_time={scan_state.start_time}")
     
-    # Prioritize database values when available, fall back to service values
-    is_running = current_app.scan_service.is_scan_running()
-    logger.debug(f"Service is_running: {is_running}")
+    is_running = bool(scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES)
+    logger.debug(f"Durable is_running: {is_running}")
     logger.debug(f"Service status: {service_status}")
     logger.debug(f"Database state_dict phase: {state_dict.get('phase', 'idle')}")
 
@@ -519,6 +513,9 @@ def get_scan_status():
     # Use database values primarily, with service as fallback
     current_progress = state_dict.get('files_processed', service_status.get('current', 0))
     total_progress = state_dict.get('estimated_total', service_status.get('total', 0))
+    active_files = []
+    active_file_count = 0
+    active_files_truncated = False
     # Fallback: if estimated_total is 0 but phase_total has a value, use it
     if total_progress == 0 and state_dict.get('phase_total', 0) > 0:
         total_progress = state_dict.get('phase_total')
@@ -532,6 +529,9 @@ def get_scan_status():
                 redis_total = redis_progress.get('estimated_total', 0)
                 redis_phase = redis_progress.get('phase', '')
                 redis_file = redis_progress.get('current_file', '')
+                active_files = redis_progress.get('active_files', [])
+                active_file_count = redis_progress.get('active_file_count', 0)
+                active_files_truncated = redis_progress.get('active_files_truncated', False)
                 # Use Redis values if they are more up-to-date (higher progress count)
                 if redis_files >= current_progress:
                     current_progress = redis_files
@@ -588,30 +588,9 @@ def get_scan_status():
             # Extract just the filename for display
             import os
             filename = os.path.basename(current_file)
-            # Generate fresh progress message with current data
-            from pixelprobe.utils.helpers import ProgressTracker
-            progress_tracker = ProgressTracker('scan')
-            # Use the actual scan start time if available
-            if state_dict.get('start_time'):
-                try:
-                    start_time_str = state_dict['start_time']
-                    if isinstance(start_time_str, str):
-                        start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
-                    else:
-                        start_time = start_time_str
-                    if start_time.tzinfo is None:
-                        start_time = start_time.replace(tzinfo=timezone.utc)
-                    # Set the actual scan start time
-                    import time
-                    progress_tracker.start_time = start_time.timestamp()
-                except:
-                    pass  # Use default if parsing fails
-            progress_message = progress_tracker.get_progress_message(
-                'Phase 3 of 3: Scanning files',
-                current_progress,
-                total_progress,
-                filename
-            )
+            progress_message = (
+                f"Phase 3 of 3: Scanning files, current file: {filename} - "
+                f"{current_progress} of {total_progress:,} files")
         else:
             progress_message = f"Phase 3 of 3: Scanning files - {current_progress} of {total_progress:,} files"
         # Use current/total from database for scanning phase  
@@ -780,7 +759,7 @@ def get_scan_status():
         'is_running': is_running,
         'is_scanning': is_running,  # Legacy compatibility
         'is_active': state_dict.get('is_active', False),  # Database active state
-        'scan_id': state_dict.get('id'),
+        'scan_id': state_dict.get('scan_id'),
         'start_time': start_time_tz,
         'end_time': end_time_tz,
         'directories': state_dict.get('directories'),
@@ -793,7 +772,13 @@ def get_scan_status():
         'phase_current': phase_current,
         'phase_total': phase_total,
         'progress_message': progress_message,
-        
+        'active_files': active_files,
+        'active_file_count': active_file_count,
+        'active_files_truncated': active_files_truncated,
+        # A scan that failed carries its reason here; without it the UI can only
+        # say the run stopped.
+        'error_message': state_dict.get('error_message') or '',
+
         # ETA fields - ensure we don't send None
         'eta': eta if eta else None,  # Let jsonify handle None properly
         'files_per_second': round(files_per_second, 2) if files_per_second > 0 else 0
@@ -819,9 +804,9 @@ def get_scan_status():
         except Exception as e:
             logger.debug(f"Failed to get chunk progress: {e}")
 
-    logger.info(f"API scan-status response: progress_message='{status['progress_message']}', "
-                f"file='{status['file']}', eta='{status['eta']}', "
-                f"current={status['current']}, total={status['total']}")
+    logger.debug(f"API scan-status response: progress_message='{status['progress_message']}', "
+                 f"file='{status['file']}', eta='{status['eta']}', "
+                 f"current={status['current']}, total={status['total']}")
 
     return status
 
@@ -832,8 +817,19 @@ def cancel_scan():
     """Cancel the current scan"""
     logger.info("Cancel scan endpoint called")
     try:
-        result = current_app.scan_service.cancel_scan()
-        logger.info(f"Cancel scan successful: {result}")
+        payload = request.get_json(silent=True) or {}
+        expected_scan_id = payload.get('scan_id')
+        if expected_scan_id:
+            result = current_app.scan_service.cancel_scan(expected_scan_id=expected_scan_id)
+        else:
+            result = current_app.scan_service.cancel_scan()
+        if not result.get('cancelled'):
+            logger.info("Cancel scan not applied: %s", result.get('message'))
+            return result, 409
+        if result.get('revoke_failures'):
+            logger.warning("Cancel scan persisted with revoke failures")
+        else:
+            logger.info("Cancel scan persisted for owned tasks")
         return result
     except RuntimeError as e:
         logger.error(f"Cancel scan failed: {str(e)}", exc_info=True)
@@ -844,7 +840,7 @@ def cancel_scan():
 @scan_bp.route('/force-cleanup-scan', methods=['POST'])
 @scan_bp.route('/scan/recovery', methods=['POST'])
 @rate_limit("5 per minute")
-@auth_required
+@admin_required
 def force_cleanup_scan():
     """Force cleanup of stuck scan states - emergency recovery endpoint
 
@@ -921,10 +917,20 @@ def scan_files_parallel():
         num_workers = 4
     num_workers = max(1, min(num_workers, current_app.config.get('MAX_WORKERS', 10)))
     scan_dirs = data.get('directories', [])
+    selected_requested = 'file_paths' in data
     file_paths = data.get('file_paths', [])
+    if selected_requested:
+        if not isinstance(file_paths, list) or not file_paths:
+            return {'error': 'file_paths must be a non-empty list'}, 400
+        if scan_dirs:
+            return {'error': 'Choose files or directories, not both'}, 400
+        try:
+            file_paths = [resolve_authorized_media_file(path) for path in file_paths]
+        except (PathTraversalError, TypeError):
+            return {'error': 'Invalid file path'}, 400
     
     # Check if we're scanning specific files
-    if file_paths:
+    if selected_requested:
         # Scan specific files only
         logger.info(f"Scanning {len(file_paths)} specific files")
         try:
@@ -933,28 +939,40 @@ def scan_files_parallel():
             
             if celery_enabled:
                 # Use Celery task queue
-                from pixelprobe.tasks import scan_files_task
+                from pixelprobe.models import ScanTask
+                from pixelprobe.services.scan_engine import claim_scan_slot
                 from uuid import uuid4
 
                 # Generate scan ID
                 scan_id = str(uuid4())
-
-                # Queue the file scan task with parallel workers
-                task = scan_files_task.delay(
-                    scan_id=scan_id,
-                    file_paths=file_paths,
-                    force_rescan=force_rescan,
-                    num_workers=num_workers  # Pass num_workers for parallel scanning
+                ok, error_payload, error_status = claim_scan_slot(scan_id, 'selected')
+                if not ok:
+                    return error_payload, error_status
+                task_id = str(uuid4())
+                state = ScanState.query.filter_by(scan_id=scan_id).with_for_update().first()
+                intent = ScanTask(
+                    scan_id=scan_id, purpose='selected', celery_task_id=task_id,
+                    generation=state.dispatch_generation,
+                    payload={'scan_id': scan_id, 'file_paths': file_paths,
+                             'force_rescan': bool(force_rescan), 'num_workers': num_workers},
                 )
+                state.celery_task_id = task_id
+                db.session.add(intent)
+                db.session.commit()
 
-                logger.info(f"Queued file scan task {task.id} for {len(file_paths)} files with {num_workers} workers")
+                from pixelprobe.tasks_parallel import dispatch_scan_task_intent
+                if not dispatch_scan_task_intent(intent):
+                    return {'status': 'pending_dispatch', 'scan_id': scan_id, 'task_id': task_id,
+                            'message': 'Scan request saved. Dispatch will retry automatically.'}, 202
+
+                logger.info(f"Queued file scan task {task_id} for {len(file_paths)} files with {num_workers} workers")
                 
                 return {
                     'status': 'queued',
                     'scan_id': scan_id,
-                    'task_id': task.id,
+                    'task_id': task_id,
                     'file_count': len(file_paths),
-                    'message': 'File scan queued successfully using Celery task queue',
+                    'message': 'File scan queued',
                     'celery_enabled': True
                 }
             else:
@@ -1002,7 +1020,7 @@ def scan_files_parallel():
 
 @scan_bp.route('/reset-for-rescan', methods=['POST'])
 @rate_limit("5 per minute")
-@auth_required
+@admin_required
 def reset_for_rescan():
     """Reset files for rescanning based on criteria"""
     data = request.get_json() or {}
@@ -1066,7 +1084,7 @@ def reset_for_rescan():
 
 @scan_bp.route('/force-scan-pending', methods=['POST'])
 @rate_limit("2 per minute")
-@auth_required
+@admin_required
 def force_scan_pending():
     """Force scan all pending files regardless of directory"""
     try:
@@ -1091,7 +1109,7 @@ def force_scan_pending():
 
 @scan_bp.route('/reset-files-by-path', methods=['POST'])
 @rate_limit("5 per minute")
-@auth_required
+@admin_required
 def reset_files_by_path():
     """Reset specific files by their paths"""
     data = request.get_json() or {}
@@ -1128,7 +1146,7 @@ def reset_files_by_path():
 
 @scan_bp.route('/reset-incomplete-scans', methods=['POST'])
 @rate_limit("2 per minute")
-@auth_required
+@admin_required
 def reset_incomplete_scans():
     """Reset files that were marked as completed but have incomplete scan data
     

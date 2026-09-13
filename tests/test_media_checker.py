@@ -3,12 +3,16 @@ Tests for PixelProbe media checker core functionality
 """
 
 import pytest
+import itertools
 import os
 import subprocess
 import threading
 from unittest.mock import Mock, patch, MagicMock
 
-from pixelprobe.media_checker import PixelProbe
+from pixelprobe.media_checker import (PixelProbe, AUDIO_PASS_TIMEOUT_CAP_SECS,
+                                      VIDEO_PASS_TIMEOUT_CAP_SECS,
+                                      _audio_pass_timeout, _video_pass_timeout)
+from pixelprobe.services.settings_service import scanner_settings_snapshot
 
 def settings_with(**overrides):
     """Registry defaults with specific settings overridden, keyed as the scanner reads them."""
@@ -19,9 +23,8 @@ def settings_with(**overrides):
 
 
 def patch_settings(**overrides):
-    """Patch the scanner's settings resolution for the duration of a test."""
-    return patch('pixelprobe.media_checker.resolve_settings',
-                 return_value=settings_with(**overrides))
+    """Scope scanner settings for the duration of a test."""
+    return scanner_settings_snapshot(settings_with(**overrides))
 
 
 def freeze_router(freeze_stderr='', probe_stdout='', decode_stderr=''):
@@ -1060,12 +1063,14 @@ class TestDataHolesInScanFile:
     @patch('pixelprobe.media_checker.PixelProbe.calculate_file_hash')
     @patch('pixelprobe.media_checker.PixelProbe.get_file_info')
     def test_holed_video_marked_corrupt_without_decoding(
-        self, mock_info, mock_hash, mock_holes, mock_video
+        self, mock_info, mock_hash, mock_holes, mock_video, tmp_path
     ):
         from datetime import datetime, timezone
 
+        media = tmp_path / 'holed.mkv'
+        media.write_bytes(b'placeholder')
         mock_info.return_value = {
-            'file_path': '/fake/holed.mkv',
+            'file_path': str(media),
             'file_size': 400 * 1024 * 1024,
             'file_type': 'video/x-matroska',
             'creation_date': datetime.now(timezone.utc),
@@ -1080,7 +1085,7 @@ class TestDataHolesInScanFile:
         )
 
         checker = PixelProbe()
-        result = checker.scan_file('/fake/holed.mkv')
+        result = checker.scan_file(str(media))
 
         assert result['is_corrupted'] is True
         assert 'Incomplete file' in result['corruption_details']
@@ -1091,11 +1096,13 @@ class TestDataHolesInScanFile:
     @patch('pixelprobe.media_checker.PixelProbe._check_data_holes')
     @patch('pixelprobe.media_checker.PixelProbe.calculate_file_hash')
     @patch('pixelprobe.media_checker.PixelProbe.get_file_info')
-    def test_non_media_file_skips_hole_check(self, mock_info, mock_hash, mock_holes):
+    def test_non_media_file_skips_hole_check(self, mock_info, mock_hash, mock_holes, tmp_path):
         from datetime import datetime, timezone
 
+        media = tmp_path / 'notes.nfo'
+        media.write_bytes(b'placeholder')
         mock_info.return_value = {
-            'file_path': '/fake/notes.nfo',
+            'file_path': str(media),
             'file_size': 400 * 1024 * 1024,
             'file_type': 'text/plain',
             'creation_date': datetime.now(timezone.utc),
@@ -1104,7 +1111,7 @@ class TestDataHolesInScanFile:
         mock_hash.return_value = 'deadbeef'
 
         checker = PixelProbe()
-        result = checker.scan_file('/fake/notes.nfo')
+        result = checker.scan_file(str(media))
 
         assert result['is_corrupted'] is False
         mock_holes.assert_not_called()
@@ -1591,3 +1598,95 @@ class TestFrameIntegrityPacketFirst:
         assert details == []
         assert warnings == []
         assert run.call_count == 1
+
+
+class TestAudioPassTimeout:
+    """A full-file audio pass gets a deadline scaled to the file, the way the
+    video pass is scaled. A fixed 120s cut two-hour episodes short: they timed
+    out, were recorded as a warning and were never actually validated."""
+
+    def _run_audio_check(self, file_size, duration, run_side_effect):
+        probe = {
+            'streams': [{
+                'codec_type': 'audio',
+                'codec_name': 'mp3',
+                'sample_rate': '44100',
+                'channels': 2,
+                'bit_rate': '128000',
+                'duration': str(duration),
+            }],
+            'format': {'duration': str(duration)}
+        }
+        with patch('os.path.exists', return_value=True), \
+             patch('os.path.getsize', return_value=file_size), \
+             patch('pixelprobe.media_checker._ffprobe_with_timeout', return_value=probe), \
+             patch_settings(), \
+             patch('subprocess.run', side_effect=run_side_effect) as run:
+            checker = PixelProbe()
+            result = checker._check_audio_corruption('/fake/episode.mp3')
+        return result, run
+
+    def test_deadline_is_capped(self):
+        assert _audio_pass_timeout(500 * 1024 * 1024 * 1024, None) == AUDIO_PASS_TIMEOUT_CAP_SECS
+
+    def test_missing_duration_still_scales_with_size(self):
+        assert _audio_pass_timeout(400 * 1024 * 1024, None) > _audio_pass_timeout(1024 * 1024, None)
+
+    def test_video_and_audio_share_one_formula(self):
+        """The video pass keeps the deadline it had before the audio fix."""
+        one_gb, one_hour = 1024 * 1024 * 1024, 3600
+        assert _video_pass_timeout(one_gb, one_hour) == min(
+            int((300 + max(180, 1800)) * 1.2), VIDEO_PASS_TIMEOUT_CAP_SECS)
+
+    def test_decode_call_uses_the_scaled_deadline(self):
+        clean = Mock(returncode=0, stdout='', stderr='')
+
+        (is_corrupted, _details, _tool, scan_output, warnings), run = self._run_audio_check(
+            57 * 1024 * 1024, 7200, lambda *a, **kw: clean)
+
+        assert is_corrupted is False
+        assert warnings == []
+        assert 'Audio decode (full file): PASSED' in scan_output
+        assert run.call_args_list, 'no ffmpeg call was made'
+        assert all(call.kwargs['timeout'] > 120 for call in run.call_args_list)
+
+    def test_passes_share_one_per_file_budget(self):
+        """Each pass gets what is left of the file's deadline, not a fresh one,
+        so a file on stalled storage cannot hold a worker for three deadlines."""
+        clean = Mock(returncode=0, stdout='', stderr='')
+        clock = itertools.count(0, 600)  # every reading is 10 minutes later
+
+        with patch('time.monotonic', side_effect=lambda: next(clock)):
+            (_corrupt, _details, _tool, _output, _warnings), run = self._run_audio_check(
+                57 * 1024 * 1024, 7200, lambda *a, **kw: clean)
+
+        deadlines = [call.kwargs['timeout'] for call in run.call_args_list]
+        assert len(deadlines) > 1, 'expected more than one pass'
+        assert deadlines == sorted(deadlines, reverse=True)
+        assert deadlines[-1] < deadlines[0]
+
+    def test_spent_budget_skips_later_passes_without_warning_again(self):
+        """A pass that used the whole budget already said the file was not
+        fully checked; the passes after it must not each add a 1s timeout."""
+        def timed_out(cmd, *args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd='ffmpeg', timeout=kwargs.get('timeout'))
+
+        clock = itertools.count(0, 5000)  # the first pass outlives the budget
+
+        with patch('time.monotonic', side_effect=lambda: next(clock)):
+            (_corrupt, _details, _tool, scan_output, warnings), _run = self._run_audio_check(
+                57 * 1024 * 1024, 7200, timed_out)
+
+        assert len(warnings) == 1
+        assert 'Deep audio scan: SKIPPED (file budget spent)' in scan_output
+
+    def test_timeout_records_the_deadline_it_hit(self):
+        def timed_out(cmd, *args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd='ffmpeg', timeout=kwargs.get('timeout'))
+
+        (is_corrupted, _details, _tool, scan_output, warnings), _run = self._run_audio_check(
+            57 * 1024 * 1024, 7200, timed_out)
+
+        assert is_corrupted is False
+        assert any('Audio decode: TIMEOUT after' in line for line in scan_output)
+        assert any('Audio decode timeout after' in w for w in warnings)

@@ -9,10 +9,13 @@ import pytz
 
 from pixelprobe.models import db, ScanResult, CleanupState, FileChangesState
 from pixelprobe.media_checker import PixelProbe
-from pixelprobe.auth import auth_required
+from pixelprobe.auth import admin_required, auth_required
 from pixelprobe.utils.helpers import ProgressTracker
 from pixelprobe.utils.validators import validate_time_budget
-from pixelprobe.services.maintenance_service import MaintenanceService
+from pixelprobe.utils.security import PathTraversalError
+from pixelprobe.services.maintenance_service import (
+    MaintenanceService, required_mounts_available, validate_maintenance_scan_roots,
+)
 from pixelprobe.progress_utils import get_file_changes_progress_redis
 
 logger = logging.getLogger(__name__)
@@ -45,7 +48,10 @@ def _try_acquire_start_lock(key):
     the existing is_active check and single-threaded execution suffice.
     """
     try:
-        if db.session.bind.dialect.name != 'postgresql':
+        # get_bind(), not .bind: the latter is None unless the session was bound
+        # explicitly, so every call raised and the guard silently let all
+        # comers through - which is the opposite of what a lock is for.
+        if db.session.get_bind().dialect.name != 'postgresql':
             return True
         return bool(db.session.execute(
             text("SELECT pg_try_advisory_xact_lock(:k)"), {'k': key}
@@ -53,6 +59,24 @@ def _try_acquire_start_lock(key):
     except Exception as e:
         logger.warning(f"Advisory start-lock check failed, proceeding: {e}")
         return True
+
+
+def _validate_scan_roots(data):
+    """Return canonical, active, non-excluded roots from a maintenance request."""
+    if 'scan_roots' not in data:
+        return None, None
+    if data.get('file_paths'):
+        return None, 'scan_roots and file_paths cannot be used together'
+    try:
+        return validate_maintenance_scan_roots(data['scan_roots']), None
+    except (PathTraversalError, ValueError) as exc:
+        logger.info('Rejected maintenance scan roots: %s', type(exc).__name__)
+        return None, 'Invalid scan roots'
+
+
+def _required_mounts_available(paths):
+    """Require an approved baseline before reading or deleting configured storage."""
+    return required_mounts_available(paths)
 
 # Global state tracking - will be moved to service layer
 cleanup_state = {
@@ -84,7 +108,7 @@ current_cleanup_thread = None
 current_file_changes_thread = None
 
 @maintenance_bp.route('/test-cleanup')
-@auth_required
+@admin_required
 def test_cleanup():
     """Test endpoint to check cleanup state from database"""
     cleanup_record = CleanupState.query.order_by(CleanupState.id.desc()).first()
@@ -141,8 +165,12 @@ def get_cleanup_status():
                 'files_processed': cleanup_record.files_processed,
                 'total_files': cleanup_record.total_files,
                 'orphaned_found': cleanup_record.orphaned_found,
+                'records_kept': cleanup_record.records_kept or 0,
                 'current_file': cleanup_record.current_file,
-                'progress_message': cleanup_record.progress_message or ''
+                'progress_message': cleanup_record.progress_message or '',
+                # An aborted run reports phase 'error'; without the reason the
+                # UI can only say the run ended, not that it deleted nothing.
+                'error_message': cleanup_record.error_message or ''
             }
             
             if cleanup_record.start_time and cleanup_record.is_active:
@@ -209,6 +237,10 @@ def get_file_changes_status():
                 'total_files': 0,
                 'changes_found': 0,
                 'corrupted_found': 0,
+                'integrity_attempted': 0,
+                'integrity_successful': 0,
+                'integrity_errors': 0,
+                'integrity_unavailable': 0,
                 'current_file': None,
                 'progress_message': '',
                 'progress_percentage': 0
@@ -225,6 +257,10 @@ def get_file_changes_status():
                 'total_files': file_changes_record.total_files,
                 'changes_found': file_changes_record.changes_found,
                 'corrupted_found': file_changes_record.corrupted_found,
+                'integrity_attempted': file_changes_record.integrity_attempted,
+                'integrity_successful': file_changes_record.integrity_successful,
+                'integrity_errors': file_changes_record.integrity_errors,
+                'integrity_unavailable': file_changes_record.integrity_unavailable,
                 'current_file': file_changes_record.current_file,
                 'progress_message': file_changes_record.progress_message or ''
             }
@@ -285,7 +321,7 @@ def get_file_changes_status():
         }, 500
 
 @maintenance_bp.route('/cancel-cleanup', methods=['POST'])
-@auth_required
+@admin_required
 def cancel_cleanup():
     """Cancel the current cleanup operation"""
     try:
@@ -311,7 +347,7 @@ def cancel_cleanup():
         return {'error': 'Internal server error'}, 500
 
 @maintenance_bp.route('/reset-cleanup-state', methods=['POST'])
-@auth_required
+@admin_required
 def reset_cleanup_state():
     """Force reset cleanup state in case of stuck operation"""
     try:
@@ -348,7 +384,7 @@ def reset_cleanup_state():
         return {'error': 'Internal server error'}, 500
 
 @maintenance_bp.route('/cancel-file-changes', methods=['POST'])
-@auth_required
+@admin_required
 def cancel_file_changes():
     """Cancel the current file changes check operation"""
     try:
@@ -374,7 +410,7 @@ def cancel_file_changes():
         return {'error': 'Internal server error'}, 500
 
 @maintenance_bp.route('/reset-file-changes-state', methods=['POST'])
-@auth_required
+@admin_required
 def reset_file_changes_state():
     """Force reset file changes state in case of stuck operation"""
     try:
@@ -412,10 +448,17 @@ def reset_file_changes_state():
         return {'error': 'Internal server error'}, 500
 
 @maintenance_bp.route('/cleanup-orphaned', methods=['POST'])
-@auth_required
+@admin_required
 def cleanup_orphaned_files():
     """Start cleanup of orphaned database entries"""
     global current_cleanup_thread
+
+    data = request.get_json(silent=True) or {}
+    scan_roots, roots_error = _validate_scan_roots(data)
+    if roots_error:
+        return {'error': roots_error}, 400
+    if not _required_mounts_available(scan_roots or data.get('file_paths')):
+        return {'error': 'Required storage mount is unavailable or does not match its approved baseline'}, 503
 
     # Serialize starts across workers, then check is_active while holding the lock
     # so two concurrent requests cannot both pass and spawn duplicate cleanups.
@@ -433,9 +476,11 @@ def cleanup_orphaned_files():
         return {'error': 'Cleanup operation already in progress'}, 409
 
     # Get optional parameters from request
-    data = request.get_json(silent=True) or {}
     file_paths = data.get('file_paths', [])
     schedule_id = data.get('schedule_id')  # For healthcheck integration
+    # Only a person can tell a folder they deleted from one that went offline,
+    # so this is the operator saying which it was. Never set for a schedule.
+    trust_unreadable_dirs = bool(data.get('trust_unreadable_dirs')) and not schedule_id
 
     # Reset state
     with cleanup_state_lock:
@@ -464,13 +509,16 @@ def cleanup_orphaned_files():
     app = current_app._get_current_object()
     current_cleanup_thread = threading.Thread(
         target=cleanup_orphaned_async,
-        args=(app, cleanup_record.id, file_paths, schedule_id),
+        args=(app, cleanup_record.id, file_paths, scan_roots, schedule_id,
+              trust_unreadable_dirs),
         name=f'cleanup_{cleanup_record.id}'
     )
     current_cleanup_thread.start()
 
     if file_paths:
         message = f'Cleanup operation started for {len(file_paths)} specific file(s)'
+    elif scan_roots is not None:
+        message = f'Cleanup operation started for {len(scan_roots)} scan root(s)'
     else:
         message = 'Cleanup operation started for all files'
 
@@ -478,14 +526,22 @@ def cleanup_orphaned_files():
         'status': 'started',
         'message': message,
         'cleanup_id': cleanup_record.id,
-        'file_count': len(file_paths) if file_paths else None
+        'file_count': len(file_paths) if file_paths else None,
+        'scan_root_count': len(scan_roots) if scan_roots is not None else None,
     }
 
-@maintenance_bp.route('/file-changes', methods=['GET', 'POST'])
-@auth_required
+@maintenance_bp.route('/file-changes', methods=['POST'])
+@admin_required
 def check_file_changes():
     """Check for file changes since last scan"""
     global current_file_changes_thread
+
+    data = request.get_json(silent=True) or {}
+    scan_roots, roots_error = _validate_scan_roots(data)
+    if roots_error:
+        return {'error': roots_error}, 400
+    if not _required_mounts_available(scan_roots or data.get('file_paths')):
+        return {'error': 'Required storage mount is unavailable or does not match its approved baseline'}, 503
 
     # Serialize starts across workers, then check is_active while holding the lock
     # so two concurrent requests cannot both pass and spawn duplicate checks.
@@ -503,7 +559,6 @@ def check_file_changes():
         return {'error': 'File changes check already in progress'}, 409
 
     # Get optional parameters from request
-    data = request.get_json(silent=True) or {}
     file_paths = data.get('file_paths', [])
     schedule_id = data.get('schedule_id')  # For healthcheck integration
 
@@ -566,12 +621,15 @@ def check_file_changes():
     app = current_app._get_current_object()
     current_file_changes_thread = threading.Thread(
         target=check_file_changes_async,
-        args=(app, check_id, file_paths, schedule_id, time_budget_minutes)
+        args=(app, check_id, file_paths, scan_roots, schedule_id,
+              time_budget_minutes)
     )
     current_file_changes_thread.start()
 
     if file_paths:
         message = f'File changes check started for {len(file_paths)} specific file(s)'
+    elif scan_roots is not None:
+        message = f'File changes check started for {len(scan_roots)} scan root(s)'
     else:
         message = 'File changes check started for all files'
 
@@ -579,17 +637,22 @@ def check_file_changes():
         'status': 'started',
         'message': message,
         'check_id': check_id,
-        'file_count': len(file_paths) if file_paths else None
+        'file_count': len(file_paths) if file_paths else None,
+        'scan_root_count': len(scan_roots) if scan_roots is not None else None,
     }
 
-def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
+def cleanup_orphaned_async(app, cleanup_id, file_paths=None, scan_roots=None,
+                           schedule_id=None, trust_unreadable_dirs=False):
     """Async function to cleanup orphaned database entries
 
     Args:
         app: Flask app instance
         cleanup_id: ID of the cleanup record
         file_paths: Optional list of specific file paths to check (if None, checks all files)
+        scan_roots: Optional directory roots to check recursively
         schedule_id: Optional schedule ID for healthcheck integration
+        trust_unreadable_dirs: The operator has confirmed that records whose
+            directory can no longer be read belong to files they deleted
     """
     try:
         with app.app_context():
@@ -607,7 +670,10 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
                     maintenance_service = MaintenanceService(app.config['SQLALCHEMY_DATABASE_URI'])
 
                     # Run the cleanup using the maintenance service logic with optional file_paths filter
-                    maintenance_service._run_cleanup(cleanup_record.id, file_paths=file_paths, schedule_id=schedule_id)
+                    maintenance_service._run_cleanup(
+                        cleanup_record.id, file_paths=file_paths, scan_roots=scan_roots,
+                        schedule_id=schedule_id,
+                        trust_unreadable_dirs=trust_unreadable_dirs)
 
     except Exception as e:
         logger.error(f"Error in cleanup_orphaned_async: {str(e)}", exc_info=True)
@@ -623,13 +689,15 @@ def cleanup_orphaned_async(app, cleanup_id, file_paths=None, schedule_id=None):
         except Exception as commit_error:
             logger.error(f"Failed to update cleanup record on error: {str(commit_error)}")
 
-def check_file_changes_async(app, check_id, file_paths=None, schedule_id=None, time_budget_minutes=None):
+def check_file_changes_async(app, check_id, file_paths=None, scan_roots=None,
+                             schedule_id=None, time_budget_minutes=None):
     """Async function to check file changes
 
     Args:
         app: Flask app instance
         check_id: Unique ID for this check
         file_paths: Optional list of specific file paths to check (if None, checks all files)
+        scan_roots: Optional directory roots to check recursively
         schedule_id: Optional schedule ID for healthcheck integration
         time_budget_minutes: Optional soft deadline; dispatch stops when it
             expires and the rolling queue resumes at the next run
@@ -651,7 +719,8 @@ def check_file_changes_async(app, check_id, file_paths=None, schedule_id=None, t
 
                     # Run the file changes check using the maintenance service logic with optional file_paths filter
                     maintenance_service._run_file_changes_check(
-                        check_record.check_id, file_paths=file_paths, schedule_id=schedule_id,
+                        check_record.check_id, file_paths=file_paths, scan_roots=scan_roots,
+                        schedule_id=schedule_id,
                         time_budget_minutes=time_budget_minutes)
 
     except Exception as e:
@@ -669,7 +738,7 @@ def check_file_changes_async(app, check_id, file_paths=None, schedule_id=None, t
             logger.error(f"Failed to update file changes record on error: {str(commit_error)}")
 
 @maintenance_bp.route('/vacuum', methods=['POST'])
-@auth_required
+@admin_required
 def vacuum_database():
     """Vacuum the SQLite database to optimize storage"""
     try:

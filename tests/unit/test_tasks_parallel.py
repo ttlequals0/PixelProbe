@@ -6,7 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from pixelprobe.models import ScanResult, ScanState, ScanChunk
+from pixelprobe.models import (
+    ScanConfiguration, ScanResult, ScanState, ScanChunk, ScanRunFile, ScanRunRoot, ScanTask,
+)
+from pixelprobe.services.scan_reporting import add_files_batch_to_db
 
 
 @pytest.fixture
@@ -22,9 +25,14 @@ def tp(tasks_parallel_mod):
     return tasks_parallel_mod
 
 
-def _add_pending(db, paths):
+def _add_pending(db, paths, scan_id='scan-1'):
+    _make_scan_state(db, scan_id)
     for p in paths:
-        db.session.add(ScanResult(file_path=p, scan_status='pending'))
+        result = ScanResult(file_path=p, scan_status='pending')
+        db.session.add(result)
+        db.session.flush()
+        db.session.add(ScanRunFile(scan_id=scan_id, scan_result_id=result.id,
+                                   file_path=p, status='pending'))
     db.session.commit()
 
 
@@ -54,6 +62,85 @@ def _make_chunk(db, scan_id, first, last, is_complete=False, status='pending',
     return chunk
 
 
+def _authorized_media_root(db, tmp_path, *names):
+    db.session.add(ScanConfiguration(path=str(tmp_path), is_active=True))
+    paths = []
+    for name in names:
+        path = tmp_path / name
+        path.write_bytes(b'not-a-real-video')
+        paths.append(str(path))
+    db.session.commit()
+    return paths
+
+
+class TestDiscoveryMembership:
+
+    def test_nonforce_discovery_members_only_new_or_pending_inventory(self, app, db, tmp_path):
+        with app.app_context():
+            paths = [str(tmp_path / name) for name in ('new.mkv', 'pending.mkv', 'done.mkv',
+                                                       'error.mkv', 'processing.mkv')]
+            discovery_error_path = str(tmp_path / 'new-error.mkv')
+            for path in paths:
+                with open(path, 'wb') as media:
+                    media.write(b'media')
+            db.session.add_all([
+                ScanResult(file_path=paths[1], scan_status='pending'),
+                ScanResult(file_path=paths[2], scan_status='completed'),
+                ScanResult(file_path=paths[3], scan_status='error'),
+                ScanResult(file_path=paths[4], scan_status='scanning'),
+                ScanState(scan_id='incremental-members', force_rescan=False),
+            ])
+            db.session.commit()
+
+            add_files_batch_to_db(paths + [discovery_error_path], scan_id='incremental-members')
+
+            members = {member.file_path for member in ScanRunFile.query.filter_by(
+                scan_id='incremental-members').all()}
+            assert members == set(paths[:2] + [discovery_error_path])
+            assert ScanResult.query.filter_by(file_path=discovery_error_path).one().scan_status == 'error'
+
+    def test_forced_discovery_members_all_inventory_and_is_idempotent(self, app, db, tmp_path):
+        with app.app_context():
+            paths = [str(tmp_path / name) for name in ('done.mkv', 'error.mkv', 'processing.mkv')]
+            for path in paths:
+                with open(path, 'wb') as media:
+                    media.write(b'media')
+            db.session.add_all([
+                ScanResult(file_path=paths[0], scan_status='completed'),
+                ScanResult(file_path=paths[1], scan_status='error'),
+                ScanResult(file_path=paths[2], scan_status='scanning'),
+                ScanState(scan_id='forced-members', force_rescan=True),
+            ])
+            db.session.commit()
+
+            add_files_batch_to_db(paths, scan_id='forced-members')
+            add_files_batch_to_db(paths, scan_id='forced-members')
+
+            assert ScanRunFile.query.filter_by(scan_id='forced-members').count() == len(paths)
+
+    def test_forced_claim_and_reclaim_preserve_prior_observation(self, tp, app, db, tmp_path):
+        with app.app_context():
+            (file_path,) = _authorized_media_root(db, tmp_path, 'completed.mkv')
+            result = ScanResult(file_path=file_path, scan_status='completed')
+            state = ScanState(scan_id='forced-reclaim', force_rescan=True,
+                              phase='scanning', is_active=True)
+            db.session.add_all([result, state])
+            db.session.flush()
+            db.session.add(ScanRunFile(scan_id=state.scan_id, scan_result_id=result.id,
+                                       file_path=file_path, status='pending'))
+            db.session.commit()
+
+            claimed = tp._claim_chunk_members(state.scan_id, file_path, file_path,
+                                               tp._build_chunk_checker(state.scan_id))
+            assert claimed == [result.id]
+            assert db.session.get(ScanResult, result.id).scan_status == 'completed'
+
+            tp._reclaim_chunk_range(state.scan_id, file_path, file_path)
+            assert db.session.get(ScanResult, result.id).scan_status == 'completed'
+            assert ScanRunFile.query.filter_by(scan_id=state.scan_id,
+                                                file_path=file_path).one().status == 'pending'
+
+
 class TestBuildScanChunks:
 
     def test_chunks_cover_all_pending_in_path_order(self, engine, app, db):
@@ -74,12 +161,22 @@ class TestBuildScanChunks:
 
     def test_no_pending_files_creates_no_chunks(self, engine, app, db):
         with app.app_context():
+            _make_scan_state(db, 'scan-1')
             assert engine.build_scan_chunks('scan-1') == []
 
     def test_completed_files_not_chunked(self, engine, app, db):
         with app.app_context():
-            db.session.add(ScanResult(file_path='/media/a.mkv', scan_status='completed'))
-            db.session.add(ScanResult(file_path='/media/b.mkv', scan_status='pending'))
+            _make_scan_state(db, 'scan-1')
+            completed = ScanResult(file_path='/media/a.mkv', scan_status='completed')
+            pending = ScanResult(file_path='/media/b.mkv', scan_status='pending')
+            db.session.add_all([completed, pending])
+            db.session.commit()
+            db.session.add_all([
+                ScanRunFile(scan_id='scan-1', scan_result_id=completed.id,
+                            file_path=completed.file_path, status='completed'),
+                ScanRunFile(scan_id='scan-1', scan_result_id=pending.id,
+                            file_path=pending.file_path, status='pending'),
+            ])
             db.session.commit()
 
             chunks = engine.build_scan_chunks('scan-1')
@@ -98,8 +195,7 @@ class TestFinalization:
             assert state.is_active is True
             assert state.phase == 'scanning'
 
-    @patch('pixelprobe.services.scan_engine.create_scan_report')
-    def test_finalizes_when_all_chunks_terminal(self, mock_report, engine, app, db):
+    def test_finalizes_when_all_chunks_terminal(self, engine, app, db):
         with app.app_context():
             _make_scan_state(db, 'scan-f2')
             _make_chunk(db, 'scan-f2', '/a', '/b', is_complete=True,
@@ -115,10 +211,8 @@ class TestFinalization:
             assert state.end_time is not None
             # Totals come from chunk sums, not global table counts
             assert state.files_processed == 8
-            mock_report.assert_called_once()
 
-    @patch('pixelprobe.services.scan_engine.create_scan_report')
-    def test_errored_chunks_finalize_as_error(self, mock_report, engine, app, db):
+    def test_errored_chunks_finalize_as_error(self, engine, app, db):
         """A scan with failed chunks must not report a clean completion"""
         with app.app_context():
             _make_scan_state(db, 'scan-f9')
@@ -133,10 +227,8 @@ class TestFinalization:
             assert state.phase == 'error'
             assert state.is_active is False
             assert 'chunks failed' in state.error_message
-            mock_report.assert_called_once()
 
-    @patch('pixelprobe.services.scan_engine.create_scan_report')
-    def test_finalize_is_exactly_once(self, mock_report, engine, app, db):
+    def test_finalize_is_exactly_once(self, engine, app, db):
         with app.app_context():
             _make_scan_state(db, 'scan-f3')
             _make_chunk(db, 'scan-f3', '/a', '/b', is_complete=True,
@@ -145,7 +237,6 @@ class TestFinalization:
             assert engine.maybe_finalize_scan('scan-f3') is True
             # Second caller sees phase != 'scanning' and does nothing
             assert engine.maybe_finalize_scan('scan-f3') is False
-            assert mock_report.call_count == 1
 
     def test_not_finalized_when_scan_inactive(self, engine, app, db):
         """A cancelled scan (is_active=False) must not be flipped to completed"""
@@ -178,20 +269,22 @@ class TestFinalization:
             state = ScanState.query.filter_by(scan_id='scan-f8').first()
             assert state.is_active is True
 
-    @patch('pixelprobe.services.scan_engine.create_scan_report')
-    def test_finalize_reclaims_stuck_scanning_rows(self, mock_report, engine, app, db):
+    def test_finalize_reclaims_stuck_scanning_rows(self, engine, app, db):
         with app.app_context():
-            db.session.add(ScanResult(file_path='/media/stuck.mkv', scan_status='scanning'))
+            result = ScanResult(file_path='/media/stuck.mkv', scan_status='scanning')
+            db.session.add(result)
             db.session.commit()
             _make_scan_state(db, 'scan-f5')
+            db.session.add(ScanRunFile(scan_id='scan-f5', scan_result_id=result.id,
+                                       file_path=result.file_path, status='processing'))
+            db.session.commit()
             _make_chunk(db, 'scan-f5', '/a', '/b', is_complete=True, status='completed')
 
             assert engine.maybe_finalize_scan('scan-f5') is True
             row = ScanResult.query.filter_by(file_path='/media/stuck.mkv').first()
             assert row.scan_status == 'pending'
 
-    @patch('pixelprobe.services.scan_engine.create_scan_report')
-    def test_finalizer_never_decreases_progress(self, mock_report, engine, app, db):
+    def test_finalizer_never_decreases_progress(self, engine, app, db):
         with app.app_context():
             state = _make_scan_state(db, 'scan-f6')
             state.files_processed = 100
@@ -232,6 +325,88 @@ class TestChunkTaskGuards:
             assert ScanResult.query.filter_by(scan_status='scanning').count() == 0
             chunk = db.session.get(ScanChunk, chunk.id)
             assert chunk.status == 'pending'
+
+
+class TestChunkOutcomeAndPolicy:
+
+    def test_unreadable_result_is_not_media_corruption(self, tp, app, db, tmp_path):
+        with app.app_context():
+            (file_path,) = _authorized_media_root(db, tmp_path, 'unreadable.mkv')
+            _add_pending(db, [file_path], scan_id='scan-unreadable')
+            chunk = _make_chunk(db, 'scan-unreadable', file_path, file_path)
+            unreadable = {
+                'outcome': 'unreadable',
+                'is_corrupted': False,
+                'corruption_details': 'Read failed: storage timeout',
+                'scan_output': 'Read failed',
+                'scan_tool': 'error',
+                'has_warnings': False,
+            }
+            with patch.object(tp.PixelProbe, 'scan_file', return_value=unreadable):
+                result = tp.process_chunk_task.apply(
+                    args=(chunk.id, 'scan-unreadable')).get()
+            assert result['status'] == 'SUCCESS'
+            row = ScanResult.query.filter_by(file_path=file_path).first()
+            member = ScanRunFile.query.filter_by(
+                scan_id='scan-unreadable', file_path=file_path).first()
+            assert row.is_corrupted is None
+            assert member.is_corrupted is None
+            assert member.outcome == 'unreadable'
+
+    def test_current_exclusion_skips_member_before_decode(self, tp, app, db, tmp_path):
+        with app.app_context():
+            (file_path,) = _authorized_media_root(db, tmp_path, 'withdrawn.mkv')
+            _add_pending(db, [file_path], scan_id='scan-withdrawn')
+            chunk = _make_chunk(db, 'scan-withdrawn', file_path, file_path)
+            with patch.object(tp, 'load_exclusions_with_patterns',
+                              return_value=([file_path], [], [])), \
+                 patch.object(tp.PixelProbe, 'scan_file') as scan_file:
+                result = tp.process_chunk_task.apply(
+                    args=(chunk.id, 'scan-withdrawn')).get()
+            assert result['status'] == 'SKIPPED'
+            scan_file.assert_not_called()
+            member = ScanRunFile.query.filter_by(
+                scan_id='scan-withdrawn', file_path=file_path).first()
+            row = ScanResult.query.filter_by(file_path=file_path).first()
+            assert member.status == 'skipped'
+            assert member.outcome == 'excluded'
+            assert row.scan_status == 'pending'
+
+
+class TestDiscoveryContainment:
+
+    def test_required_mount_mismatch_rejects_discovery_root(self, tp, app, db, tmp_path):
+        with app.app_context():
+            db.session.add(ScanConfiguration(
+                path=str(tmp_path), is_active=True, require_mount=True,
+                mount_filesystem_type='nfs', mount_source='server:/library', mount_root='/',
+            ))
+            db.session.commit()
+            with patch.object(tp, 'mount_matches_baseline', return_value=(False, None)):
+                assert tp._root_mount_baseline_matches(str(tmp_path)) is False
+
+    def test_symlinked_requested_root_is_rejected_even_when_target_is_active(
+            self, tp, app, db, tmp_path):
+        with app.app_context():
+            target = tmp_path / 'active-target'
+            target.mkdir()
+            (target / 'inside.mkv').write_bytes(b'not-a-real-video')
+            requested = tmp_path / 'requested-link'
+            requested.symlink_to(target, target_is_directory=True)
+            db.session.add(ScanConfiguration(path=str(target), is_active=True))
+            _make_scan_state(db, 'scan-symlink-root', phase='discovering')
+            db.session.add(ScanRunRoot(
+                scan_id='scan-symlink-root', root_path=str(requested),
+                resolved_path=str(target), status='dispatched'))
+            db.session.commit()
+
+            with patch.object(tp, 'finalize_scan'):
+                result = tp.discover_directory_task.apply(
+                    args=(str(requested), 'scan-symlink-root')).get()
+
+            assert result['complete'] is False
+            assert 'must not be a symlink' in result['error']
+            assert ScanRunFile.query.filter_by(scan_id='scan-symlink-root').count() == 0
 
 
 class TestChunkHeartbeat:
@@ -287,6 +462,8 @@ class TestRedispatchOrphanedChunks:
         # simulate the dead worker's claimed row
         row = ScanResult.query.filter_by(file_path='/a/f1.mkv').first()
         row.scan_status = 'scanning'
+        db.session.add(ScanRunFile(scan_id='scan-r1', scan_result_id=row.id,
+                                   file_path=row.file_path, status='processing'))
         pending = _make_chunk(db, 'scan-r1', '/a/f2.mkv', '/a/f2.mkv',
                               status='pending')
         done = _make_chunk(db, 'scan-r1', '/z', '/z2', is_complete=True,
@@ -308,7 +485,6 @@ class TestRedispatchOrphanedChunks:
                 assert chunk.status == 'pending'
                 assert chunk.celery_task_id
                 assert chunk.start_time is None
-            # dispatched task_id matches the stored ownership id
             dispatched_ids = {c.kwargs['task_id'] for c in mock_async.call_args_list}
             stored_ids = {db.session.get(ScanChunk, processing.id).celery_task_id,
                           db.session.get(ScanChunk, pending.id).celery_task_id}
@@ -325,31 +501,68 @@ class TestRedispatchOrphanedChunks:
             with patch.object(tp.process_chunk_task, 'apply_async',
                               side_effect=RuntimeError('broker down')) as mock_async:
                 count = tp.redispatch_orphaned_chunks('scan-r1')
-            # One broker hiccup must not strand the remaining chunks
             assert count == 0
             assert mock_async.call_count == 2
 
+
+class TestDurableTaskIntents:
+
+    def test_reconciliation_requeues_one_expired_chunk_intent(self, tp, app, db):
+        with app.app_context():
+            state = _make_scan_state(db, 'scan-intent')
+            chunk = _make_chunk(db, 'scan-intent', '/a', '/b')
+            task = ScanTask(
+                scan_id='scan-intent', chunk_id=chunk.id, purpose='chunk',
+                celery_task_id='intent-1', generation=state.dispatch_generation,
+                payload={'force_rescan': False}, status='queued',
+            )
+            chunk.celery_task_id = task.celery_task_id
+            db.session.add(task)
+            db.session.commit()
+
+            with patch.object(tp.process_chunk_task, 'apply_async') as publish:
+                assert tp.reconcile_scan_task_intents() == 1
+            task = db.session.get(ScanTask, task.id)
+            assert task.status == 'dispatched'
+            assert task.dispatch_attempts == 1
+            publish.assert_called_once()
+
+    def test_reconciliation_cancels_terminal_run_intent(self, tp, app, db):
+        with app.app_context():
+            state = _make_scan_state(db, 'scan-intent-terminal', is_active=False,
+                                     phase='cancelled')
+            task = ScanTask(scan_id=state.scan_id, purpose='continuation',
+                            celery_task_id='intent-2', generation=state.dispatch_generation,
+                            payload={'force_rescan': False}, status='queued')
+            db.session.add(task)
+            db.session.commit()
+            with patch.object(tp.resume_scan_after_discovery, 'apply_async') as publish:
+                assert tp.reconcile_scan_task_intents() == 0
+            assert db.session.get(ScanTask, task.id).status == 'cancelled'
+            publish.assert_not_called()
 
 class TestWorkerLostRedelivery:
     """acks_late + reject_on_worker_lost redelivers the SAME task id after a
     worker dies mid-chunk; the leftover 'scanning' rows must be reclaimed and
     re-scanned, not dropped via the empty-claim completed-with-0 path"""
 
-    def test_redelivery_reclaims_scanning_rows(self, tp, app, db):
+    def test_redelivery_reclaims_scanning_rows(self, tp, app, db, tmp_path):
         with app.app_context():
-            _add_pending(db, ['/nonexistent/f1.mkv'])
-            row = ScanResult.query.filter_by(file_path='/nonexistent/f1.mkv').first()
+            (file_path,) = _authorized_media_root(db, tmp_path, 'f1.mkv')
+            _add_pending(db, [file_path])
+            row = ScanResult.query.filter_by(file_path=file_path).first()
             row.scan_status = 'scanning'  # claimed by the dead attempt
             _make_scan_state(db, 'scan-wl1')
-            chunk = _make_chunk(db, 'scan-wl1', '/nonexistent/f1.mkv',
-                                '/nonexistent/f1.mkv', status='processing')
+            db.session.add(ScanRunFile(scan_id='scan-wl1', scan_result_id=row.id,
+                                       file_path=row.file_path, status='processing'))
+            chunk = _make_chunk(db, 'scan-wl1', file_path, file_path, status='processing')
             db.session.commit()
 
             result = tp.process_chunk_task.apply(args=(chunk.id, 'scan-wl1')).get()
 
             assert result['status'] == 'SUCCESS'
             assert result['files_processed'] == 1
-            row = ScanResult.query.filter_by(file_path='/nonexistent/f1.mkv').first()
+            row = ScanResult.query.filter_by(file_path=file_path).first()
             assert row.scan_status != 'scanning'
 
 
@@ -359,14 +572,16 @@ class TestRevivalPreservesProgress:
     high-water mark (sync_progress_from_chunks never decreases) and the final
     report undercounts by every pre-revival file."""
 
-    def test_revived_chunk_adds_to_prior_tally(self, tp, app, db):
+    def test_revived_chunk_adds_to_prior_tally(self, tp, app, db, tmp_path):
         with app.app_context():
-            _add_pending(db, ['/nonexistent/r1.mkv'])
-            row = ScanResult.query.filter_by(file_path='/nonexistent/r1.mkv').first()
+            (file_path,) = _authorized_media_root(db, tmp_path, 'r1.mkv')
+            _add_pending(db, [file_path])
+            row = ScanResult.query.filter_by(file_path=file_path).first()
             row.scan_status = 'scanning'  # claimed by the dead pre-revival attempt
             _make_scan_state(db, 'scan-rv1')
-            chunk = _make_chunk(db, 'scan-rv1', '/nonexistent/r1.mkv',
-                                '/nonexistent/r1.mkv', status='processing',
+            db.session.add(ScanRunFile(scan_id='scan-rv1', scan_result_id=row.id,
+                                       file_path=row.file_path, status='processing'))
+            chunk = _make_chunk(db, 'scan-rv1', file_path, file_path, status='processing',
                                 files_scanned=300)
             db.session.commit()
 
@@ -379,18 +594,23 @@ class TestRevivalPreservesProgress:
             state = ScanState.query.filter_by(scan_id='scan-rv1').first()
             assert state.files_processed == 301
 
-    def test_clobbered_tally_recovered_from_db(self, tp, app, db):
+    def test_clobbered_tally_recovered_from_db(self, tp, app, db, tmp_path):
         """A chunk whose tally was overwritten by a pre-fix revival recomputes
         its base from files completed in-range since the scan started."""
         with app.app_context():
             state = _make_scan_state(db, 'scan-rv3')
-            done = ScanResult(file_path='/nonexistent/s1.mkv',
+            first_path, second_path = _authorized_media_root(db, tmp_path, 's1.mkv', 's2.mkv')
+            done = ScanResult(file_path=first_path,
                               scan_status='completed',
                               scan_date=datetime.now(timezone.utc))
             db.session.add(done)
-            _add_pending(db, ['/nonexistent/s2.mkv'])
-            chunk = _make_chunk(db, 'scan-rv3', '/nonexistent/s1.mkv',
-                                '/nonexistent/s2.mkv', status='processing',
+            _add_pending(db, [second_path])
+            pending_row = ScanResult.query.filter_by(file_path=second_path).first()
+            db.session.add(ScanRunFile(scan_id='scan-rv3', scan_result_id=done.id,
+                                       file_path=done.file_path, status='completed'))
+            db.session.add(ScanRunFile(scan_id='scan-rv3', scan_result_id=pending_row.id,
+                                       file_path=pending_row.file_path, status='pending'))
+            chunk = _make_chunk(db, 'scan-rv3', first_path, second_path, status='processing',
                                 files_scanned=0)  # clobbered by the old bug
             db.session.commit()
 
@@ -401,15 +621,18 @@ class TestRevivalPreservesProgress:
             chunk = db.session.get(ScanChunk, chunk.id)
             assert chunk.files_scanned == 2
 
-    def test_empty_reclaim_keeps_prior_tally(self, tp, app, db):
+    def test_empty_reclaim_keeps_prior_tally(self, tp, app, db, tmp_path):
         with app.app_context():
             # Every file in range already completed; revival redelivery finds
             # nothing to claim and must not zero the prior tally
-            db.session.add(ScanResult(file_path='/nonexistent/r2.mkv',
+            (file_path,) = _authorized_media_root(db, tmp_path, 'r2.mkv')
+            db.session.add(ScanResult(file_path=file_path,
                                       scan_status='completed'))
             _make_scan_state(db, 'scan-rv2')
-            chunk = _make_chunk(db, 'scan-rv2', '/nonexistent/r2.mkv',
-                                '/nonexistent/r2.mkv', status='processing',
+            completed_row = ScanResult.query.filter_by(file_path=file_path).first()
+            db.session.add(ScanRunFile(scan_id='scan-rv2', scan_result_id=completed_row.id,
+                                       file_path=completed_row.file_path, status='completed'))
+            chunk = _make_chunk(db, 'scan-rv2', file_path, file_path, status='processing',
                                 files_scanned=250)
             db.session.commit()
 

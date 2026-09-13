@@ -10,6 +10,8 @@ from unittest.mock import patch, MagicMock
 import os
 import sys
 
+from tests.test_scan_task_recovery_postgres import recovery_app
+
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -104,19 +106,51 @@ class TestConcurrency:
         # Verify results (implementation specific)
         assert len(results) == 3, f"Expected 3 results, got {len(results)}"
     
-    @pytest.mark.skip(reason="Test requires full system environment with timing-sensitive behavior. Flask test clients have threading limitations that cause hangs.")
-    def test_scan_cancellation_race(self, app, db, authenticated_client):
-        """Test race condition between scan progress and cancellation
+    @pytest.mark.postgres
+    def test_scan_cancellation_race(self, recovery_app):
+        """A simultaneous delivery claim cannot revive a cancelled run."""
+        from tests.test_scan_task_recovery_postgres import POSTGRES_URI
+        from pixelprobe.models import ScanState, ScanTask, db as model_db
+        from pixelprobe.services.scan_service import ScanService
 
-        Note: This test is skipped because it requires:
-        - Real timing behavior (not instant scan completion)
-        - Thread-safe Flask clients (which aren't available in test environment)
-        - Proper app context propagation across threads
+        assert POSTGRES_URI, 'PIXELPROBE_TEST_POSTGRES_URI is required for this regression'
+        pg_app, task_module = recovery_app
+        with pg_app.app_context():
+            state = ScanState(scan_id='cancel-race', phase='scanning', is_active=True)
+            model_db.session.add(state)
+            model_db.session.flush()
+            model_db.session.add(ScanTask(
+                scan_id=state.scan_id, purpose='chunk', celery_task_id='cancel-race-task',
+                generation=state.dispatch_generation, status='dispatched'))
+            model_db.session.commit()
 
-        The test would need to be rewritten to not use Flask test clients in threads,
-        or run as an integration test with a real running server.
-        """
-        pytest.skip("Requires real server environment for thread-safe concurrent requests")
+        barrier = threading.Barrier(2)
+
+        def cancel():
+            with pg_app.app_context():
+                barrier.wait()
+                return ScanService(POSTGRES_URI).cancel_scan(expected_scan_id='cancel-race')
+
+        def claim():
+            with pg_app.app_context():
+                barrier.wait()
+                return task_module._mark_task_running('cancel-race', 'cancel-race-task')
+
+        with patch('pixelprobe.celery_config.celery_app.control.revoke'):
+            threads = [threading.Thread(target=cancel), threading.Thread(target=claim)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+        assert all(not thread.is_alive() for thread in threads)
+        with pg_app.app_context():
+            model_db.session.expire_all()
+            state = ScanState.query.filter_by(scan_id='cancel-race').one()
+            task = ScanTask.query.filter_by(celery_task_id='cancel-race-task').one()
+            assert state.phase == 'cancelled'
+            assert not state.is_active
+            assert task.status == 'cancelled'
     
     def test_database_connection_pool_exhaustion(self, app, db):
         """Test behavior when database connection pool is exhausted"""

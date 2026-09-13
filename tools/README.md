@@ -56,7 +56,7 @@ python tools/script_name.py --execute
 
 | Script | Purpose | Warning |
 |--------|---------|---------|
-| `delete_files_from_csv.sh` | Delete files from CSV export | **PERMANENTLY DELETES FILES** |
+| `delete_files_from_csv.sh` | Python 3 CSV file-deletion utility, despite the historical filename | Dry-run by default. Supply exact allowed roots and use `--apply` for permanent deletion. |
 | `fix_tile_data_sql.py` | Direct SQL tile data fix | Faster than Python version |
 
 ## Usage Examples

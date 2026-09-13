@@ -9,7 +9,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 
 # Safe top-level import: migrations.startup imports this module only inside
 # _run_all_migrations (function scope), so there is no import cycle
-from pixelprobe.migrations.startup import set_ddl_timeouts
+from pixelprobe.migrations.startup import migration_connection
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,7 @@ def run_scan_id_column_widening(db):
     ]
 
     try:
-        with db.engine.begin() as conn:
-            set_ddl_timeouts(conn)
+        with migration_connection(db) as conn:
             for table_name, column_name, new_size in column_changes:
                 try:
                     # Check current column size (PostgreSQL-specific)
@@ -52,6 +51,7 @@ def run_scan_id_column_widening(db):
                     # Don't fail startup for column widening errors
                     logger.warning(f"Could not widen {table_name}.{column_name}: {e}")
 
+            conn.commit()
         logger.info("Column widening completed successfully")
     except Exception as e:
         logger.warning(f"Error during column widening: {e}")
@@ -107,8 +107,7 @@ def run_index_optimizations(db):
     ]
 
     try:
-        with db.engine.begin() as conn:
-            set_ddl_timeouts(conn)
+        with migration_connection(db) as conn:
             # Drop duplicate indexes
             for index_name in duplicate_indexes:
                 try:
@@ -130,13 +129,14 @@ def run_index_optimizations(db):
                     else:
                         logger.warning(f"Could not create index {index_info['name']}: {e}")
 
+            conn.commit()
         logger.info("Index optimizations completed successfully")
 
     except Exception as e:
         logger.error(f"Error during index optimizations: {e}")
         # Don't fail startup for index optimization errors
 
-def run_startup_migrations(db):
+def run_startup_migrations(db, connection=None):
     """Run database migrations on startup to add any missing columns and optimize indexes"""
 
     migrations = [
@@ -213,15 +213,15 @@ def run_startup_migrations(db):
     for migration in migrations:
         try:
             # Try to select the column - if it fails, the column doesn't exist
-            with db.engine.connect() as conn:
+            with migration_connection(db) as conn:
                 conn.execute(text(migration['check_sql']))
         except (OperationalError, ProgrammingError):
             # Column doesn't exist, add it
             try:
                 logger.info(f"Running migration: {migration['description']}")
-                with db.engine.begin() as conn:
-                    set_ddl_timeouts(conn)
+                with migration_connection(db) as conn:
                     conn.execute(text(migration['migration_sql']))
+                    conn.commit()
                 logger.info(f"Migration successful: {migration['description']}")
             except (OperationalError, ProgrammingError) as e:
                 err_str = str(e).lower()

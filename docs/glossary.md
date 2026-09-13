@@ -8,8 +8,8 @@ Every term PixelProbe uses, defined once and linked to the doc that covers it.
 - **Scan phase** - The lifecycle stage of a scan: `initializing`, `discovering`, `adding`, `scanning` (active) and `idle`, `completed`, `error`, `crashed`, `cancelled` (terminal). See [How It Works](how-it-works.md).
 - **Discovery** - The directory walk that finds candidate files before any validation starts; phase 1 of a scan. See [How It Works](how-it-works.md).
 - **Chunk** - A path-range slice of the pending file list, dispatched as one Celery task. Chunk size adapts to the number of pending files and is not configurable. See [Performance Tuning](performance-tuning.md).
-- **Chunk heartbeat** - A thread inside each chunk task that bumps the scan's liveness timestamp every `CHUNK_HEARTBEAT_INTERVAL_SECS` so a scan busy on a long file is not mistaken for a dead one. See [How It Works](how-it-works.md).
-- **Revival** - The stuck-scan sweeper's recovery path: when a scan's heartbeat is stale but chunk rows are still active (a container restart lost the queued tasks), claimed files are reclaimed and the chunks re-dispatched. See [Troubleshooting](troubleshooting.md).
+- **Chunk heartbeat** - A thread inside each chunk task that updates the scan's liveness timestamp every `CHUNK_HEARTBEAT_INTERVAL_SECS`. It prevents a scan busy on a long file from being mistaken for a dead one. See [How It Works](how-it-works.md).
+- **Revival** - The stuck-scan sweeper's recovery path. When a scan's heartbeat is stale but chunk rows are still active, such as after a container restart loses queued tasks, claimed files are reclaimed and chunks are re-dispatched. See [Troubleshooting](troubleshooting.md).
 - **Stuck-scan sweeper** - A scheduler job that runs every 5 minutes, crashes scans whose heartbeat is genuinely stale, and revives scans that lost their workers. See [Troubleshooting](troubleshooting.md).
 - **Force rescan** - A scan that re-validates files even if they already have results, instead of only scanning new or pending files. See [Scan Types](scan-types.md).
 - **Pending** - A file that is registered but has not been validated yet (or was reset for rescan). See [Scan Types](scan-types.md).
@@ -32,10 +32,10 @@ Every term PixelProbe uses, defined once and linked to the doc that covers it.
 - **VREP (vertical line repetition)** - A signalstats metric from analog-tape QC; high values are normal in flat or graphic digital content, so it warns rather than condemns.
 - **Multi-point sampling (Stage 3)** - Decodes short samples at several positions in very large files. Warning-only.
 - **Strict error detection (Stage 4)** - A decode pass with aggressive error flags. Warning-only.
-- **Data integrity check** - A `SEEK_HOLE` query, run before any decode on files whose allocated blocks fall short of their length, that finds files allocated at full size but never fully written. Reads no file data. Marks the file corrupted. See [Scan Types](scan-types.md).
+- **Data integrity check** - A `SEEK_HOLE` query runs before decoding files whose allocated blocks fall short of their length. It finds files allocated at full size but never fully written. It reads no file data and marks the file corrupted. See [Scan Types](scan-types.md).
 - **Incomplete file** - A file whose length is correct but whose contents have gaps: an interrupted download or copy left regions the filesystem never allocated. Demuxers skip past them, so the picture holds while the clock keeps running. Reported as corruption, not as a freeze.
-- **Freeze detection** - A full-decode pass with FFmpeg's `freezedetect` filter that reports stretches where the picture stops changing; candidates are corroborated against the file, so absent packets or a failing decoder become corruption verdicts while intentional stillness is discounted. Switched on and off, and its shortest reported freeze set, under Tunables. See [Configuration](configuration.md#scanner-settings).
-- **Freeze corroboration** - The check that decides whether a frozen picture is damage. A packet probe asks whether the stream even has data where the clock kept running; a window decode asks whether the decoder can produce frames there. Absent packets or failing decode make the freeze a corruption verdict; neither signal means the picture stopped on purpose (a title card, an end plate, a held animation drawing) and the event is discounted.
+- **Freeze detection** - A full-decode pass with FFmpeg's `freezedetect` filter reports stretches where the picture stops changing. The candidate is corroborated against the file. Absent packets or a failing decoder become corruption verdicts, while intentional stillness is discounted. Set the check and its shortest reported freeze under Tunables. See [Configuration](configuration.md#scanner-settings).
+- **Freeze corroboration** - The check that decides whether a frozen picture is damage. A packet probe asks whether the stream has data where the clock kept running. A window decode asks whether the decoder can produce frames there. Absent packets or a failed decode make the freeze a corruption verdict. Neither signal means the picture stopped on purpose, such as on a title card, end plate, or held animation drawing, so the event is discounted.
 - **Uncorroborated minimum** - The length past which a freeze is reported even though the file shows nothing wrong, so a source that recorded a genuinely stuck picture is not silent. A tunable, default 60 seconds.
 
 ## Settings
@@ -59,7 +59,7 @@ Every term PixelProbe uses, defined once and linked to the doc that covers it.
 - **Scan schedule** - A cron or interval definition that launches scans automatically through APScheduler. See [Configuration](configuration.md).
 - **Schedule time budget** - A cap on how long a scheduled integrity run may work per window. See [Configuration](configuration.md).
 - **Notification provider** - A delivery channel for events: Pushover, ntfy, webhook, or email (SMTP). See [Configuration](configuration.md).
-- **Notification rule** - A binding of one event type (scan started/completed/failed, corruption found, bitrot suspected, auth events) to one provider. See [Configuration](configuration.md).
+- **Notification rule** - A binding of `scan_completed` or `bitrot_suspected` to one provider. See [Configuration](configuration.md).
 - **Scheduler lock** - A Redis distributed lock so only one container runs the scheduler. See [How It Works](how-it-works.md).
 - **Advisory lock** - The PostgreSQL lock that coordinates startup migrations across multiple workers. See [How It Works](how-it-works.md).
 

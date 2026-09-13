@@ -7,6 +7,7 @@ and tests can use them too.
 """
 import logging
 import re
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pixelprobe.services.scan_engine import claim_scan_slot, release_scan_claim
@@ -33,7 +34,8 @@ def launch_directory_scan(validated_dirs, force_rescan=False, source=None, scan_
         scan_id = f"scheduled_{m.group(1)}_{m.group(2)}"
         logger.info(f"Using scheduled scan source as scan_id: {scan_id}")
     elif source == 'scheduled_periodic':  # default periodic scan label
-        scan_id = 'scheduled_periodic'
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+        scan_id = f'scheduled_periodic_{timestamp}_{uuid4().hex}'
     else:
         scan_id = str(uuid4())
 
@@ -48,25 +50,30 @@ def launch_directory_scan(validated_dirs, force_rescan=False, source=None, scan_
             'message': 'Scanning requires Celery workers to be running'
         }, 503
 
-    try:
-        # Lazy import: tasks_parallel -> celery_config -> app -> blueprints (circular)
-        from pixelprobe.tasks_parallel import parallel_scan_orchestrator
-        task = parallel_scan_orchestrator.delay(
-            scan_id=scan_id,
-            paths=validated_dirs,
-            scan_type=scan_type,
-            force_rescan=force_rescan
-        )
-    except Exception as e:
-        logger.error(f"Failed to dispatch scan orchestrator: {e}", exc_info=True)
-        release_scan_claim(scan_id)
-        return {'error': 'Failed to launch scan'}, 500
+    from pixelprobe.models import db, ScanState, ScanTask
+    task_id = str(uuid4())
+    state = ScanState.query.filter_by(scan_id=scan_id).with_for_update().first()
+    intent = ScanTask(
+        scan_id=scan_id, purpose='orchestrator', celery_task_id=task_id,
+        generation=state.dispatch_generation,
+        payload={'scan_id': scan_id, 'paths': validated_dirs, 'scan_type': scan_type,
+                 'force_rescan': bool(force_rescan)},
+    )
+    state.celery_task_id = task_id
+    db.session.add(intent)
+    db.session.commit()
 
-    logger.info(f"Queued scan orchestrator {task.id} for scan_id {scan_id}")
+    # Lazy import: tasks_parallel -> celery_config -> app -> blueprints (circular)
+    from pixelprobe.tasks_parallel import dispatch_scan_task_intent
+    if not dispatch_scan_task_intent(intent):
+        return {'status': 'pending_dispatch', 'scan_id': scan_id, 'task_id': task_id,
+                'message': 'Scan request saved. Dispatch will retry automatically.'}, 202
+
+    logger.info(f"Queued scan orchestrator {task_id} for scan_id {scan_id}")
     return {
         'status': 'queued',
         'scan_id': scan_id,
-        'task_id': task.id,
-        'message': 'Scan queued successfully using Celery task queue',
+        'task_id': task_id,
+        'message': 'Scan queued',
         'celery_enabled': True
     }, 200

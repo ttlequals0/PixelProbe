@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import text, and_, or_
 
 from pixelprobe.models import ScanResult, ScanState
+from pixelprobe.services.scan_engine import finalize_scan
 from pixelprobe.utils.paths import like_prefix
 from .base_repository import BaseRepository
 
@@ -208,8 +209,7 @@ class ScanStateRepository(BaseRepository[ScanState]):
         """Mark scan as complete"""
         scan_state = self.get_by_id(scan_id)
         if scan_state:
-            scan_state.complete_scan()
-            self.commit()
+            finalize_scan(scan_state)
         return scan_state
     
     def cancel_scan(self, scan_id: int) -> Optional[ScanState]:

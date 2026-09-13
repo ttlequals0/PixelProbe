@@ -47,7 +47,7 @@ class TestStatsService:
         # Mock fallback queries
         mock_scan_result.query.count.return_value = 100
         mock_scan_result.query.filter_by.return_value.count.side_effect = [80, 10, 5, 5, 3]
-        mock_scan_result.query.filter.return_value.count.side_effect = [15, 2, 85]
+        mock_scan_result.query.filter.return_value.count.side_effect = [5, 15, 2, 85]
         
         stats = stats_service.get_file_statistics()
         

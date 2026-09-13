@@ -8,8 +8,9 @@ info:
 
     PixelProbe is a comprehensive media file corruption detection system that uses FFmpeg and other tools to scan and validate media files.
 
-    **Note**: this specification is partial and does not cover every route.
-    docs/api.md in the repository is the complete endpoint reference.
+    Route and method coverage is checked in CI. Some response fields remain
+    intentionally partial; consult docs/api.md and the response schemas before
+    generating a strict client.
 
     ## Getting Started
 
@@ -159,7 +160,57 @@ components:
       name: session
       description: Session-based authentication via login
 
+  parameters:
+    ProviderId:
+      name: provider_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    RuleId:
+      name: rule_id
+      in: path
+      required: true
+      schema:
+        type: integer
+
   schemas:
+    NotificationProviderInput:
+      type: object
+      required: [name, provider_type, configuration]
+      properties:
+        name:
+          type: string
+        provider_type:
+          type: string
+          enum: [email, ntfy, pushover, webhook]
+        configuration:
+          type: object
+          description: Provider-specific credentials and destination settings.
+          additionalProperties: true
+        is_active:
+          type: boolean
+          default: true
+    NotificationRuleInput:
+      type: object
+      required: [provider_id, event_type]
+      properties:
+        provider_id:
+          type: integer
+        event_type:
+          type: string
+          enum: [bitrot_suspected, scan_completed]
+        conditions:
+          type: object
+          additionalProperties: true
+          description: Event-specific condition values documented in docs/operational-evidence.md.
+        priority:
+          type: string
+          enum: [low, normal, high]
+          default: normal
+        is_active:
+          type: boolean
+          default: true
     ScannerSetting:
       type: object
       properties:
@@ -282,12 +333,25 @@ components:
         is_running:
           type: boolean
           description: Whether a scan is actively running
+        is_scanning:
+          type: boolean
+          description: Legacy alias of is_running
         is_active:
           type: boolean
           description: Whether scan is active
         scan_id:
-          type: integer
-          description: Database id of the scan state row
+          type: string
+          format: uuid
+          nullable: true
+          description: Durable scan UUID, or null when no scan exists
+        directories:
+          type: array
+          items:
+            type: string
+          description: Stored scan root paths
+        force_rescan:
+          type: boolean
+          description: Stored force-rescan flag
         start_time:
           type: string
           format: date-time
@@ -366,6 +430,51 @@ components:
           description: When the configuration was last updated
 
 paths:
+  /openapi.yaml:
+    get:
+      summary: Download the OpenAPI document as YAML
+      description: Returns this API specification with the running application version.
+      tags: [Documentation]
+      security: []
+      responses:
+        '200':
+          description: OpenAPI YAML document
+
+  /openapi.json:
+    get:
+      summary: Download the OpenAPI document as JSON
+      description: Returns this API specification with the running application version.
+      tags: [Documentation]
+      security: []
+      responses:
+        '200':
+          description: OpenAPI JSON document
+
+  /healthz:
+    get:
+      summary: Container liveness probe
+      description: Unauthenticated process liveness probe. It does not query the database.
+      tags: [Health]
+      servers:
+        - url: /
+      security: []
+      responses:
+        '200':
+          description: Process is running
+
+  /health:
+    get:
+      summary: Authenticated application health
+      description: Returns the application version and the current server timestamp.
+      tags: [Health]
+      servers:
+        - url: /
+      responses:
+        '200':
+          description: Authenticated health response
+        '401':
+          description: Authentication required
+
   # Authentication Endpoints
   /auth/status:
     get:
@@ -533,7 +642,7 @@ paths:
                   type: string
                 is_admin:
                   type: boolean
-                  default: true
+                  default: false
       responses:
         '200':
           description: User created successfully
@@ -867,6 +976,27 @@ paths:
       responses:
         '200':
           description: Scan status retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active_files:
+                    type: array
+                    maxItems: 8
+                    items:
+                      type: object
+                      required: [file, directory]
+                      properties:
+                        file:
+                          type: string
+                        directory:
+                          type: string
+                  active_file_count:
+                    type: integer
+                    minimum: 0
+                  active_files_truncated:
+                    type: boolean
 
   /cancel-scan:
     post:
@@ -1309,6 +1439,17 @@ paths:
                         description: PostgreSQL database version
 
   # Statistics Endpoints
+  /trends:
+    get:
+      summary: Get legacy aggregate trends
+      description: Returns aggregate corruption and storage trends for fixed historical periods.
+      tags: [Statistics]
+      responses:
+        '200':
+          description: Aggregate trends retrieved successfully
+        '401':
+          description: Authentication required
+
   /stats:
     get:
       summary: Get statistics summary
@@ -1807,6 +1948,22 @@ paths:
           description: Schedule created successfully
 
   /schedules/{schedule_id}:
+    get:
+      summary: Get scheduled scan
+      description: Get one scheduled scan by identifier.
+      tags: [Admin]
+      parameters:
+        - name: schedule_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Schedule retrieved successfully
+        '404':
+          description: Schedule not found
+
     put:
       summary: Update schedule
       description: |
@@ -2262,7 +2419,7 @@ paths:
         '200':
           description: Exclusions updated successfully
 
-  /exclusions/{type}:
+  /exclusions/{exclusion_type}:
     post:
       summary: Add exclusion
       description: |
@@ -2277,7 +2434,7 @@ paths:
         ```
       tags: [Configuration]
       parameters:
-        - name: type
+        - name: exclusion_type
           in: path
           required: true
           schema:
@@ -2311,7 +2468,7 @@ paths:
         ```
       tags: [Configuration]
       parameters:
-        - name: type
+        - name: exclusion_type
           in: path
           required: true
           schema:
@@ -2459,6 +2616,17 @@ paths:
           description: Export file generated and returned
 
   # Maintenance Endpoints
+  /test-cleanup:
+    get:
+      summary: Inspect the latest cleanup state
+      description: Administrator diagnostic endpoint that returns the latest persisted cleanup state.
+      tags: [Maintenance]
+      responses:
+        '200':
+          description: Latest cleanup state retrieved
+        '401':
+          description: Administrator authentication required
+
   /cleanup-orphaned:
     post:
       summary: Cleanup orphaned database entries
@@ -2482,6 +2650,11 @@ paths:
                   type: array
                   items:
                     type: string
+                scan_roots:
+                  type: array
+                  items:
+                    type: string
+                  description: Authorized directory roots. Records are limited to these roots and configured exclusions still apply.
       responses:
         '200':
           description: Cleanup started successfully
@@ -2539,21 +2712,6 @@ paths:
           description: Cleanup state reset successfully
 
   /file-changes:
-    get:
-      summary: Check for file changes (GET)
-      description: |
-        Check for file changes since last scan (GET request).
-
-        **Example:**
-        ```bash
-        curl -X GET http://your-server/api/file-changes \
-          -H "Authorization: Bearer YOUR_TOKEN"
-        ```
-      tags: [Maintenance]
-      responses:
-        '200':
-          description: File changes check started
-
     post:
       summary: Check for file changes (POST)
       description: |
@@ -2578,6 +2736,11 @@ paths:
                   type: array
                   items:
                     type: string
+                scan_roots:
+                  type: array
+                  items:
+                    type: string
+                  description: Authorized directory roots. Records are limited to these roots and configured exclusions still apply.
                 time_budget_minutes:
                   type: integer
                   minimum: 1
@@ -2663,6 +2826,82 @@ paths:
           description: Not supported for this database type
 
   # Reports Endpoints
+  /scan-runs/{scan_id}/files:
+    get:
+      summary: List immutable scan-run members
+      description: |
+        Return immutable membership and current raw member states for one scan run.
+        Results use an ID cursor and never read current inventory rows.
+      tags: [Reports]
+      parameters:
+        - name: scan_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 500
+      responses:
+        '200':
+          description: Scan-run member page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [scan_id, is_active, phase, total_members, files, next_cursor]
+                properties:
+                  scan_id:
+                    type: string
+                    format: uuid
+                  is_active:
+                    type: boolean
+                  phase:
+                    type: string
+                  total_members:
+                    type: integer
+                    minimum: 0
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, scan_result_id, file_path, status, outcome, completed_at]
+                      properties:
+                        id:
+                          type: integer
+                        scan_result_id:
+                          type: integer
+                          nullable: true
+                        file_path:
+                          type: string
+                        status:
+                          type: string
+                        outcome:
+                          type: string
+                          nullable: true
+                        completed_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                  next_cursor:
+                    type: integer
+                    nullable: true
+        '400':
+          description: Invalid cursor or limit
+        '404':
+          description: Scan run not found
+
   /scan-reports:
     get:
       summary: List scan reports
@@ -3116,6 +3355,118 @@ paths:
         '400':
           description: At least one filter is required
 
+  /scan-parallel/status/{scan_id}:
+    get:
+      summary: Get parallel scan status
+      tags: [Scan]
+      parameters:
+        - name: scan_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {description: Parallel scan status}
+
+  /scan-parallel/workers:
+    get:
+      summary: Get parallel worker status
+      tags: [Scan]
+      responses:
+        '200': {description: Worker status}
+
+  /notifications/providers:
+    get:
+      summary: List notification providers
+      tags: [Notifications]
+      responses:
+        '200': {description: Provider list}
+    post:
+      summary: Create a notification provider
+      tags: [Notifications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationProviderInput'
+      responses:
+        '201': {description: Provider created}
+
+  /notifications/providers/{provider_id}:
+    get:
+      summary: Get a notification provider
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '200': {description: Provider details}
+        '404': {description: Provider not found}
+    put:
+      summary: Update a notification provider
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '200': {description: Provider updated}
+    delete:
+      summary: Delete a notification provider
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '204': {description: Provider deleted}
+
+  /notifications/providers/{provider_id}/test:
+    post:
+      summary: Send a notification-provider test
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/ProviderId'
+      responses:
+        '200': {description: Test dispatched}
+
+  /notifications/rules:
+    get:
+      summary: List notification rules
+      tags: [Notifications]
+      responses:
+        '200': {description: Rule list}
+    post:
+      summary: Create a notification rule
+      tags: [Notifications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationRuleInput'
+      responses:
+        '201': {description: Rule created}
+
+  /notifications/rules/{rule_id}:
+    get:
+      summary: Get a notification rule
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/RuleId'
+      responses:
+        '200': {description: Rule details}
+        '404': {description: Rule not found}
+    put:
+      summary: Update a notification rule
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/RuleId'
+      responses:
+        '200': {description: Rule updated}
+    delete:
+      summary: Delete a notification rule
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/RuleId'
+      responses:
+        '204': {description: Rule deleted}
+
 tags:
   - name: Authentication
     description: User authentication, authorization, and API token management
@@ -3139,3 +3490,5 @@ tags:
     description: Exclusions, patterns, and advanced configuration
   - name: Logs
     description: Log viewing, filtering, download, and retention management
+  - name: Notifications
+    description: Notification providers and event rules
