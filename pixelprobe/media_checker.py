@@ -31,7 +31,7 @@ from pixelprobe.utils.security import (
 from pixelprobe.utils.helpers import env_int, env_float
 from pixelprobe.utils.integrity import apply_scan_baseline
 from pixelprobe.utils.paths import is_path_under
-from pixelprobe.services.settings_service import resolve_settings
+from pixelprobe.services.settings_service import scanner_setting
 from pixelprobe.utils.overrides import retire_stale_override
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def _setting(key):
     them briefly, so reading one per file costs a dict lookup rather than a
     query, and an edit reaches a running worker without a restart.
     """
-    return resolve_settings()[key]
+    return scanner_setting(key)
 
 
 # Hard ceiling for ffprobe metadata reads. ffmpeg-python's probe() calls

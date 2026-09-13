@@ -518,6 +518,9 @@ def get_scan_status():
     # Use database values primarily, with service as fallback
     current_progress = state_dict.get('files_processed', service_status.get('current', 0))
     total_progress = state_dict.get('estimated_total', service_status.get('total', 0))
+    active_files = []
+    active_file_count = 0
+    active_files_truncated = False
     # Fallback: if estimated_total is 0 but phase_total has a value, use it
     if total_progress == 0 and state_dict.get('phase_total', 0) > 0:
         total_progress = state_dict.get('phase_total')
@@ -531,6 +534,9 @@ def get_scan_status():
                 redis_total = redis_progress.get('estimated_total', 0)
                 redis_phase = redis_progress.get('phase', '')
                 redis_file = redis_progress.get('current_file', '')
+                active_files = redis_progress.get('active_files', [])
+                active_file_count = redis_progress.get('active_file_count', 0)
+                active_files_truncated = redis_progress.get('active_files_truncated', False)
                 # Use Redis values if they are more up-to-date (higher progress count)
                 if redis_files >= current_progress:
                     current_progress = redis_files
@@ -587,30 +593,9 @@ def get_scan_status():
             # Extract just the filename for display
             import os
             filename = os.path.basename(current_file)
-            # Generate fresh progress message with current data
-            from pixelprobe.utils.helpers import ProgressTracker
-            progress_tracker = ProgressTracker('scan')
-            # Use the actual scan start time if available
-            if state_dict.get('start_time'):
-                try:
-                    start_time_str = state_dict['start_time']
-                    if isinstance(start_time_str, str):
-                        start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
-                    else:
-                        start_time = start_time_str
-                    if start_time.tzinfo is None:
-                        start_time = start_time.replace(tzinfo=timezone.utc)
-                    # Set the actual scan start time
-                    import time
-                    progress_tracker.start_time = start_time.timestamp()
-                except:
-                    pass  # Use default if parsing fails
-            progress_message = progress_tracker.get_progress_message(
-                'Phase 3 of 3: Scanning files',
-                current_progress,
-                total_progress,
-                filename
-            )
+            progress_message = (
+                f"Phase 3 of 3: Scanning files, current file: {filename} - "
+                f"{current_progress} of {total_progress:,} files")
         else:
             progress_message = f"Phase 3 of 3: Scanning files - {current_progress} of {total_progress:,} files"
         # Use current/total from database for scanning phase  
@@ -792,6 +777,9 @@ def get_scan_status():
         'phase_current': phase_current,
         'phase_total': phase_total,
         'progress_message': progress_message,
+        'active_files': active_files,
+        'active_file_count': active_file_count,
+        'active_files_truncated': active_files_truncated,
         # A scan that failed carries its reason here; without it the UI can only
         # say the run stopped.
         'error_message': state_dict.get('error_message') or '',

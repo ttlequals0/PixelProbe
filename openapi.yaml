@@ -976,6 +976,27 @@ paths:
       responses:
         '200':
           description: Scan status retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active_files:
+                    type: array
+                    maxItems: 8
+                    items:
+                      type: object
+                      required: [file, directory]
+                      properties:
+                        file:
+                          type: string
+                        directory:
+                          type: string
+                  active_file_count:
+                    type: integer
+                    minimum: 0
+                  active_files_truncated:
+                    type: boolean
 
   /cancel-scan:
     post:
@@ -2805,6 +2826,82 @@ paths:
           description: Not supported for this database type
 
   # Reports Endpoints
+  /scan-runs/{scan_id}/files:
+    get:
+      summary: List immutable scan-run members
+      description: |
+        Return immutable membership and current raw member states for one scan run.
+        Results use an ID cursor and never read current inventory rows.
+      tags: [Reports]
+      parameters:
+        - name: scan_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 500
+      responses:
+        '200':
+          description: Scan-run member page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [scan_id, is_active, phase, total_members, files, next_cursor]
+                properties:
+                  scan_id:
+                    type: string
+                    format: uuid
+                  is_active:
+                    type: boolean
+                  phase:
+                    type: string
+                  total_members:
+                    type: integer
+                    minimum: 0
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, scan_result_id, file_path, status, outcome, completed_at]
+                      properties:
+                        id:
+                          type: integer
+                        scan_result_id:
+                          type: integer
+                          nullable: true
+                        file_path:
+                          type: string
+                        status:
+                          type: string
+                        outcome:
+                          type: string
+                          nullable: true
+                        completed_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                  next_cursor:
+                    type: integer
+                    nullable: true
+        '400':
+          description: Invalid cursor or limit
+        '404':
+          description: Scan run not found
+
   /scan-reports:
     get:
       summary: List scan reports

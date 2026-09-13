@@ -4,6 +4,7 @@ Unit tests for progress_utils and ScanService completion helpers
 
 import os
 import sys
+import json
 from types import ModuleType
 os.environ.setdefault('SECRET_KEY', 'test-secret-key')
 
@@ -103,6 +104,26 @@ class TestGetScanProgressRedis:
 
         result = get_scan_progress_redis('scan-123')
         assert result is None
+
+    @patch('pixelprobe.progress_utils.get_redis_client')
+    def test_reads_bounded_active_files(self, mock_get_client):
+        from pixelprobe.progress_utils import get_scan_progress_redis
+        mock_client = Mock()
+        active_files = [
+            {'file': f'/media/{index}.mp4', 'directory': '/media'}
+            for index in range(10)
+        ]
+        mock_client.hgetall.return_value = {
+            b'active_files': json.dumps(active_files).encode(),
+            b'active_file_count': b'10',
+        }
+        mock_get_client.return_value = mock_client
+
+        result = get_scan_progress_redis('scan-123')
+
+        assert len(result['active_files']) == 8
+        assert result['active_file_count'] == 10
+        assert result['active_files_truncated'] is True
 
 
 

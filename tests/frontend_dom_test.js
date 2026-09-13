@@ -8,7 +8,7 @@ window.fetch = async () => ({ ok: true, json: async () => ({}) });
 window.Chart = function () {};
 let source = fs.readFileSync('static/js/app.js', 'utf8');
 source = source.replace('document.addEventListener(\'DOMContentLoaded\'', '/* test suppresses bootstrap */ document.addEventListener(\'testDOMContentLoaded\'');
-source += '\nwindow.__TableManager = TableManager; window.__PixelProbeApp = PixelProbeApp; window.__StatsDashboard = StatsDashboard;';
+source += '\nwindow.__TableManager = TableManager; window.__PixelProbeApp = PixelProbeApp; window.__StatsDashboard = StatsDashboard; window.__ProgressManager = ProgressManager;';
 window.eval(source);
 
 const table = new window.__TableManager({ getScanResults: async () => ({}) });
@@ -47,6 +47,48 @@ for (const [statusFile, statusClass, statusText] of statusCases) {
   assert.equal(mobileStatus.textContent, statusText);
   assert.equal(mobileStatus.closest('.result-card').querySelector('img'), null);
 }
+
+const progressDom = new JSDOM(`
+  <div class="progress-container"><div class="progress-bar"><span class="progress-text"></span></div></div>
+  <div class="progress-details"></div>`, { runScripts: 'outside-only' });
+const progressWindow = progressDom.window;
+progressWindow.Chart = function () {};
+let progressSource = fs.readFileSync('static/js/app.js', 'utf8');
+progressSource = progressSource.replace('document.addEventListener(\'DOMContentLoaded\'', 'document.addEventListener(\'testDOMContentLoaded\'');
+progressSource += '\nwindow.__ProgressManager = ProgressManager;';
+progressWindow.eval(progressSource);
+const progress = new progressWindow.__ProgressManager({});
+const unsafeActivePath = '"/><img src=x onerror=alert(1)>';
+progress.update(10, 'Scanning files', '', false, {
+  eta: '1h 2m',
+  activeFileCount: 9,
+  activeFiles: [
+    { file: unsafeActivePath, directory: unsafeActivePath },
+    { file: 'two.mp4', directory: '/media/two' },
+    { file: 'three.mp4', directory: '/media/three' },
+    { file: 'four.mp4', directory: '/media/four' },
+    { file: 'five.mp4', directory: '/media/five' }
+  ]
+});
+const progressDetails = progressWindow.document.querySelector('.progress-details');
+assert.equal(progressDetails.querySelector('.scan-eta').textContent, 'Estimated time remaining: 1h 2m');
+assert.equal(progressDetails.querySelector('.active-files summary').textContent, `Active file: ${unsafeActivePath} (+8 more)`);
+assert.equal(progressDetails.querySelectorAll('.active-files li').length, 4);
+assert.equal(progressDetails.querySelector('.active-files li').textContent, unsafeActivePath);
+assert.equal(progressDetails.querySelector('.active-files li').title, unsafeActivePath);
+assert.equal(progressDetails.querySelector('.active-files img'), null);
+const activeDetails = progressDetails.querySelector('.active-files');
+activeDetails.open = true;
+activeDetails.dispatchEvent(new progressWindow.Event('toggle'));
+progress.update(10, 'Scanning files', '', false, {
+  eta: '1h 2m', activeFileCount: 9, activeFiles: [{ file: unsafeActivePath, directory: unsafeActivePath }]
+});
+assert.equal(progressDetails.querySelector('.active-files').open, true);
+progress.update(11, 'Scanning files', '', false, { eta: '1h 1m', activeFileCount: 0, activeFiles: [] });
+assert.equal(progressDetails.querySelector('.scan-eta').textContent, 'Estimated time remaining: 1h 1m');
+assert.equal(progressDetails.querySelector('.active-files'), null);
+progress.update(12, 'Scanning files', '', false, null);
+assert.equal(progressDetails.querySelector('.scan-activity'), null);
 
 const reportsDom = new JSDOM('<table id="scan-reports-table"><tbody></tbody></table><div id="scan-reports-cards"></div><div id="scan-reports-pagination"></div>', { runScripts: 'outside-only' });
 const reportsWindow = reportsDom.window;

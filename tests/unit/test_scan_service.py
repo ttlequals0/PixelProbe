@@ -11,11 +11,19 @@ import time
 from datetime import datetime, timezone
 
 from pixelprobe.services.scan_service import ScanService
-from pixelprobe.models import ScanConfiguration, ScanChunk, ScanResult, ScanRunFile, ScanState
+from pixelprobe.models import AppConfig, ScanConfiguration, ScanChunk, ScanResult, ScanRunFile, ScanState
+from pixelprobe.services.settings_service import invalidate_cache, resolve_settings
 from pixelprobe.utils.security import PathTraversalError
 
 class TestScanService:
     """Test the scan service business logic"""
+
+    @pytest.fixture(autouse=True)
+    def no_redis_progress(self, monkeypatch):
+        monkeypatch.setattr(
+            'pixelprobe.services.scan_service.update_scan_progress_redis', lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            'pixelprobe.services.scan_service.clear_scan_progress_redis', lambda *_args, **_kwargs: None)
     
     @pytest.fixture
     def scan_service(self, app, db):
@@ -359,6 +367,88 @@ class TestScanService:
             assert result.scan_status == 'completed'
             assert result.file_hash == 'before'
 
+    def test_cancellation_reclaims_only_owned_scanning_result(self, scan_service, app, db):
+        with app.app_context():
+            state = ScanState.create_new_scan(scan_id='selected-owned-cancel')
+            state.start_scan(['selected_files'], force_rescan=True)
+            state.phase = 'scanning'
+            owned = ScanResult(file_path='/library/owned.png', scan_status='scanning')
+            unrelated = ScanResult(file_path='/library/unrelated.png', scan_status='scanning')
+            db.session.add_all([owned, unrelated])
+            db.session.flush()
+            db.session.add(ScanRunFile(scan_id=state.scan_id, scan_result_id=owned.id,
+                                       file_path=owned.file_path, status='processing'))
+            db.session.commit()
+
+            scan_service._handle_scan_cancellation(state)
+
+            assert db.session.get(ScanResult, owned.id).scan_status == 'pending'
+            assert db.session.get(ScanResult, unrelated.id).scan_status == 'scanning'
+
+    def test_cancellation_does_not_overwrite_terminal_run(self, scan_service, app, db):
+        with app.app_context():
+            state = ScanState.create_new_scan(scan_id='selected-terminal-cancel')
+            state.phase = 'crashed'
+            state.is_active = False
+            db.session.commit()
+
+            scan_service._handle_scan_cancellation(state)
+
+            state = db.session.get(ScanState, state.id)
+            assert state.phase == 'crashed'
+            assert state.is_active is False
+
+    @pytest.mark.parametrize('count', [2, 101])
+    def test_parallel_selected_workers_use_parent_settings_snapshot(
+            self, scan_service, app, db, monkeypatch, count):
+        class Checker:
+            def __init__(self):
+                self.values = []
+
+            def scan_file(self, file_path, force_rescan=False):
+                from pixelprobe.media_checker import _setting
+                self.values.append(_setting('timeouts.temporal_sample_timeout_secs'))
+                return {
+                    'outcome': 'completed', 'file_hash': 'a' * 64,
+                    'file_size': 1, 'last_modified': datetime.now(timezone.utc),
+                    'is_corrupted': False, 'has_warnings': False,
+                    'file_type': 'image', 'scan_tool': 'pil', 'scan_output': '',
+                }
+
+        with app.app_context():
+            invalidate_cache()
+            AppConfig.query.delete()
+            db.session.commit()
+            assert resolve_settings()['timeouts.temporal_sample_timeout_secs'] == 30
+            db.session.add(AppConfig(
+                key='timeouts.temporal_sample_timeout_secs', value='120'))
+            state = ScanState.create_new_scan(scan_id=f'selected-settings-{count}')
+            state.start_scan(['selected_files'], force_rescan=True)
+            state.phase = 'scanning'
+            paths = [f'/library/settings/{index}.png' for index in range(count)]
+            for path in paths:
+                row = ScanResult(file_path=path, scan_status='completed', file_hash='before')
+                db.session.add(row)
+                db.session.flush()
+                db.session.add(ScanRunFile(scan_id=state.scan_id, scan_result_id=row.id,
+                                           file_path=path, status='pending'))
+            db.session.commit()
+            monkeypatch.setattr(scan_service, '_retry_pending_files', lambda *_args: 0)
+            monkeypatch.setattr(scan_service, '_mark_scan_completed', lambda *_args: None)
+            checker = Checker()
+
+            if count == 2:
+                scan_service._parallel_scan(checker, paths, True, 2, state, state.id)
+            else:
+                chunk = ScanChunk(scan_id=state.scan_id, chunk_id='settings-chunk',
+                                  directory_path='/library/settings', files_discovered=count)
+                db.session.add(chunk)
+                db.session.commit()
+                scan_service._parallel_scan_selected_chunks(
+                    checker, [chunk], paths, True, 2, state, state.id)
+
+            assert checker.values == [120] * count
+
     def test_large_selected_scan_stops_dispatching_after_durable_cancel(self, scan_service, app, db,
                                                                          monkeypatch):
         class Checker:
@@ -419,7 +509,7 @@ class TestScanService:
             assert state.phase == 'cancelled'
             assert state.is_active is False
             persisted_chunks = ScanChunk.query.filter_by(scan_id=run_id).all()
-            assert {chunk.status for chunk in persisted_chunks} == {'processing'}
+            assert {chunk.status for chunk in persisted_chunks} == {'processing', 'pending'}
             assert sum(chunk.files_scanned for chunk in persisted_chunks) == 0
 
     def test_progress_tracking_thread_safety(self, scan_service):

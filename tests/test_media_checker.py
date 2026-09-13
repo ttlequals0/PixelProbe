@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch, MagicMock
 from pixelprobe.media_checker import (PixelProbe, AUDIO_PASS_TIMEOUT_CAP_SECS,
                                       VIDEO_PASS_TIMEOUT_CAP_SECS,
                                       _audio_pass_timeout, _video_pass_timeout)
+from pixelprobe.services.settings_service import scanner_settings_snapshot
 
 def settings_with(**overrides):
     """Registry defaults with specific settings overridden, keyed as the scanner reads them."""
@@ -22,9 +23,8 @@ def settings_with(**overrides):
 
 
 def patch_settings(**overrides):
-    """Patch the scanner's settings resolution for the duration of a test."""
-    return patch('pixelprobe.media_checker.resolve_settings',
-                 return_value=settings_with(**overrides))
+    """Scope scanner settings for the duration of a test."""
+    return scanner_settings_snapshot(settings_with(**overrides))
 
 
 def freeze_router(freeze_stderr='', probe_stdout='', decode_stderr=''):

@@ -29,7 +29,7 @@ The mobile layout has a collapsible sidebar and shows scan results as cards inst
 
 ## Working with results
 
-1. Start a scan with "Scan All Files"; progress, ETA, and phase appear live.
+1. Start a scan with "Scan All Files". Live progress includes phase and ETA. Expand Active files for up to four files being checked. It clears when none remain.
 2. Filter with the buttons above the table (corrupted, warnings, bitrot, healthy, pending) or the path dropdown.
 3. Select files with checkboxes; Shift+click selects ranges.
 4. Per-file actions:

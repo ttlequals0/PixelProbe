@@ -604,6 +604,14 @@
         color: var(--text-secondary);
         word-break: break-word;
     }
+
+    .active-files summary {
+        min-height: 2.75rem;
+    }
+
+    .active-files ul {
+        padding-left: 1rem;
+    }
     
     .worker-grid-toggle {
         min-height: 2.75rem;

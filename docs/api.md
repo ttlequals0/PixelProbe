@@ -920,6 +920,7 @@ curl -X DELETE https://your-host/api/settings/detection.freeze_min_duration_secs
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | GET | `/api/scan-reports` | List scan reports |
+| GET | `/api/scan-runs/{scan_id}/files` | Page immutable membership and current raw member states for one scan run |
 | GET | `/api/scan-reports/latest` | Latest report per scan type |
 | GET, DELETE | `/api/scan-reports/{report_id}` | Read / delete a report |
 | GET | `/api/scan-reports/{report_id}/export` | Export a report (CSV/JSON) |
@@ -931,6 +932,8 @@ curl -X DELETE https://your-host/api/settings/detection.freeze_min_duration_secs
 | GET | `/api/openapi.yaml`, `/api/openapi.json` | OpenAPI specification (partial; unauthenticated) |
 
 `HEAD /api/view/{result_id}` returns the content type and disposition used for preview without a body. The type comes from the file content, not stored scan metadata. Clients must treat an attachment disposition as download-only.
+
+`GET /api/scan-runs/{scan_id}/files` requires authentication and is available in 2.9.3. It returns immutable members and their current state after `cursor` (default `0`), with `limit` from 1 through 1000 (default `500`). `next_cursor` is `null` on the final page. It never resumes a run; any follow-up selection is created separately with a new scan UUID.
 
 ## Code examples
 

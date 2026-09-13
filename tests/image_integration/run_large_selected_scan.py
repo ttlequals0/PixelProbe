@@ -62,6 +62,14 @@ def container_logs(container):
     return f'{result.stdout}\n{result.stderr}'
 
 
+def setting_value(payload, key):
+    for group in payload.get('groups', []):
+        for setting in group.get('settings', []):
+            if setting.get('key') == key:
+                return setting.get('value')
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--image', required=True)
@@ -154,6 +162,14 @@ def main():
             raise RuntimeError(f'API token creation failed: {status} {token_response}')
         token = token_response['token']
 
+        setting_key = 'timeouts.temporal_sample_timeout_secs'
+        status, settings = request(opener, base_url, 'PUT', '/api/settings', {setting_key: 120}, token=token, csrf=csrf)
+        if status != 200 or setting_key not in settings.get('updated', []):
+            raise RuntimeError(f'Scanner setting update failed: {status} {settings}')
+        status, settings = request(opener, base_url, 'GET', '/api/settings', token=token)
+        if status != 200 or setting_value(settings, setting_key) != 120:
+            raise RuntimeError(f'Scanner setting was not retained: {status} {settings}')
+
         status, baseline = request(opener, base_url, 'POST', '/api/scan',
                                    {'directories': ['/media/baseline'], 'force_rescan': True}, token=token)
         if status != 200 or not baseline.get('scan_id'):
@@ -178,8 +194,37 @@ def main():
         if status != 200 or launched.get('file_count') != SELECTED_TOTAL or not launched.get('scan_id'):
             raise RuntimeError(f'Large selected scan launch failed: {status} {launched}')
         selected_id = launched['scan_id']
+
+        def live_status():
+            response_status, payload = request(opener, base_url, 'GET', '/api/scan-status', token=token)
+            if response_status != 200 or payload.get('scan_id') != selected_id:
+                return None
+            active_files = payload.get('active_files')
+            if (payload.get('files_processed', payload.get('current', 0)) <= 0
+                    or not payload.get('eta') or not isinstance(active_files, list) or not active_files):
+                return None
+            return payload
+
+        live = wait_for(live_status, 90, 'active selected-file progress with ETA')
+        active_files = live['active_files']
+        if (len(active_files) > 4 or live.get('active_file_count', 0) > 4
+                or live.get('active_file_count', 0) < len(active_files)
+                or any(entry.get('file') not in selected
+                       or entry.get('directory') != os.path.dirname(entry['file'])
+                       for entry in active_files)):
+            raise RuntimeError(f'Active file evidence mismatch: {live}')
         if wait_for(lambda: terminal(selected_id), args.timeout, 'large selected scan terminal state') != 'completed':
             raise RuntimeError(f'Large selected scan was not completed: {container_logs(worker)}')
+
+        status, completed_status = request(opener, base_url, 'GET', '/api/scan-status', token=token)
+        if (status != 200 or completed_status.get('scan_id') != selected_id
+                or completed_status.get('active_files') != []
+                or completed_status.get('active_file_count') != 0):
+            raise RuntimeError(f'Completed scan retained active files: {status} {completed_status}')
+        if not wait_for(lambda: run('docker', 'exec', valkey, 'valkey-cli', '--raw', 'EXISTS',
+                                    f'scan_progress:{selected_id}', capture_output=True).stdout.strip() == '0',
+                        60, 'completed scan Redis progress clear'):
+            raise RuntimeError('Completed scan Redis progress key remained present')
 
         member_total = postgres_scalar(postgres, f"SELECT count(*) FROM scan_run_files WHERE scan_id = '{selected_id}'")
         distinct_paths = postgres_scalar(postgres, f"SELECT count(DISTINCT file_path) FROM scan_run_files WHERE scan_id = '{selected_id}'")
@@ -210,7 +255,45 @@ def main():
         status, cancelled = request(opener, base_url, 'POST', '/api/cancel-scan', {'scan_id': selected_id}, token=token)
         if status not in {200, 409} or cancelled.get('cancelled'):
             raise RuntimeError(f'Terminal selected scan changed by cancel request: {status} {cancelled}')
-        print(json.dumps({'selected_members': SELECTED_TOTAL, 'scan_id': selected_id, 'status': 'passed'}))
+
+        status, launched = request(opener, base_url, 'POST', '/api/scan-files-parallel', {
+            'file_paths': selected,
+            'force_rescan': True,
+            'num_workers': 4,
+        }, token=token)
+        if status != 200 or not launched.get('scan_id'):
+            raise RuntimeError(f'Cancellation scan launch failed: {status} {launched}')
+        cancelled_id = launched['scan_id']
+
+        def cancelled_run_active():
+            response_status, payload = request(opener, base_url, 'GET', '/api/scan-status', token=token)
+            if response_status != 200 or payload.get('scan_id') != cancelled_id:
+                return None
+            active_files = payload.get('active_files')
+            if not isinstance(active_files, list) or not active_files:
+                return None
+            return payload
+
+        wait_for(cancelled_run_active, 90, 'active selected-file futures before cancellation')
+        status, cancelled = request(opener, base_url, 'POST', '/api/cancel-scan', {'scan_id': cancelled_id}, token=token)
+        if status != 200 or not cancelled.get('cancelled'):
+            raise RuntimeError(f'Active selected scan did not cancel: {status} {cancelled}')
+        if wait_for(lambda: terminal(cancelled_id), 90, 'cancelled selected scan terminal state') != 'cancelled':
+            raise RuntimeError(f'Cancellation did not terminalize: {container_logs(worker)}')
+        status, cancelled_status = request(opener, base_url, 'GET', '/api/scan-status', token=token)
+        if (status != 200 or cancelled_status.get('scan_id') != cancelled_id
+                or cancelled_status.get('active_files') != []
+                or cancelled_status.get('active_file_count') != 0):
+            raise RuntimeError(f'Cancelled scan retained active files: {status} {cancelled_status}')
+        if not wait_for(lambda: run('docker', 'exec', valkey, 'valkey-cli', '--raw', 'EXISTS',
+                                    f'scan_progress:{cancelled_id}', capture_output=True).stdout.strip() == '0',
+                        60, 'cancelled scan Redis progress clear'):
+            raise RuntimeError('Cancelled scan Redis progress key remained present')
+        worker_output = container_logs(worker)
+        if 'Could not read scanner settings' in worker_output:
+            raise RuntimeError('Worker fell back to default scanner settings')
+        print(json.dumps({'selected_members': SELECTED_TOTAL, 'scan_id': selected_id,
+                          'active_files': len(active_files), 'eta': bool(live.get('eta')), 'status': 'passed'}))
     finally:
         for container in reversed(containers):
             run('docker', 'rm', '-fv', container, check=False)

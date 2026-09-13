@@ -65,6 +65,7 @@ const DETAIL_SEVERITY = {
     'Error Message': 'danger',
     'Scan Output': 'neutral',
 };
+const MAX_VISIBLE_ACTIVE_FILES = 4;
 
 // Theme Management
 class ThemeManager {
@@ -591,7 +592,7 @@ class ProgressManager {
         }
     }
 
-    update(percentage, text, details = '', isStuck = false) {
+    update(percentage, text, details = '', isStuck = false, scanActivity = null) {
         if (this.progressBar) {
             this.progressBar.style.width = `${percentage}%`;
         }
@@ -626,10 +627,73 @@ class ProgressManager {
                 progressDetails.textContent = detailsText;
             }
 
+            this._renderScanActivity(progressDetails, scanActivity);
+
             // Render per-worker chunk progress grid if available
             if (this._lastScanStatus && this._lastScanStatus.chunks && this._lastScanStatus.chunks.length > 0) {
                 this._renderWorkerGrid(progressDetails, this._lastScanStatus.chunks);
             }
+        }
+    }
+
+    _renderScanActivity(container, scanActivity) {
+        let activity = container.querySelector('.scan-activity');
+        if (!scanActivity) {
+            if (activity) activity.remove();
+            return;
+        }
+
+        if (!activity) {
+            activity = document.createElement('div');
+            activity.className = 'scan-activity';
+            const workerGrid = container.querySelector('.worker-grid-container');
+            if (workerGrid) {
+                container.insertBefore(activity, workerGrid);
+            } else {
+                container.appendChild(activity);
+            }
+        }
+
+        activity.replaceChildren();
+        if (scanActivity.eta) {
+            const eta = document.createElement('div');
+            eta.className = 'scan-eta';
+            eta.textContent = `Estimated time remaining: ${scanActivity.eta}`;
+            activity.appendChild(eta);
+        }
+
+        const activeFiles = Array.isArray(scanActivity.activeFiles) ?
+            scanActivity.activeFiles.slice(0, MAX_VISIBLE_ACTIVE_FILES) : [];
+        if (activeFiles.length === 0) return;
+
+        const files = document.createElement('details');
+        files.className = 'active-files';
+        files.open = Boolean(this._activeFilesExpanded);
+        files.addEventListener('toggle', () => {
+            this._activeFilesExpanded = files.open;
+        });
+        const summary = document.createElement('summary');
+        const activeCount = Number.isInteger(scanActivity.activeFileCount) && scanActivity.activeFileCount >= activeFiles.length ?
+            scanActivity.activeFileCount : activeFiles.length;
+        const firstFile = activeFiles.find(entry => entry && typeof entry.file === 'string' && entry.file);
+        if (!firstFile) return;
+        summary.append('Active file: ');
+        const filename = document.createElement('span');
+        filename.className = 'active-file-name';
+        filename.textContent = firstFile.file;
+        summary.appendChild(filename);
+        if (activeCount > 1) summary.append(` (+${activeCount - 1} more)`);
+        const list = document.createElement('ul');
+        for (const entry of activeFiles) {
+            if (!entry || typeof entry.file !== 'string' || !entry.file) continue;
+            const item = document.createElement('li');
+            item.textContent = entry.file;
+            if (typeof entry.directory === 'string' && entry.directory) item.title = entry.directory;
+            list.appendChild(item);
+        }
+        if (list.childElementCount > 0) {
+            files.append(summary, list);
+            activity.appendChild(files);
         }
     }
 
@@ -796,7 +860,12 @@ class ProgressManager {
             if (status) {
                 if (isRunning) {
                     const progress = this.calculateProgress(status, this.operationType);
-                    this.update(progress.percentage, progress.text, progress.details, status._isStuck || false);
+                    const scanActivity = this.operationType === 'scan' ? {
+                        eta: progress.eta,
+                        activeFiles: status.active_files,
+                        activeFileCount: status.active_file_count
+                    } : null;
+                    this.update(progress.percentage, progress.text, progress.details, status._isStuck || false, scanActivity);
                 } else if (status.phase === 'complete' || status.phase === 'completed' ||
                           status.phase === 'cancelled' || status.phase === 'error' ||
                           status.status === 'completed') {
@@ -823,6 +892,7 @@ class ProgressManager {
         // integrity check started mid-scan) must not leak a second poll loop
         this.stopMonitoring();
         this.operationType = operationType;
+        this._activeFilesExpanded = false;
         this.show();
         
         // Update button states based on operation type
@@ -918,6 +988,7 @@ class ProgressManager {
         }
         this._lastScanStatus = null;
         this._workersExpanded = false;
+        this._activeFilesExpanded = false;
     }
 
     calculateProgress(status, operationType = 'scan') {
@@ -1068,7 +1139,7 @@ class ProgressManager {
             details = parts.join(' - ');
         }
         
-        return { percentage, text, details };
+        return { percentage, text, details, eta };
     }
 
     formatTime(seconds) {

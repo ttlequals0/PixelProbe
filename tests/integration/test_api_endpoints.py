@@ -4,7 +4,7 @@ Integration tests for API endpoints
 
 import pytest
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch
 
 from pixelprobe.models import ScanResult, ScanState, db
@@ -78,6 +78,34 @@ class TestScanEndpoints:
         assert data['scan_id'] == 'durable-status-id'
         assert data['directories'] == ['/media/one']
         assert data['force_rescan'] is True
+
+    @patch('pixelprobe.api.scan_routes.get_scan_progress_redis')
+    def test_scan_status_returns_active_files_and_eta_without_current_file(
+            self, progress_redis, authenticated_client, app, db):
+        with app.app_context():
+            state = ScanState(scan_id='active-status', is_active=True, phase='scanning',
+                              files_processed=1, estimated_total=3,
+                              start_time=datetime.now(timezone.utc) - timedelta(seconds=10),
+                              current_file='')
+            db.session.add(state)
+            db.session.commit()
+        progress_redis.return_value = {
+            'files_processed': 1,
+            'estimated_total': 3,
+            'phase': 'scanning',
+            'current_file': '',
+            'active_files': [{'file': '/media/one.mp4', 'directory': '/media'}],
+            'active_file_count': 1,
+            'active_files_truncated': False,
+        }
+
+        response = authenticated_client.get('/api/scan-status')
+
+        data = response.get_json()
+        assert data['file'] == ''
+        assert data['active_files'] == progress_redis.return_value['active_files']
+        assert data['active_file_count'] == 1
+        assert data['eta'] is not None
 
     @pytest.mark.parametrize(('stored', 'expected'), [
         (None, []),

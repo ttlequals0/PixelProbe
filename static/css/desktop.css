@@ -681,6 +681,58 @@ body {
     color: var(--text-secondary);
 }
 
+.scan-activity {
+    display: grid;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.scan-eta {
+    font-variant-numeric: tabular-nums;
+}
+
+.active-files {
+    min-width: 0;
+}
+
+.active-files summary {
+    cursor: pointer;
+    min-height: 2.75rem;
+    display: block;
+    padding: 0.75rem 0;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.active-files summary::after {
+    content: '';
+    display: inline-block;
+    margin-left: 0.5rem;
+    border: solid currentColor;
+    border-width: 0 2px 2px 0;
+    padding: 0.2rem;
+    transform: rotate(45deg) translateY(-0.15rem);
+}
+
+.active-files[open] summary::after {
+    transform: rotate(-135deg) translate(-0.15rem, -0.15rem);
+}
+
+.active-file-name {
+    font-family: monospace;
+}
+
+.active-files ul {
+    margin: 0.25rem 0 0;
+    padding-left: 1.25rem;
+}
+
+.active-files li {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
 .progress {
     height: 2rem;
     background-color: var(--bg-tertiary);

@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import logging
+import uuid
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone_name
@@ -12,7 +13,7 @@ import base64
 import pytz
 from xml.sax.saxutils import escape as escape_xml
 
-from pixelprobe.models import db, CleanupFileDecision, ScanReport, ScanRunFile, ScanRunRoot
+from pixelprobe.models import db, CleanupFileDecision, ScanReport, ScanRunFile, ScanRunRoot, ScanState
 from pixelprobe.utils.security import validate_json_input
 from pixelprobe.auth import auth_required, admin_required
 
@@ -30,6 +31,8 @@ reports_bp = Blueprint('reports', __name__, url_prefix='/api')
 MAX_REPORT_EXPORT_ROWS = 1000
 MAX_COMBINED_REPORTS = 20
 MAX_COMBINED_PDF_ROWS = 1000
+DEFAULT_RUN_FILES_LIMIT = 500
+MAX_RUN_FILES_LIMIT = 1000
 
 def _historical_files(report, limit=None):
     """Return immutable run snapshots; never substitute current ScanResult rows."""
@@ -269,6 +272,57 @@ def get_scan_reports():
         'page': page,
         'per_page': per_page,
         'pages': pagination.pages
+    })
+
+
+@reports_bp.route('/scan-runs/<scan_id>/files')
+@auth_required
+def get_scan_run_files(scan_id):
+    """Return bounded immutable membership for one scan run."""
+    try:
+        uuid.UUID(scan_id)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Scan run not found'}), 404
+
+    run = ScanState.query.filter_by(scan_id=scan_id).first()
+    if run is None:
+        return jsonify({'error': 'Scan run not found'}), 404
+
+    try:
+        cursor = int(request.args.get('cursor', '0'))
+        limit = int(request.args.get('limit', str(DEFAULT_RUN_FILES_LIMIT)))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'cursor and limit must be integers'}), 400
+    if cursor < 0 or limit < 1 or limit > MAX_RUN_FILES_LIMIT:
+        return jsonify({'error': 'cursor or limit is out of range'}), 400
+
+    rows = (ScanRunFile.query.filter(
+        ScanRunFile.scan_id == scan_id,
+        ScanRunFile.id > cursor,
+    ).order_by(ScanRunFile.id).with_entities(
+        ScanRunFile.id,
+        ScanRunFile.scan_result_id,
+        ScanRunFile.file_path,
+        ScanRunFile.status,
+        ScanRunFile.outcome,
+        ScanRunFile.completed_at,
+    ).limit(limit + 1).all())
+    page = rows[:limit]
+    next_cursor = page[-1].id if len(rows) > limit else None
+    return jsonify({
+        'scan_id': scan_id,
+        'is_active': run.is_active,
+        'phase': run.phase,
+        'total_members': ScanRunFile.query.filter_by(scan_id=scan_id).count(),
+        'files': [{
+            'id': row.id,
+            'scan_result_id': row.scan_result_id,
+            'file_path': row.file_path,
+            'status': row.status,
+            'outcome': row.outcome,
+            'completed_at': convert_to_timezone(row.completed_at),
+        } for row in page],
+        'next_cursor': next_cursor,
     })
 
 @reports_bp.route('/scan-reports/<report_id>')
