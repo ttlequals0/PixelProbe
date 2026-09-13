@@ -9,12 +9,16 @@ For larger changes, open an issue first. Security findings should not include ex
 ## Development
 
 ```bash
+python3.12 -m venv venv
 source venv/bin/activate
+python -m pip install -r requirements-test.txt
 python -m pytest tests/ -v
 npm ci
 npm run test:dom
 npm run build
 ```
+
+Python 3.12 is the supported development and production runtime.
 
 PostgreSQL is required for production behavior. Some focused tests use SQLite fixtures, so use the documented PostgreSQL integration variables for locking, startup, and worker behavior.
 

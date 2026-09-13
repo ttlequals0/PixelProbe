@@ -14,10 +14,10 @@
 
 ### Prerequisites
 
-- Python 3.10-3.12 (the Docker image ships 3.12)
+- Python 3.12
 - PostgreSQL (required; SQLite is not supported since v2.2.0)
 - Redis or Valkey (Celery broker/result backend and scheduler lock)
-- Node.js 20 and npm (frontend build)
+- Node.js 22.22.2 and npm (frontend build)
 - FFmpeg and ImageMagick
 - Git
 
@@ -31,7 +31,7 @@ cd PixelProbe
 
 2. **Create a virtual environment:**
 ```bash
-python -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
@@ -254,7 +254,7 @@ npm ci && npm run build
 ```
 
 ```bash
-# Default local run: skips tests that need the real media sample corpus
+# Fast local run: skips tests that need the real media sample corpus
 pytest -m "not real_media"
 
 # Run with coverage
@@ -264,7 +264,7 @@ pytest -m "not real_media" --cov=pixelprobe
 pytest tests/unit/test_scan_service.py
 ```
 
-The `real_media` tests run in CI inside the Docker image, where the exact FFmpeg and ImageMagick versions match production. See [testing-guide.md](testing-guide.md) for the full testing reference.
+The full test suite includes `real_media` tests. CI also runs them inside the Docker image, where the exact FFmpeg and ImageMagick versions match production. See [testing-guide.md](testing-guide.md) for the full testing reference.
 
 ### Writing tests
 

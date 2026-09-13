@@ -14,10 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SECRET_KEY: test-secret-key-for-github-actions
-    strategy:
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
-
     services:
       postgres:
         image: postgres:15
@@ -39,10 +35,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python ${{ matrix.python-version }}
+    - name: Set up Python 3.12
       uses: actions/setup-python@v5
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: '3.12'
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
@@ -73,7 +69,6 @@ jobs:
         pytest -m "not real_media" --cov=pixelprobe --cov-report=xml --cov-report=term
 
     - name: Run real-media corruption detection tests
-      if: matrix.python-version == '3.12'
       run: |
         pytest -m real_media -v
 

@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Authenticated `GET /api/scan-runs/{scan_id}/files` pages a run's durable member paths and current raw states with an ID cursor.
 
+### Changed
+
+- Python 3.12 is now the supported runtime. CI no longer tests Python 3.10 or 3.11.
+- The retired SQLite test setup helper now directs contributors to the supported PostgreSQL workflow.
+
 ### Fixed
 
 - Parallel selected-file workers use a settings snapshot resolved by their parent task. Saved scanner tunables no longer fall back to defaults outside Flask application context.

@@ -135,8 +135,8 @@ pip install --upgrade pip
 
 2. **Install system dependencies first:**
 ```bash
-# Ubuntu/Debian
-sudo apt-get install python3-dev build-essential libpq-dev
+# Ubuntu 24.04
+sudo apt-get install python3.12-dev build-essential libpq-dev
 
 # macOS
 brew install postgresql
@@ -144,10 +144,12 @@ brew install postgresql
 
 3. **Use virtual environment:**
 ```bash
-python3 -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+On a distribution without Python 3.12 packages, install Python 3.12 and its venv package first or use Docker.
 
 ## Database issues
 

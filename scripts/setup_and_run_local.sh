@@ -2,9 +2,14 @@
 set -euo pipefail
 
 if [ ! -d "venv" ]; then
-    python3 -m venv venv
+    python3.12 -m venv venv
 fi
 source venv/bin/activate
+python_version=$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+if [ "$python_version" != "3.12" ]; then
+    echo "venv must use Python 3.12. Move the existing venv aside, then create a new one with python3.12 -m venv venv."
+    exit 1
+fi
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 npm ci

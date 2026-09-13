@@ -28,7 +28,7 @@ How to install PixelProbe, either with Docker (recommended) or manually.
 ### For manual installation
 
 - **Operating System**: Ubuntu 20.04+, Debian 11+, macOS 11+, or Windows 10+ (WSL2)
-- **Python**: 3.10-3.12 (3.12 recommended; the Docker image ships 3.12)
+- **Python**: 3.12
 - **PostgreSQL**: 15 or higher
 - **Redis**: 7.0 or higher, or Valkey (the Docker stack uses valkey/valkey:9-alpine)
 - **System Tools**:
@@ -38,15 +38,17 @@ How to install PixelProbe, either with Docker (recommended) or manually.
 
 #### Installing system dependencies
 
-**Ubuntu/Debian:**
+**Ubuntu 24.04:**
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
-    python3 python3-dev python3-venv python3-pip \
+    python3.12 python3.12-venv python3-pip \
     ffmpeg imagemagick \
     postgresql redis-server \
     git curl wget
 ```
+
+On other distributions, install Python 3.12 and its venv package before continuing, or use Docker.
 
 PixelProbe supports PostgreSQL 15 through 18; the distro default is fine. For PostgreSQL 18 on releases that ship an older version, use the [PGDG apt repository](https://www.postgresql.org/download/linux/ubuntu/).
 
@@ -204,7 +206,7 @@ redis-cli ping
 
 ```bash
 # Create virtual environment
-python3 -m venv venv
+python3.12 -m venv venv
 
 # Activate virtual environment
 source venv/bin/activate  # Linux/macOS

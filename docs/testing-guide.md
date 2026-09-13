@@ -4,6 +4,8 @@
 
 PixelProbe uses pytest with unit, integration, and top-level feature tests. `pytest.ini` sets `testpaths = tests scripts`, so test files under `scripts/` (currently `scripts/test_database.py`) are collected too.
 
+Tests require Python 3.12. Create the virtual environment with `python3.12 -m venv venv`.
+
 ## Test structure
 
 ```
@@ -57,15 +59,11 @@ tests/
 
 Two files deserve a call-out:
 
-- `test_real_media_samples.py` and `test_synthetic_corruption.py` are gated
-  behind the `real_media` marker. They exercise the FFmpeg/ImageMagick
-  validation paths against the sample corpus (plus fixtures synthesized at
-  test time) and are sensitive to tool versions, so they are excluded from
-  the default local run; CI runs them on the Python 3.12 matrix leg.
+- `test_real_media_samples.py` and `test_synthetic_corruption.py` are gated behind the `real_media` marker. They exercise the FFmpeg/ImageMagick validation paths against the sample corpus (plus fixtures synthesized at test time) and are sensitive to tool versions. The full test suite includes them, and CI runs them in the Python 3.12 job.
   Committed synthesized fixtures are regenerated with
   `tests/fixtures/media_samples/generate_corrupted_fixtures.py`.
 - `test_frontend_build.py` actually runs `npm ci` and `npm run build`,
-  so it needs Node.js 20 and npm available.
+  so it needs Node.js 22.22.2 and npm available.
 
 ## Running tests
 
@@ -78,7 +76,10 @@ pip install -r requirements-test.txt
 # Build the frontend once (test_frontend_build.py and the app expect it)
 npm ci && npm run build
 
-# Default local run: everything except the real_media tests
+# Full local run
+pytest
+
+# Fast local run: exclude the real_media tests
 pytest -m "not real_media"
 
 # Run with verbose output
@@ -262,13 +263,7 @@ Tests use an in-memory SQLite database (`sqlite:///:memory:`) created by the ses
 
 CI is defined in [.github/workflows/test.yml](../.github/workflows/test.yml) with two jobs:
 
-- `test`: runs on every push and pull request across a Python matrix of
-  3.10, 3.11, and 3.12 (`actions/checkout@v4`, `actions/setup-python@v5`).
-  It sets up Node.js 20, installs `ffmpeg imagemagick libmagic1` via apt,
-  installs `requirements-test.txt`, runs `npm ci && npm run build`,
-  then executes `pytest -m "not real_media" --cov=pixelprobe`. Coverage is
-  uploaded to Codecov (`codecov/codecov-action@v5`) with
-  `fail_ci_if_error: false`, so a Codecov outage cannot fail the build.
+- `test`: runs on every push and pull request with Python 3.12 (`actions/checkout@v4`, `actions/setup-python@v5`). It sets up Node.js 22.22.2, installs `ffmpeg imagemagick libmagic1` via apt, installs `requirements-test.txt`, runs `npm ci && npm run build`, then executes `pytest -m "not real_media" --cov=pixelprobe` and the `real_media` tests. Codecov uploads coverage with `fail_ci_if_error: false`, so an outage cannot fail the build.
 - `image-integration`: builds the production Docker image, runs the
   `real_media` tests (`tests/test_real_media_samples.py`) inside that image
   so the stderr parsers are exercised against the exact FFmpeg/ImageMagick

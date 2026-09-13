@@ -172,11 +172,7 @@ curl -X POST http://localhost:5000/api/reset-incomplete-scans \
 ```
 
 #### `scripts/setup_test_env.sh`
-**Purpose:** Set up the virtual environment and test database for running tests
-**Usage:**
-```bash
-./scripts/setup_test_env.sh
-```
+**Status:** Retired SQLite setup helper. Use [developer-guide.md](developer-guide.md) and [testing-guide.md](testing-guide.md) for the supported PostgreSQL test setup.
 
 ---
 
