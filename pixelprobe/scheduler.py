@@ -4,12 +4,12 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from pixelprobe.models import (db, ScanSchedule, ScanResult, ScanState, ScanChunk,
                                HealthcheckConfig, ScanReport, ScanNotificationOutbox)
 from pixelprobe.constants import SCAN_PHASES, TERMINAL_SCAN_PHASES
 from pixelprobe.services.scan_engine import maybe_finalize_scan
+from pixelprobe.utils.cron import crontab_trigger
 from pixelprobe.utils.paths import is_path_under
 from sqlalchemy import and_, or_, text
 import threading
@@ -177,6 +177,32 @@ class MediaScheduler:
     def _clear_pending_retry(self, retry_key: str):
         with self._retry_lock:
             self.pending_retries.pop(retry_key, None)
+            # A cron fire can start the scan while a retry is still queued
+            for job in self.scheduler.get_jobs():
+                if job.id.startswith(f"{retry_key}_retry_"):
+                    job.remove()
+
+    def _queue_missed_cron_fires(self, now=None):
+        """Queue a catch-up for cron schedules whose last fire never started.
+
+        Retries live in memory, so a restart while a schedule waits behind a
+        long scan drops it until its next fire, a week away for a weekly job.
+        """
+        now = now or datetime.now(timezone.utc)
+        for schedule in ScanSchedule.query.filter_by(is_active=True).all():
+            if schedule.last_run is None or schedule.cron_expression.startswith('interval:'):
+                continue
+            job = self.scheduler.get_job(f"schedule_{schedule.id}")
+            if job is None:
+                continue
+            last_run = schedule.last_run
+            if last_run.tzinfo is None:
+                last_run = last_run.replace(tzinfo=timezone.utc)
+            missed = job.trigger.get_next_fire_time(None, last_run)
+            if missed is not None and missed <= now:
+                self._queue_conflict_retry(
+                    f"schedule_{schedule.id}", self._run_scheduled_scan, (schedule.id,),
+                    f"missed fire at {missed.isoformat()}", consume_budget=False)
 
     def _filter_excluded_paths(self, scan_paths):
         """Filter out excluded paths and return the remaining ones."""
@@ -359,6 +385,11 @@ class MediaScheduler:
                 self._schedules_fp = self._schedule_fingerprint()
             except Exception as e:
                 logger.warning(f"Could not compute initial schedule fingerprint: {e}")
+            try:
+                self._queue_missed_cron_fires()
+            except Exception as e:
+                db.session.rollback()
+                logger.error(f"Failed to queue missed schedule fires: {e}")
             
     def _load_exclusions(self):
         """Load path and extension exclusions from environment variables"""
@@ -410,19 +441,8 @@ class MediaScheduler:
                 
     def _add_cron_job(self, job_id: str, func, cron_expr: str):
         """Add a cron-based job"""
-        # Parse cron expression (minute hour day month day_of_week)
-        parts = cron_expr.split()
-        if len(parts) != 5:
-            raise ValueError("Invalid cron expression")
-            
-        trigger = CronTrigger(
-            minute=parts[0],
-            hour=parts[1],
-            day=parts[2],
-            month=parts[3],
-            day_of_week=parts[4]
-        )
-        
+        trigger = crontab_trigger(cron_expr)
+
         self.scheduler.add_job(
             func,
             trigger,

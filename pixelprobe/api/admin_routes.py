@@ -4,10 +4,9 @@ import json
 import logging
 from datetime import datetime, timezone, timedelta
 
-from apscheduler.triggers.cron import CronTrigger
-
 from pixelprobe.models import db, ScanResult, IgnoredErrorPattern, ScanConfiguration, ScanSchedule, AppConfig
 from pixelprobe.constants import SETTING_GROUPS, SCANNER_SETTINGS_BY_KEY
+from pixelprobe.utils.cron import crontab_trigger
 from pixelprobe.services.settings_service import (describe_settings, coerce_setting,
                                                   invalidate_cache, plain_bound,
                                                   SettingValueError)
@@ -76,15 +75,7 @@ def calculate_next_run(cron_expression: str, last_run=None):
             return now + interval
         raise ValueError(f"Invalid interval format: {cron_expression}")
     else:
-        # Standard cron format - use APScheduler's trigger
-        parts = cron_expression.split()
-        if len(parts) != 5:
-            raise ValueError(f"Invalid cron expression: {cron_expression}")
-        trigger = CronTrigger(
-            minute=parts[0], hour=parts[1], day=parts[2],
-            month=parts[3], day_of_week=parts[4],
-            timezone='UTC'
-        )
+        trigger = crontab_trigger(cron_expression, timezone='UTC')
         return trigger.get_next_fire_time(None, now)
 
 
@@ -429,11 +420,7 @@ def _validate_schedule_payload(data):
             if len(parts) != 3 or parts[1] not in {'minutes', 'hours', 'days'} or int(parts[2]) < 1:
                 raise ValueError
         else:
-            fields = cron_expression.split()
-            if len(fields) != 5:
-                raise ValueError
-            CronTrigger(minute=fields[0], hour=fields[1], day=fields[2],
-                        month=fields[3], day_of_week=fields[4], timezone='UTC')
+            crontab_trigger(cron_expression, timezone='UTC')
     except (TypeError, ValueError):
         return None, {'error': 'Invalid schedule expression'}
     paths = data.get('scan_paths', [])

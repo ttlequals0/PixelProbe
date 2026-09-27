@@ -317,6 +317,34 @@ class TestQueueConflictRetry:
 
         scheduler._clear_pending_retry('periodic')
         assert 'periodic' not in scheduler.pending_retries
+        assert scheduler.scheduler.get_job('periodic_retry_1') is None
+
+    def _weekly_cleanup(self, db, last_run):
+        schedule = ScanSchedule(name='cleanup', cron_expression='0 2 * * 0',
+                                scan_type='orphan', is_active=True, last_run=last_run)
+        db.session.add(schedule)
+        db.session.commit()
+        return schedule
+
+    def test_missed_cron_fire_queues_catch_up(self, scheduler, app, db):
+        with app.app_context():
+            schedule = self._weekly_cleanup(
+                db, datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30))
+            scheduler._activate_schedule(schedule)
+            scheduler._queue_missed_cron_fires()
+
+            job = scheduler.scheduler.get_job(f'schedule_{schedule.id}_retry_0')
+            assert job is not None
+            assert job.args == (schedule.id,)
+
+    def test_recent_cron_fire_is_not_caught_up(self, scheduler, app, db):
+        with app.app_context():
+            schedule = self._weekly_cleanup(
+                db, datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5))
+            scheduler._activate_schedule(schedule)
+            scheduler._queue_missed_cron_fires()
+
+            assert f'schedule_{schedule.id}' not in scheduler.pending_retries
 
     def test_add_job_failure_does_not_consume_slot(self, scheduler, monkeypatch):
         """If APScheduler fails to enqueue the retry job the counter must not

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.9.4] - 2026-09-27
+
+### Fixed
+
+- Cron schedules read day-of-week numbers as crontab does: 0 and 7 are Sunday. APScheduler counts from Monday, so a `0 2 * * 0` schedule ran every Monday. Schedules that use numeric weekdays now run one day earlier than before.
+- A cron schedule whose last fire never started is queued again on startup. A restart used to drop a retry that was waiting behind a long scan. The weekly orphan cleanup could then miss runs for weeks, and inventory rows for replaced or deleted files stayed pending.
+- Starting a scheduled run removes its other queued retries, so a retry left over from a cron fire cannot start the same run a second time.
+
 ## [2.9.3] - 2026-09-13
 
 ### Added
