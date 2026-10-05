@@ -117,3 +117,81 @@ class TestJpegPixelCorruption:
         is_corrupted, details, output = checker._check_jpeg_pixel_corruption(img)
         assert is_corrupted is False
         assert any('too small' in line for line in output)
+
+
+class TestJpegPixelFalsePositives:
+    """Letterbox/stripe negatives and truncated-decode positives."""
+
+    def test_letterboxed_screenshot_no_false_positive(self):
+        """Sharp UI edges above a solid black bottom bar are not corruption."""
+        checker = PixelProbe()
+
+        img = Image.new('RGB', (200, 300), (0, 0, 0))
+        pixels = img.load()
+        for y in range(20, 230):
+            base = (230, 230, 230) if (y // 20) % 2 == 0 else (200, 205, 215)
+            for x in range(200):
+                pixels[x, y] = base
+        for y in (100, 140, 222, 225, 228):
+            for x in range(200):
+                pixels[x, y] = (10, 10, 20)
+
+        is_corrupted, details, output = checker._check_jpeg_pixel_corruption(img)
+        assert is_corrupted is False
+
+    def test_horizontal_stripes_no_false_positive(self):
+        """A short run of alternating bright/dark rows is not corruption."""
+        checker = PixelProbe()
+
+        img = Image.new('RGB', (200, 200))
+        pixels = img.load()
+        for y in range(200):
+            for x in range(200):
+                pixels[x, y] = (100 + x // 4, 120 + y // 4, 140)
+        for y in range(90, 102):
+            c = (240, 240, 240) if y % 2 == 0 else (20, 20, 20)
+            for x in range(200):
+                pixels[x, y] = c
+
+        is_corrupted, details, output = checker._check_jpeg_pixel_corruption(img)
+        assert is_corrupted is False
+
+    def test_jpeg_truncated_decode_short_chaos_then_gray(self):
+        """Three garbage rows (smallest flagged run) followed by decoder gray to the bottom is corrupt."""
+        checker = PixelProbe()
+
+        img = Image.new('RGB', (200, 200), (100, 150, 200))
+        pixels = img.load()
+        chaos_colors = [(255, 0, 0), (0, 0, 255), (0, 255, 0), (255, 255, 0)]
+        for y in range(110, 113):
+            c = chaos_colors[y % len(chaos_colors)]
+            for x in range(200):
+                pixels[x, y] = c
+        for y in range(113, 200):
+            for x in range(200):
+                pixels[x, y] = (128, 128, 128)
+
+        is_corrupted, details, output = checker._check_jpeg_pixel_corruption(img)
+        assert is_corrupted is True
+        assert any('solid fill' in d for d in details)
+
+    def test_jpeg_persistent_chaos_to_bottom(self):
+        """Random per-row colors from 40% to the bottom are sustained chaos."""
+        import random
+        rng = random.Random(7)
+        checker = PixelProbe()
+
+        img = Image.new('RGB', (200, 200), (100, 150, 200))
+        pixels = img.load()
+        prev = None
+        for y in range(80, 200):
+            c = prev
+            while c is None or sum(abs(a - b) for a, b in zip(c, prev or (0, 0, 0))) <= 150:
+                c = (rng.choice((0, 255)), rng.choice((0, 255)), rng.choice((0, 255)))
+            prev = c
+            for x in range(200):
+                pixels[x, y] = c
+
+        is_corrupted, details, output = checker._check_jpeg_pixel_corruption(img)
+        assert is_corrupted is True
+        assert any('sustained chaos' in d for d in details)

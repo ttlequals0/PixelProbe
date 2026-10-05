@@ -861,6 +861,10 @@ class PixelProbe:
             def read_info(read_path=file_path):
                 rewind_authorized_fd_path(read_path)
                 stats = os.stat(read_path)
+                if _descriptor_path_or_none(read_path):
+                    # libmagic would lstat the fd symlink; sniff a buffer, pread keeps the offset
+                    fd = int(str(read_path).rsplit('/', 1)[1])
+                    return stats, magic.from_buffer(os.pread(fd, 8192, 0), mime=True)
                 return stats, magic.from_file(read_path, mime=True)
 
             file_stats, file_type = _read_with_timeout(
@@ -1878,6 +1882,10 @@ class PixelProbe:
                     current_fill = 1
 
             has_chaos = max_chaos_streak >= 8
+            if has_chaos:
+                # Real decode damage persists to the bottom; stripes and UI edges recur sparsely
+                tail = row_jumps[max_chaos_start - start_row - 1:]
+                has_chaos = sum(1 for _, j in tail if j > 100) >= 0.5 * len(tail)
             near_bottom = fill_end >= total_rows * 0.95
 
             chaos_before_fill = False
@@ -1887,6 +1895,10 @@ class PixelProbe:
                 chaotic_before = sum(1 for _, j in row_jumps[lookback_start:lookback_end] if j > 100)
                 chaos_before_fill = chaotic_before >= 3
             has_fill = max_fill_streak >= 30 and near_bottom and chaos_before_fill
+            if has_fill:
+                # Only decoder gray counts as a fill; letterbox black/white bars do not
+                fc = row_averages[fill_start]
+                has_fill = all(104 <= v <= 152 for v in fc) and max(fc) - min(fc) <= 12
 
             if has_chaos or has_fill:
                 details = []
@@ -2485,7 +2497,7 @@ class PixelProbe:
         
         return is_corrupted, corruption_details, hevc_output
 
-    def _corroborate_freeze(self, file_path, event, avg_fps=None):
+    def _corroborate_freeze(self, file_path, event, avg_fps=None, duration=None):
         """What else is true where the picture stopped.
 
         Two independent signals, checked cheapest-first:
@@ -2507,7 +2519,7 @@ class PixelProbe:
         try:
             probe = safe_subprocess_run([
                 'ffprobe', '-v', 'error', '-select_streams', 'v:0',
-                '-read_intervals', f'{lead}%+{span}',
+                '-read_intervals', f'{lead}%{lead + span}',
                 '-show_entries', 'packet=pts_time', '-of', 'csv=p=0',
                 file_path,
             ], capture_output=True, text=True, timeout=FREEZE_PROBE_TIMEOUT_SECS)
@@ -2515,7 +2527,16 @@ class PixelProbe:
                          if x.strip() and x.strip() != 'N/A')
             inside = sum(1 for t in pts if start - 0.05 <= t <= start + length + 0.05)
             outside = [t for t in pts if t < start - 0.05 or t > start + length + 0.05]
-            if len(pts) > 2 and _steady_cadence(outside):
+            need = start + length - 0.05
+            if duration is not None and duration - 1.0 < need:
+                # Window runs to the end of the file: the last packet starts a frame or so early
+                need = duration - 1.0
+            covered = not pts or max(pts) >= need
+            if pts and not covered:
+                # A probe that stopped short of the window proves nothing
+                logger.debug(f"Freeze packet probe for {file_path} ended at "
+                             f"{max(pts):.2f}s, short of the window end; no verdict")
+            if len(pts) > 2 and covered and _steady_cadence(outside):
                 # Absent packets only mean damage on a stream that stores
                 # frames at a steady rhythm. A variable-frame-rate source
                 # (screen recordings, slideshows) legitimately stores nothing
@@ -2655,7 +2676,7 @@ class PixelProbe:
                 if index >= FREEZE_CORROBORATE_MAX_EVENTS:
                     uncorroborated.append(event)
                     continue
-                cause, detail = self._corroborate_freeze(file_path, event, avg_fps)
+                cause, detail = self._corroborate_freeze(file_path, event, avg_fps, duration)
                 if cause:
                     corroborated.append((cause, detail, event))
                 else:
@@ -2865,6 +2886,49 @@ class PixelProbe:
             return None
         return framerate, count, duration
 
+    def _probe_video_end(self, file_path, declared_duration, timeout=60):
+        """Locate where the video stream really ends; None if the probe fails.
+
+        Seeking past a truncated file lands on its last keyframe instead of
+        returning nothing, so video exists at t only when a packet at or after
+        t comes back. Bounded: one probe near the declared end, then a binary
+        search of at most 12 seeks.
+        """
+        def last_pts(t):
+            result = safe_subprocess_run([
+                'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'packet=pts_time', '-of', 'csv=p=0',
+                '-read_intervals', f'{t}%{t + 15}',
+                ensure_cli_safe_path(file_path),
+            ], capture_output=True, text=True, timeout=timeout)
+            vals = []
+            for x in (result.stdout or '').split():
+                try:
+                    vals.append(float(x.strip().rstrip(',')))
+                except ValueError:
+                    continue
+            return max(vals) if vals else None
+
+        try:
+            top = last_pts(max(0.0, declared_duration - 15))
+            if top is not None and top >= max(0.0, declared_duration - 15) - 0.05:
+                return declared_duration
+            lo, hi = 0.0, declared_duration
+            best = top
+            for _ in range(12):
+                mid = (lo + hi) / 2
+                seen = last_pts(mid)
+                if seen is not None and seen >= mid - 0.05:
+                    lo = mid
+                else:
+                    hi = mid
+                if seen is not None and (best is None or seen > best):
+                    best = seen
+            return best
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.debug(f"Video end probe failed for {file_path}: {e}")
+            return None
+
     @staticmethod
     def _frame_mismatch(framerate, count, duration):
         """Return (expected, diff, diff_percent) for a counted stream"""
@@ -2876,16 +2940,19 @@ class PixelProbe:
         """Compare decodable frame count against container metadata expectations.
 
         Returns (is_corrupted, corruption_details, warning_details). A confirmed
-        mismatch is a warning, never a corruption verdict: container framerate
+        mismatch is a warning, not a corruption verdict: container framerate
         lies on sparse-video and variable-frame-rate files (a 240s QuickTime
         with 244 real frames declares 25fps), and real decode damage is caught
-        by the err_detect deep-decode stage. Only an ffprobe process crash
-        marks corruption here.
+        by the err_detect deep-decode stage. Corruption is marked only for an
+        ffprobe process crash or truncation proven by the video stream ending
+        far short of the declared duration. A container duration inflated by a
+        longer audio track is recomputed against the video's own end.
         """
         corruption_details = []
         warning_details = []
         info_notes = []
         is_corrupted = False
+        end = None
 
         try:
             logger.info(f"Checking frame integrity for {file_path}")
@@ -2903,12 +2970,36 @@ class PixelProbe:
                 logger.info(f"Frame analysis (packets): expected {expected}, "
                             f"found {packet_count}, diff {diff} ({diff_percent:.1f}%)")
                 if diff_percent > 5.0:
+                    end = self._probe_video_end(file_path, duration)
+                    if end is not None:
+                        # Truncation: the video that exists runs at the declared rate, then stops
+                        steady = end > 0 and packet_count / end >= 0.5 * framerate
+                        if end < 0.5 * duration and diff_percent > 50 and steady:
+                            corruption_details.append(
+                                f"Truncated file: video stream ends at {end:.1f}s of the "
+                                f"declared {duration:.1f}s ({diff} frames missing)")
+                            return True, corruption_details, warning_details, info_notes
+                        expected, diff, diff_percent = self._frame_mismatch(
+                            framerate, packet_count, end)
+                        duration = end
+                        logger.info(f"Frame analysis recomputed against video end {end:.1f}s: "
+                                    f"expected {expected}, found {packet_count}, "
+                                    f"diff {diff} ({diff_percent:.1f}%)")
+                        if diff_percent <= 5.0:
+                            info_notes.append(
+                                "Container duration exceeds the video stream (audio or "
+                                "subtitle tail); frame count matches the video's own length")
+                            return is_corrupted, corruption_details, warning_details, info_notes
+                if diff_percent > 5.0:
                     # Packets and frames can legitimately differ; confirm with a decode
                     decoded = self._probe_stream_counts(
                         file_path, '-count_frames', 'nb_read_frames', timeout=120)
                     if decoded:
-                        framerate, frame_count, duration = decoded
-                        expected, diff, diff_percent = self._frame_mismatch(framerate, frame_count, duration)
+                        framerate, frame_count, decoded_duration = decoded
+                        if end is not None:
+                            decoded_duration = end
+                        expected, diff, diff_percent = self._frame_mismatch(
+                            framerate, frame_count, decoded_duration)
                         logger.info(f"Frame analysis (decoded): expected {expected}, "
                                     f"found {frame_count}, diff {diff} ({diff_percent:.1f}%)")
                         if diff_percent > 5.0:
@@ -2947,7 +3038,9 @@ class PixelProbe:
         (fades and title cards), which is where vertical-line repetition is
         legitimately highest.
 
-        TOUT (temporal outliers) warns; VREP (vertical line repetition) is an
+        TOUT (temporal outliers) warns only when at least two sampled windows
+        each exceed the threshold; one elevated window is a single stylised
+        scene and becomes an info note. VREP (vertical line repetition) is an
         informational note only. Measured against real damage neither metric
         discriminates well, because signalstats is analog-tape QC tooling:
         film grain pushes TOUT past its per-frame threshold on 46-100% of
@@ -2980,7 +3073,7 @@ class PixelProbe:
 
             logger.info(f"Checking temporal outliers for {file_path} (duration: {duration:.1f}s)")
 
-            tout_values = []
+            tout_windows = []
             vrep_values = []
             timed_out = False
 
@@ -3012,9 +3105,10 @@ class PixelProbe:
                 # stderr is deliberately ignored: seeking mid-stream emits
                 # version-dependent decoder noise that says nothing about the
                 # file's integrity (see _check_multipoint_sampling).
-                tout_values.extend(float(v) for v in _RE_SIGNALSTATS_TOUT.findall(result.stdout))
+                tout_windows.append([float(v) for v in _RE_SIGNALSTATS_TOUT.findall(result.stdout)])
                 vrep_values.extend(float(v) for v in _RE_SIGNALSTATS_VREP.findall(result.stdout))
 
+            tout_values = [v for w in tout_windows for v in w]
             total_frames = max(len(tout_values), len(vrep_values))
             min_frames = _setting('performance.temporal_min_frames')
             if total_frames < min_frames:
@@ -3034,9 +3128,18 @@ class PixelProbe:
             logger.info(f"Temporal analysis over {total_frames} sampled frames: "
                         f"{tout_percent:.1f}% outliers, {vrep_percent:.1f}% vertical repetition")
 
-            # TOUT warns; VREP is informational only - rationale in the docstring
-            if tout_percent > TEMPORAL_TOUT_PERCENT:
+            window_percents = [
+                sum(1 for v in w if v > TEMPORAL_TOUT_FRAME) / len(w) * 100
+                for w in tout_windows if w]
+            hot = [p for p in window_percents if p > TEMPORAL_TOUT_PERCENT]
+
+            # TOUT warns only when 2+ windows agree; VREP is informational only
+            if len(hot) >= 2:
                 warning_details.append(f"High temporal outliers detected: {tout_percent:.1f}% of frames")
+            elif len(hot) == 1:
+                info_notes.append(
+                    f"Temporal outliers elevated in 1 of {len(window_percents)} sampled windows "
+                    f"({hot[0]:.1f}% of its frames); a single scene, not a file-wide signal")
             if vrep_percent > TEMPORAL_VREP_PERCENT:
                 info_notes.append(
                     f"Elevated vertical line repetition: {vrep_percent:.1f}% of sampled frames")
