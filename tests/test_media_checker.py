@@ -802,6 +802,34 @@ class TestFreezeCorroboration:
         assert any('Corroborated the first 12 of 14' in line for line in out)
 
 
+class TestFreezeProbeWindow:
+    """The packet probe must cover the whole window or prove nothing"""
+
+    def _probe(self, stdout):
+        m = Mock()
+        m.returncode = 0
+        m.stdout = stdout
+        m.stderr = ''
+        return m
+
+    def test_probe_uses_absolute_end(self):
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.return_value = self._probe(_packets(5699.0, 5712.8))
+            PixelProbe()._corroborate_freeze('/fake.mp4', {'start': 5702.0, 'duration': 7.8})
+        argv = run.call_args_list[0][0][0]
+        assert argv[0] == 'ffprobe'
+        assert argv[argv.index('-read_intervals') + 1] == '5699.0%5712.8'
+
+    def test_short_probe_is_not_a_missing_content_verdict(self):
+        # Packets stop 4s before the window end: sparse by truncation, not by damage
+        sparse = _packets(5699.0, 5702.0) + "\n" + _packets(5703.0, 5708.0)
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.return_value = self._probe(sparse)
+            cause, detail = PixelProbe()._corroborate_freeze(
+                '/fake.mp4', {'start': 5702.0, 'duration': 7.8}, avg_fps=23.976)
+        assert cause != 'missing-content'
+
+
 class TestFrozenPercentageClamp:
     """Overlapping events must not report more frozen time than the runtime"""
 
@@ -1203,6 +1231,34 @@ class TestTemporalOutlierDetection:
 
     @patch('pixelprobe.media_checker._probe_video_duration')
     @patch('subprocess.run')
+    def test_single_hot_window_is_a_note(self, mock_run, mock_duration):
+        """One stylised scene (grain, overlay) must not warn the whole file"""
+        mock_duration.return_value = 1000.0
+        mock_run.side_effect = [
+            self._mock_result([(0.5, 0.0)] * 100),
+            self._mock_result([(0.0, 0.0)] * 100),
+            self._mock_result([(0.0, 0.0)] * 100),
+        ]
+        is_corrupted, details, warnings, info = PixelProbe()._check_temporal_outliers('/fake/video.mkv')
+        assert is_corrupted is False
+        assert warnings == []
+        assert any('elevated in 1 of 3 sampled windows (100.0% of its frames)' in n for n in info)
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
+    def test_two_hot_windows_warn(self, mock_run, mock_duration):
+        mock_duration.return_value = 1000.0
+        hot = [(0.5, 0.0)] * 60 + [(0.0, 0.0)] * 40
+        mock_run.side_effect = [
+            self._mock_result(hot),
+            self._mock_result(hot),
+            self._mock_result([(0.0, 0.0)] * 100),
+        ]
+        is_corrupted, details, warnings, info = PixelProbe()._check_temporal_outliers('/fake/video.mkv')
+        assert any('temporal outliers' in w.lower() for w in warnings)
+
+    @patch('pixelprobe.media_checker._probe_video_duration')
+    @patch('subprocess.run')
     def test_clean_body_produces_no_verdict(self, mock_run, mock_duration):
         """Values under both thresholds yield neither corruption nor warnings"""
         mock_duration.return_value = 1000.0
@@ -1486,8 +1542,43 @@ class TestWorkerDatabasePool:
         assert isinstance(checker._db_engine.pool, QueuePool)
 
 
+class TestProbeVideoEnd:
+    """Where the video stream really ends, found with bounded ffprobe seeks"""
+
+    def test_probe_video_end_binary_search(self):
+        end = 1575.3
+        declared = 1717.989
+        calls = []
+
+        def fake(argv, **kwargs):
+            t = float(argv[argv.index('-read_intervals') + 1].split('%')[0])
+            calls.append(t)
+            m = MagicMock()
+            m.returncode = 0
+            # Past the end ffprobe lands on the last keyframe: stale low pts
+            pts = [min(t + i * 0.5, end) for i in range(10)] if t < end else [end - 4.0]
+            m.stdout = "\n".join(f"{x:.3f}" for x in pts)
+            m.stderr = ''
+            return m
+
+        with patch('pixelprobe.media_checker.safe_subprocess_run', side_effect=fake):
+            result = PixelProbe()._probe_video_end('/fake.mkv', declared, timeout=30)
+        assert abs(result - end) <= 2.0
+        assert len(calls) <= 13
+
+    def test_probe_video_end_timeout_returns_none(self):
+        with patch('pixelprobe.media_checker.safe_subprocess_run',
+                   side_effect=subprocess.TimeoutExpired(cmd='ffprobe', timeout=30)):
+            assert PixelProbe()._probe_video_end('/fake.mkv', 100.0, timeout=30) is None
+
+
 class TestFrameIntegrityPacketFirst:
     """Stage 1 frame check: cheap -count_packets pass before full-decode -count_frames"""
+
+    @pytest.fixture(autouse=True)
+    def _no_end_probe(self):
+        with patch.object(PixelProbe, '_probe_video_end', return_value=None):
+            yield
 
     def _proc(self, framerate, count_key, count, duration, rc=0):
         m = MagicMock()
@@ -1574,6 +1665,41 @@ class TestFrameIntegrityPacketFirst:
         assert is_corrupted is False
         assert warnings == []
         assert run.call_count == 1  # 250 packets vs 25fps*10s: no decode needed
+
+    def test_truncated_video_is_corruption(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run, \
+                patch.object(PixelProbe, '_probe_video_end', return_value=123.4):
+            run.return_value = self._proc('25/1', 'nb_read_packets', 3000, '6236.0')
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mkv')
+        assert is_corrupted is True
+        assert any('Truncated file: video stream ends at 123.4s of the declared 6236.0s' in d
+                   for d in details)
+        assert warnings == []
+        assert run.call_count == 1  # confirm decode skipped
+
+    def test_audio_tail_is_not_a_warning(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run, \
+                patch.object(PixelProbe, '_probe_video_end', return_value=100.0):
+            # 125s declared, video ends at 100s: 25fps * 100s = 2500 packets
+            run.return_value = self._proc('25/1', 'nb_read_packets', 2500, '125.0')
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mkv')
+        assert is_corrupted is False
+        assert details == []
+        assert warnings == []
+        assert any('Container duration exceeds the video stream' in n for n in notes)
+
+    def test_failed_end_probe_keeps_warning(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.side_effect = [
+                self._proc('25/1', 'nb_read_packets', 2500, '125.0'),
+                self._proc('25/1', 'nb_read_frames', 2500, '125.0'),
+            ]
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mkv')
+        assert is_corrupted is False
+        assert any('frame count differs' in w.lower() for w in warnings)
 
     def test_timeout_is_inconclusive_note_not_pass(self):
         import subprocess as sp

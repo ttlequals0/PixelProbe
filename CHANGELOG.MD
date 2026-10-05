@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [2.9.5] - 2026-10-05
+
+### Fixed
+
+- Every scanned file was recorded with the file type `inode/symlink`. The descriptor-bound scanner hands libmagic a `/proc/self/fd` path, which libmagic reads as the symlink it is instead of the file behind it. The type is now sniffed from the file's first bytes through the descriptor. Startup clears the bogus value on existing rows so the next scan of each file records the real type; until then those rows show as Unknown.
+- JPEG pixel analysis flagged intact phone screenshots and photos as corrupt. A black letterbox bar under screen content read as a decoder fill, and horizontal stripes such as stadium seating read as decode garbage. A solid fill now has to be decoder gray, and a chaotic run has to persist to the bottom of the image the way real decode damage does. Measured on the 21 flagged production files: the 18 intact ones clear and the 3 with real damage (a truncated original rendered to a preview) stay flagged.
+- A freeze was corroborated as missing content from a packet probe whose window ended too early. ffprobe measures a relative interval end from the keyframe it seeks to, not from the requested start, so a long GOP on a static shot shrank the window and most expected packets fell outside it. The probe now uses an absolute end and ignores a window it did not cover.
+- The frame-count check compared the video against the container duration when the video stream reported none, which Matroska never does. A file whose audio runs longer than its video was warned for missing frames it never had. The check now finds where the video stream actually ends and compares against that.
+- A truncated download whose video stops a few minutes into a declared two-hour runtime was a warning, not a corruption finding. When the video stream ends before half the declared duration and most expected frames are absent, the file is now reported as truncated.
+- Temporal outlier detection warned when a single grainy, stylized, or screen-recorded scene fell inside one of its three sample windows. It now warns only when at least two windows are elevated; one elevated window is recorded as a note.
+
+### Security
+
+- Frontend build dependencies: serialize-javascript 7.1.2 (GHSA-gfhx-hw2g-v5hg) and fast-uri 4.2.1 (GHSA-jvvf-x445-j334) via lockfile overrides. Build-time only; nothing ships to the browser.
+
+### Tests
+
+- Descriptor-path MIME detection, the file-type startup repair against PostgreSQL, four JPEG false-positive and true-positive guards, the freeze probe window, the video-end probe and its truncation and audio-tail branches, and per-window temporal outlier scoring.
+
 ## [2.9.4] - 2026-09-27
 
 ### Fixed

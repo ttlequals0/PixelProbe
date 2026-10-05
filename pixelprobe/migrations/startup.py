@@ -13,7 +13,7 @@ from contextvars import ContextVar
 from sqlalchemy import text, inspect, exc
 from pixelprobe.constants import (CONFIG_LOG_RETENTION_DAYS, CONFIG_LOG_EXCLUDE_LOGGERS,
                                   DEFAULT_LOG_EXCLUDE_LOGGERS, SCANNER_SETTINGS)
-from pixelprobe.models import CleanupState
+from pixelprobe.models import CleanupState, ScanResult, ScanRunFile
 from pixelprobe.utils.helpers import env_int
 from pixelprobe.utils.overrides import classify_findings, encode_verdict
 
@@ -587,6 +587,30 @@ def run_v2_8_12_lifecycle_migrations(db):
         conn.commit()
 
 
+def run_v2_9_5_migrations(db):
+    """Clear the bogus inode/symlink file_type the descriptor-bound scanner wrote."""
+    updated = {}
+    try:
+        with migration_connection(db) as conn:
+            for table in (ScanResult.__tablename__, ScanRunFile.__tablename__):
+                if not conn.execute(text(
+                        f"SELECT EXISTS (SELECT 1 FROM {table} "
+                        "WHERE file_type = 'inode/symlink')")).scalar():
+                    continue
+                # Unindexed UPDATE: may take tens of seconds on a million-row table.
+                result = conn.execute(text(
+                    f"UPDATE {table} SET file_type = NULL "
+                    "WHERE file_type = 'inode/symlink'"))
+                updated[table] = result.rowcount
+            conn.commit()
+    except Exception:
+        logger.exception("Migration v2.9.5 failed")
+        raise
+    for table, count in updated.items():
+        logger.info(f"Cleared inode/symlink file_type on {count} {table} row(s)")
+    return updated
+
+
 def create_performance_indexes(db):
     """Create performance indexes"""
     indexes = [
@@ -776,6 +800,9 @@ def _run_all_migrations(db, connection):
 
     logger.info("Running v2.8.14 mount policy migration...")
     run_v2_8_14_mount_policy_migrations(db)
+
+    logger.info("Running v2.9.5 file_type repair...")
+    run_v2_9_5_migrations(db)
 
     logger.info("Creating performance indexes...")
     create_performance_indexes(db)

@@ -129,6 +129,49 @@ def test_lifecycle_migration_repairs_known_legacy_tool_statuses():
 
 @pytest.mark.postgres
 @pytest.mark.skipif(not POSTGRES_URI, reason='PIXELPROBE_TEST_POSTGRES_URI not set')
+def test_symlink_file_type_repair_clears_only_bogus_values():
+    from pixelprobe.migrations import startup
+
+    schema = f"symlink_type_{uuid4().hex[:12]}"
+    admin_engine = create_engine(POSTGRES_URI)
+    with admin_engine.begin() as conn:
+        conn.execute(text(f'CREATE SCHEMA {schema}'))
+    migration_db = _migration_db(schema)
+    try:
+        startup.migrate_database(migration_db)
+        with migration_db.engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO scan_results "
+                "(file_path, scan_status, file_type, marked_as_good, has_warnings, file_exists) "
+                "VALUES ('/t/bad.mkv', 'completed', 'inode/symlink', false, false, true), "
+                "('/t/good.jpg', 'completed', 'image/jpeg', false, false, true)"))
+            conn.execute(text(
+                "INSERT INTO scan_run_files (scan_id, file_path, status, file_type) "
+                "VALUES ('s1', '/t/bad.mkv', 'completed', 'inode/symlink'), "
+                "('s1', '/t/good.jpg', 'completed', 'image/jpeg')"))
+
+        first = startup.run_v2_9_5_migrations(migration_db)
+        second = startup.run_v2_9_5_migrations(migration_db)
+
+        with migration_db.engine.connect() as conn:
+            results = conn.execute(text(
+                "SELECT file_path, file_type FROM scan_results ORDER BY file_path")).all()
+            files = conn.execute(text(
+                "SELECT file_path, file_type FROM scan_run_files ORDER BY file_path")).all()
+        expected = [('/t/bad.mkv', None), ('/t/good.jpg', 'image/jpeg')]
+        assert [tuple(r) for r in results] == expected
+        assert [tuple(r) for r in files] == expected
+        assert first == {'scan_results': 1, 'scan_run_files': 1}
+        assert second == {}
+    finally:
+        migration_db.engine.dispose()
+        with admin_engine.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA {schema} CASCADE'))
+        admin_engine.dispose()
+
+
+@pytest.mark.postgres
+@pytest.mark.skipif(not POSTGRES_URI, reason='PIXELPROBE_TEST_POSTGRES_URI not set')
 def test_migration_failure_releases_actual_postgres_advisory_lock(monkeypatch):
     from pixelprobe.migrations import startup
 

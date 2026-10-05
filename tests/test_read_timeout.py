@@ -112,6 +112,18 @@ class TestGetFileInfoTimeout:
         info = checker.get_file_info(str(f))
         assert info['file_size'] == 11
 
+    @pytest.mark.skipif(not os.path.isdir('/proc/self/fd'), reason='needs /proc/self/fd')
+    def test_descriptor_path_reports_real_mime_and_keeps_offset(self, tmp_path):
+        f = tmp_path / 'img.jpg'
+        Image.new('RGB', (16, 16), 'red').save(f, 'JPEG')
+        fd = os.open(str(f), os.O_RDONLY)
+        try:
+            info = PixelProbe(database_path=None).get_file_info(f'/proc/self/fd/{fd}')
+            assert info['file_type'] == 'image/jpeg'
+            assert os.lseek(fd, 0, os.SEEK_CUR) == 0
+        finally:
+            os.close(fd)
+
 
 class TestScanFileSkipsUnreadableFile:
     def test_read_timeout_marks_file_and_continues(self, tmp_path, monkeypatch):
