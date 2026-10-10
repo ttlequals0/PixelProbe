@@ -1,4 +1,4 @@
-from flask import Blueprint, request, current_app
+from flask import Blueprint, jsonify, request, current_app
 import os
 import threading
 import logging
@@ -218,7 +218,7 @@ def get_scan_results():
             }
             if duplicate_status is not None:
                 empty_response['duplicate_status'] = duplicate_status
-            return empty_response
+            return jsonify(empty_response)
     
     # Apply search filter
     if search_query:
@@ -338,7 +338,7 @@ def get_scan_results():
     }
     if duplicate_status is not None:
         response['duplicate_status'] = duplicate_status
-    return response
+    return jsonify(response)
 
 @scan_bp.route('/scan-results/<int:result_id>')
 @auth_required

@@ -115,6 +115,36 @@ def test_duplicate_api_global_groups_pagination_and_stats(db, authenticated_clie
     assert authenticated_client.get('/api/scan-results?duplicate_mode=visual').status_code == 400
 
 
+def test_scan_results_json_preserves_script_like_search_and_filename(
+        db, authenticated_client):
+    html_like = '<img src=x onerror=alert(1)>'
+    result = ScanResult(file_path=f'/media/{html_like}.mp4', file_size=10)
+    db.session.add(result)
+    db.session.commit()
+
+    response = authenticated_client.get(
+        '/api/scan-results', query_string={'search': html_like})
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/json'
+    assert response.get_json()['results'][0]['file_name'] == f'{html_like}.mp4'
+
+
+def test_scan_results_invalid_path_returns_json_empty_response(
+        db, authenticated_client, monkeypatch):
+    monkeypatch.setattr(
+        'pixelprobe.api.scan_routes.get_configured_scan_paths', lambda: ['/media'])
+
+    response = authenticated_client.get(
+        '/api/scan-results', query_string={'path': '/outside/<script>alert(1)</script>'})
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/json'
+    assert response.get_json() == {
+        'results': [], 'total': 0, 'page': 1, 'per_page': 100, 'pages': 0,
+    }
+
+
 @pytest.mark.postgres
 @pytest.mark.skipif(not os.environ.get('PIXELPROBE_TEST_POSTGRES_URI'), reason='PIXELPROBE_TEST_POSTGRES_URI not set')
 def test_postgres_duplicate_basename_and_grouping():
