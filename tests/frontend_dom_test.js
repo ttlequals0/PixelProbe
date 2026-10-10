@@ -37,6 +37,36 @@ const statusCases = [
   [{ scan_status: 'completed', has_warnings: true }, 'warning', 'Warning'],
   [{ scan_status: 'completed', is_corrupted: true }, 'danger', 'Corrupted']
 ];
+for (const mode of ['hash', 'name']) {
+  const file = { id: 101, file_path: payload, scan_status: 'completed', duplicate_group_size: 3, duplicate_mode: mode };
+  const expected = `3 files: ${mode === 'name' ? 'same filename candidates' : 'same recorded content'}`;
+  assert.equal(table.renderRow(file).querySelector('.duplicate-label').textContent, expected);
+  assert.equal(table.renderMobileCard(file).querySelector('.duplicate-label').textContent, expected);
+  assert.equal(table.renderMobileCard(file).querySelector('img'), null);
+}
+assert.equal(row.querySelector('.duplicate-label'), null);
+
+const duplicateControls = window.document.createElement('div');
+duplicateControls.innerHTML = '<button data-filter="duplicates">Duplicates</button><button data-filter="all">All Files</button><div id="duplicate-controls" hidden><select id="duplicate-mode"><option value="hash">Content</option><option value="name">Filename</option></select><p id="duplicate-help"></p></div>';
+window.document.body.appendChild(duplicateControls);
+const requestedDuplicateModes = [];
+const duplicateTable = new window.__TableManager({ getScanResults: async params => {
+  requestedDuplicateModes.push(params.duplicate_mode);
+  return { results: [], total: 0 };
+} });
+duplicateTable.bindEvents();
+window.document.querySelector('[data-filter="duplicates"]').click();
+assert.equal(window.document.querySelector('#duplicate-controls').hidden, false);
+assert.equal(requestedDuplicateModes.at(-1), 'hash');
+const duplicateSelect = window.document.querySelector('#duplicate-mode');
+duplicateSelect.value = 'name';
+duplicateSelect.dispatchEvent(new window.Event('change'));
+assert.equal(requestedDuplicateModes.at(-1), 'name');
+assert.match(window.document.querySelector('#duplicate-help').textContent, /contents may differ/);
+window.document.querySelector('[data-filter="all"]').click();
+assert.equal(window.document.querySelector('#duplicate-controls').hidden, true);
+assert.equal(requestedDuplicateModes.at(-1), undefined);
+
 for (const [statusFile, statusClass, statusText] of statusCases) {
   const file = { id: 100, file_path: payload, file_size: 0, ...statusFile };
   const desktopStatus = table.renderRow(file).children[1].querySelector('.badge');
@@ -194,6 +224,7 @@ async function verifyViewer() {
     <div id="total-files"></div><div id="healthy-files"></div><div id="corrupted-files"></div>
     <div id="warning-files"></div><div id="bitrot-files"></div><div id="pending-files"></div>
     <div id="scanning-files"></div><div id="integrity-checked"></div>
+    <div id="duplicate-files"></div><div id="duplicate-details"></div>
     <button id="integrity-details-toggle" aria-expanded="false"></button>
     <div id="integrity-detail-panel" hidden><div id="integrity-details"></div><div id="integrity-refresh-status"></div></div>`,
   { runScripts: 'outside-only' });
@@ -217,7 +248,8 @@ async function verifyViewer() {
     getStats: async () => {
       if (shouldFail) throw new Error('network');
       return { total_files: 8, completed_files: 5, healthy_files: 3, corrupted_files: 1, warning_files: 0,
-        pending_files: 0, scanning_files: 0, integrity: { total_files: 5, checked_percent: 40,
+        pending_files: 0, scanning_files: 0, duplicate_files: 2, duplicate_groups: 1, duplicate_extra_files: 1,
+        integrity: { total_files: 5, checked_percent: 40,
           attempted_files: 3, checked_files: 2, integrity_error_files: 1,
           integrity_unavailable_files: 1, never_attempted: 2, bitrot_suspected: 0 } };
     }
@@ -228,6 +260,8 @@ async function verifyViewer() {
   assert.equal(statsWindow.document.querySelector('#integrity-detail-panel').hidden, false);
   assert.equal(statsWindow.document.querySelector('#integrity-details-toggle').getAttribute('aria-expanded'), 'true');
   assert.equal(statsWindow.document.querySelector('#total-files').textContent, '8');
+  assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, '2');
+  assert.equal(statsWindow.document.querySelector('#duplicate-details').textContent, '1 group; 1 extra file');
   assert.match(statsWindow.document.querySelector('#integrity-details').textContent, /Successful integrity rechecks 2/);
   assert.match(statsWindow.document.querySelector('#integrity-details').textContent, /with no recorded recheck attempt 2/);
   assert.match(statsWindow.document.querySelector('#integrity-details').textContent, /Legacy integrity outcomes were not recorded/);

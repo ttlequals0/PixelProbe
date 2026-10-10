@@ -1408,8 +1408,12 @@ class PixelProbe:
                 file_path, None, scan_start_time, 'unreadable', str(e))
         except Exception as e:
             logger.error(f"Error scanning file {file_path}: {str(e)}")
+            cause = e
+            while cause.__cause__ is not None:
+                cause = cause.__cause__
             return self._save_unverifiable_result(
-                file_path, None, scan_start_time, 'error', str(e))
+                file_path, None, scan_start_time,
+                'unreadable' if isinstance(cause, OSError) else 'error', str(e))
         finally:
             if 'media_file' in locals() and media_file is not None:
                 media_file.close()

@@ -346,6 +346,8 @@ class TestChunkOutcomeAndPolicy:
                 result = tp.process_chunk_task.apply(
                     args=(chunk.id, 'scan-unreadable')).get()
             assert result['status'] == 'SUCCESS'
+            assert result['files_unverified'] == 1
+            assert result['files_corrupted'] == 0
             row = ScanResult.query.filter_by(file_path=file_path).first()
             member = ScanRunFile.query.filter_by(
                 scan_id='scan-unreadable', file_path=file_path).first()

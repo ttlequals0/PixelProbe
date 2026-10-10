@@ -9,6 +9,7 @@ from pixelprobe.models import db, ScanResult
 from pixelprobe.version import __version__
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone_name
 from pixelprobe.services.stats_service import StatsService
+from pixelprobe.services.duplicate_service import duplicate_statistics
 from pixelprobe.auth import auth_required
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ def get_stats():
         # Rolling-integrity coverage: answers "how much of the library has
         # been verified over time" - no single budgeted run report can
         result['integrity'] = StatsService().get_integrity_coverage()
+        result.update(duplicate_statistics())
 
         return result
 
@@ -117,6 +119,7 @@ def get_stats():
                 'healthy_files': healthy_files,
                 'marked_as_good': marked_as_good,
                 'warning_files': warning_files,
+                **duplicate_statistics(),
                 'integrity': StatsService().get_integrity_coverage()
             }
         except Exception as e2:

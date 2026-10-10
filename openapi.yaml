@@ -841,6 +841,20 @@ paths:
           in: query
           schema:
             type: string
+        - name: duplicate_mode
+          in: query
+          description: >-
+            Hash groups require files recorded as existing, nonempty recorded
+            SHA-256 hashes, and equal sizes. Suspected bitrot and failed or
+            unreadable observations are excluded. Name groups use exact
+            case-sensitive basenames and are candidates only. Groups span
+            the inventory before search and path filters. Each matching row
+            includes duplicate_mode and duplicate_group_size. Hashes describe
+            recorded baselines without verifying current contents.
+          schema:
+            type: string
+            enum: [all, hash, name]
+            default: all
         - name: sort_field
           in: query
           schema:
@@ -1460,6 +1474,15 @@ paths:
         never-checked count, the oldest check date (every checked file has
         been verified at least once since then), and the current
         bitrot-suspected count.
+        `duplicate_files` counts all files in recorded hash-and-size groups;
+        `duplicate_groups` counts those groups and `duplicate_extra_files`
+        counts copies beyond one per group. `filename_duplicate_files`,
+        `filename_duplicate_groups`, and `filename_duplicate_extra_files`
+        use exact case-sensitive basenames and describe candidates, not
+        confirmed content matches. Missing files are excluded. Hash matching
+        also excludes suspected bitrot, failed or unreadable observations,
+        absent hashes, and absent sizes. Hashes describe recorded baselines,
+        not fresh filesystem verification.
 
         **Example:**
         ```bash

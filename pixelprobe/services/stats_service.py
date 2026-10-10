@@ -11,6 +11,7 @@ from sqlalchemy import text, func
 from pixelprobe.models import db, ScanResult, ScanReport
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone
 from pixelprobe.version import __version__
+from pixelprobe.services.duplicate_service import duplicate_statistics
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,8 @@ class StatsService:
                 'corrupted_files': stats[5] or 0,
                 'healthy_files': stats[6] or 0,
                 'marked_as_good': stats[7] or 0,
-                'warning_files': stats[8] or 0
+                'warning_files': stats[8] or 0,
+                **duplicate_statistics(),
             }
             
         except Exception as e:
@@ -230,7 +232,8 @@ class StatsService:
                 'corrupted_files': corrupted_files,
                 'healthy_files': healthy_files,
                 'marked_as_good': marked_as_good,
-                'warning_files': warning_files
+                'warning_files': warning_files,
+                **duplicate_statistics(),
             }
         except Exception as e:
             logger.error(f"Fallback stats query also failed: {e}")

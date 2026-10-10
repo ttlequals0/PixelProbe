@@ -204,6 +204,7 @@ Get paginated scan results with optional filters.
 - `is_corrupted` (string): Filter by corruption: `all`, `true`, `false`
 - `has_warnings` (string): Filter by warning flag: `all`, `true`, `false` (`true` excludes corrupted and marked-as-good files)
 - `bitrot_suspected` (string): Filter by suspected bitrot: `all`, `true`, `false`
+- `duplicate_mode` (string): `hash` for recorded SHA-256 matches, `name` for same-filename candidates, or `all` to disable (default). Invalid values return HTTP 400.
 - `search` (string): Case-insensitive substring match on file path
 - `path` (string): Restrict results to one configured scan path (must exactly match a configured path)
 - `sort_field` (string): Field to sort by (default: `scan_date`). Valid values: `scan_date`, `file_path`, `file_size`, `file_type`, `scan_status`, `status`, `is_corrupted`, `marked_as_good`, `scan_tool`, `corruption_details`, `discovered_date`, `last_modified`. `status` sorts by corruption status. Unknown values fall back to `scan_date` descending.
@@ -242,6 +243,7 @@ Get paginated scan results with optional filters.
 Notes:
 - `media_info` is a JSON-encoded **string**, not a nested object - parse it client-side (e.g. `json.loads(result["media_info"])`).
 - Items also carry warning, bitrot, and integrity fields: `has_warnings`, `warning_details`, `bitrot_suspected`, `last_integrity_check_date`, and related hash/baseline columns.
+- Duplicate filtering adds `duplicate_mode` and `duplicate_group_size` to each result. Groups span the inventory before path, search, and status filters apply. Only files recorded as existing are eligible. Content matching requires equal recorded hashes and sizes; suspected bitrot and failed or unreadable observations are excluded. Filename matching compares exact case-sensitive basenames. Matches use recorded baselines without verifying current contents; filename candidates may contain different content.
 
 #### Get single scan result
 ```http
@@ -441,6 +443,19 @@ GET /api/stats
 ```
 
 Get overall statistics about scanned files.
+
+Duplicate statistics use the same inventory groups as `duplicate_mode` filtering:
+
+| Field | Meaning |
+|---|---|
+| `duplicate_files` | All files in matching recorded SHA-256 groups |
+| `duplicate_groups` | Number of matching content groups |
+| `duplicate_extra_files` | Files beyond one per content group |
+| `filename_duplicate_files` | All files in same-filename candidate groups |
+| `filename_duplicate_groups` | Number of same-filename candidate groups |
+| `filename_duplicate_extra_files` | Files beyond one per filename group |
+
+Counts include only files recorded as existing. Content counts exclude absent hashes or sizes, suspected bitrot, and failed or unreadable observations. Filename counts do not prove matching contents. No fresh filesystem verification runs for these queries.
 
 **Response:**
 ```json

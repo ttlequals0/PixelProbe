@@ -3,6 +3,7 @@ failing disk sector) must not hang the scan worker. Stat/magic/hash are
 pure-Python reads with no subprocess timeout to save them, so a watchdog
 deadline skips the file and lets the scan continue."""
 import hashlib
+import errno
 import os
 import threading
 import time
@@ -126,6 +127,29 @@ class TestGetFileInfoTimeout:
 
 
 class TestScanFileSkipsUnreadableFile:
+    @pytest.mark.parametrize('wrapped', [False, True])
+    def test_stale_handle_is_unreadable_without_retry(self, tmp_path, monkeypatch, wrapped):
+        path = tmp_path / 'stale.mkv'
+        path.write_bytes(b'content')
+        checker = PixelProbe(database_path=None)
+        calls = []
+
+        def stale_identity(_path):
+            calls.append(_path)
+            try:
+                raise OSError(errno.ESTALE, 'Stale file handle')
+            except OSError as exc:
+                if wrapped:
+                    raise ValueError('File changed or is unavailable') from exc
+                raise
+
+        monkeypatch.setattr(checker, '_file_identity', stale_identity)
+        result = checker.scan_file(str(path))
+        assert result['outcome'] == 'unreadable'
+        assert result['is_corrupted'] is None
+        assert result['file_hash'] is None
+        assert len(calls) == 1
+
     def test_read_timeout_marks_file_and_continues(self, tmp_path, monkeypatch):
         f = tmp_path / 'poison.mkv'
         f.write_bytes(b'x' * 1024)

@@ -430,6 +430,11 @@ class StatsDashboard {
         this.updateStatCard('warning-files', stats.warning_files || 0);
         this.updateStatCard('bitrot-files', (stats.integrity && stats.integrity.bitrot_suspected) || 0);
         this.updateStatCard('pending-files', stats.pending_files);
+        this.updateStatCard('duplicate-files', stats.duplicate_files || 0);
+        const duplicateDetails = document.querySelector('#duplicate-details');
+        const duplicateGroups = stats.duplicate_groups || 0;
+        const extraFiles = stats.duplicate_extra_files || 0;
+        if (duplicateDetails) duplicateDetails.textContent = `${duplicateGroups} ${duplicateGroups === 1 ? 'group' : 'groups'}; ${extraFiles} extra ${extraFiles === 1 ? 'file' : 'files'}`;
         this.updateStatCard('scanning-files', stats.scanning_files);
         this.lastIntegrity = stats.integrity || null;
         this.renderIntegrityCoverage(stats.integrity);
@@ -1349,6 +1354,7 @@ class TableManager {
         this.sortField = 'scan_date';
         this.sortOrder = 'desc';
         this.filter = 'all';
+        this.duplicateMode = 'hash';
         this.searchQuery = '';
         this.pathFilter = '';
         this.selectedFiles = new Set();
@@ -1423,10 +1429,29 @@ class TableManager {
                 this.updateSelectionUI();
                 
                 this.filter = e.target.dataset.filter;
+                const duplicateControls = document.querySelector('#duplicate-controls');
+                if (duplicateControls) duplicateControls.hidden = this.filter !== 'duplicates';
                 this.currentPage = 1;
                 this.loadData();
             });
         });
+
+        const duplicateMode = document.querySelector('#duplicate-mode');
+        if (duplicateMode) {
+            duplicateMode.addEventListener('change', (event) => {
+                this.duplicateMode = event.target.value;
+                const help = document.querySelector('#duplicate-help');
+                if (help) help.textContent = this.duplicateMode === 'name'
+                    ? 'Matching filenames are candidates only; their contents may differ. Groups span all inventory paths.'
+                    : 'Matches use recorded hash baselines. Files without hashes are excluded; changes since hashing are not verified.';
+                this.selectedFiles.clear();
+                const selectAll = document.querySelector('#select-all');
+                if (selectAll) selectAll.checked = false;
+                this.updateSelectionUI();
+                this.currentPage = 1;
+                this.loadData();
+            });
+        }
 
         // Path filter
         const pathFilter = document.querySelector('#path-filter');
@@ -1503,6 +1528,9 @@ class TableManager {
             // Map frontend filter values to backend parameters
             if (this.filter) {
                 switch (this.filter) {
+                    case 'duplicates':
+                        params.duplicate_mode = this.duplicateMode;
+                        break;
                     case 'corrupted':
                         params.is_corrupted = 'true';
                         break;
@@ -1598,6 +1626,7 @@ class TableManager {
         details.className = 'file-details';
         this.appendFileDetails(details, file);
         card.append(status, path, info, details, this.createFileActions(file, false), this.createFileCheckbox(file));
+        if (file.duplicate_group_size > 1) path.appendChild(this.createDuplicateLabel(file));
         return card;
     }
 
@@ -1614,10 +1643,18 @@ class TableManager {
             else { cell.textContent = value; if (index === 2 || index === 6) { cell.title = value; cell.className = index === 2 ? 'file-path-cell' : 'text-truncate'; } }
             row.appendChild(cell);
         });
+        if (file.duplicate_group_size > 1) row.children[2].appendChild(this.createDuplicateLabel(file));
         const actions = document.createElement('td');
         actions.appendChild(this.createFileActions(file, true));
         row.appendChild(actions);
         return row;
+    }
+
+    createDuplicateLabel(file) {
+        const label = document.createElement('span');
+        label.className = 'duplicate-label';
+        label.textContent = `${file.duplicate_group_size} files: ${file.duplicate_mode === 'name' ? 'same filename candidates' : 'same recorded content'}`;
+        return label;
     }
 
     createFileCheckbox(file) {

@@ -346,6 +346,24 @@ body {
 }
 
 /* Stats grid */
+#duplicate-controls {
+    margin-bottom: 1rem;
+}
+
+#duplicate-mode {
+    width: 100%;
+    max-width: 22rem;
+    margin: 0.5rem 0;
+}
+
+.duplicate-label {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    white-space: normal;
+    margin-top: 0.35rem;
+}
+
 .stats-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));

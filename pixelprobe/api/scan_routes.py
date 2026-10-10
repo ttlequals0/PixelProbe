@@ -19,6 +19,7 @@ from pixelprobe.utils.security import (
 from pixelprobe.utils.helpers import get_configured_scan_paths
 from pixelprobe.utils.paths import like_prefix
 from pixelprobe.api.scan_launch import launch_directory_scan
+from pixelprobe.services.duplicate_service import duplicate_members
 # Remove direct limiter imports as we'll use decorators
 
 logger = logging.getLogger(__name__)
@@ -186,9 +187,15 @@ def get_scan_results():
     sort_field = request.args.get('sort_field', 'scan_date')
     sort_order = request.args.get('sort_order', 'desc')
     path_filter = request.args.get('path', '').strip()
+    duplicate_mode = request.args.get('duplicate_mode', 'all')
+    if duplicate_mode not in ('all', 'hash', 'name'):
+        return {'error': 'duplicate_mode must be all, hash, or name'}, 400
 
     # Build query
     query = ScanResult.query
+    if duplicate_mode != 'all':
+        members = duplicate_members(duplicate_mode)
+        query = query.join(members, ScanResult.id == members.c.file_id).add_columns(members.c.group_size)
 
     # Apply path filter -- validate against configured paths to prevent probing
     if path_filter:
@@ -205,11 +212,11 @@ def get_scan_results():
     
     # Apply status filter
     if scan_status != 'all':
-        query = query.filter_by(scan_status=scan_status)
+        query = query.filter(ScanResult.scan_status == scan_status)
     
     # Apply corruption filter
     if is_corrupted == 'true':
-        query = query.filter_by(is_corrupted=True).filter_by(marked_as_good=False)
+        query = query.filter(ScanResult.is_corrupted.is_(True), ScanResult.marked_as_good.is_(False))
     elif is_corrupted == 'false':
         query = query.filter(
             (ScanResult.is_corrupted == False) | 
@@ -261,6 +268,7 @@ def get_scan_results():
     else:
         # Default sorting
         query = query.order_by(ScanResult.scan_date.desc())
+    query = query.order_by(ScanResult.id.asc())
     
     # Paginate - handle -1 as "show all"
     if per_page == -1:
@@ -278,8 +286,12 @@ def get_scan_results():
     
     # Build response
     results = []
-    for result in pagination.items:
+    for item in pagination.items:
+        result, group_size = item if duplicate_mode != 'all' else (item, None)
         result_dict = result.to_dict()
+        if duplicate_mode != 'all':
+            result_dict['duplicate_mode'] = duplicate_mode
+            result_dict['duplicate_group_size'] = group_size
         
         # Convert timestamps to configured timezone for display
         if result.scan_date:

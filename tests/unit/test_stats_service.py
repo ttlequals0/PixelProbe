@@ -15,9 +15,22 @@ class TestStatsService:
     def stats_service(self):
         """Create a stats service instance"""
         return StatsService()
+
+    @pytest.fixture
+    def duplicate_stats(self):
+        counts = {
+            'duplicate_files': 6,
+            'duplicate_groups': 2,
+            'duplicate_extra_files': 4,
+            'filename_duplicate_files': 9,
+            'filename_duplicate_groups': 3,
+            'filename_duplicate_extra_files': 6,
+        }
+        with patch('pixelprobe.services.stats_service.duplicate_statistics', return_value=counts) as mocked:
+            yield counts, mocked
     
     @patch('pixelprobe.services.stats_service.db')
-    def test_get_file_statistics_success(self, mock_db, stats_service):
+    def test_get_file_statistics_success(self, mock_db, stats_service, duplicate_stats):
         """Test successful file statistics retrieval"""
         # Mock database result
         mock_result = MagicMock()
@@ -36,10 +49,13 @@ class TestStatsService:
         assert stats['healthy_files'] == 85
         assert stats['marked_as_good'] == 3
         assert stats['warning_files'] == 2
+        counts, mocked = duplicate_stats
+        assert {key: stats[key] for key in counts} == counts
+        mocked.assert_called_once_with()
     
     @patch('pixelprobe.services.stats_service.db')
     @patch('pixelprobe.services.stats_service.ScanResult')
-    def test_get_file_statistics_fallback(self, mock_scan_result, mock_db, stats_service):
+    def test_get_file_statistics_fallback(self, mock_scan_result, mock_db, stats_service, duplicate_stats):
         """Test fallback when optimized query fails"""
         # Make optimized query fail
         mock_db.session.execute.side_effect = Exception("DB Error")
@@ -53,6 +69,9 @@ class TestStatsService:
         
         assert stats['total_files'] == 100
         assert stats['completed_files'] == 80
+        counts, mocked = duplicate_stats
+        assert {key: stats[key] for key in counts} == counts
+        mocked.assert_called_once_with()
     
     @patch('pixelprobe.services.stats_service.db')
     def test_get_system_info(self, mock_db, stats_service):
