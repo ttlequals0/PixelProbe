@@ -110,6 +110,68 @@ class ThemeManager {
     }
 }
 
+function initializeMobileScrollLock() {
+    const body = document.body;
+    const properties = ['overflow', 'overflow-x', 'overflow-y', 'position', 'top', 'left', 'right', 'width'];
+    let previousBodyStyle = null;
+
+    const sync = () => {
+        const sidebarOpen = Boolean(document.querySelector('.sidebar.active'));
+        const modalOpen = Array.from(document.querySelectorAll('.modal')).some(
+            modal => getComputedStyle(modal).display !== 'none');
+        const shouldLock = window.innerWidth <= 768 && (sidebarOpen || modalOpen);
+
+        if (shouldLock && !previousBodyStyle) {
+            previousBodyStyle = {
+                scrollY: window.scrollY,
+                values: Object.fromEntries(properties.map(property => [
+                    property,
+                    [body.style.getPropertyValue(property), body.style.getPropertyPriority(property)],
+                ])),
+            };
+            body.style.position = 'fixed';
+            body.style.top = `-${previousBodyStyle.scrollY}px`;
+            body.style.left = '0';
+            body.style.right = '0';
+            body.style.width = 'auto';
+            body.style.overflow = 'hidden';
+        } else if (!shouldLock && previousBodyStyle) {
+            const { scrollY, values } = previousBodyStyle;
+            previousBodyStyle = null;
+            properties.forEach(property => {
+                const [value, priority] = values[property];
+                if (value) body.style.setProperty(property, value, priority);
+                else body.style.removeProperty(property);
+            });
+            window.scrollTo(0, scrollY);
+        }
+    };
+
+    const attributeObserver = new MutationObserver(sync);
+    const observeOverlays = () => {
+        attributeObserver.disconnect();
+        document.querySelectorAll('.modal, .sidebar').forEach(overlay => {
+            attributeObserver.observe(overlay, {
+                attributes: true,
+                attributeFilter: ['class', 'style'],
+            });
+        });
+    };
+    const childObserver = new MutationObserver(records => {
+        const changed = records.some(record =>
+            [...record.addedNodes, ...record.removedNodes].some(node =>
+                node.nodeType === Node.ELEMENT_NODE && node.matches('.modal, .sidebar')));
+        if (changed) {
+            observeOverlays();
+            sync();
+        }
+    });
+    observeOverlays();
+    childObserver.observe(body, { childList: true });
+    window.addEventListener('resize', sync);
+    sync();
+}
+
 // Sidebar Management
 class SidebarManager {
     constructor() {
@@ -165,13 +227,11 @@ class SidebarManager {
     toggleMobile() {
         this.sidebar?.classList.toggle('active');
         this.overlay?.classList.toggle('active');
-        document.body.style.overflow = this.sidebar?.classList.contains('active') ? 'hidden' : '';
     }
 
     closeMobile() {
         this.sidebar?.classList.remove('active');
         this.overlay?.classList.remove('active');
-        document.body.style.overflow = '';
     }
     
     toggleDesktop() {
@@ -5475,6 +5535,7 @@ function bindTemplateActions() {
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
+    initializeMobileScrollLock();
     window.app = new PixelProbeApp();
     window.app.init();
     bindTemplateActions();

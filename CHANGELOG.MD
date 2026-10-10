@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.4] - 2026-10-10
+
+### Fixed
+
+- Mobile dialogs and the sidebar fit the visible browser height and keep background scrolling locked until the last overlay closes.
+
 ## [2.10.3] - 2026-10-10
 
 ### Changed
