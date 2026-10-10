@@ -19,7 +19,7 @@ from pixelprobe.utils.security import (
 from pixelprobe.utils.helpers import get_configured_scan_paths
 from pixelprobe.utils.paths import like_prefix
 from pixelprobe.api.scan_launch import launch_directory_scan
-from pixelprobe.services.duplicate_service import duplicate_members
+from pixelprobe.services.duplicate_service import duplicate_index_status, duplicate_members
 # Remove direct limiter imports as we'll use decorators
 
 logger = logging.getLogger(__name__)
@@ -191,6 +191,14 @@ def get_scan_results():
     if duplicate_mode not in ('all', 'hash', 'name'):
         return {'error': 'duplicate_mode must be all, hash, or name'}, 400
 
+    duplicate_status = None
+    if duplicate_mode != 'all':
+        duplicate_status = duplicate_index_status()
+        if not duplicate_status['ready']:
+            return ({'error': 'Duplicate index is initializing',
+                     'duplicate_status': duplicate_status},
+                    503, {'Retry-After': '30'})
+
     # Build query
     query = ScanResult.query
     if duplicate_mode != 'all':
@@ -204,7 +212,13 @@ def get_scan_results():
             query = query.filter(ScanResult.file_path.like(like_prefix(path_filter), escape='\\'))
         else:
             # Invalid path -- return empty results
-            return {'results': [], 'total': 0, 'page': page, 'per_page': per_page, 'pages': 0}
+            empty_response = {
+                'results': [], 'total': 0, 'page': page,
+                'per_page': per_page, 'pages': 0,
+            }
+            if duplicate_status is not None:
+                empty_response['duplicate_status'] = duplicate_status
+            return empty_response
     
     # Apply search filter
     if search_query:
@@ -315,13 +329,16 @@ def get_scan_results():
         
         results.append(result_dict)
     
-    return {
+    response = {
         'results': results,
         'total': pagination.total,
         'page': page,
         'per_page': per_page,
         'pages': pagination.pages
     }
+    if duplicate_status is not None:
+        response['duplicate_status'] = duplicate_status
+    return response
 
 @scan_bp.route('/scan-results/<int:result_id>')
 @auth_required

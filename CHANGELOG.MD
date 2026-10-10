@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [Unreleased]
+
+## [2.10.1] - 2026-10-10
+
+### Changed
+
+- Duplicate lists and statistics use persisted summaries. Until initialization completes, `/api/stats` returns null duplicate counts and duplicate-mode lists return HTTP 503 with `Retry-After: 30`. The API serves stale summaries with a status flag. Refresh targets 60 seconds under normal operation. Backlogs or outages can delay refresh; the stale flag reports delays over 60 seconds or failures.
+- Resizing across the mobile breakpoint redraws accepted results without another request. Stats loading no longer blocks table results, filters, or operation detection.
+
 ## [2.10.0] - 2026-10-10
 
 ### Added

@@ -245,6 +245,23 @@ Notes:
 - Items also carry warning, bitrot, and integrity fields: `has_warnings`, `warning_details`, `bitrot_suspected`, `last_integrity_check_date`, and related hash/baseline columns.
 - Duplicate filtering adds `duplicate_mode` and `duplicate_group_size` to each result. Groups span the inventory before path, search, and status filters apply. Only files recorded as existing are eligible. Content matching requires equal recorded hashes and sizes; suspected bitrot and failed or unreadable observations are excluded. Filename matching compares exact case-sensitive basenames. Matches use recorded baselines without verifying current contents; filename candidates may contain different content.
 
+Duplicate-mode responses include `duplicate_status` with `ready`, `updated_at`, and `stale`. `updated_at` records the UTC time of the last completed summary refresh. `ready: false` means no completed summary is available. `stale` is independent of `ready`. It becomes true after a refresh failure or when queued inventory changes have waited over 60 seconds. A stale summary is served, and its groups may differ from current eligible membership until refresh completes.
+
+While the summary is initializing, a request with `duplicate_mode=hash` or `duplicate_mode=name` returns HTTP 503 and `Retry-After: 30`:
+
+```json
+{
+  "error": "Duplicate index is initializing",
+  "duplicate_status": {
+    "ready": false,
+    "updated_at": null,
+    "stale": false
+  }
+}
+```
+
+The refresh target is 60 seconds under normal operation. A backlog or database or worker outage can delay refreshes; `stale` reports when changes have waited over 60 seconds or refresh has failed. Requests without a duplicate mode remain available while the summary initializes.
+
 #### Get single scan result
 ```http
 GET /api/scan-results/{result_id}
@@ -457,6 +474,8 @@ Duplicate statistics use the same inventory groups as `duplicate_mode` filtering
 
 Counts include only files recorded as existing. Content counts exclude absent hashes or sizes, suspected bitrot, and failed or unreadable observations. Filename counts do not prove matching contents. No fresh filesystem verification runs for these queries.
 
+The six duplicate count fields are numbers when a summary is ready and `null` while it initializes. `duplicate_status` reports readiness, the UTC refresh time, and whether refresh has failed or inventory changes have waited over 60 seconds. `stale` can be false while `ready` is false if the first refresh is still within that interval. A stale summary remains available, but its group counts may differ from current eligible membership until refresh completes. The refresh target is 60 seconds under normal operation. Backlog or an outage can delay it, with delayed or failed refresh reported by `stale`. The statistics endpoint remains available during initialization.
+
 **Response:**
 ```json
 {
@@ -469,6 +488,17 @@ Counts include only files recorded as existing. Content counts exclude absent ha
   "healthy_files": 940,
   "marked_as_good": 3,
   "warning_files": 7,
+  "duplicate_files": null,
+  "duplicate_groups": null,
+  "duplicate_extra_files": null,
+  "filename_duplicate_files": null,
+  "filename_duplicate_groups": null,
+  "filename_duplicate_extra_files": null,
+  "duplicate_status": {
+    "ready": false,
+    "updated_at": null,
+    "stale": false
+  },
   "integrity": {
     "total_files": 1000,
     "checked_files": 800,

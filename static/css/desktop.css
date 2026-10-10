@@ -409,6 +409,14 @@ body {
     color: var(--warning-color, #b7791f);
 }
 
+#duplicate-index-status {
+    margin-bottom: 0.75rem;
+}
+
+#duplicate-index-status.is-stale {
+    color: var(--warning-color, #b7791f);
+}
+
 .integrity-details-toggle {
     display: inline-flex;
     align-items: center;

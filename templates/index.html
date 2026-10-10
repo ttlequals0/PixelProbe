@@ -205,9 +205,9 @@
                         <div class="stat-label">Pending Files</div>
                     </div>
                     <div class="stat-card" role="group" aria-label="Duplicate files by recorded content hash">
-                        <div class="stat-value" id="duplicate-files" aria-live="polite">0</div>
+                        <div class="stat-value" id="duplicate-files" aria-live="polite">Preparing...</div>
                         <div class="stat-label">Duplicate Files</div>
-                        <div class="stat-detail" id="duplicate-details" aria-live="polite"></div>
+                        <div class="stat-detail" id="duplicate-details" aria-live="polite">Preparing duplicate counts.</div>
                         <div class="stat-detail">All files in matching recorded SHA-256 groups.</div>
                     </div>
                     <div class="stat-card" role="group" aria-label="Integrity coverage">
@@ -275,6 +275,7 @@
                             </select>
                             <p id="duplicate-help" class="text-muted" aria-live="polite">Matches use recorded hash baselines. Files without hashes are excluded; changes since hashing are not verified.</p>
                         </div>
+                        <div id="duplicate-index-status" class="text-muted" role="status" aria-live="polite" hidden></div>
                         <!-- Selection Actions -->
                         <div class="d-flex justify-content-between align-items-center mb-3">
                             <div class="d-flex gap-2 align-items-center">

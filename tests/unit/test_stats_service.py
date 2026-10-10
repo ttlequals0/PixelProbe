@@ -26,8 +26,12 @@ class TestStatsService:
             'filename_duplicate_groups': 3,
             'filename_duplicate_extra_files': 6,
         }
-        with patch('pixelprobe.services.stats_service.duplicate_statistics', return_value=counts) as mocked:
-            yield counts, mocked
+        status = {'ready': True, 'updated_at': None, 'stale': False}
+        with patch('pixelprobe.services.stats_service.duplicate_index_status',
+                   return_value=status), \
+             patch('pixelprobe.services.stats_service.duplicate_statistics',
+                   return_value=counts) as mocked:
+            yield counts, status, mocked
     
     @patch('pixelprobe.services.stats_service.db')
     def test_get_file_statistics_success(self, mock_db, stats_service, duplicate_stats):
@@ -49,9 +53,10 @@ class TestStatsService:
         assert stats['healthy_files'] == 85
         assert stats['marked_as_good'] == 3
         assert stats['warning_files'] == 2
-        counts, mocked = duplicate_stats
+        counts, status, mocked = duplicate_stats
         assert {key: stats[key] for key in counts} == counts
-        mocked.assert_called_once_with()
+        assert stats['duplicate_status'] == status
+        mocked.assert_called_once_with(status)
     
     @patch('pixelprobe.services.stats_service.db')
     @patch('pixelprobe.services.stats_service.ScanResult')
@@ -69,9 +74,10 @@ class TestStatsService:
         
         assert stats['total_files'] == 100
         assert stats['completed_files'] == 80
-        counts, mocked = duplicate_stats
+        counts, status, mocked = duplicate_stats
         assert {key: stats[key] for key in counts} == counts
-        mocked.assert_called_once_with()
+        assert stats['duplicate_status'] == status
+        mocked.assert_called_once_with(status)
     
     @patch('pixelprobe.services.stats_service.db')
     def test_get_system_info(self, mock_db, stats_service):

@@ -237,6 +237,11 @@ class TestScheduleDbSync:
         # the sync job must never match that prefix or it would delete itself
         assert not job.id.startswith('schedule_')
 
+    def test_duplicate_refresh_uses_its_own_single_thread_executor(self, scheduler):
+        job = scheduler.scheduler.get_job('duplicate_index_refresh')
+        assert job is not None
+        assert job.executor == 'duplicate_index'
+
     def test_sync_reloads_when_definitions_change(self, scheduler, app, db):
         with app.app_context():
             schedule = ScanSchedule(name='Sync Test', cron_expression='0 2 * * *',

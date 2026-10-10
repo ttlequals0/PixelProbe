@@ -1,12 +1,18 @@
 import os
 from uuid import uuid4
+from datetime import datetime, timezone
 
 import pytest
 from flask import Flask
 from sqlalchemy import create_engine, text
 
-from pixelprobe.models import db as model_db, ScanResult
-from pixelprobe.services.duplicate_service import duplicate_members, duplicate_statistics
+from pixelprobe.models import (db as model_db, DuplicateGroupSummary,
+                               DuplicateIndexState, ScanResult)
+from pixelprobe.services.duplicate_service import (_duplicate_groups,
+                                                   duplicate_index_status,
+                                                   duplicate_members,
+                                                   duplicate_statistics,
+                                                   refresh_duplicate_index)
 from pixelprobe.services.stats_service import StatsService
 
 
@@ -31,8 +37,26 @@ def seed_duplicates(session):
     return rows
 
 
-def assert_grouping(session):
+def prime_sqlite_cache(session):
+    for mode in ('hash', 'name'):
+        groups, _ = _duplicate_groups(mode)
+        for row in session.query(groups).all():
+            session.add(DuplicateGroupSummary(
+                mode=mode,
+                key_text=row.key_0,
+                key_size=row.key_1 if mode == 'hash' else -1,
+                group_size=row.group_size,
+                group_id=row.group_id,
+            ))
+    session.add(DuplicateIndexState(id=1, ready=True,
+                                    updated_at=datetime.now(timezone.utc)))
+    session.commit()
+
+
+def assert_grouping(session, prime=True):
     seed_duplicates(session)
+    if prime:
+        prime_sqlite_cache(session)
     stats = duplicate_statistics()
     assert stats == {
         'duplicate_files': 3, 'duplicate_groups': 1, 'duplicate_extra_files': 2,
@@ -50,8 +74,25 @@ def test_duplicate_eligibility_and_count_semantics(db):
     assert StatsService().get_file_statistics()['duplicate_files'] == 3
 
 
+def test_duplicate_api_waits_for_cache_before_serving_duplicate_results(
+        db, authenticated_client):
+    status = duplicate_index_status()
+    assert status == {'ready': False, 'updated_at': None, 'stale': False}
+    response = authenticated_client.get('/api/scan-results?duplicate_mode=hash')
+    assert response.status_code == 503
+    assert response.headers['Retry-After'] == '30'
+    assert response.get_json() == {
+        'error': 'Duplicate index is initializing',
+        'duplicate_status': status,
+    }
+    stats = authenticated_client.get('/api/stats').get_json()
+    assert stats['duplicate_files'] is None
+    assert stats['duplicate_status']['ready'] is False
+
+
 def test_duplicate_api_global_groups_pagination_and_stats(db, authenticated_client, monkeypatch):
     seed_duplicates(db.session)
+    prime_sqlite_cache(db.session)
     monkeypatch.setattr('pixelprobe.api.scan_routes.get_configured_scan_paths', lambda: ['/media'])
     response = authenticated_client.get('/api/scan-results?duplicate_mode=hash&path=/media&per_page=1&sort_field=file_path&sort_order=asc')
     assert response.status_code == 200
@@ -89,7 +130,24 @@ def test_postgres_duplicate_basename_and_grouping():
     try:
         with app.app_context():
             model_db.create_all()
-            assert_grouping(model_db.session)
+            from pixelprobe.migrations.duplicates import run_duplicate_index_migrations
+            run_duplicate_index_migrations(model_db)
+            seed_duplicates(model_db.session)
+            assert refresh_duplicate_index()
+            assert duplicate_index_status()['ready'] is True
+            assert refresh_duplicate_index()
+            assert duplicate_statistics()['duplicate_files'] == 3
+            stats = duplicate_statistics()
+            assert stats == {
+                'duplicate_files': 3, 'duplicate_groups': 1,
+                'duplicate_extra_files': 2,
+                'filename_duplicate_files': 3, 'filename_duplicate_groups': 1,
+                'filename_duplicate_extra_files': 2,
+            }
+            for mode in ('hash', 'name'):
+                members = duplicate_members(mode)
+                assert model_db.session.query(members).count() == 3
+                assert {row.group_size for row in model_db.session.query(members)} == {3}
             model_db.session.remove()
             model_db.engine.dispose()
     finally:

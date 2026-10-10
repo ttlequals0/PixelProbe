@@ -175,6 +175,21 @@ components:
         type: integer
 
   schemas:
+    DuplicateStatus:
+      type: object
+      required: [ready, updated_at, stale]
+      properties:
+        ready:
+          type: boolean
+          description: Whether a completed duplicate summary is available.
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: UTC time of the last completed summary refresh, or null before the first refresh.
+        stale:
+          type: boolean
+          description: True when refresh has failed or inventory changes have waited over 60 seconds for processing. This is independent of ready.
     NotificationProviderInput:
       type: object
       required: [name, provider_type, configuration]
@@ -873,7 +888,52 @@ paths:
             type: string
       responses:
         '200':
-          description: Scan results retrieved successfully
+          description: Scan results retrieved successfully. Duplicate-mode responses include duplicate_status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        duplicate_mode:
+                          type: string
+                          enum: [hash, name]
+                        duplicate_group_size:
+                          type: integer
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  per_page:
+                    type: integer
+                  pages:
+                    type: integer
+                  duplicate_status:
+                    $ref: '#/components/schemas/DuplicateStatus'
+                additionalProperties: true
+        '503':
+          description: Duplicate summary is initializing. Returned only when duplicate_mode is hash or name and no completed summary is ready.
+          headers:
+            Retry-After:
+              description: Seconds before retrying.
+              schema:
+                type: string
+              example: '30'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, duplicate_status]
+                properties:
+                  error:
+                    type: string
+                    example: Duplicate index is initializing
+                  duplicate_status:
+                    $ref: '#/components/schemas/DuplicateStatus'
 
   /scan-results/{result_id}:
     get:
@@ -1493,6 +1553,32 @@ paths:
       responses:
         '200':
           description: Statistics retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  duplicate_files:
+                    type: integer
+                    nullable: true
+                  duplicate_groups:
+                    type: integer
+                    nullable: true
+                  duplicate_extra_files:
+                    type: integer
+                    nullable: true
+                  filename_duplicate_files:
+                    type: integer
+                    nullable: true
+                  filename_duplicate_groups:
+                    type: integer
+                    nullable: true
+                  filename_duplicate_extra_files:
+                    type: integer
+                    nullable: true
+                  duplicate_status:
+                    $ref: '#/components/schemas/DuplicateStatus'
+                additionalProperties: true
 
   /stats/trends:
     get:

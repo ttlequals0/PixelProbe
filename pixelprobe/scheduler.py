@@ -65,7 +65,9 @@ class MediaScheduler:
     PROGRESS_STALE_AFTER = timedelta(minutes=30)
 
     def __init__(self, app=None):
-        self.scheduler = BackgroundScheduler()
+        self.scheduler = BackgroundScheduler(
+            executors={'duplicate_index': {'type': 'threadpool', 'max_workers': 1}}
+        )
         self.app = app
         self._shutdown = False
         self.scan_lock = threading.Lock()
@@ -377,6 +379,19 @@ class MediaScheduler:
             coalesce=True
         )
         logger.info("Scheduled database schedule sync every 60 seconds")
+
+        self.scheduler.add_job(
+            func=self._refresh_duplicate_index,
+            trigger="interval",
+            seconds=30,
+            id="duplicate_index_refresh",
+            name="Refresh duplicate group summaries",
+            misfire_grace_time=30,
+            coalesce=True,
+            max_instances=1,
+            executor='duplicate_index',
+        )
+        logger.info("Scheduled duplicate index refresh every 30 seconds")
 
         # Load saved schedules from database
         with app.app_context():
@@ -1189,6 +1204,16 @@ class MediaScheduler:
             logger.info("Enqueued daily data retention cleanup task")
         except Exception as e:
             logger.error(f"Failed to enqueue data retention cleanup: {e}")
+
+    def _refresh_duplicate_index(self):
+        if not self._can_dispatch():
+            return
+        try:
+            with self.app.app_context():
+                from pixelprobe.services.duplicate_service import refresh_duplicate_index
+                refresh_duplicate_index(can_dispatch=self._can_dispatch)
+        except Exception as e:
+            logger.error(f"Failed to refresh duplicate index: {e}", exc_info=True)
 
     def shutdown(self):
         """Stop lease renewal and scheduler executors without waiting on jobs."""

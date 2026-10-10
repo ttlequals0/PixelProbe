@@ -188,6 +188,50 @@ class ScanResult(db.Model):
     def __repr__(self):
         return f'<ScanResult {self.file_path}>'
 
+
+class DuplicateGroupSummary(db.Model):
+    __tablename__ = 'duplicate_group_summaries'
+
+    mode = db.Column(db.String(8), primary_key=True)
+    key_text = db.Column(db.String(500), primary_key=True)
+    key_size = db.Column(db.BigInteger, primary_key=True, default=-1, server_default='-1')
+    group_size = db.Column(db.Integer, nullable=False)
+    group_id = db.Column(db.Integer, nullable=False)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.CheckConstraint("mode IN ('hash', 'name')", name='ck_duplicate_summary_mode'),
+        db.CheckConstraint('group_size > 1', name='ck_duplicate_summary_size'),
+    )
+
+
+class DuplicateDirtyKey(db.Model):
+    __tablename__ = 'duplicate_dirty_keys'
+
+    mode = db.Column(db.String(8), primary_key=True)
+    key_text = db.Column(db.String(500), primary_key=True)
+    key_size = db.Column(db.BigInteger, primary_key=True, default=-1, server_default='-1')
+    enqueued_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.CheckConstraint("mode IN ('hash', 'name')", name='ck_duplicate_dirty_mode'),
+        db.Index('idx_duplicate_dirty_enqueued_at', 'enqueued_at', 'mode', 'key_text', 'key_size'),
+    )
+
+
+class DuplicateIndexState(db.Model):
+    __tablename__ = 'duplicate_index_state'
+
+    id = db.Column(db.Integer, primary_key=True)
+    ready = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    refresh_failed = db.Column(db.Boolean, nullable=False, default=False,
+                               server_default='false')
+
+    __table_args__ = (db.CheckConstraint('id = 1', name='ck_duplicate_state_singleton'),)
+
 class IgnoredErrorPattern(db.Model):
     __tablename__ = 'ignored_error_patterns'
     
