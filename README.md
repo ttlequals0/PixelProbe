@@ -23,6 +23,7 @@ Detection
 - FFmpeg validation for video and audio, plus PIL and ImageMagick decoding for images
 - Warning and corruption verdicts kept separate
 - Rolling hashes that flag content changes without a matching modification-time change
+- Duplicate file counts and filters for recorded SHA-256 matches or same-filename candidates. Filename matches may have different content; hashes do not verify changes since the recorded baseline.
 - Exclusions and per-finding mark-as-good overrides
 
 Scanning and recovery

@@ -804,6 +804,10 @@ def _run_all_migrations(db, connection):
     logger.info("Running v2.9.5 file_type repair...")
     run_v2_9_5_migrations(db)
 
+    from pixelprobe.migrations.duplicates import run_duplicate_index_migrations
+    logger.info("Creating duplicate index state and invalidation triggers...")
+    run_duplicate_index_migrations(db)
+
     logger.info("Creating performance indexes...")
     create_performance_indexes(db)
     logger.info("Performance indexes created successfully")

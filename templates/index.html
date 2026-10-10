@@ -178,7 +178,7 @@
                 
                 <!-- Stats Grid -->
                 <!-- Card order mirrors the filter buttons below: total/all,
-                     corrupted, warnings, bitrot, healthy, pending -->
+                     corrupted, warnings, bitrot, healthy, pending, duplicates -->
                 <div class="stats-grid" role="region" aria-label="File statistics summary">
                     <div class="stat-card" role="group" aria-label="Total files">
                         <div class="stat-value" id="total-files" aria-live="polite">0</div>
@@ -203,6 +203,20 @@
                     <div class="stat-card">
                         <div class="stat-value" id="pending-files">0</div>
                         <div class="stat-label">Pending Files</div>
+                    </div>
+                    <div class="stat-card" role="group" aria-label="Duplicate files by recorded content hash">
+                        <div class="stat-value" id="duplicate-files" aria-live="polite">Preparing...</div>
+                        <div class="stat-label">Duplicate Files</div>
+                        <button class="duplicate-details-toggle" id="duplicate-details-toggle" type="button"
+                                aria-expanded="false" aria-controls="duplicate-detail-panel">
+                            <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                            <i class="fas fa-exclamation-circle duplicate-refresh-warning" aria-hidden="true" hidden></i>
+                            <span>Details</span>
+                        </button>
+                        <div id="duplicate-detail-panel" hidden>
+                            <div class="stat-detail" id="duplicate-details" aria-live="polite">Preparing duplicate counts.</div>
+                            <div class="stat-detail">All files in matching recorded SHA-256 groups.</div>
+                        </div>
                     </div>
                     <div class="stat-card" role="group" aria-label="Integrity coverage">
                         <div class="stat-value" id="integrity-checked" aria-live="polite">-</div>
@@ -244,6 +258,9 @@
                                     <button class="btn btn-secondary" data-filter="pending">
                                         Pending Only
                                     </button>
+                                    <button class="btn btn-secondary" data-filter="duplicates">
+                                        Duplicates
+                                    </button>
                                 </div>
                             </div>
                             <div class="form-group mb-0">
@@ -258,6 +275,15 @@
                         </div>
                     </div>
                     <div class="card-body">
+                        <div id="duplicate-controls" hidden>
+                            <label for="duplicate-mode">Match by</label>
+                            <select id="duplicate-mode" class="form-control" aria-describedby="duplicate-help">
+                                <option value="hash">Same content (SHA-256)</option>
+                                <option value="name">Same filename (candidates)</option>
+                            </select>
+                            <p id="duplicate-help" class="text-muted" aria-live="polite">Matches use recorded hash baselines. Files without hashes are excluded; changes since hashing are not verified.</p>
+                        </div>
+                        <div id="duplicate-index-status" class="text-muted" role="status" aria-live="polite" hidden></div>
                         <!-- Selection Actions -->
                         <div class="d-flex justify-content-between align-items-center mb-3">
                             <div class="d-flex gap-2 align-items-center">

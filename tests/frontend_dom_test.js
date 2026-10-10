@@ -8,7 +8,7 @@ window.fetch = async () => ({ ok: true, json: async () => ({}) });
 window.Chart = function () {};
 let source = fs.readFileSync('static/js/app.js', 'utf8');
 source = source.replace('document.addEventListener(\'DOMContentLoaded\'', '/* test suppresses bootstrap */ document.addEventListener(\'testDOMContentLoaded\'');
-source += '\nwindow.__TableManager = TableManager; window.__PixelProbeApp = PixelProbeApp; window.__StatsDashboard = StatsDashboard; window.__ProgressManager = ProgressManager;';
+source += '\nwindow.__TableManager = TableManager; window.__PixelProbeApp = PixelProbeApp; window.__StatsDashboard = StatsDashboard; window.__ProgressManager = ProgressManager; window.__APIClient = APIClient;';
 window.eval(source);
 
 const table = new window.__TableManager({ getScanResults: async () => ({}) });
@@ -37,6 +37,239 @@ const statusCases = [
   [{ scan_status: 'completed', has_warnings: true }, 'warning', 'Warning'],
   [{ scan_status: 'completed', is_corrupted: true }, 'danger', 'Corrupted']
 ];
+for (const mode of ['hash', 'name']) {
+  const file = { id: 101, file_path: payload, scan_status: 'completed', duplicate_group_size: 3, duplicate_mode: mode };
+  const expected = `3 files: ${mode === 'name' ? 'same filename candidates' : 'same recorded content'}`;
+  assert.equal(table.renderRow(file).querySelector('.duplicate-label').textContent, expected);
+  assert.equal(table.renderMobileCard(file).querySelector('.duplicate-label').textContent, expected);
+  assert.equal(table.renderMobileCard(file).querySelector('img'), null);
+}
+assert.equal(row.querySelector('.duplicate-label'), null);
+
+const duplicateControls = window.document.createElement('div');
+duplicateControls.innerHTML = '<button data-filter="duplicates">Duplicates</button><button data-filter="all">All Files</button><div id="duplicate-controls" hidden><select id="duplicate-mode"><option value="hash">Content</option><option value="name">Filename</option></select><p id="duplicate-help"></p></div>';
+window.document.body.appendChild(duplicateControls);
+const requestedDuplicateModes = [];
+const duplicateTable = new window.__TableManager({ getScanResults: async params => {
+  requestedDuplicateModes.push(params.duplicate_mode);
+  return { results: [], total: 0 };
+} });
+duplicateTable.bindEvents();
+window.document.querySelector('[data-filter="duplicates"]').click();
+assert.equal(window.document.querySelector('#duplicate-controls').hidden, false);
+assert.equal(requestedDuplicateModes.at(-1), 'hash');
+const duplicateSelect = window.document.querySelector('#duplicate-mode');
+duplicateSelect.value = 'name';
+duplicateSelect.dispatchEvent(new window.Event('change'));
+assert.equal(requestedDuplicateModes.at(-1), 'name');
+assert.match(window.document.querySelector('#duplicate-help').textContent, /contents may differ/);
+window.document.querySelector('[data-filter="all"]').click();
+assert.equal(window.document.querySelector('#duplicate-controls').hidden, true);
+assert.equal(requestedDuplicateModes.at(-1), undefined);
+
+function makeTableWindow(width = 900) {
+  const tableDom = new JSDOM(`
+    <button data-filter="all">All Files</button><button data-filter="duplicates">Duplicates</button>
+    <div id="duplicate-controls"><select id="duplicate-mode"><option value="hash">Hash</option><option value="name">Name</option></select><p id="duplicate-help"></p></div>
+    <div id="duplicate-index-status" hidden></div>
+    <select id="items-per-page"><option value="50" selected>50</option><option value="all">All</option></select>
+    <select id="path-filter"><option value="">All Paths</option></select><input id="search-input">
+    <input type="checkbox" id="select-all"><span class="selection-info"></span>
+    <div><div class="table-container"><table><tbody id="results-tbody"></tbody></table></div></div>
+    <div class="pagination"></div>`, { runScripts: 'outside-only', url: 'http://localhost' });
+  const tableWindow = tableDom.window;
+  Object.defineProperty(tableWindow, 'innerWidth', { value: width, writable: true, configurable: true });
+  tableWindow.Chart = function () {};
+  tableWindow.app = { viewFile() {}, rescanFile() {}, orphanCheckFile() {}, changeCheckFile() {}, acceptBitrot() {}, viewScanOutput() {}, downloadFile() {}, markFileAsGood() {} };
+  let tableSource = fs.readFileSync('static/js/app.js', 'utf8');
+  tableSource = tableSource.replace('document.addEventListener(\'DOMContentLoaded\'', 'document.addEventListener(\'testDOMContentLoaded\'');
+  tableSource += '\nwindow.__TableManager = TableManager; window.__PixelProbeApp = PixelProbeApp; window.__APIClient = APIClient;';
+  tableWindow.eval(tableSource);
+  return tableWindow;
+}
+
+(async () => {
+  const tableWindow = makeTableWindow();
+  let calls = 0;
+  const table = new tableWindow.__TableManager({
+    getScanResults: async () => {
+      calls++;
+      return { results: [{ id: 1, file_path: '/media/one.mp4', scan_status: 'completed' }], total: 1 };
+    }
+  });
+  await table.init();
+  const row = tableWindow.document.querySelector('#results-tbody tr');
+  row.querySelector('.file-checkbox').click();
+  tableWindow.dispatchEvent(new tableWindow.Event('resize'));
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  assert.equal(tableWindow.document.querySelector('#results-tbody tr'), row);
+
+  tableWindow.innerWidth = 700;
+  tableWindow.dispatchEvent(new tableWindow.Event('resize'));
+  const mobileSelection = tableWindow.document.querySelector('.mobile-results .file-checkbox');
+  assert.ok(mobileSelection);
+  assert.equal(mobileSelection.checked, true);
+  tableWindow.innerWidth = 900;
+  tableWindow.dispatchEvent(new tableWindow.Event('resize'));
+  assert.equal(tableWindow.document.querySelector('#results-tbody .file-checkbox').checked, true);
+  assert.equal(calls, 1);
+  table.dispose();
+})();
+
+(async () => {
+  const tableWindow = makeTableWindow();
+  const pending = [];
+  const calls = [];
+  const table = new tableWindow.__TableManager({
+    getScanResults: params => {
+      calls.push(params.search || '');
+      return new Promise(resolve => pending.push({ search: params.search || '', resolve }));
+    }
+  });
+  table.searchQuery = 'A';
+  const firstA = table.loadData();
+  table.searchQuery = 'B';
+  const onlyB = table.loadData();
+  table.searchQuery = 'A';
+  const latestA = table.loadData();
+  assert.deepEqual(calls, ['A', 'B']);
+  pending.find(item => item.search === 'A').resolve({ results: [{ id: 3, file_path: 'A.mp4' }], total: 100 });
+  await Promise.all([firstA, latestA]);
+  assert.equal(tableWindow.document.querySelector('#results-tbody .file-path-cell').textContent, 'A.mp4');
+  const latestPagination = tableWindow.document.querySelector('.pagination').innerHTML;
+  pending.find(item => item.search === 'B').resolve({ results: [{ id: 2, file_path: 'B.mp4' }], total: 20 });
+  await onlyB;
+  assert.equal(tableWindow.document.querySelector('#results-tbody .file-path-cell').textContent, 'A.mp4');
+  assert.equal(tableWindow.document.querySelector('.pagination').innerHTML, latestPagination);
+
+  table.searchQuery = 'A';
+  const refreshedA = table.loadData();
+  assert.deepEqual(calls, ['A', 'B', 'A']);
+  pending[2].resolve({ results: [{ id: 4, file_path: 'A refreshed.mp4' }], total: 150 });
+  await refreshedA;
+  assert.equal(tableWindow.document.querySelector('#results-tbody .file-path-cell').textContent, 'A refreshed.mp4');
+  assert.match(tableWindow.document.querySelector('.pagination').textContent, /3/);
+  table.dispose();
+})();
+
+(async () => {
+  const tableWindow = makeTableWindow();
+  let timerCallback;
+  let nextTimerId = 0;
+  tableWindow.setTimeout = (callback, delay) => {
+    assert.equal(delay, 30000);
+    timerCallback = callback;
+    return ++nextTimerId;
+  };
+  tableWindow.clearTimeout = () => {};
+  let requests = 0;
+  const table = new tableWindow.__TableManager({
+    getScanResults: async () => {
+      requests++;
+      if (requests === 1) return { results: [{ id: 5, file_path: 'accepted.mp4' }], total: 1 };
+      if (requests === 2 || requests === 4) {
+        const error = new Error('initializing');
+        error.status = 503;
+        error.data = { duplicate_status: { ready: false, updated_at: null, stale: true } };
+        throw error;
+      }
+      return { results: [{ id: 6, file_path: 'ready.mp4', duplicate_group_size: 2, duplicate_mode: 'hash' }],
+        total: 2, duplicate_status: { ready: true, updated_at: '2026-10-10T12:00:00Z', stale: false } };
+    }
+  });
+  await table.init();
+  const oldRow = tableWindow.document.querySelector('#results-tbody tr');
+  table.filter = 'duplicates';
+  await table.loadData();
+  assert.equal(oldRow.isConnected, false);
+  assert.equal(tableWindow.document.querySelectorAll('.file-checkbox').length, 0);
+  assert.equal(tableWindow.document.querySelector('.table-container').style.display, 'none');
+  assert.equal(tableWindow.document.querySelector('.pagination').style.display, 'none');
+  assert.match(tableWindow.document.querySelector('#duplicate-index-status').textContent, /Preparing duplicate results/);
+  assert.equal(table.duplicateIndexNotReady, true);
+  tableWindow.document.querySelector('#select-all').click();
+  assert.deepEqual(Array.from(table.selectedFiles), []);
+  timerCallback();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests, 3);
+  assert.equal(tableWindow.document.querySelector('#results-tbody .file-path-cell').title, 'ready.mp4');
+  assert.equal(tableWindow.document.querySelector('#duplicate-index-status').hidden, true);
+
+  const acceptedDuplicateRow = tableWindow.document.querySelector('#results-tbody tr');
+  await table.loadData();
+  assert.equal(tableWindow.document.querySelector('#results-tbody tr'), acceptedDuplicateRow);
+  assert.equal(tableWindow.document.querySelector('.table-container').style.display, '');
+  assert.match(tableWindow.document.querySelector('#duplicate-index-status').textContent, /Preparing duplicate results/);
+
+  table.filter = 'duplicates';
+  let rejectOldDuplicate;
+  table.api.getScanResults = params => {
+    if (params.duplicate_mode) return new Promise((resolve, reject) => { rejectOldDuplicate = reject; });
+    return Promise.resolve({ results: [{ id: 7, file_path: 'normal.mp4' }], total: 1 });
+  };
+  const oldDuplicateRequest = table.loadData();
+  table.filter = 'all';
+  await table.loadData();
+  const oldError = new Error('still initializing');
+  oldError.data = { duplicate_status: { ready: false, updated_at: null, stale: true } };
+  rejectOldDuplicate(oldError);
+  await oldDuplicateRequest;
+  assert.equal(tableWindow.document.querySelector('#results-tbody .file-path-cell').textContent, 'normal.mp4');
+  assert.equal(tableWindow.document.querySelector('#duplicate-index-status').hidden, true);
+  assert.equal(table.duplicateIndexNotReady, false);
+  assert.equal(table.duplicateRetryTimer, null);
+  table.dispose();
+})();
+
+(async () => {
+  const tableWindow = makeTableWindow(700);
+  const table = new tableWindow.__TableManager({
+    getScanResults: async params => ({
+      results: [{ id: params.search === 'new' ? 22 : 11,
+        file_path: `${params.search || 'old'}.mp4` }],
+      total: 1
+    })
+  });
+  await table.init();
+  assert.equal(tableWindow.document.querySelectorAll('#results-tbody .file-checkbox').length, 0);
+  table.searchQuery = 'new';
+  await table.loadData();
+  tableWindow.innerWidth = 900;
+  tableWindow.dispatchEvent(new tableWindow.Event('resize'));
+  assert.equal(tableWindow.document.querySelectorAll('.mobile-results .file-checkbox').length, 0);
+  assert.deepEqual(
+    Array.from(tableWindow.document.querySelectorAll('#results-tbody .file-checkbox'), checkbox => checkbox.value),
+    ['22']
+  );
+  tableWindow.document.querySelector('#select-all').click();
+  assert.deepEqual(Array.from(table.selectedFiles), [22]);
+  table.dispose();
+})();
+
+(async () => {
+  const appWindow = makeTableWindow();
+  appWindow.fetch = async () => ({
+    ok: false, status: 503,
+    headers: { get: name => name === 'Retry-After' ? '30' : null },
+    json: async () => ({ error: 'Duplicate index is initializing', duplicate_status: { ready: false, updated_at: null, stale: true } })
+  });
+  const api = new appWindow.__APIClient();
+  await assert.rejects(api.getStats(), error => error.status === 503 && error.data.duplicate_status.ready === false);
+
+  let unblockStats;
+  const calls = [];
+  const instance = {
+    stats: { init: () => new Promise(resolve => { unblockStats = resolve; }) },
+    table: { init: () => { calls.push('table'); return Promise.resolve(); } },
+    loadScanPaths: () => { calls.push('paths'); },
+    detectOngoingOperations: () => { calls.push('operations'); }
+  };
+  await appWindow.__PixelProbeApp.prototype.init.call(instance);
+  assert.deepEqual(calls, ['table', 'paths', 'operations']);
+  unblockStats();
+})();
+
 for (const [statusFile, statusClass, statusText] of statusCases) {
   const file = { id: 100, file_path: payload, file_size: 0, ...statusFile };
   const desktopStatus = table.renderRow(file).children[1].querySelector('.badge');
@@ -190,12 +423,14 @@ async function verifyViewer() {
 
 (async () => {
   await verifyViewer();
+  const templateDom = new JSDOM(fs.readFileSync('templates/index.html', 'utf8'));
+  const duplicateCard = templateDom.window.document.querySelector('[aria-label="Duplicate files by recorded content hash"]');
+  const integrityCard = templateDom.window.document.querySelector('[aria-label="Integrity coverage"]');
   const statsDom = new JSDOM(`
     <div id="total-files"></div><div id="healthy-files"></div><div id="corrupted-files"></div>
     <div id="warning-files"></div><div id="bitrot-files"></div><div id="pending-files"></div>
-    <div id="scanning-files"></div><div id="integrity-checked"></div>
-    <button id="integrity-details-toggle" aria-expanded="false"></button>
-    <div id="integrity-detail-panel" hidden><div id="integrity-details"></div><div id="integrity-refresh-status"></div></div>`,
+    <div id="scanning-files"></div>
+    ${duplicateCard.outerHTML}${integrityCard.outerHTML}`,
   { runScripts: 'outside-only' });
   const statsWindow = statsDom.window;
   statsWindow.Chart = function () {};
@@ -217,21 +452,76 @@ async function verifyViewer() {
     getStats: async () => {
       if (shouldFail) throw new Error('network');
       return { total_files: 8, completed_files: 5, healthy_files: 3, corrupted_files: 1, warning_files: 0,
-        pending_files: 0, scanning_files: 0, integrity: { total_files: 5, checked_percent: 40,
+        pending_files: 0, scanning_files: 0, duplicate_files: 2, duplicate_groups: 1, duplicate_extra_files: 1,
+        integrity: { total_files: 5, checked_percent: 40,
           attempted_files: 3, checked_files: 2, integrity_error_files: 1,
           integrity_unavailable_files: 1, never_attempted: 2, bitrot_suspected: 0 } };
     }
   });
   await dashboard.updateStats();
   assert.equal(statsWindow.document.querySelector('#integrity-detail-panel').hidden, true);
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, true);
+  assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, '2');
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').contains(
+    statsWindow.document.querySelector('#duplicate-files')), false);
+  assert.equal(statsWindow.document.querySelector('#duplicate-details-toggle').getAttribute('aria-expanded'), 'false');
+  assert.equal(statsWindow.document.querySelector('#duplicate-details-toggle').getAttribute('aria-controls'), 'duplicate-detail-panel');
+  statsWindow.document.querySelector('#duplicate-details-toggle').click();
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, false);
+  assert.equal(statsWindow.document.querySelector('#duplicate-details-toggle').getAttribute('aria-expanded'), 'true');
   statsWindow.document.querySelector('#integrity-details-toggle').click();
   assert.equal(statsWindow.document.querySelector('#integrity-detail-panel').hidden, false);
   assert.equal(statsWindow.document.querySelector('#integrity-details-toggle').getAttribute('aria-expanded'), 'true');
   assert.equal(statsWindow.document.querySelector('#total-files').textContent, '8');
+  assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, '2');
+  assert.equal(statsWindow.document.querySelector('#duplicate-details').textContent, '1 group; 1 extra file');
   assert.match(statsWindow.document.querySelector('#integrity-details').textContent, /Successful integrity rechecks 2/);
   assert.match(statsWindow.document.querySelector('#integrity-details').textContent, /with no recorded recheck attempt 2/);
   assert.match(statsWindow.document.querySelector('#integrity-details').textContent, /Legacy integrity outcomes were not recorded/);
   assert.match(statsWindow.document.querySelector('#integrity-refresh-status').textContent, /Last refreshed/);
+  dashboard.renderStats({ total_files: 8, healthy_files: 3, corrupted_files: 1, warning_files: 0,
+    pending_files: 0, scanning_files: 0, duplicate_files: null, duplicate_groups: null,
+    duplicate_extra_files: null, duplicate_status: { ready: false, updated_at: null, stale: true } });
+  assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, '2');
+  assert.match(statsWindow.document.querySelector('#duplicate-details').textContent, /Refresh delayed/);
+  assert.equal(statsWindow.document.querySelector('.duplicate-refresh-warning').hidden, false);
+  dashboard.renderStats({ total_files: 8, healthy_files: 3, corrupted_files: 1, warning_files: 0,
+    pending_files: 0, scanning_files: 0, duplicate_files: 4, duplicate_groups: 2,
+    duplicate_extra_files: 2, duplicate_status: { ready: true, updated_at: '2026-10-10T12:00:00Z', stale: true } });
+  assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, '4');
+  assert.match(statsWindow.document.querySelector('#duplicate-details').textContent, /Refresh delayed/);
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, false);
+  assert.equal(statsWindow.document.querySelector('.duplicate-refresh-warning').hidden, false);
+  assert.match(statsWindow.document.querySelector('#duplicate-details-toggle').title, /delayed/);
+  dashboard.renderStats({ total_files: 8, healthy_files: 3, corrupted_files: 1, warning_files: 0,
+    pending_files: 0, scanning_files: 0, duplicate_files: 4, duplicate_groups: 2,
+    duplicate_extra_files: 2, duplicate_status: { ready: true, updated_at: null, stale: false } });
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, false);
+  assert.equal(statsWindow.document.querySelector('.duplicate-refresh-warning').hidden, true);
+  statsWindow.document.querySelector('#duplicate-details-toggle').click();
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, true);
+  assert.equal(statsWindow.document.querySelector('#duplicate-details-toggle').getAttribute('aria-expanded'), 'false');
+  await dashboard.updateStats();
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, true);
+  assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, '2');
+
+  let finishStats;
+  let statsCalls = 0;
+  const coalescedDashboard = new statsWindow.__StatsDashboard({
+    getStats: () => {
+      statsCalls++;
+      return new Promise(resolve => { finishStats = resolve; });
+    }
+  });
+  const statsRequestOne = coalescedDashboard.updateStats();
+  const statsRequestTwo = coalescedDashboard.updateStats();
+  assert.equal(statsCalls, 1);
+  finishStats({ total_files: 1, healthy_files: 1, corrupted_files: 0, warning_files: 0,
+    pending_files: 0, scanning_files: 0, duplicate_files: null, duplicate_groups: null,
+    duplicate_extra_files: null, duplicate_status: { ready: false, updated_at: null, stale: true } });
+  await Promise.all([statsRequestOne, statsRequestTwo]);
+  assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, 'Preparing...');
+
   shouldFail = true;
   dashboard.startAutoRefresh();
   await dashboard._statsPoll();

@@ -1,4 +1,4 @@
-from flask import Blueprint, request, current_app
+from flask import Blueprint, jsonify, request, current_app
 import os
 import threading
 import logging
@@ -19,6 +19,7 @@ from pixelprobe.utils.security import (
 from pixelprobe.utils.helpers import get_configured_scan_paths
 from pixelprobe.utils.paths import like_prefix
 from pixelprobe.api.scan_launch import launch_directory_scan
+from pixelprobe.services.duplicate_service import duplicate_index_status, duplicate_members
 # Remove direct limiter imports as we'll use decorators
 
 logger = logging.getLogger(__name__)
@@ -186,9 +187,23 @@ def get_scan_results():
     sort_field = request.args.get('sort_field', 'scan_date')
     sort_order = request.args.get('sort_order', 'desc')
     path_filter = request.args.get('path', '').strip()
+    duplicate_mode = request.args.get('duplicate_mode', 'all')
+    if duplicate_mode not in ('all', 'hash', 'name'):
+        return {'error': 'duplicate_mode must be all, hash, or name'}, 400
+
+    duplicate_status = None
+    if duplicate_mode != 'all':
+        duplicate_status = duplicate_index_status()
+        if not duplicate_status['ready']:
+            return ({'error': 'Duplicate index is initializing',
+                     'duplicate_status': duplicate_status},
+                    503, {'Retry-After': '30'})
 
     # Build query
     query = ScanResult.query
+    if duplicate_mode != 'all':
+        members = duplicate_members(duplicate_mode)
+        query = query.join(members, ScanResult.id == members.c.file_id).add_columns(members.c.group_size)
 
     # Apply path filter -- validate against configured paths to prevent probing
     if path_filter:
@@ -197,7 +212,13 @@ def get_scan_results():
             query = query.filter(ScanResult.file_path.like(like_prefix(path_filter), escape='\\'))
         else:
             # Invalid path -- return empty results
-            return {'results': [], 'total': 0, 'page': page, 'per_page': per_page, 'pages': 0}
+            empty_response = {
+                'results': [], 'total': 0, 'page': page,
+                'per_page': per_page, 'pages': 0,
+            }
+            if duplicate_status is not None:
+                empty_response['duplicate_status'] = duplicate_status
+            return jsonify(empty_response)
     
     # Apply search filter
     if search_query:
@@ -205,11 +226,11 @@ def get_scan_results():
     
     # Apply status filter
     if scan_status != 'all':
-        query = query.filter_by(scan_status=scan_status)
+        query = query.filter(ScanResult.scan_status == scan_status)
     
     # Apply corruption filter
     if is_corrupted == 'true':
-        query = query.filter_by(is_corrupted=True).filter_by(marked_as_good=False)
+        query = query.filter(ScanResult.is_corrupted.is_(True), ScanResult.marked_as_good.is_(False))
     elif is_corrupted == 'false':
         query = query.filter(
             (ScanResult.is_corrupted == False) | 
@@ -261,6 +282,7 @@ def get_scan_results():
     else:
         # Default sorting
         query = query.order_by(ScanResult.scan_date.desc())
+    query = query.order_by(ScanResult.id.asc())
     
     # Paginate - handle -1 as "show all"
     if per_page == -1:
@@ -278,8 +300,12 @@ def get_scan_results():
     
     # Build response
     results = []
-    for result in pagination.items:
+    for item in pagination.items:
+        result, group_size = item if duplicate_mode != 'all' else (item, None)
         result_dict = result.to_dict()
+        if duplicate_mode != 'all':
+            result_dict['duplicate_mode'] = duplicate_mode
+            result_dict['duplicate_group_size'] = group_size
         
         # Convert timestamps to configured timezone for display
         if result.scan_date:
@@ -303,13 +329,16 @@ def get_scan_results():
         
         results.append(result_dict)
     
-    return {
+    response = {
         'results': results,
         'total': pagination.total,
         'page': page,
         'per_page': per_page,
         'pages': pagination.pages
     }
+    if duplicate_status is not None:
+        response['duplicate_status'] = duplicate_status
+    return jsonify(response)
 
 @scan_bp.route('/scan-results/<int:result_id>')
 @auth_required

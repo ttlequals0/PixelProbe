@@ -30,6 +30,7 @@ from app import celery as celery_app
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
+    stream=sys.stdout,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ def main():
         rc = celery_app.worker_main([
             'worker',
             '--loglevel', log_level.lower(),
+            '--logfile', '/dev/stdout',
             '--concurrency', str(concurrency),
             '--queues', 'pixelprobe',
             '--hostname', f'pixelprobe-worker@%h',

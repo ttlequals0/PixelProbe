@@ -225,25 +225,23 @@ class APIClient {
             }
 
             if (!response.ok) {
-                // Surface the server's reason (e.g. "Celery workers not available")
-                let detail = '';
+                let data = null;
                 try {
-                    const data = await response.json();
-                    if (data && data.error) {
-                        detail = `: ${data.error}`;
-                    }
+                    data = await response.json();
                 } catch (parseError) {
                     // Non-JSON error body
                 }
-                throw new Error(`HTTP error! status: ${response.status}${detail}`);
+                const detail = data && data.error ? `: ${data.error}` : '';
+                const error = new Error(`HTTP error! status: ${response.status}${detail}`);
+                error.status = response.status;
+                error.data = data;
+                error.retryAfter = response.headers && response.headers.get('Retry-After');
+                throw error;
             }
 
             return await response.json();
         } catch (error) {
-            // Handle network/connection errors silently for stats updates
-            if (endpoint === '/stats' || endpoint === '/system-info') {
-                return null;
-            }
+            if (endpoint === '/system-info') return null;
             throw error;
         }
     }
@@ -384,12 +382,28 @@ class StatsDashboard {
         this.refreshInterval = null;
         this.lastIntegrity = null;
         this.lastSuccessfulRefresh = null;
+        this.lastDuplicateStats = null;
+        this.statsRequest = null;
+        this.statsPollInFlight = false;
         this.setupIntegrityDetailsToggle();
+        this.setupDuplicateDetailsToggle();
     }
 
     setupIntegrityDetailsToggle() {
         const toggle = document.querySelector('#integrity-details-toggle');
         const panel = document.querySelector('#integrity-detail-panel');
+        if (!toggle || !panel || toggle.dataset.bound) return;
+        toggle.dataset.bound = 'true';
+        toggle.addEventListener('click', () => {
+            const expanded = toggle.getAttribute('aria-expanded') === 'true';
+            toggle.setAttribute('aria-expanded', String(!expanded));
+            panel.hidden = expanded;
+        });
+    }
+
+    setupDuplicateDetailsToggle() {
+        const toggle = document.querySelector('#duplicate-details-toggle');
+        const panel = document.querySelector('#duplicate-detail-panel');
         if (!toggle || !panel || toggle.dataset.bound) return;
         toggle.dataset.bound = 'true';
         toggle.addEventListener('click', () => {
@@ -410,15 +424,20 @@ class StatsDashboard {
     }
 
     async updateStats() {
-        try {
+        if (this.statsRequest) return this.statsRequest;
+        this.statsRequest = (async () => {
             const stats = await this.api.getStats();
             if (stats) {
                 this.renderStats(stats);
                 this.lastSuccessfulRefresh = new Date();
                 this.renderRefreshStatus();
             }
-        } catch (error) {
-            throw error;
+            return stats;
+        })();
+        try {
+            return await this.statsRequest;
+        } finally {
+            this.statsRequest = null;
         }
     }
 
@@ -430,9 +449,68 @@ class StatsDashboard {
         this.updateStatCard('warning-files', stats.warning_files || 0);
         this.updateStatCard('bitrot-files', (stats.integrity && stats.integrity.bitrot_suspected) || 0);
         this.updateStatCard('pending-files', stats.pending_files);
+        this.renderDuplicateStats(stats);
         this.updateStatCard('scanning-files', stats.scanning_files);
         this.lastIntegrity = stats.integrity || null;
         this.renderIntegrityCoverage(stats.integrity);
+    }
+
+    renderDuplicateStats(stats) {
+        const status = stats.duplicate_status || { ready: true, stale: false };
+        const fileCount = stats.duplicate_files;
+        const groupCount = stats.duplicate_groups;
+        const extraCount = stats.duplicate_extra_files;
+        if (status.ready && [fileCount, groupCount, extraCount].every(Number.isFinite)) {
+            this.lastDuplicateStats = { fileCount, groupCount, extraCount, updatedAt: status.updated_at || null };
+            this.updateStatCard('duplicate-files', fileCount);
+            const details = document.querySelector('#duplicate-details');
+            const toggle = document.querySelector('#duplicate-details-toggle');
+            const warning = document.querySelector('.duplicate-refresh-warning');
+            if (details) {
+                const lastUpdated = status.updated_at ? ` Last updated ${new Date(status.updated_at).toLocaleString()}.` : '';
+                const refresh = status.stale ? '. Refresh delayed.' : '';
+                details.textContent = `${groupCount} ${groupCount === 1 ? 'group' : 'groups'}; ${extraCount} extra ${extraCount === 1 ? 'file' : 'files'}${refresh}${lastUpdated}`;
+                details.classList.toggle('is-stale', Boolean(status.stale));
+            }
+            if (toggle) {
+                toggle.classList.toggle('is-stale', Boolean(status.stale));
+                toggle.title = status.stale ? 'Duplicate stats refresh is delayed. Open details for the latest counts.' :
+                    'Show duplicate file details';
+            }
+            if (warning) warning.hidden = !status.stale;
+            return;
+        }
+
+        if (this.lastDuplicateStats) {
+            this.updateStatCard('duplicate-files', this.lastDuplicateStats.fileCount);
+            const details = document.querySelector('#duplicate-details');
+            if (details) {
+                details.textContent = 'Refresh delayed; showing the last available duplicate counts.';
+                details.classList.add('is-stale');
+            }
+            const toggle = document.querySelector('#duplicate-details-toggle');
+            const warning = document.querySelector('.duplicate-refresh-warning');
+            if (toggle) {
+                toggle.classList.add('is-stale');
+                toggle.title = 'Duplicate stats refresh is delayed. Open details for the latest counts.';
+            }
+            if (warning) warning.hidden = false;
+        } else {
+            const count = document.querySelector('#duplicate-files');
+            if (count) count.textContent = 'Preparing...';
+            const details = document.querySelector('#duplicate-details');
+            if (details) {
+                details.textContent = 'Preparing duplicate counts.';
+                details.classList.remove('is-stale');
+            }
+            const toggle = document.querySelector('#duplicate-details-toggle');
+            const warning = document.querySelector('.duplicate-refresh-warning');
+            if (toggle) {
+                toggle.classList.remove('is-stale');
+                toggle.title = 'Show duplicate file details';
+            }
+            if (warning) warning.hidden = true;
+        }
     }
 
     renderIntegrityCoverage(integrity, stale = false) {
@@ -475,7 +553,7 @@ class StatsDashboard {
         const element = document.querySelector('#integrity-refresh-status');
         if (!element) return;
         const toggle = document.querySelector('#integrity-details-toggle');
-        const warning = document.querySelector('.integrity-refresh-warning');
+        const warning = document.querySelector('#integrity-details-toggle .integrity-refresh-warning');
         element.classList.toggle('is-stale', Boolean(error));
         if (toggle) {
             toggle.classList.toggle('is-stale', Boolean(error));
@@ -485,6 +563,7 @@ class StatsDashboard {
         if (warning) warning.hidden = !error;
         if (error) {
             this.renderIntegrityCoverage(this.lastIntegrity, true);
+            this.renderDuplicateRefreshFailure();
             const previous = this.lastSuccessfulRefresh ?
                 ` Showing data from ${this.lastSuccessfulRefresh.toLocaleString()}.` :
                 ' No current data is available.';
@@ -493,6 +572,34 @@ class StatsDashboard {
         }
         element.textContent = this.lastSuccessfulRefresh ?
             `Last refreshed ${this.lastSuccessfulRefresh.toLocaleString()}.` : '';
+    }
+
+    renderDuplicateRefreshFailure() {
+        const details = document.querySelector('#duplicate-details');
+        const toggle = document.querySelector('#duplicate-details-toggle');
+        const warning = document.querySelector('.duplicate-refresh-warning');
+        if (!details) return;
+        if (this.lastDuplicateStats) {
+            const updated = this.lastDuplicateStats.updatedAt ?
+                ` Last updated ${new Date(this.lastDuplicateStats.updatedAt).toLocaleString()}.` : '';
+            details.textContent = `Refresh delayed; showing the last available duplicate counts.${updated}`;
+            details.classList.add('is-stale');
+            if (toggle) {
+                toggle.classList.add('is-stale');
+                toggle.title = 'Duplicate stats refresh failed. Open details for the last available counts.';
+            }
+            if (warning) warning.hidden = false;
+        } else {
+            const count = document.querySelector('#duplicate-files');
+            if (count) count.textContent = 'Preparing...';
+            details.textContent = 'Preparing duplicate counts. Refresh will retry automatically.';
+            details.classList.remove('is-stale');
+            if (toggle) {
+                toggle.classList.remove('is-stale');
+                toggle.title = 'Show duplicate file details';
+            }
+            if (warning) warning.hidden = true;
+        }
     }
 
     updateStatCard(id, value) {
@@ -509,17 +616,21 @@ class StatsDashboard {
         this.statsPollDelay = 30000;
         const poll = async () => {
             if (generation !== this._statsPollGeneration) return;
+            if (this.statsPollInFlight) return;
             this.refreshInterval = null;
             if (document.hidden) {
                 this.refreshInterval = setTimeout(poll, 30000);
                 return;
             }
+            this.statsPollInFlight = true;
             try {
                 await this.updateStats();
                 this.statsPollDelay = 30000;
             } catch (error) {
                 this.statsPollDelay = Math.min(this.statsPollDelay * 2, 300000);
                 this.renderRefreshStatus(error);
+            } finally {
+                this.statsPollInFlight = false;
             }
             if (generation === this._statsPollGeneration) {
                 this.refreshInterval = setTimeout(poll, this.statsPollDelay);
@@ -1349,10 +1460,20 @@ class TableManager {
         this.sortField = 'scan_date';
         this.sortOrder = 'desc';
         this.filter = 'all';
+        this.duplicateMode = 'hash';
         this.searchQuery = '';
         this.pathFilter = '';
         this.selectedFiles = new Set();
         this.lastClickedCheckbox = null; // Track last clicked checkbox for shift-select
+        this.inFlightRequests = new Map();
+        this.requestGeneration = 0;
+        this.lastAcceptedData = null;
+        this.lastAcceptedKey = null;
+        this.resultsHidden = false;
+        this.lastLayoutIsMobile = window.innerWidth <= 768;
+        this.duplicateRetryTimer = null;
+        this.duplicateIndexNotReady = false;
+        this.resizeHandler = null;
     }
 
     async init() {
@@ -1364,12 +1485,17 @@ class TableManager {
         }
         
         this.bindEvents();
+        this.resizeHandler = () => {
+            const isMobile = window.innerWidth <= 768;
+            if (isMobile === this.lastLayoutIsMobile) return;
+            this.lastLayoutIsMobile = isMobile;
+            if (this.lastAcceptedData && !this.resultsHidden) {
+                this.renderTable(this.lastAcceptedData);
+                this.updatePagination(this.lastAcceptedData);
+            }
+        };
+        window.addEventListener('resize', this.resizeHandler);
         await this.loadData();
-        
-        // Handle window resize
-        window.addEventListener('resize', () => {
-            this.loadData();
-        });
     }
 
     bindEvents() {
@@ -1423,10 +1549,34 @@ class TableManager {
                 this.updateSelectionUI();
                 
                 this.filter = e.target.dataset.filter;
+                if (this.filter !== 'duplicates') {
+                    this.duplicateIndexNotReady = false;
+                    this.clearDuplicateRetry();
+                    this.renderDuplicateIndexStatus('', false);
+                }
+                const duplicateControls = document.querySelector('#duplicate-controls');
+                if (duplicateControls) duplicateControls.hidden = this.filter !== 'duplicates';
                 this.currentPage = 1;
                 this.loadData();
             });
         });
+
+        const duplicateMode = document.querySelector('#duplicate-mode');
+        if (duplicateMode) {
+            duplicateMode.addEventListener('change', (event) => {
+                this.duplicateMode = event.target.value;
+                const help = document.querySelector('#duplicate-help');
+                if (help) help.textContent = this.duplicateMode === 'name'
+                    ? 'Matching filenames are candidates only; their contents may differ. Groups span all inventory paths.'
+                    : 'Matches use recorded hash baselines. Files without hashes are excluded; changes since hashing are not verified.';
+                this.selectedFiles.clear();
+                const selectAll = document.querySelector('#select-all');
+                if (selectAll) selectAll.checked = false;
+                this.updateSelectionUI();
+                this.currentPage = 1;
+                this.loadData();
+            });
+        }
 
         // Path filter
         const pathFilter = document.querySelector('#path-filter');
@@ -1466,7 +1616,10 @@ class TableManager {
         const selectAll = document.querySelector('#select-all');
         if (selectAll) {
             selectAll.addEventListener('change', (e) => {
-                const checkboxes = document.querySelectorAll('.file-checkbox');
+                const container = window.innerWidth <= 768
+                    ? document.querySelector('.mobile-results')
+                    : document.querySelector('.table-container');
+                const checkboxes = container ? container.querySelectorAll('.file-checkbox') : [];
                 checkboxes.forEach(cb => {
                     cb.checked = e.target.checked;
                     if (e.target.checked) {
@@ -1482,6 +1635,10 @@ class TableManager {
     }
 
     async loadData() {
+        const generation = ++this.requestGeneration;
+        this.clearDuplicateRetry();
+        if (this.filter !== 'duplicates') this.duplicateIndexNotReady = false;
+        let requestParams = null;
         try {
             const params = {
                 page: this.currentPage,
@@ -1503,6 +1660,9 @@ class TableManager {
             // Map frontend filter values to backend parameters
             if (this.filter) {
                 switch (this.filter) {
+                    case 'duplicates':
+                        params.duplicate_mode = this.duplicateMode;
+                        break;
                     case 'corrupted':
                         params.is_corrupted = 'true';
                         break;
@@ -1527,11 +1687,105 @@ class TableManager {
                 }
             }
 
-            const data = await this.api.getScanResults(params);
-            this.renderTable(data);
-            this.updatePagination(data);
+            requestParams = params;
+            const key = JSON.stringify(params);
+            if (params.duplicate_mode && key !== this.lastAcceptedKey) {
+                this.setResultsVisible(false);
+                this.renderDuplicateIndexStatus('Preparing duplicate results.', false);
+            }
+            let request = this.inFlightRequests.get(key);
+            if (!request) {
+                request = this.api.getScanResults(params);
+                this.inFlightRequests.set(key, request);
+                request.finally(() => {
+                    if (this.inFlightRequests.get(key) === request) this.inFlightRequests.delete(key);
+                }).catch(() => {});
+            }
+            const data = await request;
+            if (!data || !Array.isArray(data.results)) return;
+            if (params.duplicate_mode && data.duplicate_status && data.duplicate_status.ready === false) {
+                if (generation === this.requestGeneration) this.showDuplicateIndexInitializing(params);
+                return;
+            }
+            if (generation === this.requestGeneration) this.acceptResults(data, params);
         } catch (error) {
+            if (generation === this.requestGeneration && this.filter === 'duplicates') {
+                const duplicateStatus = error && error.data && error.data.duplicate_status;
+                if (duplicateStatus && duplicateStatus.ready === false) {
+                    this.showDuplicateIndexInitializing(requestParams);
+                } else {
+                    const hasMatchingData = requestParams && JSON.stringify(requestParams) === this.lastAcceptedKey;
+                    this.renderDuplicateIndexStatus(hasMatchingData
+                        ? 'Duplicate results could not be refreshed. Showing the last available results.'
+                        : 'Duplicate results are unavailable. Refresh will retry.', Boolean(hasMatchingData));
+                }
+            }
         }
+    }
+
+    acceptResults(data, params) {
+        this.lastAcceptedData = data;
+        this.lastAcceptedKey = JSON.stringify(params);
+        this.setResultsVisible(true);
+        this.renderTable(data);
+        this.updatePagination(data);
+        const duplicateStatus = data.duplicate_status;
+        if (params.duplicate_mode && duplicateStatus && duplicateStatus.stale) {
+            this.duplicateIndexNotReady = false;
+            this.renderDuplicateIndexStatus('Duplicate results may be out of date. Refresh is delayed.', true);
+        } else {
+            this.duplicateIndexNotReady = false;
+            this.renderDuplicateIndexStatus('', false);
+        }
+    }
+
+    showDuplicateIndexInitializing(params = null) {
+        this.duplicateIndexNotReady = true;
+        if (params && JSON.stringify(params) !== this.lastAcceptedKey) this.setResultsVisible(false);
+        this.renderDuplicateIndexStatus('Preparing duplicate results. Refresh will retry automatically.', false);
+        this.duplicateRetryTimer = setTimeout(() => {
+            this.duplicateRetryTimer = null;
+            if (this.filter === 'duplicates' && this.duplicateIndexNotReady) this.loadData();
+        }, 30000);
+    }
+
+    clearDuplicateRetry() {
+        if (this.duplicateRetryTimer) {
+            clearTimeout(this.duplicateRetryTimer);
+            this.duplicateRetryTimer = null;
+        }
+    }
+
+    dispose() {
+        this.clearDuplicateRetry();
+        if (this.resizeHandler) window.removeEventListener('resize', this.resizeHandler);
+    }
+
+    setResultsVisible(visible) {
+        this.resultsHidden = !visible;
+        if (!visible) {
+            document.querySelector('#results-tbody')?.replaceChildren();
+            document.querySelector('.mobile-results')?.replaceChildren();
+            const pagination = document.querySelector('.pagination');
+            if (pagination) pagination.replaceChildren();
+            this.selectedFiles.clear();
+            this.lastClickedCheckbox = null;
+            const selectAll = document.querySelector('#select-all');
+            if (selectAll) selectAll.checked = false;
+            this.updateSelectionUI();
+        }
+        for (const selector of ['.table-container', '.mobile-results', '.pagination']) {
+            const element = document.querySelector(selector);
+            if (element) element.style.display = visible ? '' : 'none';
+        }
+    }
+
+    renderDuplicateIndexStatus(message, stale) {
+        const status = document.querySelector('#duplicate-index-status');
+        if (!status) return;
+        status.textContent = message;
+        status.hidden = !message;
+        status.classList.toggle('is-stale', Boolean(stale && message));
     }
 
     renderTable(data) {
@@ -1539,8 +1793,10 @@ class TableManager {
         const isMobile = window.innerWidth <= 768;
         
         if (isMobile) {
+            document.querySelector('#results-tbody')?.replaceChildren();
             this.renderMobileCards(data);
         } else {
+            document.querySelector('.mobile-results')?.replaceChildren();
             const tbody = document.querySelector('#results-tbody');
             if (!tbody) return;
 
@@ -1598,6 +1854,7 @@ class TableManager {
         details.className = 'file-details';
         this.appendFileDetails(details, file);
         card.append(status, path, info, details, this.createFileActions(file, false), this.createFileCheckbox(file));
+        if (file.duplicate_group_size > 1) path.appendChild(this.createDuplicateLabel(file));
         return card;
     }
 
@@ -1614,10 +1871,18 @@ class TableManager {
             else { cell.textContent = value; if (index === 2 || index === 6) { cell.title = value; cell.className = index === 2 ? 'file-path-cell' : 'text-truncate'; } }
             row.appendChild(cell);
         });
+        if (file.duplicate_group_size > 1) row.children[2].appendChild(this.createDuplicateLabel(file));
         const actions = document.createElement('td');
         actions.appendChild(this.createFileActions(file, true));
         row.appendChild(actions);
         return row;
+    }
+
+    createDuplicateLabel(file) {
+        const label = document.createElement('span');
+        label.className = 'duplicate-label';
+        label.textContent = `${file.duplicate_group_size} files: ${file.duplicate_mode === 'name' ? 'same filename candidates' : 'same recorded content'}`;
+        return label;
     }
 
     createFileCheckbox(file) {
@@ -1776,7 +2041,12 @@ class TableManager {
         // If shift key is pressed and we have a last clicked checkbox, select range
         if (event.shiftKey && this.lastClickedCheckbox !== null) {
             // Get all checkboxes currently in the DOM
-            const allCheckboxes = Array.from(document.querySelectorAll('.file-checkbox'));
+            const activeContainer = window.innerWidth <= 768
+                ? document.querySelector('.mobile-results')
+                : document.querySelector('.table-container');
+            const allCheckboxes = activeContainer
+                ? Array.from(activeContainer.querySelectorAll('.file-checkbox'))
+                : [];
 
             // Find indices of current and last clicked checkboxes
             const currentIndex = allCheckboxes.findIndex(cb => parseInt(cb.value) === fileId);
@@ -2232,48 +2502,38 @@ class PixelProbeApp {
     }
 
     async init() {
-        // Initialize components
-        await this.stats.init();
-        await this.table.init();
-
-        // Populate path filter dropdown
+        this.stats.init().catch(error => this.stats.renderRefreshStatus(error));
+        this.table.init().catch(() => {});
         this.loadScanPaths();
-        
-        // Check for ongoing operations
+        this.detectOngoingOperations();
+    }
+
+    async detectOngoingOperations() {
         try {
-            // Check for ongoing scan
             const scanStatus = await this.api.getScanStatus();
-            
-            // Check for active scan (remove stuck detection on page load - it will be handled by monitoring)
             if (scanStatus.is_scanning || scanStatus.is_running || 
                 (scanStatus.phase === 'scanning' && scanStatus.current > 0)) {
                 this.progress.operationType = 'scan';
                 this.progress.startMonitoring('scan');
-                return; // Only monitor one operation at a time
+                return;
             }
-            
-            // Check for ongoing cleanup
+
             const cleanupStatus = await this.api.getCleanupStatus();
             if (cleanupStatus.is_running) {
                 this.progress.operationType = 'cleanup';
-                // Attaching to a run in progress: it may be a scheduled one,
-                // whose kept records are not this person's to confirm.
                 this.progress.startedHere = false;
                 this.progress.startMonitoring('cleanup');
-                return; // Only monitor one operation at a time
+                return;
             }
-            
-            // Check for ongoing file changes check
+
             const fileChangesStatus = await this.api.getFileChangesStatus();
             if (fileChangesStatus.is_running) {
                 this.progress.operationType = 'file-changes';
                 this.progress.startMonitoring('file-changes');
-                return; // Only monitor one operation at a time
+                return;
             }
         } catch (error) {
         }
-
-        // Start background detection for scheduled scans
         this.startBackgroundScanDetection();
     }
 

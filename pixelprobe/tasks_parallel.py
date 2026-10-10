@@ -562,6 +562,7 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
 
         files_processed = 0
         files_corrupted = 0
+        files_unverified = 0
         last_progress_write = time.time()
 
         for batch_ids in batch_process(claimed_ids, _CHUNK_COMMIT_BATCH):
@@ -691,10 +692,13 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
                     # Commit each post-decode result while the persistence
                     # fence is held. Never keep that lock across the next IO.
                     db.session.commit()
+                    if not scan_result or result_outcome != 'completed':
+                        files_unverified += 1
                     files_processed += 1
                     current_file = file_path
 
                 except Exception as e:
+                    files_unverified += 1
                     logger.error(f"Error scanning {file_path} in chunk {chunk_db_id}: {e}")
                     member = _lock_chunk_result_write(
                         scan_id, chunk_db_id, self.request.id, db_result.id)
@@ -765,7 +769,7 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
                              files_scanned=base_scanned + files_processed)
         logger.info(f"Chunk {chunk_db_id} completed: {files_processed} files "
                     f"this attempt ({base_scanned + files_processed} total), "
-                    f"{files_corrupted} corrupted")
+                    f"{files_corrupted} corrupted, {files_unverified} unverified")
         maybe_finalize_scan(scan_id)
         _mark_task_finished(scan_id, self.request.id)
 
@@ -774,6 +778,7 @@ def process_chunk_task(self, chunk_db_id: int, scan_id: str, force_rescan: bool 
             'chunk_id': chunk_db_id,
             'files_processed': files_processed,
             'files_corrupted': files_corrupted,
+            'files_unverified': files_unverified,
             'completed_at': datetime.now(timezone.utc).isoformat()
         }
 

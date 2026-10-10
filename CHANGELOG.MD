@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0).
 
+## [Unreleased]
+
+## [2.10.2] - 2026-10-10
+
+### Changed
+
+- Duplicate statistics keep the file count visible and place supporting details behind a Details toggle.
+
+## [2.10.1] - 2026-10-10
+
+### Changed
+
+- Duplicate lists and statistics use persisted summaries. Until initialization completes, `/api/stats` returns null duplicate counts and duplicate-mode lists return HTTP 503 with `Retry-After: 30`. The API serves stale summaries with a status flag. Refresh targets 60 seconds under normal operation. Backlogs or outages can delay refresh; the stale flag reports delays over 60 seconds or failures.
+- Resizing across the mobile breakpoint redraws accepted results without another request. Stats loading no longer blocks table results, filters, or operation detection.
+
+## [2.10.0] - 2026-10-10
+
+### Added
+
+- Duplicate file counts and a Duplicates filter for recorded SHA-256 matches or same-filename candidates ([#88](https://github.com/ttlequals0/PixelProbe/issues/88)). Counts include every group member across inventory paths, excluding known missing files. Desktop rows and mobile cards show group sizes. Content matching excludes files without hashes and does not verify changes since the recorded baseline.
+
+### Fixed
+
+- Storage read failures, including stale file handles wrapped by the reader, are recorded as unreadable rather than generic scanner errors. Completed worker chunks report unverified file counts separately from corrupted files.
+- Application and worker logs use stdout so successful INFO messages are not labeled as errors merely because they were written to stderr.
+- Starting with `python app.py` reuses the running application module instead of importing it again through route dependencies and creating duplicate application state.
+
+### Security
+
+- Updated the frontend build dependency source-map-js to 1.2.2 for GHSA-68fv-2mgg-jv7q, which fixes denial of service from malicious indexed source maps.
+- Updated Werkzeug to 3.1.9 for CVE-2026-102598. On Windows, `safe_join` rejects NTFS special-device names with empty alternate data stream markers.
+
 ## [2.9.5] - 2026-10-05
 
 ### Fixed

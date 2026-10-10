@@ -7,6 +7,9 @@ import os
 import sys
 import atexit
 import logging
+if __name__ == '__main__':
+    sys.modules['app'] = sys.modules[__name__]
+
 from datetime import datetime, timezone
 from flask import Flask, jsonify, send_file, render_template, request, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
@@ -57,6 +60,7 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
+    stream=sys.stdout,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)

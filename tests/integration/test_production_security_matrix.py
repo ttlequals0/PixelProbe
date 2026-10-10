@@ -23,10 +23,12 @@ pytestmark = pytest.mark.skipif(
 def test_production_security_matrix():
     root = Path(__file__).parents[2]
     script = r'''
+import atexit
 import os
 import re
 import subprocess
 import sys
+import threading
 import app as app_module
 from pixelprobe.models import APIToken, SecurityAuditEvent, User, db
 
@@ -56,8 +58,25 @@ for _ in range(2):
 child_env = os.environ | {'MATRIX_ADMIN_USERNAME': admin_username}
 child = subprocess.Popen([sys.executable, '-c', child_rate_test], env=child_env,
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, text=True)
-assert child.stdout.readline().strip() == 'READY'
+                         stderr=subprocess.STDOUT, text=True)
+child_ready = threading.Event()
+child_output = []
+
+def drain_child_logs():
+    for line in child.stdout:
+        child_output.append(line)
+        if line.strip() == 'READY':
+            child_ready.set()
+
+def cleanup_child():
+    if child.poll() is None:
+        child.kill()
+        child.wait(timeout=10)
+
+atexit.register(cleanup_child)
+child_reader = threading.Thread(target=drain_child_logs, daemon=True)
+child_reader.start()
+assert child_ready.wait(timeout=20), ''.join(child_output)
 
 with app.app_context():
     admin = User(username=admin_username, email=f'{admin_username}@example.test', is_admin=True)
@@ -241,8 +260,10 @@ for _ in range(2):
     assert response.status_code == 401
 child.stdin.write('run\n')
 child.stdin.flush()
-child_stdout, child_stderr = child.communicate(timeout=30)
-assert child.returncode == 0, child_stdout + child_stderr
+child.stdin.close()
+child.wait(timeout=30)
+child_reader.join(timeout=5)
+assert child.returncode == 0, ''.join(child_output)
 client = app.test_client()
 response = client.post('/api/auth/login', base_url='https://localhost',
     json={'username': admin_username, 'password': 'wrong'},

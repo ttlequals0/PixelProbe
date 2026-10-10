@@ -11,6 +11,7 @@ from sqlalchemy import text, func
 from pixelprobe.models import db, ScanResult, ScanReport
 from pixelprobe.utils.timezone import from_utc_to_configured, get_configured_timezone
 from pixelprobe.version import __version__
+from pixelprobe.services.duplicate_service import duplicate_index_status, duplicate_statistics
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,8 @@ class StatsService:
                     FROM scan_results
                 """)
             ).fetchone()
-            
+
+            duplicate_status = duplicate_index_status()
             return {
                 'total_files': stats[0] or 0,
                 'completed_files': stats[1] or 0,
@@ -49,7 +51,9 @@ class StatsService:
                 'corrupted_files': stats[5] or 0,
                 'healthy_files': stats[6] or 0,
                 'marked_as_good': stats[7] or 0,
-                'warning_files': stats[8] or 0
+                'warning_files': stats[8] or 0,
+                **duplicate_statistics(duplicate_status),
+                'duplicate_status': duplicate_status,
             }
             
         except Exception as e:
@@ -220,6 +224,8 @@ class StatsService:
                 (ScanResult.scan_tool == None) |
                 ScanResult.scan_tool.notin_(['error', 'unsupported'])
             ).count()
+
+            duplicate_status = duplicate_index_status()
             
             return {
                 'total_files': total_files,
@@ -230,7 +236,9 @@ class StatsService:
                 'corrupted_files': corrupted_files,
                 'healthy_files': healthy_files,
                 'marked_as_good': marked_as_good,
-                'warning_files': warning_files
+                'warning_files': warning_files,
+                **duplicate_statistics(duplicate_status),
+                'duplicate_status': duplicate_status,
             }
         except Exception as e:
             logger.error(f"Fallback stats query also failed: {e}")
