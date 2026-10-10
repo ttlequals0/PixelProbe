@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Updated the frontend build dependency source-map-js to 1.2.2 for GHSA-68fv-2mgg-jv7q, which fixes denial of service from malicious indexed source maps.
+- Updated Werkzeug to 3.1.9 for CVE-2026-102598. On Windows, `safe_join` rejects NTFS special-device names with empty alternate data stream markers.
 
 ## [2.9.5] - 2026-10-05
 
