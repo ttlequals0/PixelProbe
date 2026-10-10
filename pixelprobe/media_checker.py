@@ -24,6 +24,7 @@ import tempfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import fnmatch
 from pixelprobe.utils.security import (
     authorized_fd_path, open_authorized_media_file, rewind_authorized_fd_path,
     safe_subprocess_run, validate_file_path, ensure_cli_safe_path,
@@ -376,56 +377,31 @@ def get_default_filename_patterns():
     ]
 
 def load_exclusions():
-    """Load exclusion patterns from exclusions.json file with default exclusions
-    
-    Returns:
-        tuple: (excluded_paths, excluded_extensions) for backward compatibility
-    """
-    # Default exclusions that are always applied
-    default_excluded_paths = []
-    default_excluded_extensions = []
-    
-    try:
-        # Load user-defined exclusions from file
-        exclusions_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'exclusions.json')
-        user_paths = []
-        user_extensions = []
-        
-        if os.path.exists(exclusions_file):
-            with open(exclusions_file, 'r') as f:
-                data = json.load(f)
-                user_paths = data.get('paths', [])
-                user_extensions = data.get('extensions', [])
-        
-        # Combine default and user exclusions
-        excluded_paths = list(set(default_excluded_paths + user_paths))
-        excluded_extensions = list(set(default_excluded_extensions + user_extensions))
-        
-        return excluded_paths, excluded_extensions
-    except Exception as e:
-        logger.error(f"Error loading exclusions.json: {e}")
-        # Return defaults on error
-        return default_excluded_paths, default_excluded_extensions
+    """Load path and extension exclusions from the active policy source."""
+    paths, extensions, _ = load_exclusions_with_patterns()
+    return paths, extensions
 
 def load_exclusions_with_patterns():
-    """Load exclusion patterns including filename patterns.
-
-    Reads exclusions.json once and returns all exclusion data.
-
-    Returns:
-        tuple: (excluded_paths, excluded_extensions, excluded_patterns)
-    """
+    """Load active database policy in the app, retaining standalone JSON use."""
     default_patterns = get_default_filename_patterns()
+    from flask import has_app_context
+    if has_app_context():
+        from pixelprobe.models import Exclusion
+        rows = Exclusion.query.filter_by(is_active=True).all()
+        paths = [row.value for row in rows if row.exclusion_type == 'path']
+        extensions = [row.value for row in rows if row.exclusion_type == 'extension']
+        patterns = [row.value for row in rows if row.exclusion_type == 'filename_pattern']
+        return paths, extensions, list(dict.fromkeys(default_patterns + patterns))
 
     try:
         exclusions_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'exclusions.json')
         if os.path.exists(exclusions_file):
             with open(exclusions_file, 'r') as f:
                 data = json.load(f)
-                paths = list(set(data.get('paths', [])))
-                extensions = list(set(data.get('extensions', [])))
+                paths = list(dict.fromkeys(data.get('paths', [])))
+                extensions = list(dict.fromkeys(data.get('extensions', [])))
                 user_patterns = data.get('filename_patterns', [])
-                excluded_patterns = list(set(default_patterns + user_patterns))
+                excluded_patterns = list(dict.fromkeys(default_patterns + user_patterns))
                 return paths, extensions, excluded_patterns
     except Exception as e:
         logger.error(f"Error loading exclusions.json: {e}")
@@ -841,7 +817,6 @@ class PixelProbe:
                 return False
         
         # Check if filename matches exclusion patterns
-        import fnmatch
         for pattern in self.excluded_patterns:
             if fnmatch.fnmatch(filename, pattern):
                 logger.debug(f"Excluding {filename} - matches pattern {pattern}")
@@ -1282,6 +1257,14 @@ class PixelProbe:
             with self.scan_lock:
                 self.current_scan_file = file_path
                 self.scan_start_time = scan_start_time
+
+            extension = Path(file_path).suffix.lower()
+            filename = os.path.basename(file_path)
+            if (extension in self.excluded_extensions
+                    or any(is_path_under(file_path, path) for path in self.excluded_paths)
+                    or any(fnmatch.fnmatch(filename, pattern)
+                           for pattern in self.excluded_patterns)):
+                return {'file_path': file_path, 'outcome': 'excluded', 'excluded': True}
             
             media_file = None
             checked_path = file_path

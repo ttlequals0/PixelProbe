@@ -7,7 +7,7 @@ import pytest
 import pixelprobe.progress_utils as pu
 import pixelprobe.scheduler_lock as sl
 from pixelprobe.scheduler import MediaScheduler
-from pixelprobe.models import db, ScanSchedule
+from pixelprobe.models import db, Exclusion, ScanSchedule
 
 
 class TestSchedulerLock:
@@ -129,6 +129,24 @@ class TestMediaScheduler:
         """Test that update_schedules method exists"""
         assert hasattr(scheduler, 'update_schedules')
         assert callable(getattr(scheduler, 'update_schedules'))
+
+    def test_periodic_scan_refreshes_exclusions_from_database(
+            self, scheduler, app, db, monkeypatch):
+        with app.app_context():
+            db.session.add(Exclusion(exclusion_type='path', value='/library/blocked'))
+            db.session.commit()
+            monkeypatch.setattr(
+                'pixelprobe.utils.helpers.get_configured_scan_paths',
+                lambda: ['/library/blocked', '/library/allowed'])
+            dispatched = []
+            monkeypatch.setattr(
+                scheduler, '_execute_scan_request',
+                lambda endpoint, payload, *_args, **_kwargs: dispatched.append(payload) or object())
+            monkeypatch.setattr(scheduler, '_handle_scan_response', lambda *_args: None)
+
+            scheduler._run_periodic_scan()
+
+            assert dispatched[0]['directories'] == ['/library/allowed']
 
     def test_shutdown_stops_lease_before_scheduler_executors(self):
         scheduler = MediaScheduler()

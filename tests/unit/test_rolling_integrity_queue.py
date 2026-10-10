@@ -8,8 +8,11 @@ explicitly.
 
 from datetime import datetime, timedelta
 
-from pixelprobe.models import ScanResult
-from pixelprobe.services.maintenance_service import fetch_cleanup_batch, fetch_integrity_batch
+from pixelprobe.models import Exclusion, ScanResult
+from pixelprobe.media_checker import load_exclusions_with_patterns
+from pixelprobe.services.maintenance_service import (
+    _apply_maintenance_scope, fetch_cleanup_batch, fetch_integrity_batch,
+)
 
 # Naive UTC datetimes, matching what the DateTime column stores.
 NOW = datetime(2026, 7, 1, 12, 0, 0)
@@ -31,6 +34,31 @@ def seed(db, path, checked=None, size=1000):
 
 
 class TestQueueOrdering:
+
+    def test_maintenance_uses_database_policy_but_keeps_exact_file_scope(self, db):
+        wanted = seed(db, '/media/a/kept.mkv', checked=None)
+        seed(db, '/media/a/excluded/file.mkv', checked=None)
+        seed(db, '/media/a/ignored.tmp', checked=None)
+        seed(db, '/media/a/._resource.mkv', checked=None)
+        db.session.add_all([
+            Exclusion(exclusion_type='path', value='/media/a/excluded'),
+            Exclusion(exclusion_type='extension', value='.tmp'),
+            Exclusion(exclusion_type='filename_pattern', value='._*'),
+        ])
+        db.session.commit()
+
+        paths, extensions, patterns = load_exclusions_with_patterns()
+        batch = fetch_integrity_batch(
+            None, WATERMARK, set(), 10, scan_roots=['/media/a'],
+            excluded_paths=paths, excluded_extensions=extensions,
+            excluded_patterns=patterns)
+        assert [entry['id'] for entry in batch] == [wanted]
+
+        exact = _apply_maintenance_scope(
+            ScanResult.query, file_paths=['/media/a/excluded/file.mkv'],
+            scan_roots=['/media/a'], excluded_paths=paths,
+            excluded_extensions=extensions, excluded_patterns=patterns).all()
+        assert [row.file_path for row in exact] == ['/media/a/excluded/file.mkv']
 
     def test_never_checked_files_come_first(self, db):
         checked = seed(db, '/m/checked.mkv', checked=NOW - timedelta(days=2))

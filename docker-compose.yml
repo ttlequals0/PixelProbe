@@ -13,12 +13,39 @@
 #     so this is the main scan-throughput knob (8-12 reasonable; chunk work
 #     is mostly ffmpeg/imagemagick subprocess-bound)
 #
-# - MAX_WORKERS: Parallel workers for selected-file rescans (default: 10)
+# - MAX_WORKERS: Maximum thread count for selected-file rescans (default: 10).
+#   The API defaults to 4 threads; this value sets the maximum.
 #
 # Connection math (keep under PostgreSQL max_connections, default 100):
 #   web: 4 gunicorn workers x (DB_POOL_SIZE 5 + DB_MAX_OVERFLOW 10) = 60 max
 #   celery: CELERY_CONCURRENCY children x (5 + 10) worst-case, few in practice
 #   plus ~MAX_WORKERS single checker connections during selected-file rescans
+
+x-pixelprobe-environment: &pixelprobe-environment
+  SECRET_KEY: ${SECRET_KEY}
+  TZ: ${TZ:-UTC}
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: pixelprobe
+  POSTGRES_USER: pixelprobe
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/0
+  FLASK_ENV: ${FLASK_ENV:-production}
+  SCAN_PATHS: ${SCAN_PATHS:-/media}
+  EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
+  EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
+  MAX_WORKERS: ${MAX_WORKERS:-10}
+  BATCH_SIZE: ${BATCH_SIZE:-100}
+  MAX_OUTPUT_SIZE: ${MAX_OUTPUT_SIZE:-10000}
+  OUTPUT_ROTATION_ENABLED: ${OUTPUT_ROTATION_ENABLED:-true}
+  # Legacy migration input; stored Tunables become authoritative after seeding.
+  FREEZE_DETECTION_ENABLED: ${FREEZE_DETECTION_ENABLED:-true}
+  PILLOW_BLOCKS_MAX: 256
+  PERIODIC_SCAN_SCHEDULE: ${PERIODIC_SCAN_SCHEDULE:-}
+  CLEANUP_SCHEDULE: ${CLEANUP_SCHEDULE:-}
+  TRUSTED_INTERNAL_HOSTS: ${TRUSTED_INTERNAL_HOSTS:-}
 
 services:
   # PostgreSQL database
@@ -71,11 +98,11 @@ services:
 
   # PixelProbe application
   pixelprobe:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.10.0}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.10.3}
     container_name: pixelprobe-app
     environment:
+      <<: *pixelprobe-environment
       # Security
-      SECRET_KEY: ${SECRET_KEY}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       SESSION_COOKIE_HTTPONLY: ${SESSION_COOKIE_HTTPONLY:-true}
       SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
@@ -84,43 +111,10 @@ services:
       GUNICORN_BIND: ${GUNICORN_BIND:-0.0.0.0:5000}
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-300}
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
-      TZ: ${TZ:-UTC}
 
       # Scheduler runs in celery-worker; keep the web container out of the
       # scheduler lock entirely (set to "true" only in single-container setups)
       SCHEDULER_ENABLED: "false"
-      
-      # PostgreSQL database configuration
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      
-      # Celery configuration
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      
-      # Application settings
-      FLASK_ENV: ${FLASK_ENV:-production}
-      SCAN_PATHS: ${SCAN_PATHS:-/media}
-      EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
-      EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
-      MAX_WORKERS: ${MAX_WORKERS:-10}
-      BATCH_SIZE: ${BATCH_SIZE:-100}
-      MAX_OUTPUT_SIZE: ${MAX_OUTPUT_SIZE:-10000}
-      OUTPUT_ROTATION_ENABLED: ${OUTPUT_ROTATION_ENABLED:-true}
-      FREEZE_DETECTION_ENABLED: ${FREEZE_DETECTION_ENABLED:-true}
-      PILLOW_BLOCKS_MAX: 256
-
-
-      # Scheduled scans
-      PERIODIC_SCAN_SCHEDULE: ${PERIODIC_SCAN_SCHEDULE:-}
-      CLEANUP_SCHEDULE: ${CLEANUP_SCHEDULE:-}
-
-      # SSRF trusted hosts (hostnames/CIDRs that bypass private-IP blocking)
-      TRUSTED_INTERNAL_HOSTS: ${TRUSTED_INTERNAL_HOSTS:-}
 
     volumes:
       # Media files to scan
@@ -167,47 +161,14 @@ services:
 
   # P1 Celery Worker for distributed task processing
   celery-worker:
-    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.10.0}
+    image: ttlequals0/pixelprobe:${PIXELPROBE_VERSION:-2.10.3}
     container_name: pixelprobe-celery-worker
     command: python celery_worker.py
     environment:
+      <<: *pixelprobe-environment
       # Celery configuration
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
       CELERY_LOG_LEVEL: ${CELERY_LOG_LEVEL:-INFO}
       CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
-      TZ: ${TZ:-UTC}
-      
-      # Database connection (worker needs database access)
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      
-      # Worker-specific settings
-      SECRET_KEY: ${SECRET_KEY}
-      FLASK_ENV: ${FLASK_ENV:-production}
-      MAX_WORKERS: ${MAX_WORKERS:-10}  # Parallel file scanning workers per task
-      BATCH_SIZE: ${BATCH_SIZE:-100}
-      MAX_OUTPUT_SIZE: ${MAX_OUTPUT_SIZE:-10000}
-      OUTPUT_ROTATION_ENABLED: ${OUTPUT_ROTATION_ENABLED:-true}
-      FREEZE_DETECTION_ENABLED: ${FREEZE_DETECTION_ENABLED:-true}
-      PILLOW_BLOCKS_MAX: 256
-
-      # Scan configuration (required for scheduler)
-      SCAN_PATHS: ${SCAN_PATHS:-/media}
-      EXCLUDED_PATHS: ${EXCLUDED_PATHS:-}
-      EXCLUDED_EXTENSIONS: ${EXCLUDED_EXTENSIONS:-.txt,.log,.md}
-
-      # Scheduled scans (scheduler runs in celery-worker)
-      PERIODIC_SCAN_SCHEDULE: ${PERIODIC_SCAN_SCHEDULE:-}
-      CLEANUP_SCHEDULE: ${CLEANUP_SCHEDULE:-}
-
-      # SSRF trusted hosts (hostnames/CIDRs that bypass private-IP blocking)
-      TRUSTED_INTERNAL_HOSTS: ${TRUSTED_INTERNAL_HOSTS:-}
-
 
     volumes:
       # Media files access (read-only for scanning)

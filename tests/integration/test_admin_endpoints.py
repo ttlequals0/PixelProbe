@@ -335,6 +335,67 @@ class TestExclusionEndpoints:
         assert response.status_code == 400
         assert 'Invalid exclusion type' in response.get_json()['error']
 
+    def test_put_preserves_patterns_and_reactivates_removed_value(
+            self, authenticated_client, db, app):
+        from pixelprobe.models import Exclusion
+
+        with app.app_context():
+            pattern = Exclusion(exclusion_type='filename_pattern', value='*.skip')
+            removed = Exclusion(exclusion_type='path', value='/library/removed',
+                                is_active=False)
+            db.session.add_all([pattern, removed])
+            db.session.commit()
+
+            response = authenticated_client.put('/api/exclusions', json={
+                'paths': ['/library/keep'], 'extensions': ['.TMP']})
+            assert response.status_code == 200
+            response = authenticated_client.put('/api/exclusions', json={
+                'paths': ['/library/keep'], 'extensions': ['.TMP']})
+            assert response.status_code == 200
+            assert pattern.is_active is True
+            assert removed.is_active is False
+
+            response = authenticated_client.post('/api/exclusions/path',
+                                                 json={'item': '/library/removed'})
+            assert response.status_code == 200
+            assert removed.is_active is True
+
+            from pixelprobe.media_checker import load_exclusions_with_patterns
+            paths, extensions, patterns = load_exclusions_with_patterns()
+            assert '/library/removed' in paths
+            assert '.tmp' in extensions
+            assert '*.skip' in patterns
+
+            response = authenticated_client.delete('/api/exclusions/path',
+                                                   json={'item': '/library/removed'})
+            assert response.status_code == 200
+            assert '/library/removed' not in load_exclusions_with_patterns()[0]
+
+            response = authenticated_client.get('/api/exclusions')
+            assert response.get_json()['filename_patterns'] == ['*.skip']
+            assert response.get_json()['extensions'] == ['.tmp']
+
+            response = authenticated_client.post('/api/exclusions/filename_pattern',
+                                                 json={'item': '*.temp'})
+            assert response.status_code == 200
+            response = authenticated_client.delete('/api/exclusions/filename_pattern',
+                                                   json={'item': '*.temp'})
+            assert response.status_code == 200
+
+            response = authenticated_client.put('/api/exclusions', json={
+                'paths': [], 'extensions': [], 'filename_patterns': []})
+            assert response.status_code == 200
+            paths, extensions, patterns = load_exclusions_with_patterns()
+            assert paths == []
+            assert extensions == []
+            assert '*.skip' not in patterns
+            assert '._*' in patterns
+
+    def test_delete_rejects_non_string_value(self, authenticated_client, db):
+        response = authenticated_client.delete('/api/exclusions/path',
+                                               json={'item': ['bad']})
+        assert response.status_code == 400
+
 
 class TestIgnoredPatternsEndpoints:
     """Test ignored patterns endpoints"""

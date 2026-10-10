@@ -68,7 +68,7 @@ cd PixelProbe
 cp .env.example .env
 ```
 
-Before startup, edit `.env`: replace `SECRET_KEY` and `POSTGRES_PASSWORD`, set `MEDIA_PATH`, and choose `PUID` and `PGID`. Create the host runtime directory and make it writable by those configured values. The Compose default is `10001:10001`.
+Before startup, edit `.env`: set `SECRET_KEY`, `POSTGRES_PASSWORD`, and `MEDIA_PATH`. `MEDIA_PATH` must name an existing host directory; Compose will fail if it is missing. The `PUID` and `PGID` defaults are `10001:10001`; change them only if the host directories need a different identity. Create the host `instance` directory and make it writable by the configured identity.
 
 ```bash
 mkdir -p instance

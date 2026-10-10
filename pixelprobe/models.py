@@ -256,7 +256,7 @@ class Exclusion(db.Model):
     __tablename__ = 'exclusions'
     
     id = db.Column(db.Integer, primary_key=True)
-    exclusion_type = db.Column(db.String(20), nullable=False)  # 'path' or 'extension'
+    exclusion_type = db.Column(db.String(20), nullable=False)
     value = db.Column(db.String(500), nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     is_active = db.Column(db.Boolean, nullable=False, default=True)

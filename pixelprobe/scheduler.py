@@ -91,7 +91,6 @@ class MediaScheduler:
             'SCHEDULE_RETRY_MAX_COUNT', self.DEFAULT_RETRY_MAX_COUNT, min_value=0
         )
 
-        # Load exclusions from environment
         self._load_exclusions()
 
     @staticmethod
@@ -407,14 +406,17 @@ class MediaScheduler:
                 logger.error(f"Failed to queue missed schedule fires: {e}")
             
     def _load_exclusions(self):
-        """Load path and extension exclusions from environment variables"""
-        excluded_paths_env = os.environ.get('EXCLUDED_PATHS', '')
-        if excluded_paths_env:
-            self.excluded_paths = [p.strip() for p in excluded_paths_env.split(',') if p.strip()]
-            
-        excluded_extensions_env = os.environ.get('EXCLUDED_EXTENSIONS', '')
-        if excluded_extensions_env:
-            self.excluded_extensions = [e.strip().lower() for e in excluded_extensions_env.split(',') if e.strip()]
+        """Refresh scheduled-scan exclusions from the shared database policy."""
+        from flask import has_app_context
+        if not has_app_context():
+            self.excluded_paths = []
+            self.excluded_extensions = []
+            return
+        from pixelprobe.models import Exclusion
+        rows = Exclusion.query.filter_by(is_active=True).all()
+        self.excluded_paths = [row.value for row in rows if row.exclusion_type == 'path']
+        self.excluded_extensions = [
+            row.value.lower() for row in rows if row.exclusion_type == 'extension']
             
     def _schedule_default_tasks(self):
         """Schedule default tasks based on environment variables"""
@@ -574,6 +576,7 @@ class MediaScheduler:
 
         try:
             with self.app.app_context():
+                self._load_exclusions()
                 # Check if ANY scan is already running before proceeding
                 scan_state = ScanState.get_or_create()
                 if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:
@@ -628,6 +631,7 @@ class MediaScheduler:
 
         try:
             with self.app.app_context():
+                self._load_exclusions()
                 # Check if ANY scan is already running before proceeding
                 scan_state = ScanState.get_or_create()
                 if scan_state.is_active and scan_state.phase not in TERMINAL_SCAN_PHASES:

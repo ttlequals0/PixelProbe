@@ -6,15 +6,15 @@ Configuration values in this guide are operator starting points, not measured pe
 
 ### Scanning performance
 - `CELERY_CONCURRENCY=4` - Number of Celery worker processes (default: 4). This is the main scan-throughput knob: scans are split into chunks that fan out across these workers.
-- `MAX_WORKERS=10` - ThreadPoolExecutor threads for parallel file validation within a scan task (default: 10). Distinct from Celery concurrency.
+- `MAX_WORKERS=10` - Upper bound on thread workers accepted by the selected-file scan API. The API defaults to 4 workers and clamps larger requests to this limit. Distinct from Celery process count.
 - `BATCH_SIZE=100` - Legacy media-checker discovery lookup batch. Leave at 100; it does not control parallel discovery inserts or scan chunk commits.
-- Freeze detection, its confirmation limits, and the scan timeouts are settings rather than environment variables. Edit them under System > Tunables or through `/api/settings`; a change reaches a running scan without a restart. See [Configuration](configuration.md#scanner-settings).
+- Freeze detection, its confirmation limits, and scan timeouts are saved in the database. Edit them under System > Tunables or through `/api/settings`. Workers refresh cached values within 60 seconds. Selected-file scans snapshot settings for each submitted file; other checks use cached values at each setting lookup, so an edit is not guaranteed to change a file already in progress. See [Configuration](configuration.md#scanner-settings).
 - The data integrity check is close to free. The allocation gate reuses the block count from the `stat` the scanner already performs, and files that fail it are queried with `SEEK_HOLE`, which reads no file data. A file it marks incomplete skips decoding entirely, which on a large damaged file saves a full-length pass.
 - Freeze corroboration runs only on files that already produced a candidate. Each event costs one packet probe (a fraction of a second, no decode) and, when the packets are present, one decode of just that window. At most 12 events per file are probed; the rest fall through to the uncorroborated path.
 - `time_budget_minutes` - Per-schedule setting on file-changes schedules. Caps how long a rolling integrity check runs; the next run resumes where the last one stopped.
 
 ### Database performance
-- `DATABASE_URL` - Deprecated since v2.2.0; use the `POSTGRES_*` variables instead
+- `DATABASE_URL` - Deprecated compatibility override. If explicitly set, it takes precedence over `POSTGRES_*`; the bundled Compose file does not pass it.
 - `DB_POOL_SIZE=5` - SQLAlchemy connection pool size per process (default: 5)
 - `DB_MAX_OVERFLOW=10` - Extra connections beyond the pool (default: 10)
 - PostgreSQL connection pooling is automatically configured with:
@@ -23,7 +23,7 @@ Configuration values in this guide are operator starting points, not measured pe
   - Pool timeout: 30 seconds
   - Connection timeout: 10 seconds
 
-Keep pool math under PostgreSQL `max_connections` (default 100): 4 gunicorn workers x (5 + 10) = 60 max for the web app, plus Celery children and checker connections.
+Keep pool math under PostgreSQL `max_connections` (default 100): 4 gunicorn workers x (5 + 10) = 60 max for the web app, plus `CELERY_CONCURRENCY` worker children and selected-scan connections. `CELERY_CONCURRENCY` sets Celery processes; `MAX_WORKERS` caps selected-file scan threads.
 
 ### Redis
 - `REDIS_MAX_MEMORY=2gb` - Memory limit for the Redis/Valkey task queue (default: 2gb, recommended: 1-4gb).
@@ -88,7 +88,7 @@ Freeze detection fully decodes every video, and that decode is the dominant cost
 
 ### For memory-constrained environments
 - Reduce `CELERY_CONCURRENCY` to 2
-- Reduce `MAX_WORKERS` to 4
+- Reduce `MAX_WORKERS` to 4 when selected-file scans use many threads
 - Lower `REDIS_MAX_MEMORY` to 1gb
 
 ### For high-performance storage

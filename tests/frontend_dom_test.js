@@ -8,7 +8,7 @@ window.fetch = async () => ({ ok: true, json: async () => ({}) });
 window.Chart = function () {};
 let source = fs.readFileSync('static/js/app.js', 'utf8');
 source = source.replace('document.addEventListener(\'DOMContentLoaded\'', '/* test suppresses bootstrap */ document.addEventListener(\'testDOMContentLoaded\'');
-source += '\nwindow.__TableManager = TableManager; window.__PixelProbeApp = PixelProbeApp; window.__StatsDashboard = StatsDashboard; window.__ProgressManager = ProgressManager; window.__APIClient = APIClient;';
+source += '\nwindow.__TableManager = TableManager; window.__PixelProbeApp = PixelProbeApp; window.__StatsDashboard = StatsDashboard; window.__ProgressManager = ProgressManager; window.__APIClient = APIClient; window.__initializeMobileScrollLock = initializeMobileScrollLock;';
 window.eval(source);
 
 const table = new window.__TableManager({ getScanResults: async () => ({}) });
@@ -538,9 +538,73 @@ async function verifyViewer() {
 });
 
 (async () => {
+  const lockDom = new JSDOM('<div class="sidebar"></div><div id="schedule-modal" class="modal" style="display:none"></div>', { runScripts: 'outside-only' });
+  const lockWindow = lockDom.window;
+  const lockBody = lockWindow.document.body;
+  Object.defineProperty(lockWindow, 'innerWidth', { configurable: true, value: 390, writable: true });
+  Object.defineProperty(lockWindow, 'scrollY', { configurable: true, value: 125 });
+  let restoredScroll;
+  lockWindow.scrollTo = (_x, y) => { restoredScroll = y; };
+  lockBody.style.setProperty('overflow', 'scroll', 'important');
+  lockBody.style.setProperty('position', 'relative');
+  lockWindow.eval(source);
+  lockWindow.__initializeMobileScrollLock();
+  const sidebar = lockWindow.document.querySelector('.sidebar');
+  sidebar.classList.add('active');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(lockBody.style.position, 'fixed');
+
+  const firstModal = lockWindow.document.querySelector('#schedule-modal');
+  firstModal.style.display = 'block';
+  await new Promise(resolve => setTimeout(resolve, 0));
+  sidebar.classList.remove('active');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(lockBody.style.position, 'fixed');
+
+  const secondModal = lockWindow.document.createElement('div');
+  secondModal.className = 'modal';
+  secondModal.style.display = 'block';
+  lockBody.appendChild(secondModal);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  firstModal.style.display = 'none';
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(lockBody.style.position, 'fixed');
+  secondModal.remove();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(lockBody.style.getPropertyValue('overflow'), 'scroll');
+  assert.equal(lockBody.style.getPropertyPriority('overflow'), 'important');
+  assert.equal(lockBody.style.position, 'relative');
+  assert.equal(restoredScroll, 125);
+
+  firstModal.style.display = 'block';
+  await new Promise(resolve => setTimeout(resolve, 0));
+  lockWindow.innerWidth = 900;
+  lockWindow.dispatchEvent(new lockWindow.Event('resize'));
+  assert.equal(lockBody.style.position, 'relative');
+  assert.equal(restoredScroll, 125);
+
+  const postcss = require('postcss');
+  const css = postcss.parse(fs.readFileSync('static/css/mobile.css', 'utf8'));
+  const declarations = selector => {
+    const found = [];
+    css.walkRules(selector, rule => rule.walkDecls(decl => found.push([decl.prop, decl.value])));
+    return found;
+  };
+  assert(declarations('.sidebar').some(([prop, value]) => prop === 'height' && value === '100dvh'));
+  assert(declarations('.modal').some(([prop, value]) => prop === 'height' && value === '100dvh'));
+  assert(declarations('.modal-content').some(([prop, value]) => prop === 'max-height' && value.includes('100dvh')));
+  assert(declarations('.modal-body').some(([prop, value]) => prop === 'min-height' && value === '0'));
+  assert(declarations('.modal-body').some(([prop, value]) => prop === 'overflow-y' && value === 'auto'));
+})().catch((error) => {
+  process.exitCode = 1;
+  throw error;
+});
+
+(async () => {
   const payload = 'Stored "value" <img src=x onerror=alert(1)>';
   const componentDom = new JSDOM(`
     <div id="schedules-list"></div><div id="excluded-paths-list"></div>
+    <div id="excluded-extensions-list"></div>
     <div id="confirm-modal"><button class="modal-close"></button><div id="confirm-title"></div><div id="confirm-message"></div></div>`,
   { runScripts: 'outside-only' });
   const componentWindow = componentDom.window;
@@ -567,12 +631,32 @@ async function verifyViewer() {
   schedule.querySelector('[title="Configure Healthcheck"]').click();
   assert.equal(healthcheckName, payload);
   componentApp.renderExclusionList('#excluded-paths-list', [payload], 'path', 'None');
+  componentApp.renderExclusionList('#excluded-extensions-list', ['.tmp'], 'extension', 'None');
   const exclusion = componentWindow.document.querySelector('#excluded-paths-list');
   assert.equal(exclusion.querySelector('img'), null);
   exclusion.querySelector('button').click();
   assert.equal(exclusionValue, payload);
+  const pathListBeforeFailure = exclusion.innerHTML;
+  const extensionListBeforeFailure = componentWindow.document.querySelector(
+    '#excluded-extensions-list').innerHTML;
+  let parsedFailureResponse = false;
+  componentWindow.fetch = async () => ({
+    ok: false,
+    status: 500,
+    json: async () => {
+      parsedFailureResponse = true;
+      return { paths: [], extensions: [] };
+    },
+  });
+  await componentApp.loadExclusions();
+  assert.equal(parsedFailureResponse, false);
+  assert.equal(exclusion.innerHTML, pathListBeforeFailure);
+  assert.equal(componentWindow.document.querySelector(
+    '#excluded-extensions-list').innerHTML, extensionListBeforeFailure);
+  assert.equal(componentWindow.document.querySelector(
+    '.notification-error').textContent, 'Failed to load exclusions');
   componentApp.showNotification(payload, 'warning');
-  assert.equal(componentWindow.document.querySelector('.notification').textContent, payload);
+  assert.equal(componentWindow.document.querySelector('.notification-warning').textContent, payload);
   const confirmation = componentApp.showConfirmModal(payload, payload);
   assert.equal(componentWindow.document.querySelector('#confirm-title').textContent, payload);
   assert.equal(componentWindow.document.querySelector('#confirm-message').textContent, payload);

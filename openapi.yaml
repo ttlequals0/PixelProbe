@@ -2481,7 +2481,8 @@ paths:
     get:
       summary: Get exclusion settings
       description: |
-        Get current exclusion settings from database.
+        Get active path, extension, and filename-pattern exclusions from PostgreSQL.
+        Built-in filename patterns are not included in this response and remain active.
 
         **Example:**
         ```bash
@@ -2492,11 +2493,32 @@ paths:
       responses:
         '200':
           description: Exclusions retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [paths, extensions, filename_patterns]
+                properties:
+                  paths:
+                    type: array
+                    items:
+                      type: string
+                  extensions:
+                    type: array
+                    items:
+                      type: string
+                  filename_patterns:
+                    type: array
+                    items:
+                      type: string
 
     put:
-      summary: Update all exclusion settings
+      summary: Update exclusion settings
       description: |
-        Update all exclusion settings in database.
+        Replace the paths and extensions lists in the database. An omitted path or extension
+        key clears that type. Update filename patterns only when that key is supplied; an
+        empty filename_patterns list clears configured patterns. Built-in filename patterns
+        remain active.
 
         **Example:**
         ```bash
@@ -2524,6 +2546,10 @@ paths:
                   type: array
                   items:
                     type: string
+                filename_patterns:
+                  type: array
+                  items:
+                    type: string
       responses:
         '200':
           description: Exclusions updated successfully
@@ -2548,7 +2574,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [path, extension]
+            enum: [path, extension, filename_pattern]
       requestBody:
         required: true
         content:
@@ -2582,7 +2608,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [path, extension]
+            enum: [path, extension, filename_pattern]
       requestBody:
         required: true
         content:

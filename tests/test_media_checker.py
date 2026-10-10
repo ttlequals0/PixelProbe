@@ -54,6 +54,31 @@ def freeze_router(freeze_stderr='', probe_stdout='', decode_stderr=''):
 
 class TestMediaChecker:
     """Test the core PixelProbe media checking functionality"""
+
+    @pytest.mark.parametrize(('file_path', 'policy'), [
+        ('/library/secret.private', {'excluded_patterns': ['*.private']}),
+        ('/library/tmp/movie.mkv', {'excluded_paths': ['/library/tmp']}),
+        ('/library/movie.tmp', {'excluded_extensions': ['.tmp']}),
+    ])
+    def test_scan_file_exclusion_returns_before_open_or_cache(
+            self, monkeypatch, file_path, policy):
+        checker = PixelProbe(allowed_paths=['/library'], **policy)
+        monkeypatch.setattr('pixelprobe.media_checker.open_authorized_media_file',
+                            lambda *_args, **_kwargs: pytest.fail('excluded file was opened'))
+        monkeypatch.setattr(checker, 'get_file_info',
+                            lambda *_args, **_kwargs: pytest.fail('excluded file was statted'))
+        monkeypatch.setattr(checker, 'calculate_file_hash',
+                            lambda *_args, **_kwargs: pytest.fail('excluded file was hashed'))
+        monkeypatch.setattr(checker, '_save_to_cache',
+                            lambda *_args, **_kwargs: pytest.fail('excluded result was cached'))
+
+        result = checker.scan_file(file_path, force_rescan=True)
+
+        assert result == {
+            'file_path': file_path,
+            'outcome': 'excluded',
+            'excluded': True,
+        }
     
     def test_corrupted_mp4_detection(self, test_data_dir):
         """Test detection of corrupted MP4 files"""

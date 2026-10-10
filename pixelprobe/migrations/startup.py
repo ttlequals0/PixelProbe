@@ -7,6 +7,7 @@ is up-to-date. Each migration is idempotent (safe to re-run).
 
 import os
 import logging
+import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -27,6 +28,8 @@ MIGRATION_ADVISORY_LOCK_ID = 7283945162
 # Migrations are idempotent: a timed-out one is retried on the next boot.
 MIGRATION_LOCK_TIMEOUT_MS = env_int('MIGRATION_LOCK_TIMEOUT_MS', 10000, floor=1000)
 MIGRATION_STATEMENT_TIMEOUT_MS = env_int('MIGRATION_STATEMENT_TIMEOUT_MS', 300000, floor=10000)
+LEGACY_EXCLUSIONS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'exclusions.json')
+LEGACY_EXCLUSIONS_MARKER = 'legacy_exclusions_imported_v1'
 _migration_owner_connection = ContextVar('migration_owner_connection', default=None)
 
 
@@ -371,6 +374,57 @@ def run_v2_6_53_migrations(db):
             logger.info("v2.6.53 log-exclusion backfill completed")
     except Exception as e:
         logger.error(f"Migration v2.6.53 failed: {e}")
+        raise
+
+
+def run_v2_10_3_exclusion_migration(db):
+    """Import legacy exclusion sources once, preserving explicit DB rows."""
+    try:
+        with migration_connection(db) as conn:
+            if conn.execute(text(
+                    "SELECT 1 FROM app_configs WHERE key = :key"),
+                    {'key': LEGACY_EXCLUSIONS_MARKER}).first():
+                return
+
+            legacy = {'path': [], 'extension': [], 'filename_pattern': []}
+            try:
+                with open(LEGACY_EXCLUSIONS_FILE, encoding='utf-8') as source:
+                    data = json.load(source)
+            except FileNotFoundError:
+                data = {}
+            if not isinstance(data, dict):
+                raise ValueError('Legacy exclusions must be a JSON object')
+            for key, exclusion_type in (
+                    ('paths', 'path'), ('extensions', 'extension'),
+                    ('filename_patterns', 'filename_pattern')):
+                values = data.get(key, [])
+                if not isinstance(values, list) or any(
+                        not isinstance(value, str) or not value.strip()
+                        or len(value) > 500 for value in values):
+                    raise ValueError(f'Legacy exclusions field {key} must be a list of non-empty strings')
+                legacy[exclusion_type].extend(values)
+            legacy['path'].extend(
+                value.strip() for value in os.environ.get('EXCLUDED_PATHS', '').split(',')
+                if value.strip())
+            legacy['extension'].extend(
+                value.strip().lower() for value in os.environ.get('EXCLUDED_EXTENSIONS', '').split(',')
+                if value.strip())
+
+            for exclusion_type, values in legacy.items():
+                for value in dict.fromkeys(values):
+                    conn.execute(text("""
+                        INSERT INTO exclusions (exclusion_type, value, created_at, is_active)
+                        VALUES (:type, :value, CURRENT_TIMESTAMP, TRUE)
+                        ON CONFLICT (exclusion_type, value) DO NOTHING
+                    """), {'type': exclusion_type, 'value': value})
+            conn.execute(text("""
+                INSERT INTO app_configs (key, value, description)
+                VALUES (:key, 'true', 'Legacy exclusion import completed')
+                ON CONFLICT (key) DO NOTHING
+            """), {'key': LEGACY_EXCLUSIONS_MARKER})
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Legacy exclusion import failed: {e}")
         raise
 
 
@@ -807,6 +861,9 @@ def _run_all_migrations(db, connection):
     from pixelprobe.migrations.duplicates import run_duplicate_index_migrations
     logger.info("Creating duplicate index state and invalidation triggers...")
     run_duplicate_index_migrations(db)
+
+    logger.info("Importing legacy exclusion settings...")
+    run_v2_10_3_exclusion_migration(db)
 
     logger.info("Creating performance indexes...")
     create_performance_indexes(db)
