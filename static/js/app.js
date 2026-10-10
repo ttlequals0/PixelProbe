@@ -386,11 +386,24 @@ class StatsDashboard {
         this.statsRequest = null;
         this.statsPollInFlight = false;
         this.setupIntegrityDetailsToggle();
+        this.setupDuplicateDetailsToggle();
     }
 
     setupIntegrityDetailsToggle() {
         const toggle = document.querySelector('#integrity-details-toggle');
         const panel = document.querySelector('#integrity-detail-panel');
+        if (!toggle || !panel || toggle.dataset.bound) return;
+        toggle.dataset.bound = 'true';
+        toggle.addEventListener('click', () => {
+            const expanded = toggle.getAttribute('aria-expanded') === 'true';
+            toggle.setAttribute('aria-expanded', String(!expanded));
+            panel.hidden = expanded;
+        });
+    }
+
+    setupDuplicateDetailsToggle() {
+        const toggle = document.querySelector('#duplicate-details-toggle');
+        const panel = document.querySelector('#duplicate-detail-panel');
         if (!toggle || !panel || toggle.dataset.bound) return;
         toggle.dataset.bound = 'true';
         toggle.addEventListener('click', () => {
@@ -451,12 +464,20 @@ class StatsDashboard {
             this.lastDuplicateStats = { fileCount, groupCount, extraCount, updatedAt: status.updated_at || null };
             this.updateStatCard('duplicate-files', fileCount);
             const details = document.querySelector('#duplicate-details');
+            const toggle = document.querySelector('#duplicate-details-toggle');
+            const warning = document.querySelector('.duplicate-refresh-warning');
             if (details) {
                 const lastUpdated = status.updated_at ? ` Last updated ${new Date(status.updated_at).toLocaleString()}.` : '';
                 const refresh = status.stale ? '. Refresh delayed.' : '';
                 details.textContent = `${groupCount} ${groupCount === 1 ? 'group' : 'groups'}; ${extraCount} extra ${extraCount === 1 ? 'file' : 'files'}${refresh}${lastUpdated}`;
                 details.classList.toggle('is-stale', Boolean(status.stale));
             }
+            if (toggle) {
+                toggle.classList.toggle('is-stale', Boolean(status.stale));
+                toggle.title = status.stale ? 'Duplicate stats refresh is delayed. Open details for the latest counts.' :
+                    'Show duplicate file details';
+            }
+            if (warning) warning.hidden = !status.stale;
             return;
         }
 
@@ -467,6 +488,13 @@ class StatsDashboard {
                 details.textContent = 'Refresh delayed; showing the last available duplicate counts.';
                 details.classList.add('is-stale');
             }
+            const toggle = document.querySelector('#duplicate-details-toggle');
+            const warning = document.querySelector('.duplicate-refresh-warning');
+            if (toggle) {
+                toggle.classList.add('is-stale');
+                toggle.title = 'Duplicate stats refresh is delayed. Open details for the latest counts.';
+            }
+            if (warning) warning.hidden = false;
         } else {
             const count = document.querySelector('#duplicate-files');
             if (count) count.textContent = 'Preparing...';
@@ -475,6 +503,13 @@ class StatsDashboard {
                 details.textContent = 'Preparing duplicate counts.';
                 details.classList.remove('is-stale');
             }
+            const toggle = document.querySelector('#duplicate-details-toggle');
+            const warning = document.querySelector('.duplicate-refresh-warning');
+            if (toggle) {
+                toggle.classList.remove('is-stale');
+                toggle.title = 'Show duplicate file details';
+            }
+            if (warning) warning.hidden = true;
         }
     }
 
@@ -518,7 +553,7 @@ class StatsDashboard {
         const element = document.querySelector('#integrity-refresh-status');
         if (!element) return;
         const toggle = document.querySelector('#integrity-details-toggle');
-        const warning = document.querySelector('.integrity-refresh-warning');
+        const warning = document.querySelector('#integrity-details-toggle .integrity-refresh-warning');
         element.classList.toggle('is-stale', Boolean(error));
         if (toggle) {
             toggle.classList.toggle('is-stale', Boolean(error));
@@ -541,17 +576,29 @@ class StatsDashboard {
 
     renderDuplicateRefreshFailure() {
         const details = document.querySelector('#duplicate-details');
+        const toggle = document.querySelector('#duplicate-details-toggle');
+        const warning = document.querySelector('.duplicate-refresh-warning');
         if (!details) return;
         if (this.lastDuplicateStats) {
             const updated = this.lastDuplicateStats.updatedAt ?
                 ` Last updated ${new Date(this.lastDuplicateStats.updatedAt).toLocaleString()}.` : '';
             details.textContent = `Refresh delayed; showing the last available duplicate counts.${updated}`;
             details.classList.add('is-stale');
+            if (toggle) {
+                toggle.classList.add('is-stale');
+                toggle.title = 'Duplicate stats refresh failed. Open details for the last available counts.';
+            }
+            if (warning) warning.hidden = false;
         } else {
             const count = document.querySelector('#duplicate-files');
             if (count) count.textContent = 'Preparing...';
             details.textContent = 'Preparing duplicate counts. Refresh will retry automatically.';
             details.classList.remove('is-stale');
+            if (toggle) {
+                toggle.classList.remove('is-stale');
+                toggle.title = 'Show duplicate file details';
+            }
+            if (warning) warning.hidden = true;
         }
     }
 

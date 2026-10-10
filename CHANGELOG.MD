@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.2] - 2026-10-10
+
+### Changed
+
+- Duplicate statistics keep the file count visible and place supporting details behind a Details toggle.
+
 ## [2.10.1] - 2026-10-10
 
 ### Changed

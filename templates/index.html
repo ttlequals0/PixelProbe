@@ -207,8 +207,16 @@
                     <div class="stat-card" role="group" aria-label="Duplicate files by recorded content hash">
                         <div class="stat-value" id="duplicate-files" aria-live="polite">Preparing...</div>
                         <div class="stat-label">Duplicate Files</div>
-                        <div class="stat-detail" id="duplicate-details" aria-live="polite">Preparing duplicate counts.</div>
-                        <div class="stat-detail">All files in matching recorded SHA-256 groups.</div>
+                        <button class="duplicate-details-toggle" id="duplicate-details-toggle" type="button"
+                                aria-expanded="false" aria-controls="duplicate-detail-panel">
+                            <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                            <i class="fas fa-exclamation-circle duplicate-refresh-warning" aria-hidden="true" hidden></i>
+                            <span>Details</span>
+                        </button>
+                        <div id="duplicate-detail-panel" hidden>
+                            <div class="stat-detail" id="duplicate-details" aria-live="polite">Preparing duplicate counts.</div>
+                            <div class="stat-detail">All files in matching recorded SHA-256 groups.</div>
+                        </div>
                     </div>
                     <div class="stat-card" role="group" aria-label="Integrity coverage">
                         <div class="stat-value" id="integrity-checked" aria-live="polite">-</div>

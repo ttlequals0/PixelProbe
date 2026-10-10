@@ -423,13 +423,14 @@ async function verifyViewer() {
 
 (async () => {
   await verifyViewer();
+  const templateDom = new JSDOM(fs.readFileSync('templates/index.html', 'utf8'));
+  const duplicateCard = templateDom.window.document.querySelector('[aria-label="Duplicate files by recorded content hash"]');
+  const integrityCard = templateDom.window.document.querySelector('[aria-label="Integrity coverage"]');
   const statsDom = new JSDOM(`
     <div id="total-files"></div><div id="healthy-files"></div><div id="corrupted-files"></div>
     <div id="warning-files"></div><div id="bitrot-files"></div><div id="pending-files"></div>
-    <div id="scanning-files"></div><div id="integrity-checked"></div>
-    <div id="duplicate-files"></div><div id="duplicate-details"></div>
-    <button id="integrity-details-toggle" aria-expanded="false"></button>
-    <div id="integrity-detail-panel" hidden><div id="integrity-details"></div><div id="integrity-refresh-status"></div></div>`,
+    <div id="scanning-files"></div>
+    ${duplicateCard.outerHTML}${integrityCard.outerHTML}`,
   { runScripts: 'outside-only' });
   const statsWindow = statsDom.window;
   statsWindow.Chart = function () {};
@@ -459,6 +460,15 @@ async function verifyViewer() {
   });
   await dashboard.updateStats();
   assert.equal(statsWindow.document.querySelector('#integrity-detail-panel').hidden, true);
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, true);
+  assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, '2');
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').contains(
+    statsWindow.document.querySelector('#duplicate-files')), false);
+  assert.equal(statsWindow.document.querySelector('#duplicate-details-toggle').getAttribute('aria-expanded'), 'false');
+  assert.equal(statsWindow.document.querySelector('#duplicate-details-toggle').getAttribute('aria-controls'), 'duplicate-detail-panel');
+  statsWindow.document.querySelector('#duplicate-details-toggle').click();
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, false);
+  assert.equal(statsWindow.document.querySelector('#duplicate-details-toggle').getAttribute('aria-expanded'), 'true');
   statsWindow.document.querySelector('#integrity-details-toggle').click();
   assert.equal(statsWindow.document.querySelector('#integrity-detail-panel').hidden, false);
   assert.equal(statsWindow.document.querySelector('#integrity-details-toggle').getAttribute('aria-expanded'), 'true');
@@ -474,11 +484,26 @@ async function verifyViewer() {
     duplicate_extra_files: null, duplicate_status: { ready: false, updated_at: null, stale: true } });
   assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, '2');
   assert.match(statsWindow.document.querySelector('#duplicate-details').textContent, /Refresh delayed/);
+  assert.equal(statsWindow.document.querySelector('.duplicate-refresh-warning').hidden, false);
   dashboard.renderStats({ total_files: 8, healthy_files: 3, corrupted_files: 1, warning_files: 0,
     pending_files: 0, scanning_files: 0, duplicate_files: 4, duplicate_groups: 2,
     duplicate_extra_files: 2, duplicate_status: { ready: true, updated_at: '2026-10-10T12:00:00Z', stale: true } });
   assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, '4');
   assert.match(statsWindow.document.querySelector('#duplicate-details').textContent, /Refresh delayed/);
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, false);
+  assert.equal(statsWindow.document.querySelector('.duplicate-refresh-warning').hidden, false);
+  assert.match(statsWindow.document.querySelector('#duplicate-details-toggle').title, /delayed/);
+  dashboard.renderStats({ total_files: 8, healthy_files: 3, corrupted_files: 1, warning_files: 0,
+    pending_files: 0, scanning_files: 0, duplicate_files: 4, duplicate_groups: 2,
+    duplicate_extra_files: 2, duplicate_status: { ready: true, updated_at: null, stale: false } });
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, false);
+  assert.equal(statsWindow.document.querySelector('.duplicate-refresh-warning').hidden, true);
+  statsWindow.document.querySelector('#duplicate-details-toggle').click();
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, true);
+  assert.equal(statsWindow.document.querySelector('#duplicate-details-toggle').getAttribute('aria-expanded'), 'false');
+  await dashboard.updateStats();
+  assert.equal(statsWindow.document.querySelector('#duplicate-detail-panel').hidden, true);
+  assert.equal(statsWindow.document.querySelector('#duplicate-files').textContent, '2');
 
   let finishStats;
   let statsCalls = 0;
