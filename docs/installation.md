@@ -83,53 +83,35 @@ Copy the example environment file and edit it:
 cp .env.example .env
 ```
 
-Edit `.env` with your preferred text editor and set the required variables:
+Edit `.env` with your preferred text editor. Generate a secret key with:
 
 ```bash
 # Generate a secure secret key
 python3 -c "import secrets; print(secrets.token_hex(32))"
 
-# Edit .env file
-nano .env  # or vim, code, etc.
+# Edit .env with your preferred text editor, then set SECRET_KEY,
+# POSTGRES_PASSWORD, and MEDIA_PATH from the Docker host.
+nano .env
 ```
 
-**Required settings in `.env`:**
-```bash
-# Security (use the generated secret key from above)
-SECRET_KEY=your-generated-64-character-hex-key-here
+Set `MEDIA_PATH` to an existing host directory. The Compose file fails startup
+if the bind source is missing. `SCAN_PATHS` defaults to `/media`; active paths
+saved in the app take priority. See [Configuration](configuration.md) for
+environment settings and database-backed tunables.
 
-# Database password (choose a secure password)
-POSTGRES_PASSWORD=your-secure-database-password
-
-# Media path on host system (absolute path)
-MEDIA_PATH=/path/to/your/media/directory
-
-# Scan paths inside container (usually /media)
-SCAN_PATHS=/media
-```
-
-**Optional settings:**
-```bash
-# Timezone (default: UTC)
-TZ=America/New_York
-
-# Performance tuning (see configuration.md for details)
-MAX_WORKERS=10
-CELERY_CONCURRENCY=4
-BATCH_SIZE=100
-
-# Port (default: 5000)
-PORT=5000
-```
+Optional Compose settings include `TZ`, `PORT`, and `CELERY_CONCURRENCY`.
+`MAX_WORKERS` caps threads for selected-file scans. It does not set the number
+of Celery processes. Avoid adding the legacy `BATCH_SIZE` unless you are
+diagnosing media discovery lookups.
 
 ### 3. Start the application
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 This will:
-1. Pull the latest PixelProbe image from Docker Hub
+1. Start the PixelProbe image selected by `PIXELPROBE_VERSION` in Compose
 2. Start PostgreSQL database
 3. Start Redis message broker
 4. Start PixelProbe web application
@@ -147,7 +129,7 @@ The Compose file also drops Linux capabilities, enables `no-new-privileges`, and
 ### 4. Verify containers are running
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 You should see all containers in "Up" state:
@@ -163,11 +145,11 @@ pixelprobe-celery-worker  Up
 
 ```bash
 # All containers
-docker-compose logs -f
+docker compose logs -f
 
 # Specific container
-docker-compose logs -f pixelprobe-app
-docker-compose logs -f pixelprobe-celery-worker
+docker compose logs -f pixelprobe
+docker compose logs -f celery-worker
 ```
 
 ## Manual installation
@@ -184,13 +166,17 @@ cd PixelProbe
 ### 2. Set up PostgreSQL database
 
 ```bash
-# Create database user and database
-sudo -u postgres psql << EOF
-CREATE USER pixelprobe WITH PASSWORD 'your-secure-password';
+sudo -u postgres psql
+```
+
+At the `psql` prompt, create the user and database, then set the password:
+
+```sql
+CREATE USER pixelprobe;
+\password pixelprobe
 CREATE DATABASE pixelprobe OWNER pixelprobe;
 GRANT ALL PRIVILEGES ON DATABASE pixelprobe TO pixelprobe;
 \q
-EOF
 ```
 
 ### 3. Set up Redis
@@ -228,18 +214,18 @@ cp .env.example .env
 nano .env  # Edit configuration
 ```
 
-Set the following in `.env`:
+Set the generated secret and chosen database password in `.env`. The remaining
+values below are connection settings for a local PostgreSQL and Redis setup:
+
 ```bash
-SECRET_KEY=your-generated-secret-key
 FLASK_ENV=production
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=pixelprobe
 POSTGRES_USER=pixelprobe
-POSTGRES_PASSWORD=your-secure-password
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/0
-SCAN_PATHS=/path/to/your/media
+SCAN_PATHS=/media
 ```
 
 Notes:
@@ -380,16 +366,16 @@ After installation:
 
 ```bash
 # Stop containers
-docker-compose down
+docker compose down
 
-# Pull latest image
-docker-compose pull
+# Pull the image version selected in Compose
+docker compose pull
 
 # Start containers
-docker-compose up -d
+docker compose up -d
 
 # Check logs
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ### Manual installation
@@ -421,6 +407,6 @@ Common installation issues:
 ## Getting help
 
 1. Check [troubleshooting.md](troubleshooting.md) for common issues
-2. Review logs: `docker-compose logs` or check terminal output
+2. Review logs: `docker compose logs` or check terminal output
 3. Search existing issues: https://github.com/ttlequals0/PixelProbe/issues
 4. Create new issue with logs and system info

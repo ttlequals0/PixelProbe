@@ -681,7 +681,7 @@ deploy:
 
 ## Environment variables
 
-Scanner detection, performance and timeout values are no longer environment variables. They are stored in the database and edited under System > Tunables or through `/api/settings`, so a change reaches a running scan without a restart. See [Configuration](configuration.md#scanner-settings).
+Scanner detection, performance, and timeout values are stored in the database and edited under System > Tunables or through `/api/settings`. Workers refresh cached values within 60 seconds. Selected-file scans snapshot settings for each submitted file; other checks use cached values at each setting lookup. An edit is not guaranteed to change a file already in progress. See [Configuration](configuration.md#scanner-settings).
 
 
 ### Required
@@ -709,8 +709,6 @@ Only one variable is truly required - the app refuses to start without it:
 | `CELERY_RESULT_BACKEND`         | `redis://localhost:6379/0` | Celery result backend                               |
 | `CELERY_CONCURRENCY`            | `4`                        | Worker pool size (main scan-throughput knob)        |
 | `SCAN_PATHS`                    | (empty)                    | Comma-separated directories to scan                 |
-| `EXCLUDED_PATHS`                | (empty)                    | Comma-separated excluded paths                      |
-| `EXCLUDED_EXTENSIONS`           | `.txt,.log,.md`            | Comma-separated excluded extensions                 |
 | `MAX_WORKERS`                   | `10`                       | Thread pool size for selected-file rescans          |
 | `BATCH_SIZE`                    | `100`                      | Legacy media-checker discovery lookup batch; not parallel discovery inserts or scan chunk commits |
 | `SCHEDULER_ENABLED`             | `true`                     | Whether this process may compete for the scheduler lock |
@@ -719,113 +717,9 @@ Only one variable is truly required - the app refuses to start without it:
 | `CHUNK_HEARTBEAT_INTERVAL_SECS` | `120`                      | Chunk liveness heartbeat interval                   |
 | `CHUNK_REVIVE_STALENESS_SECS`   | `600`                      | Staleness threshold before chunk revival            |
 
-## Deployment example
+## Deployment
 
-Condensed from the repository's `docker-compose.yml`:
-
-```yaml
-services:
-  postgres:
-    image: postgres:18-alpine
-    environment:
-      POSTGRES_DB: pixelprobe
-      POSTGRES_USER: pixelprobe
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-    volumes:
-      # postgres:18+ images require the mount at /var/lib/postgresql (NOT .../data)
-      - postgres_data:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pixelprobe"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - pixelprobe-network
-
-  # Valkey (Redis-compatible). Service name stays "redis" so redis:// URLs work.
-  redis:
-    image: valkey/valkey:9-alpine
-    command: >
-      valkey-server
-      --maxmemory ${REDIS_MAX_MEMORY:-2gb}
-      --maxmemory-policy noeviction
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - pixelprobe-network
-
-  pixelprobe:
-    image: ttlequals0/pixelprobe:latest
-    environment:
-      SECRET_KEY: ${SECRET_KEY}
-      # Scheduler runs in celery-worker; keep the web container out of the lock
-      SCHEDULER_ENABLED: "false"
-      POSTGRES_HOST: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      SCAN_PATHS: ${SCAN_PATHS:-/media}
-      TRUSTED_INTERNAL_HOSTS: ${TRUSTED_INTERNAL_HOSTS:-}
-    volumes:
-      - ${MEDIA_PATH:-./media}:/media:ro
-      # Instance folder for configs (no database files with PostgreSQL)
-      - ./instance:/app/instance
-    ports:
-      - "${PORT:-5000}:5000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s  # migrations run before workers serve requests
-    networks:
-      - pixelprobe-network
-
-  celery-worker:
-    image: ttlequals0/pixelprobe:latest
-    command: python celery_worker.py
-    environment:
-      SECRET_KEY: ${SECRET_KEY}
-      POSTGRES_HOST: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
-      SCAN_PATHS: ${SCAN_PATHS:-/media}
-      TRUSTED_INTERNAL_HOSTS: ${TRUSTED_INTERNAL_HOSTS:-}
-    volumes:
-      - ${MEDIA_PATH:-./media}:/media:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - pixelprobe-network
-
-networks:
-  pixelprobe-network:
-    driver: bridge
-
-volumes:
-  postgres_data:
-```
-
-Notes:
-- Postgres and Redis ports are NOT published to the host: the broker has no auth, and app/worker reach both on the compose network
-- Valkey runs with `noeviction` so queued tasks are never silently dropped; size it with `REDIS_MAX_MEMORY` (default 2gb)
-- The app and celery-worker MUST run as the same user so both can read mounted media files (`user: "${PUID:-10001}:${PGID:-10001}"` by default)
-- The container healthcheck hits the unauthenticated `/healthz` liveness endpoint, with a 120s `start_period` because startup migrations run before workers serve requests
+The root [`docker-compose.yml`](../docker-compose.yml) is the supported deployment configuration. It defines the PostgreSQL and Valkey services, web and worker settings, read-only media mounts, and healthchecks. See [Docker setup](docker-setup.md) for deployment and Portainer guidance.
 
 ## Technology stack
 

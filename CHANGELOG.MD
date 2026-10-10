@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.3] - 2026-10-10
+
+### Changed
+
+- Compose shares app and worker startup settings, and `.env.example` separates required values from optional overrides. The configuration guide documents six shared read-only media mounts and the one-time import and database runtime behavior for exclusions.
+
+### Fixed
+
+- Saved exclusions now apply to scans, scheduled scans, and selected-file rescans. Legacy JSON and environment rules import once without restoring removed database entries, and API replacement and re-add operations handle existing rows.
+
 ## [2.10.2] - 2026-10-10
 
 ### Changed

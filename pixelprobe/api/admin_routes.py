@@ -596,7 +596,7 @@ def delete_schedule(schedule_id):
 @admin_bp.route('/exclusions', methods=['GET'])
 @admin_required
 def get_exclusions():
-    """Get current exclusion settings from database"""
+    """Get active path, extension, and filename pattern exclusions."""
     try:
         from pixelprobe.models import Exclusion
         
@@ -607,42 +607,56 @@ def get_exclusions():
         ).all()
         
         extension_exclusions = Exclusion.query.filter_by(
-            exclusion_type='extension', 
-            is_active=True
-        ).all()
+            exclusion_type='extension', is_active=True).all()
+        filename_patterns = Exclusion.query.filter_by(
+            exclusion_type='filename_pattern', is_active=True).all()
         
         return {
             'paths': [e.value for e in path_exclusions],
-            'extensions': [e.value for e in extension_exclusions]
+            'extensions': [e.value for e in extension_exclusions],
+            'filename_patterns': [e.value for e in filename_patterns]
         }
     except Exception as e:
-        logger.error(f"Error reading exclusions: {e}")
-        return {'paths': [], 'extensions': []}
+        logger.error(f"Error reading exclusions: {e}", exc_info=True)
+        db.session.rollback()
+        return {'error': 'Unable to read exclusions'}, 500
 
 @admin_bp.route('/exclusions', methods=['PUT'])
 @admin_required
 def update_exclusions():
-    """Update all exclusion settings in database"""
-    data = request.get_json()
+    """Replace path and extension lists; update patterns only when supplied."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return {'error': 'Invalid data format'}, 400
     
     try:
         from pixelprobe.models import Exclusion
         
         # Validate data structure
-        if not isinstance(data.get('paths', []), list) or not isinstance(data.get('extensions', []), list):
+        fields = {'paths': 'path', 'extensions': 'extension',
+                  'filename_patterns': 'filename_pattern'}
+        if any(key in data and not isinstance(data[key], list) for key in fields):
             return {'error': 'Invalid data format'}, 400
-        
-        # Clear existing exclusions
-        Exclusion.query.update({'is_active': False})
-        
-        # Add new exclusions
-        for path in data.get('paths', []):
-            exclusion = Exclusion(exclusion_type='path', value=path, is_active=True)
-            db.session.add(exclusion)
-        
-        for extension in data.get('extensions', []):
-            exclusion = Exclusion(exclusion_type='extension', value=extension, is_active=True)
-            db.session.add(exclusion)
+        if any(not isinstance(value, str) or not value.strip() or len(value) > 500
+               for key in fields if key in data for value in data[key]):
+            return {'error': 'Exclusion values must be non-empty strings of at most 500 characters'}, 400
+
+        for field, exclusion_type in fields.items():
+            if field not in data and field == 'filename_patterns':
+                continue
+            values = list(dict.fromkeys(data.get(field, [])))
+            if exclusion_type == 'extension':
+                values = [value.lower() for value in values]
+            Exclusion.query.filter_by(exclusion_type=exclusion_type).update(
+                {'is_active': False})
+            for value in values:
+                row = Exclusion.query.filter_by(
+                    exclusion_type=exclusion_type, value=value).first()
+                if row:
+                    row.is_active = True
+                else:
+                    db.session.add(Exclusion(
+                        exclusion_type=exclusion_type, value=value, is_active=True))
         
         db.session.commit()
         return {'message': 'Exclusions updated'}
@@ -654,37 +668,36 @@ def update_exclusions():
 @admin_bp.route('/exclusions/<exclusion_type>', methods=['POST'])
 @admin_required
 def add_exclusion(exclusion_type):
-    """Add a single exclusion (path or extension) to database"""
+    """Add a path, extension, or filename pattern exclusion."""
     # Validate exclusion type
-    if exclusion_type not in ['path', 'extension']:
+    if exclusion_type not in ['path', 'extension', 'filename_pattern']:
         return {'error': 'Invalid exclusion type'}, 400
     
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return {'error': 'Invalid data format'}, 400
     value = data.get('item') or data.get('value')  # Support both 'item' and 'value'
-    
-    if not value:
+
+    if not isinstance(value, str) or not value.strip() or len(value) > 500:
         return {'error': 'Value is required'}, 400
+    value = value.strip()
+    if exclusion_type == 'extension':
+        value = value.lower()
     
     try:
         from pixelprobe.models import Exclusion
         
         # Check if already exists
         existing = Exclusion.query.filter_by(
-            exclusion_type=exclusion_type,
-            value=value,
-            is_active=True
-        ).first()
+            exclusion_type=exclusion_type, value=value).first()
         
-        if existing:
+        if existing and existing.is_active:
             return {'error': f'{exclusion_type.capitalize()} already exists'}, 400
-
-        # Add new exclusion
-        exclusion = Exclusion(
-            exclusion_type=exclusion_type,
-            value=value,
-            is_active=True
-        )
-        db.session.add(exclusion)
+        if existing:
+            existing.is_active = True
+        else:
+            db.session.add(Exclusion(
+                exclusion_type=exclusion_type, value=value, is_active=True))
         db.session.commit()
 
         AuditLogger.log_action('add_exclusion', {'type': exclusion_type, 'value': value})
@@ -701,13 +714,14 @@ def add_exclusion(exclusion_type):
 def remove_exclusion(exclusion_type):
     """Remove a single exclusion (path or extension) from database"""
     # Validate exclusion type
-    if exclusion_type not in ['path', 'extension']:
+    if exclusion_type not in ['path', 'extension', 'filename_pattern']:
         return {'error': 'Invalid exclusion type'}, 400
     
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return {'error': 'Invalid data format'}, 400
     value = data.get('item') or data.get('value')  # Support both 'item' and 'value'
-    
-    if not value:
+    if not isinstance(value, str) or not value.strip() or len(value) > 500:
         return {'error': 'Value is required'}, 400
     
     try:

@@ -5327,6 +5327,7 @@ class PixelProbeApp {
     async loadExclusions() {
         try {
             const response = await fetch('/api/exclusions');
+            if (!response.ok) throw new Error('Failed to load exclusions');
             const data = await response.json();
             
             this.renderExclusionList('#excluded-paths-list', data.paths, 'path', 'No excluded paths');

@@ -4,7 +4,7 @@ The Docker Compose setup for PixelProbe and what each container does.
 
 ## Container overview
 
-PixelProbe uses 4 main containers:
+The Compose stack has four containers:
 
 | Container | Purpose | Ports | Dependencies |
 |-----------|---------|-------|--------------|
@@ -31,22 +31,13 @@ services:
       CELERY_CONCURRENCY: 2
 ```
 
-## Environment variables (.env file)
+## Environment variables
 
-Create a `.env` file in the same directory as your `docker-compose.yml`:
+The project `.env` file supplies values for substitutions in Compose. It does not automatically add every value to the container environment. The root Compose file forwards only the variables listed under each service's `environment` section. If a service also has `env_file`, entries under `environment` take precedence. Removing a default-valued `environment` entry can expose a value with the same name in `env_file`; check for conflicts before dropping defaults. See the [Compose services reference](https://docs.docker.com/reference/compose-file/services/).
 
-```bash
-# Required secrets
-POSTGRES_PASSWORD=your-secure-database-password-here
-SECRET_KEY=your-secret-key-for-sessions-here
+After changing a value used by Compose, run `docker compose up -d` to recreate containers whose configuration changed. `docker compose restart` restarts existing containers and does not apply new environment or Compose settings, as described in the [`docker compose restart` reference](https://docs.docker.com/reference/cli/docker/compose/restart/).
 
-# Optional settings
-TZ=America/New_York
-CELERY_CONCURRENCY=4
-MAX_WORKERS=10
-BATCH_SIZE=100
-REDIS_MAX_MEMORY=2gb
-```
+The restart policy handles a stopped process. A failed healthcheck marks a running container unhealthy; it does not trigger the restart policy or stop an active scan by itself. Healthchecks are status signals for operators and dependent services. See Docker's [restart policy documentation](https://docs.docker.com/engine/containers/start-containers-automatically/).
 
 ## Container responsibilities
 
@@ -119,32 +110,92 @@ Rule of thumb: set `shared_buffers` to about 25% of the container's memory limit
 
 ### Media directories
 
-Mount your media directories as **read-only** to prevent accidental modifications:
+For a Portainer stack based on the root Compose file, add the six host path variables in the stack's environment settings. Replace the existing `/media` bind under both application services with these mounts, then set the matching `SCAN_PATHS` values. Keep the web service's `./instance` volume and the rest of the root service configuration.
 
 ```yaml
-volumes:
-  - /media/movies:/movies:ro
-  - /media/tv:/tv:ro
-  - /media/photos:/photos:ro
-  - /media/music:/music:ro
+x-media-films: &media-films
+  type: bind
+  source: ${MEDIA_FILMS_PATH:?Set MEDIA_FILMS_PATH to an existing host directory}
+  target: /library/films
+  read_only: true
+  bind:
+    create_host_path: false
+x-media-series: &media-series
+  type: bind
+  source: ${MEDIA_SERIES_PATH:?Set MEDIA_SERIES_PATH to an existing host directory}
+  target: /library/series
+  read_only: true
+  bind:
+    create_host_path: false
+x-media-photos: &media-photos
+  type: bind
+  source: ${MEDIA_PHOTOS_PATH:?Set MEDIA_PHOTOS_PATH to an existing host directory}
+  target: /library/photos
+  read_only: true
+  bind:
+    create_host_path: false
+x-media-music: &media-music
+  type: bind
+  source: ${MEDIA_MUSIC_PATH:?Set MEDIA_MUSIC_PATH to an existing host directory}
+  target: /library/music
+  read_only: true
+  bind:
+    create_host_path: false
+x-media-home-video: &media-home-video
+  type: bind
+  source: ${MEDIA_HOME_VIDEO_PATH:?Set MEDIA_HOME_VIDEO_PATH to an existing host directory}
+  target: /library/home-video
+  read_only: true
+  bind:
+    create_host_path: false
+x-media-misc: &media-misc
+  type: bind
+  source: ${MEDIA_MISC_PATH:?Set MEDIA_MISC_PATH to an existing host directory}
+  target: /library/misc
+  read_only: true
+  bind:
+    create_host_path: false
+
+services:
+  pixelprobe:
+    environment:
+      SCAN_PATHS: /library/films,/library/series,/library/photos,/library/music,/library/home-video,/library/misc
+    volumes:
+      - *media-films
+      - *media-series
+      - *media-photos
+      - *media-music
+      - *media-home-video
+      - *media-misc
+      - ./instance:/app/instance
+
+  celery-worker:
+    environment:
+      SCAN_PATHS: /library/films,/library/series,/library/photos,/library/music,/library/home-video,/library/misc
+    volumes:
+      - *media-films
+      - *media-series
+      - *media-photos
+      - *media-music
+      - *media-home-video
+      - *media-misc
 ```
 
-**Important:** the root Compose file already runs both application services as
-the same configured user. Keep that setting in any override:
+The root Compose file runs both application services as the same configured user. Keep those identities and the web service's existing `instance` volume when adding media mounts:
+
+`SCAN_PATHS` is synced into the database at web startup, and both services use it for path authorization. Recreate both services after changing it. Existing active database paths remain in use, so disable old roots in the UI if they should no longer be scanned.
+
+Files such as `.mount-ok` used by host healthchecks are not read by the scanner and do not guard scan roots. For PixelProbe's mount identity check, set `require_mount` on a scan-path configuration; see [Required mount policy](operational-evidence.md#required-mount-policy).
 
 ```yaml
 services:
   pixelprobe:
     # ... other settings ...
     user: "${PUID:-10001}:${PGID:-10001}"
-    volumes:
-      - /media/movies:/movies:ro
 
   celery-worker:
     # ... other settings ...
-    user: "${PUID:-10001}:${PGID:-10001}"  # MUST match pixelprobe user
-    volumes:
-      - /media/movies:/movies:ro
+    user: "${PUID:-10001}:${PGID:-10001}"
 ```
 
 To find your user's UID and GID on the host:
@@ -158,7 +209,7 @@ Or use environment variables:
 user: "${PUID:-10001}:${PGID:-10001}"
 ```
 
-If the web app and Celery worker run as different users, the worker may not read the mounted media directories. It then reports "No valid files provided" even when the files exist.
+If the web app and Celery worker run as different users, the worker may not read the mounted media directories. The root Compose file also uses `create_host_path: false`, so a missing host directory fails at startup instead of being created as a directory.
 
 ### Database persistence
 
@@ -196,16 +247,16 @@ pixelprobe:5000 <-> redis:6379 <-> celery-worker
 
 ```bash
 # Start all containers
-docker-compose up -d
+docker compose up -d
 
 # Check status
-docker-compose ps
+docker compose ps
 
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # Stop all containers
-docker-compose down
+docker compose down
 ```
 
 ## Monitoring
@@ -228,12 +279,12 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c "SELECT count(*) FROM pg_s
 ## Troubleshooting
 
 ### Workers not processing
-1. Check Redis is running: `docker-compose ps redis`
-2. Check worker logs: `docker-compose logs celery-worker`
+1. Check Redis is running: `docker compose ps redis`
+2. Check worker logs: `docker compose logs celery-worker`
 3. Verify queue: `docker exec pixelprobe-redis valkey-cli LLEN pixelprobe`
 
 ### Database connection issues
-1. Check PostgreSQL is healthy: `docker-compose ps postgres`
+1. Check PostgreSQL is healthy: `docker compose ps postgres`
 2. Test connection: `docker exec pixelprobe-postgres pg_isready`
 3. Check password in `.env` file
 
@@ -249,7 +300,7 @@ docker exec pixelprobe-postgres psql -U pixelprobe -c "SELECT count(*) FROM pg_s
 2. Mount media as read-only (`:ro` flag)
 3. Don't expose ports unless needed (remove `ports:` sections)
 4. Use a firewall if exposing ports
-5. Pull latest images periodically
+5. Review published versions periodically and update image tags intentionally
 
 ## Backup strategy
 
@@ -271,11 +322,11 @@ tar -czf pixelprobe_config_$(date +%Y%m%d).tar.gz docker-compose.yml .env
 ## Upgrade process
 
 1. Backup database
-2. Stop containers: `docker-compose down`
+2. Stop containers: `docker compose down`
 3. Update image version in `docker-compose.yml`
-4. Pull new image: `docker-compose pull`
-5. Start containers: `docker-compose up -d`
-6. Check logs: `docker-compose logs -f`
+4. Pull new image: `docker compose pull`
+5. Start containers: `docker compose up -d`
+6. Check logs: `docker compose logs -f`
 
 ## PostgreSQL 15 to 18 migration (required for v2.7.0+)
 
@@ -291,7 +342,7 @@ DUMP=pixelprobe_pg15_$(date +%Y%m%d).sql.gz
 docker exec pixelprobe-postgres pg_dump -U pixelprobe pixelprobe | gzip > "$DUMP"
 
 # 2. Stop the stack
-docker-compose down
+docker compose down
 
 # 3. Keep the old volume as a fallback (rename instead of delete)
 docker volume create pixelprobe_postgres_data_pg15_backup
@@ -302,7 +353,7 @@ docker volume rm pixelprobe_postgres_data
 #    /var/lib/postgresql volume mount) - e.g. git pull or edit your copy
 
 # 5. Start ONLY postgres on the new compose file (creates a fresh v18 volume)
-docker-compose up -d postgres
+docker compose up -d postgres
 # wait for: docker exec pixelprobe-postgres pg_isready -U pixelprobe
 
 # 6. Restore the dump
@@ -313,7 +364,7 @@ docker exec pixelprobe-postgres psql -U pixelprobe -d pixelprobe -c "ALTER DATAB
 docker exec pixelprobe-postgres psql -U pixelprobe -d pixelprobe -c "REINDEX DATABASE pixelprobe;"
 
 # 8. Start the rest of the stack and verify
-docker-compose up -d
+docker compose up -d
 # sanity check: row counts should match your pre-migration numbers
 docker exec pixelprobe-postgres psql -U pixelprobe -d pixelprobe -c "SELECT COUNT(*) FROM scan_results;"
 ```

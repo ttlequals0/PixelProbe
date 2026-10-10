@@ -742,55 +742,10 @@ class MediaValidator {
 
 ## Docker Compose integration
 
-```yaml
-version: '3.8'
-
-services:
-  pixelprobe:
-    image: pixelprobe:latest
-    container_name: pixelprobe
-    ports:
-      - "5000:5000"
-    volumes:
-      - /media:/media:ro
-      - pixelprobe_data:/app/data
-    environment:
-      - SECRET_KEY=${SECRET_KEY}
-      - TZ=${TZ:-UTC}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-  
-  # Media server integration
-  jellyfin:
-    image: jellyfin/jellyfin
-    volumes:
-      - /media:/media
-    depends_on:
-      - pixelprobe
-  
-  # Monitoring
-  prometheus:
-    image: prom/prometheus
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-  
-  grafana:
-    image: grafana/grafana
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-
-volumes:
-  pixelprobe_data:
-  grafana_data:
-```
+Use the root [`docker-compose.yml`](../../docker-compose.yml) for the supported
+PixelProbe stack. It includes PostgreSQL, Valkey, the web app, and the Celery
+worker with the required identity and read-only media settings. For Portainer
+media mounts, see [Docker setup](../docker-setup.md#media-directories).
 
 ## Webhook integration
 

@@ -893,6 +893,24 @@ class ScanService:
             member.completed_at = datetime.now(timezone.utc)
             db.session.commit()
             return True
+        if isinstance(observed, dict) and observed.get('outcome') == 'excluded':
+            member.status = 'skipped'
+            member.outcome = 'excluded'
+            member.file_hash = None
+            member.file_size = None
+            member.last_modified = None
+            member.is_corrupted = None
+            member.has_warnings = None
+            member.corruption_details = None
+            member.warning_details = None
+            member.file_type = None
+            member.scan_tool = None
+            member.scan_output = None
+            member.marked_as_good = None
+            member.error_message = None
+            member.completed_at = datetime.now(timezone.utc)
+            db.session.commit()
+            return True
         row = (ScanResult.query.filter_by(file_path=file_path)
                .populate_existing().first())
         if not row:
@@ -1115,7 +1133,7 @@ class ScanService:
                     result = checker.scan_file(file_path, force_rescan=force_rescan)
                     recorded = self._snapshot_run_member(scan_state.scan_id, file_path, result)
                     outcome = result.get('outcome') if isinstance(result, dict) else None
-                    if not recorded or outcome != 'completed':
+                    if not recorded or outcome not in ('completed', 'excluded'):
                         chunk_failed = True
                     if not recorded:
                         self._mark_selected_member_error(
@@ -1291,7 +1309,7 @@ class ScanService:
                             recorded = self._snapshot_run_member(
                                 scan_state.scan_id, file_path, observed)
                             outcome = observed.get('outcome') if isinstance(observed, dict) else None
-                            if not recorded or outcome != 'completed':
+                            if not recorded or outcome not in ('completed', 'excluded'):
                                 chunk_failed[directory] = True
                             if not recorded:
                                 self._mark_selected_member_error(

@@ -367,6 +367,34 @@ class TestScanService:
             assert result.scan_status == 'completed'
             assert result.file_hash == 'before'
 
+    def test_excluded_selected_member_does_not_copy_stale_result(self, scan_service, app, db):
+        with app.app_context():
+            run_id = 'selected-excluded-observation'
+            file_path = '/library/excluded.png'
+            state = ScanState.create_new_scan(scan_id=run_id)
+            state.start_scan(['selected_files'], force_rescan=True)
+            state.phase = 'scanning'
+            result = ScanResult(file_path=file_path, scan_status='completed',
+                                file_hash='before', is_corrupted=True)
+            db.session.add(result)
+            db.session.flush()
+            member = ScanRunFile(scan_id=run_id, scan_result_id=result.id,
+                                 file_path=file_path, status='processing')
+            db.session.add(member)
+            db.session.commit()
+
+            assert scan_service._snapshot_run_member(
+                run_id, file_path, {'outcome': 'excluded', 'excluded': True})
+
+            db.session.refresh(member)
+            db.session.refresh(result)
+            assert member.status == 'skipped'
+            assert member.outcome == 'excluded'
+            assert member.file_hash is None
+            assert member.is_corrupted is None
+            assert result.scan_status == 'completed'
+            assert result.file_hash == 'before'
+
     def test_cancellation_reclaims_only_owned_scanning_result(self, scan_service, app, db):
         with app.app_context():
             state = ScanState.create_new_scan(scan_id='selected-owned-cancel')

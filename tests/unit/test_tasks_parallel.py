@@ -7,7 +7,8 @@ from unittest.mock import patch
 import pytest
 
 from pixelprobe.models import (
-    ScanConfiguration, ScanResult, ScanState, ScanChunk, ScanRunFile, ScanRunRoot, ScanTask,
+    Exclusion, ScanConfiguration, ScanResult, ScanState, ScanChunk, ScanRunFile,
+    ScanRunRoot, ScanTask,
 )
 from pixelprobe.services.scan_reporting import add_files_batch_to_db
 
@@ -74,6 +75,46 @@ def _authorized_media_root(db, tmp_path, *names):
 
 
 class TestDiscoveryMembership:
+
+    def test_parallel_policy_uses_database_and_keeps_discovery_snapshot(self, tp, app, db,
+                                                                        tmp_path):
+        with app.app_context():
+            blocked = str(tmp_path / 'blocked')
+            db.session.add_all([
+                ScanConfiguration(path=str(tmp_path), is_active=True),
+                Exclusion(exclusion_type='path', value=blocked),
+                Exclusion(exclusion_type='extension', value='.MP4'),
+                Exclusion(exclusion_type='filename_pattern', value='*.Private.mp4'),
+            ])
+            state = _make_scan_state(db, 'policy-snapshot', phase='discovering')
+            root = ScanRunRoot(scan_id=state.scan_id, root_path=str(tmp_path),
+                               resolved_path=str(tmp_path), status='pending')
+            db.session.add(root)
+            db.session.commit()
+
+            checker = tp._build_chunk_checker(state.scan_id)
+            assert checker._is_supported_file(f'{blocked}/movie.mkv') is False
+            assert checker._is_supported_file('/other/movie.mp4') is True
+            assert checker._is_supported_file('/other/movie.Private.mp4') is False
+            assert checker._is_supported_file('/other/movie.private.mp4') is True
+
+            paths, extensions, patterns = tp.load_exclusions_with_patterns()
+            tasks = tp._dispatch_discovery_tasks(
+                state.scan_id, [str(tmp_path)], paths, extensions, patterns,
+                commit=True, publish=False)
+            assert tasks[0].payload['excluded_paths'] == [blocked]
+            assert tasks[0].payload['excluded_extensions'] == ['.MP4']
+            assert '*.Private.mp4' in tasks[0].payload['excluded_patterns']
+            assert checker.excluded_paths == [blocked]
+
+            newly_excluded = str(tmp_path / 'newly-blocked')
+            db.session.add(Exclusion(exclusion_type='path', value=newly_excluded))
+            db.session.commit()
+            assert checker._is_supported_file(f'{newly_excluded}/movie.mkv') is True
+            refreshed_checker = tp._build_chunk_checker(state.scan_id)
+            assert refreshed_checker._is_supported_file(
+                f'{newly_excluded}/movie.mkv') is False
+            assert tasks[0].payload['excluded_paths'] == [blocked]
 
     def test_nonforce_discovery_members_only_new_or_pending_inventory(self, app, db, tmp_path):
         with app.app_context():
