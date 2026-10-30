@@ -46,6 +46,28 @@ for (const mode of ['hash', 'name']) {
 }
 assert.equal(row.querySelector('.duplicate-label'), null);
 
+// Regression: the per-file Actions toggle must open its menu on mobile cards and table rows.
+window.app.toggleActionDropdown = window.__PixelProbeApp.prototype.toggleActionDropdown;
+window.app.closeAllDropdowns = window.__PixelProbeApp.prototype.closeAllDropdowns;
+const mobileResults = window.document.createElement('div');
+mobileResults.className = 'mobile-results';
+window.document.body.appendChild(mobileResults);
+const actionCard = table.renderMobileCard({ id: 9, file_path: '/media/card.mp4', scan_status: 'completed' });
+mobileResults.appendChild(actionCard);
+const actionMenu = actionCard.querySelector('.action-dropdown .dropdown-menu');
+assert.equal(actionMenu.style.display, 'none');
+actionCard.querySelector('.action-dropdown button').click();
+assert.equal(actionMenu.style.display, 'block');
+let rescanned = null;
+window.app.rescanFile = (id) => { rescanned = id; };
+actionMenu.querySelector('.dropdown-item').click();
+assert.equal(rescanned, 9);
+const tableRow = table.renderRow({ id: 10, file_path: '/media/row.mp4', scan_status: 'completed' });
+window.document.querySelector('#results-tbody').appendChild(tableRow);
+tableRow.querySelector('.action-dropdown button').click();
+assert.equal(tableRow.querySelector('.action-dropdown .dropdown-menu').style.display, 'block');
+assert.equal(actionMenu.style.display, 'none');
+
 const duplicateControls = window.document.createElement('div');
 duplicateControls.innerHTML = '<button data-filter="duplicates">Duplicates</button><button data-filter="all">All Files</button><div id="duplicate-controls" hidden><select id="duplicate-mode"><option value="hash">Content</option><option value="name">Filename</option></select><p id="duplicate-help"></p></div>';
 window.document.body.appendChild(duplicateControls);

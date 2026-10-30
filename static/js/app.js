@@ -1977,7 +1977,7 @@ class TableManager {
         actions.appendChild(make('View', 'fa-eye', () => app.viewFile(id), 'btn-primary'));
         const dropdown = document.createElement('div'); dropdown.className = 'action-dropdown';
         const menu = document.createElement('ul'); menu.className = 'dropdown-menu'; menu.style.display = 'none';
-        const toggle = make('Actions', 'fa-tasks', (event) => this.toggleActionDropdown(event, menu.id));
+        const toggle = make('Actions', 'fa-tasks', (event) => app.toggleActionDropdown(event, menu.id));
         menu.id = `file-action-menu-${id}-${compact ? 'table' : 'mobile'}`;
         [['Rescan', 'fa-sync', () => app.rescanFile(id)], ['Cleanup', 'fa-search', () => app.orphanCheckFile(id)], ['Integrity Check', 'fa-shield-alt', () => app.changeCheckFile(id)]].forEach(([text, icon, handler]) => {
             const item = document.createElement('li'); const action = document.createElement('a'); action.href = '#'; action.className = 'dropdown-item'; action.innerHTML = `<i class="fas ${icon}"></i>`; action.append(` ${text}`); action.addEventListener('click', (event) => { event.preventDefault(); handler(); }); item.appendChild(action); menu.appendChild(item);
@@ -4436,6 +4436,7 @@ class PixelProbeApp {
                 // Export all files in current filter/search
                 requestBody.filter = this.table.filter;
                 requestBody.search = this.table.searchQuery;
+                if (this.table.filter === 'duplicates') requestBody.duplicate_mode = this.table.duplicateMode;
             }
             
             const response = await fetch('/api/export', {
@@ -4470,6 +4471,8 @@ class PixelProbeApp {
                 window.URL.revokeObjectURL(url);
                 
                 this.showNotification(`${formatUpper} export complete`, 'success');
+            } else if (response.status === 503) {
+                this.showNotification('Duplicate index is initializing. Try the export again shortly.', 'warning');
             } else {
                 throw new Error('Export failed');
             }
