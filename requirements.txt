@@ -4,7 +4,7 @@ Flask-CORS==6.0.0
 Flask-Limiter==3.9.0
 Flask-WTF==1.2.2
 flask-restx==1.3.2
-Pillow==12.3.0  # 12.3.0 resolves 13 CVEs in 12.2.0 (CVE-2026-59197..59205, 55379, 55380, 55798, 54058..54060)
+Pillow==13.0.0  # 13.0.0 resolves 28 CVEs in 12.3.0, including CVE-2026-112393 (TIFF heap overflow)
 pillow-heif==1.3.0  # HEIC/HEIF support for Pillow (requires libheif system library); 1.3.0 resolves CVE-2026-28231
 python-magic==0.4.27
 ffmpeg-python==0.2.0
