@@ -1,4 +1,5 @@
 from flask import Blueprint, request, send_file, Response, make_response, stream_with_context
+from sqlalchemy import null
 import os
 import csv
 import io
@@ -10,6 +11,7 @@ from xml.sax.saxutils import escape as escape_xml
 
 from pixelprobe.models import db, ScanResult
 from pixelprobe.auth import auth_required
+from pixelprobe.services.duplicate_service import duplicate_index_status, duplicate_members
 from pixelprobe.utils.security import PathTraversalError, open_authorized_media_file
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,48 @@ def _apply_status_filter(query, filter_type):
             db.and_(completed, ScanResult.scan_tool == 'error'),
         ))
     return query
+
+
+class _InvalidDuplicateMode(ValueError):
+    pass
+
+
+class _DuplicateIndexNotReady(Exception):
+    def __init__(self, status):
+        super().__init__('Duplicate index is initializing')
+        self.status = status
+
+
+def _filtered_export_query(filter_type, search, duplicate_mode):
+    """Build the export query; returns (query, export_type)."""
+    if duplicate_mode not in ('all', 'hash', 'name'):
+        raise _InvalidDuplicateMode('duplicate_mode must be all, hash, or name')
+    query = ScanResult.query
+    if search:
+        query = query.filter(ScanResult.file_path.contains(search))
+    if filter_type != 'duplicates':
+        return _apply_status_filter(query, filter_type), filter_type
+    mode = 'hash' if duplicate_mode == 'all' else duplicate_mode
+    status = duplicate_index_status()
+    if not status['ready']:
+        raise _DuplicateIndexNotReady(status)
+    members = duplicate_members(mode)
+    return query.join(members, ScanResult.id == members.c.file_id), f'duplicates_{mode}'
+
+
+def _duplicate_export_columns():
+    """Outer joins and labeled columns for duplicate annotations; blank until the index is ready."""
+    labels = ('content_duplicate_group', 'content_duplicate_group_size',
+              'filename_duplicate_group', 'filename_duplicate_group_size')
+    if not duplicate_index_status()['ready']:
+        return [], tuple(null().label(label) for label in labels)
+    hash_members = duplicate_members('hash')
+    name_members = duplicate_members('name')
+    joins = [(hash_members, ScanResult.id == hash_members.c.file_id),
+             (name_members, ScanResult.id == name_members.c.file_id)]
+    columns = (hash_members.c.group_id.label(labels[0]), hash_members.c.group_size.label(labels[1]),
+               name_members.c.group_id.label(labels[2]), name_members.c.group_size.label(labels[3]))
+    return joins, columns
 
 
 def _pdf_export_rows(query):
@@ -209,18 +253,10 @@ def export_scan_results():
                 # Export based on current filter and search
                 filter_type = data.get('filter', 'all')
                 search = data.get('search', '')
-                
-                query = ScanResult.query
-                
-                # Apply search filter
-                if search:
-                    query = query.filter(ScanResult.file_path.contains(search))
-                
-                query = _apply_status_filter(query, filter_type)
-                
+                duplicate_mode = data.get('duplicate_mode', 'all')
+                query, export_type = _filtered_export_query(filter_type, search, duplicate_mode)
                 result_total = query.count()
                 results = _pdf_export_rows(query) if format_type == 'pdf' else None
-                export_type = filter_type if filter_type != 'all' else 'all'
                 logger.info("Exporting %s scan results to %s", result_total, format_type.upper())
         else:
             # GET request - support format, filter, and search parameters
@@ -232,31 +268,28 @@ def export_scan_results():
             if format_type not in ['csv', 'json', 'pdf']:
                 format_type = 'csv'
             
-            # Build query based on filter
-            query = ScanResult.query
-            
-            # Apply search filter if provided
-            if search:
-                query = query.filter(ScanResult.file_path.contains(search))
-            
-            query = _apply_status_filter(query, filter_type)
-            
+            duplicate_mode = request.args.get('duplicate_mode', 'all')
+            query, export_type = _filtered_export_query(filter_type, search, duplicate_mode)
             result_total = query.count()
             results = _pdf_export_rows(query) if format_type == 'pdf' else None
-            export_type = filter_type if filter_type != 'all' else 'all'
             logger.info("Exporting %s scan results to %s", result_total, format_type.upper())
         
+        duplicate_joins, duplicate_columns = _duplicate_export_columns()
+
         def result_batches():
             columns = (ScanResult.id, ScanResult.file_path, ScanResult.file_size,
                        ScanResult.file_type, ScanResult.creation_date, ScanResult.is_corrupted,
                        ScanResult.corruption_details, ScanResult.scan_date, ScanResult.scan_status,
                        ScanResult.discovered_date, ScanResult.marked_as_good, ScanResult.has_warnings,
-                       ScanResult.warning_details, ScanResult.error_message)
+                       ScanResult.warning_details, ScanResult.error_message) + duplicate_columns
             last_id = 0
             while True:
                 session = db.session.session_factory()
                 try:
-                    batch = (query.with_session(session).filter(
+                    batch_query = query.with_session(session)
+                    for members, on_clause in duplicate_joins:
+                        batch_query = batch_query.outerjoin(members, on_clause)
+                    batch = (batch_query.filter(
                         ScanResult.id > last_id, ScanResult.id <= export_max_id)
                              .order_by(ScanResult.id).with_entities(*columns).limit(500).all())
                 finally:
@@ -298,6 +331,10 @@ def export_scan_results():
                     'has_warnings': getattr(result, 'has_warnings', False),
                     'warning_details': getattr(result, 'warning_details', None),
                     'error_message': getattr(result, 'error_message', None),
+                    'content_duplicate_group': result.content_duplicate_group,
+                    'content_duplicate_group_size': result.content_duplicate_group_size,
+                    'filename_duplicate_group': result.filename_duplicate_group,
+                    'filename_duplicate_group_size': result.filename_duplicate_group_size,
                     'details': {
                         'corruption': result.corruption_details,
                         'warning': getattr(result, 'warning_details', None),
@@ -460,7 +497,11 @@ def export_scan_results():
                 'Scan Date',
                 'Scan Status',
                 'Discovered Date',
-                'Marked as Good'
+                'Marked as Good',
+                'Content Duplicate Group',
+                'Content Duplicate Files',
+                'Filename Duplicate Group',
+                'Filename Duplicate Files'
                 ])
                 yield output.getvalue(); output.seek(0); output.truncate(0)
                 for result in result_batches():
@@ -485,13 +526,21 @@ def export_scan_results():
                     result.scan_date.isoformat() if result.scan_date else '',
                     getattr(result, 'scan_status', 'completed'),  # Default to completed for old records
                     getattr(result, 'discovered_date', result.scan_date).isoformat() if getattr(result, 'discovered_date', result.scan_date) else '',
-                    'Yes' if result.marked_as_good else 'No'
+                    'Yes' if result.marked_as_good else 'No',
+                    result.content_duplicate_group if result.content_duplicate_group is not None else '',
+                    result.content_duplicate_group_size if result.content_duplicate_group_size is not None else '',
+                    result.filename_duplicate_group if result.filename_duplicate_group is not None else '',
+                    result.filename_duplicate_group_size if result.filename_duplicate_group_size is not None else ''
                     ])
                     yield output.getvalue(); output.seek(0); output.truncate(0)
             filename = f"pixelprobe_{export_type}_{timestamp}.csv"
             release_request_session()
             return Response(stream_with_context(generate_csv()), mimetype='text/csv', headers={'Content-Disposition': f'attachment; filename={filename}'})
         
+    except _InvalidDuplicateMode as e:
+        return {'error': str(e)}, 400
+    except _DuplicateIndexNotReady as e:
+        return {'error': str(e), 'duplicate_status': e.status}, 503, {'Retry-After': '30'}
     except Exception as e:
         logger.error(f"Error exporting: {str(e)}", exc_info=True)
         return {'error': 'Export failed'}, 500

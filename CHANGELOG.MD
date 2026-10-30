@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.5] - 2026-10-29
+
+### Added
+
+- CSV and JSON exports mark each row's content duplicate group and filename duplicate group, with the group's file count, so a script can keep one file per group ([#88](https://github.com/ttlequals0/PixelProbe/issues/88)). Exports honor the Duplicates filter and its content or filename mode. They return HTTP 503 with `Retry-After: 30` until the duplicate index is ready, and the duplicate columns stay empty while it initializes.
+
+### Fixed
+
+- The per-file Actions menu did not open on mobile cards or desktop table rows. Since 2.9.3 the toggle called the menu handler on the table renderer instead of the application, which raised a TypeError on every tap.
+
 ## [2.10.4] - 2026-10-10
 
 ### Fixed

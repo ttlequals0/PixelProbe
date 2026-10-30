@@ -2699,15 +2699,26 @@ paths:
           in: query
           schema:
             type: string
-            enum: [all, corrupted, healthy, pending, error]
+            enum: [all, corrupted, healthy, warning, pending, error, duplicates]
             default: all
         - name: search
           in: query
           schema:
             type: string
+        - name: duplicate_mode
+          in: query
+          description: With filter=duplicates, hash (same recorded content) or name (same filename)
+          schema:
+            type: string
+            enum: [all, hash, name]
+            default: all
       responses:
         '200':
-          description: Export file generated and returned
+          description: Export file generated and returned. CSV and JSON rows carry content and filename duplicate group columns.
+        '400':
+          description: Unknown duplicate_mode
+        '503':
+          description: Duplicate index is initializing; retry after the Retry-After interval
 
     post:
       summary: Export scan results (POST)
@@ -2739,16 +2750,24 @@ paths:
                   enum: [csv, json, pdf]
                 filter:
                   type: string
-                  enum: [all, corrupted, healthy, pending, warning]
+                  enum: [all, corrupted, healthy, warning, pending, error, duplicates]
                 search:
                   type: string
+                duplicate_mode:
+                  type: string
+                  enum: [all, hash, name]
+                  default: all
                 file_ids:
                   type: array
                   items:
                     type: integer
       responses:
         '200':
-          description: Export file generated and returned
+          description: Export file generated and returned. CSV and JSON rows carry content and filename duplicate group columns.
+        '400':
+          description: Unknown duplicate_mode
+        '503':
+          description: Duplicate index is initializing; retry after the Retry-After interval
 
   # Maintenance Endpoints
   /test-cleanup:

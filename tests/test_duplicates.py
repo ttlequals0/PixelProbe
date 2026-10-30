@@ -1,3 +1,6 @@
+import csv
+import io
+import json
 import os
 from uuid import uuid4
 from datetime import datetime, timezone
@@ -184,3 +187,53 @@ def test_postgres_duplicate_basename_and_grouping():
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA {schema} CASCADE'))
         engine.dispose()
+
+
+def _csv_rows(response):
+    return list(csv.DictReader(io.StringIO(response.get_data(as_text=True))))
+
+
+def test_export_annotates_duplicate_groups_and_filters_duplicates(db, authenticated_client):
+    rows = seed_duplicates(db.session)
+    prime_sqlite_cache(db.session)
+    content_ids = {rows[0].id, rows[1].id, rows[2].id}
+    name_ids = {rows[0].id, rows[1].id, rows[11].id}
+
+    exported = _csv_rows(authenticated_client.get('/api/export?format=csv'))
+    assert len(exported) == len(rows)
+    by_id = {int(row['ID']): row for row in exported}
+    assert {int(by_id[i]['Content Duplicate Group']) for i in content_ids} == {rows[0].id}
+    assert {by_id[i]['Content Duplicate Files'] for i in content_ids} == {'3'}
+    assert {int(by_id[i]['Filename Duplicate Group']) for i in name_ids} == {rows[0].id}
+    assert {by_id[i]['Filename Duplicate Files'] for i in name_ids} == {'3'}
+    assert by_id[rows[3].id]['Content Duplicate Group'] == ''
+    assert by_id[rows[12].id]['Filename Duplicate Group'] == ''
+
+    as_json = json.loads(authenticated_client.get('/api/export?format=json').get_data(as_text=True))
+    by_id = {row['id']: row for row in as_json}
+    assert by_id[rows[2].id]['content_duplicate_group'] == rows[0].id
+    assert by_id[rows[2].id]['content_duplicate_group_size'] == 3
+    assert by_id[rows[2].id]['filename_duplicate_group'] is None
+    assert by_id[rows[11].id]['filename_duplicate_group_size'] == 3
+
+    filtered = _csv_rows(authenticated_client.get('/api/export?format=csv&filter=duplicates'))
+    assert {int(row['ID']) for row in filtered} == content_ids
+    posted = authenticated_client.post('/api/export', json={
+        'format': 'csv', 'filter': 'duplicates', 'duplicate_mode': 'name', 'search': 'no-hash'})
+    assert posted.status_code == 200
+    assert {int(row['ID']) for row in _csv_rows(posted)} == {rows[11].id}
+    pdf = authenticated_client.post('/api/export', json={'format': 'pdf', 'filter': 'duplicates'})
+    assert pdf.status_code == 200
+    assert pdf.mimetype == 'application/pdf'
+    assert authenticated_client.get('/api/export?filter=duplicates&duplicate_mode=visual').status_code == 400
+
+
+def test_export_duplicate_filter_waits_for_index_and_leaves_columns_blank(db, authenticated_client):
+    rows = seed_duplicates(db.session)
+    response = authenticated_client.get('/api/export?format=csv&filter=duplicates')
+    assert response.status_code == 503
+    assert response.headers['Retry-After'] == '30'
+    exported = _csv_rows(authenticated_client.get('/api/export?format=csv'))
+    assert len(exported) == len(rows)
+    assert {row['Content Duplicate Group'] for row in exported} == {''}
+    assert {row['Filename Duplicate Files'] for row in exported} == {''}

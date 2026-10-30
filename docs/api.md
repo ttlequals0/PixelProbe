@@ -758,8 +758,9 @@ Export scan results in multiple formats (CSV, JSON, or PDF).
 
 **Query parameters (GET):**
 - `format` (string): Output format - `csv`, `json`, or `pdf` (default: csv)
-- `filter` (string): Filter type - `all`, `corrupted`, `healthy`, `pending`, `error` (default: all). `warning` is **not** handled on GET; use the POST form for it.
+- `filter` (string): Filter type - `all`, `corrupted`, `healthy`, `warning`, `pending`, `error`, `duplicates` (default: all)
 - `search` (string): Search term to filter by file path
+- `duplicate_mode` (string): With `filter=duplicates`, `hash` (same recorded content, default) or `name` (same filename)
 
 **Request body (POST):**
 ```json
@@ -771,9 +772,11 @@ Export scan results in multiple formats (CSV, JSON, or PDF).
 }
 ```
 
-In the POST form, `filter` accepts `all`, `corrupted`, `healthy`, or `warning`. If `file_ids` is provided, only those specific results are exported and `filter`/`search` are ignored.
+The POST form accepts the same `filter`, `search`, and `duplicate_mode` values. If `file_ids` is provided, only those specific results are exported and `filter`/`search` are ignored.
 
-**Response:** File download in requested format
+CSV and JSON rows carry four duplicate columns. `Content Duplicate Group` and `Content Duplicate Files` (`content_duplicate_group` and `content_duplicate_group_size` in JSON) mark files whose recorded SHA-256 hash and size match another existing file. `Filename Duplicate Group` and `Filename Duplicate Files` (`filename_duplicate_group` and `filename_duplicate_group_size`) mark files that share a filename. The group value is the lowest scan result ID in the group, so a script can keep one row per group value and remove the rest. The columns are empty for files that are not duplicates, and for every row while the duplicate index is still initializing.
+
+**Response:** File download in requested format. `filter=duplicates` returns `503` with `Retry-After: 30` until the duplicate index is ready, and `400` for an unknown `duplicate_mode`.
 
 ### Maintenance endpoints
 
