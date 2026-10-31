@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.6] - 2026-10-31
+
+### Fixed
+
+- Creating an API token with an expiration returned HTTP 500. The settings form sends `expires_in_days` as a string, which `timedelta` rejects. The endpoint now accepts digit strings and returns HTTP 400 for values that are not positive integers.
+- Try-it-out requests from the API documentation page failed with "The CSRF token is missing" for every write endpoint. The page now carries the CSRF token and Swagger UI sends it as `X-CSRFToken` on same-origin writes.
+
 ## [2.10.5] - 2026-10-29
 
 ### Added

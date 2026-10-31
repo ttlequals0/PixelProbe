@@ -253,9 +253,22 @@ def list_tokens():
 def create_token():
     """Create a new API token for the current user"""
     user = get_authenticated_user(request)
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     description = data.get('description', '')
     expires_in_days = data.get('expires_in_days')
+
+    # The settings form posts the value as a string; accept digits, reject the rest.
+    if expires_in_days not in (None, ''):
+        if isinstance(expires_in_days, bool) or isinstance(expires_in_days, float):
+            return jsonify({'error': 'expires_in_days must be a positive integer'}), 400
+        try:
+            expires_in_days = int(expires_in_days)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'expires_in_days must be a positive integer'}), 400
+        if expires_in_days < 1:
+            return jsonify({'error': 'expires_in_days must be a positive integer'}), 400
+    else:
+        expires_in_days = None
 
     token = APIToken(
         user_id=user.id,
