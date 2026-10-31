@@ -742,6 +742,36 @@ class TestFreezeCorroboration:
         return checker._check_video_freeze('/fake/video.mkv', duration=duration)
 
     @patch('subprocess.run')
+    def test_bogus_avg_frame_rate_does_not_fabricate_absent_packets(self, mock_run):
+        """Matroska reports avg_frame_rate=1000/1 when it cannot compute one.
+        A steady 23.976 fps packet cadence through a static end card is
+        content that is present, whatever the header claims."""
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=_freeze_stderr([(8294.4, 8305.7, 11.3)]),
+            probe_stdout=_packets(8291.4, 8311.7, step=1001 / 24000))
+        checker = PixelProbe()
+        is_corrupted, corruption_details, _, _, scan_output = checker._check_video_freeze(
+            '/fake/respect.mkv', duration=8692.1, avg_fps=1000.0)
+        assert is_corrupted is False
+        assert corruption_details == []
+        assert not any('Missing content' in line for line in scan_output)
+
+    @patch('subprocess.run')
+    def test_absent_packets_still_corroborate_with_bogus_avg_frame_rate(self, mock_run):
+        """The measured cadence outside the window, not the header, sets the
+        expectation, so a real hole is still missing content."""
+        lead = _packets(839.4, 842.4, step=1001 / 24000)
+        trail = _packets(942.2, 945.2, step=1001 / 24000)
+        mock_run.side_effect = freeze_router(
+            freeze_stderr=_freeze_stderr([(842.4, 942.2, 99.8)]),
+            probe_stdout=lead + "\n" + trail)
+        checker = PixelProbe()
+        is_corrupted, corruption_details, _, _, _ = checker._check_video_freeze(
+            '/fake/bunny.mkv', duration=5206.9, avg_fps=1000.0)
+        assert is_corrupted is True
+        assert any('absent packets' in d for d in corruption_details)
+
+    @patch('subprocess.run')
     def test_uncorroborated_freeze_is_discounted(self, mock_run):
         """Packets present, frames decodable: the picture stopped on purpose"""
         c, cd, w, wd, out = self._run(mock_run, [(640.0, 648.0, 8.0)])
@@ -1544,6 +1574,71 @@ class TestOpusEofParseError:
 
         assert is_corrupted is True
         assert any('Opus' in d for d in corruption_details)
+
+
+class TestLeadingParameterSetSample:
+    """A lone PPS/SPS sample before the first keyframe (seen on Blu-ray
+    remuxes) makes the probe-time decoder print one 'missing picture in
+    access unit' and one 'no frame!'. -c copy never decodes, so with exit
+    code 0 those lines come only from stream probing; a verified-clean file
+    shows exactly one of each, so a flood still means a damaged stream start."""
+
+    def _run_video_check(self, validation_returncode, no_frame_count=1):
+        lines = []
+        for _ in range(no_frame_count):
+            lines.append('[h264 @ 0x63c7f5d47300] missing picture in access unit with size 10')
+            lines.append('[h264 @ 0x63c7f5d47300] no frame!')
+
+        def subprocess_side_effect(cmd, *args, **kwargs):
+            result = Mock()
+            result.stdout = ''
+            if 'copy' in cmd:
+                result.returncode = validation_returncode
+                result.stderr = '\n'.join(lines)
+            else:
+                result.returncode = 0
+                result.stderr = ''
+            return result
+
+        probe = {
+            'streams': [{
+                'codec_type': 'video',
+                'codec_name': 'h264',
+                'profile': 'High',
+                'pix_fmt': 'yuv420p',
+                'duration': '60.0'
+            }],
+            'format': {'duration': '60.0'}
+        }
+
+        with patch('os.path.exists', return_value=True), \
+             patch('os.path.getsize', return_value=1024 * 1024), \
+             patch('pixelprobe.media_checker._ffprobe_with_timeout', return_value=probe), \
+             patch('subprocess.run', side_effect=subprocess_side_effect):
+            checker = PixelProbe()
+            return checker._check_video_corruption('/fake/remux.mp4')
+
+    def test_single_probe_no_frame_with_clean_exit_stays_healthy(self):
+        is_corrupted, corruption_details, _, _, warning_details = (
+            self._run_video_check(validation_returncode=0)
+        )
+        assert is_corrupted is False
+        assert not any('no frame' in d for d in corruption_details)
+        assert not any('no frame' in w for w in warning_details)
+
+    def test_probe_no_frame_with_failed_exit_stays_corrupted(self):
+        is_corrupted, corruption_details, _, _, _ = (
+            self._run_video_check(validation_returncode=1)
+        )
+        assert is_corrupted is True
+        assert any('FFmpeg validation failed' in d for d in corruption_details)
+
+    def test_probe_no_frame_flood_stays_corrupted(self):
+        is_corrupted, corruption_details, _, _, _ = (
+            self._run_video_check(validation_returncode=0, no_frame_count=20)
+        )
+        assert is_corrupted is True
+        assert any('no frame' in d for d in corruption_details)
 
 
 class TestWorkerDatabasePool:

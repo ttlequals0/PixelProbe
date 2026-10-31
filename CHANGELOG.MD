@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.7] - 2026-10-31
+
+### Fixed
+
+- Freeze corroboration reported "Missing content" on Matroska files whose header declares `avg_frame_rate` as 1000/1, which ffprobe emits when it cannot compute a rate. Expected packets now come from the cadence measured around the frozen window, so a static end card with a steady 23.976 fps packet stream is no longer flagged.
+- Blu-ray remuxes that start with a lone PPS sample before the first keyframe were marked corrupted with `FFmpeg errors: no frame!`. The container validation pass never decodes, so that line only comes from stream probing. Up to `NO_FRAME_PROBE_NOTICE_MAX` (default 4) probe-time `no frame!` and `missing picture in access unit` lines are now benign on a clean exit; more still mark the file corrupted.
+
 ## [2.10.6] - 2026-10-31
 
 ### Fixed
