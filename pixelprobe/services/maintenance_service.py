@@ -31,7 +31,7 @@ from pixelprobe.utils.integrity import adopt_bitrot_baseline
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
 from pixelprobe.utils.paths import is_path_under, like_prefix
 from pixelprobe.utils.mounts import mount_matches_baseline
-from pixelprobe.utils.security import PathTraversalError, validate_directory_path
+from pixelprobe.utils.security import PathTraversalError, get_allowed_scan_paths, validate_directory_path
 from pixelprobe.progress_utils import (
     update_file_changes_progress_redis,
     clear_file_changes_progress_redis,
@@ -1079,7 +1079,8 @@ class MaintenanceService:
                 directory = os.path.dirname(path)
                 if directory not in occupied:
                     occupied[directory] = (self._has_entries(directory)
-                                           or self._library_answers(os.path.dirname(directory)))
+                                           or self._library_answers(
+                                               self._nearest_present_ancestor(directory)))
                 if occupied[directory] or trust_unreadable_dirs:
                     decision.decision = 'eligible'
                     decision.reason = ('operator_trusted_unreadable_directory'
@@ -1153,7 +1154,8 @@ class MaintenanceService:
             directory = os.path.dirname(path)
             if directory not in occupied:
                 occupied[directory] = (self._has_entries(directory)
-                                       or self._library_answers(os.path.dirname(directory)))
+                                       or self._library_answers(
+                                           self._nearest_present_ancestor(directory)))
             if occupied[directory] or trust_unreadable_dirs:
                 deletable.append(entry)
             else:
@@ -1161,6 +1163,28 @@ class MaintenanceService:
                 held_dirs.add(directory)
 
         return deletable, unconfirmed, returned, self._describe_holds(held_dirs)
+
+    def _nearest_present_ancestor(self, directory, max_levels=16):
+        """The first directory above a vanished folder that still exists.
+
+        Deleting a whole podcast or show removes its media folders and the
+        folder above them together, so the level directly above is just as
+        gone. Walk up until something is present, never above the scan root
+        that holds the path: evidence has to come from the same library. A
+        timed-out stat is not an answer and stops the walk there, where
+        sampling will fail and hold.
+        """
+        roots = [os.path.realpath(root) for root in get_allowed_scan_paths()]
+        root = max((r for r in roots if is_path_under(directory, r)), key=len, default=None)
+        current = os.path.dirname(directory)
+        for _ in range(max_levels):
+            parent = os.path.dirname(current)
+            if parent == current or self._classify(current) != PATH_ABSENT:
+                return current
+            if root is not None and (current == root or not is_path_under(parent, root)):
+                return current
+            current = parent
+        return current
 
     def _library_answers(self, directory, _seen=None):
         """Whether the library above a vanished folder is still mounted.

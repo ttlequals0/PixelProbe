@@ -234,6 +234,16 @@ def _steady_cadence(pts, spread=2.0, minimum=8):
     return median > 0 and high <= median * spread
 
 
+def _measured_rate(pts):
+    """Packets per second from the median gap between consecutive timestamps.
+    None with fewer than two gaps."""
+    gaps = sorted(b - a for a, b in zip(pts, pts[1:]) if b > a)
+    if len(gaps) < 2:
+        return None
+    median = gaps[len(gaps) // 2]
+    return 1.0 / median if median > 0 else None
+
+
 def _parse_rate(text):
     """Parse an ffprobe rate fraction like '24000/1001'. None when unusable
     (missing, zero, or the '0/0' ffprobe emits for unknown rates)."""
@@ -304,6 +314,9 @@ def _merged_frozen_seconds(events):
 # neither signal is a held animation cel or a static title/end card, not
 # damage. Thresholds are generous because observed real cases are extreme
 # (87-100% of packets absent; thousands of decode errors in one window).
+# A decoded-frame deficit with no gap longer than this between consecutive
+# packets is variable frame rate (dropped duplicate frames), not missing video.
+FRAME_GAP_CONTINUOUS_SECS = 1.0
 FREEZE_PACKET_ABSENT_RATIO = 0.2  # under this fraction of expected packets = missing content
 FREEZE_DECODE_ERROR_MIN = 20      # more error lines than this in one window = decode failure
 FREEZE_CORROBORATE_MAX_EVENTS = 12
@@ -345,6 +358,7 @@ TEMPORAL_SAMPLE_POSITIONS = (0.25, 0.50, 0.75)
 # More means mid-stream damage that a -c copy validation cannot surface
 # through the exit code because audio is never decoded.
 OPUS_EOF_NOTICE_MAX = env_int('OPUS_EOF_NOTICE_MAX', 4, floor=1)
+NO_FRAME_PROBE_NOTICE_MAX = env_int('NO_FRAME_PROBE_NOTICE_MAX', 4, floor=1)
 
 # Verdict thresholds for signalstats. Per-frame values above TOUT/VREP_FRAME
 # count toward the corresponding percentage, and the file is judged once that
@@ -2063,6 +2077,7 @@ class PixelProbe:
                 # edit site here instead of a boolean + condition + label trio
                 benign_labels = []
                 opus_notice_count = 0
+                no_frame_count = 0
 
                 def note_benign(label):
                     if label not in benign_labels:
@@ -2090,6 +2105,13 @@ class PixelProbe:
                         # through the exit code, so it is promoted below.
                         opus_notice_count += 1
                         note_benign("Opus packet header parse notices (ffmpeg 8 EOF artifact)")
+                    elif 'no frame!' in line_lower or 'missing picture in access unit' in line_lower:
+                        # -c copy never decodes, so these come from stream
+                        # probing. A lone PPS/SPS sample before the first
+                        # keyframe (Blu-ray remuxes) yields one of each on a
+                        # clean file; a flood means the stream start is damaged.
+                        no_frame_count += 1
+                        note_benign("probe-time 'no frame' notices (parameter-set-only leading sample)")
                     elif 'invalid data found when processing input' in line_lower or 'error while decoding stream' in line_lower:
                         # These are common FFmpeg decoder issues that don't always mean corruption
                         # Only mark as error if FFmpeg actually fails (returncode != 0)
@@ -2099,13 +2121,15 @@ class PixelProbe:
                             note_benign("decoder warnings (FFmpeg succeeded)")
                     elif (('error' in line_lower and 'duration' not in line_lower) or
                           'corrupt' in line_lower or
-                          'broken' in line_lower or
-                          'no frame' in line_lower):
+                          'broken' in line_lower):
                         significant_errors.append(line)
                 
                 if opus_notice_count > OPUS_EOF_NOTICE_MAX:
                     significant_errors.append(
                         f"{opus_notice_count} Opus packet header parse errors (mid-stream damage)")
+                if no_frame_count > NO_FRAME_PROBE_NOTICE_MAX:
+                    significant_errors.append(
+                        f"{no_frame_count} 'no frame' errors while probing the stream start")
                 # Only include NAL errors if there are other errors OR if FFmpeg failed
                 if 'NAL unit errors' in benign_labels and (significant_errors or result.returncode != 0):
                     # Add representative NAL error
@@ -2529,8 +2553,11 @@ class PixelProbe:
                 # (screen recordings, slideshows) legitimately stores nothing
                 # while the picture holds, so an irregular cadence around the
                 # window means this gap proves nothing. Expected packets come
-                # from the file's declared average rate when it has one.
-                rate = avg_fps or len(pts) / max(0.001, pts[-1] - pts[0])
+                # from the cadence measured around the window; the declared
+                # average rate is only a fallback because Matroska reports
+                # 1000/1 when it cannot compute one.
+                rate = (_measured_rate(outside) or avg_fps
+                        or len(pts) / max(0.001, pts[-1] - pts[0]))
                 expected = length * rate
                 if expected > 5 and inside < expected * FREEZE_PACKET_ABSENT_RATIO:
                     absent_pct = 100.0 * (1 - inside / expected)
@@ -2873,6 +2900,24 @@ class PixelProbe:
             return None
         return framerate, count, duration
 
+    def _probe_packet_cadence(self, file_path, timeout):
+        """(packet count, largest gap between consecutive packet timestamps,
+        last timestamp) for the video stream, or None when the probe fails."""
+        try:
+            result = safe_subprocess_run([
+                'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'packet=pts_time', '-of', 'csv=p=0',
+                ensure_cli_safe_path(file_path)
+            ], capture_output=True, text=True, timeout=timeout)
+            pts = sorted(float(x) for x in (result.stdout or '').split()
+                         if x.strip() and x.strip() != 'N/A')
+        except (subprocess.TimeoutExpired, OSError, ValueError) as e:
+            logger.debug(f"Packet cadence probe failed for {file_path}: {e}")
+            return None
+        if result.returncode != 0 or len(pts) < 2:
+            return None
+        return len(pts), max(b - a for a, b in zip(pts, pts[1:])), pts[-1]
+
     def _probe_video_end(self, file_path, declared_duration, timeout=60):
         """Locate where the video stream really ends; None if the probe fails.
 
@@ -2990,10 +3035,29 @@ class PixelProbe:
                         logger.info(f"Frame analysis (decoded): expected {expected}, "
                                     f"found {frame_count}, diff {diff} ({diff_percent:.1f}%)")
                         if diff_percent > 5.0:
-                            warning_details.append(
-                                f"Frame count differs from container metadata by {diff} frames "
-                                f"({diff_percent:.1f}%) - possible missing frames or "
-                                f"sparse/variable frame rate content")
+                            # Every packet decoded and no stretch of the
+                            # timeline is empty: the declared rate is wrong,
+                            # not the file (interlaced sources encoded with
+                            # duplicate frames dropped look like this).
+                            cadence = None
+                            if frame_count == packet_count:
+                                cadence = self._probe_packet_cadence(file_path, timeout=120)
+                            # A truncated tail concentrates the deficit at the
+                            # end; a VFR deficit is spread through the stream,
+                            # so the tail may explain only a small part of it.
+                            tail = decoded_duration - cadence[2] if cadence else None
+                            if (cadence and cadence[1] <= FRAME_GAP_CONTINUOUS_SECS
+                                    and tail <= FRAME_GAP_CONTINUOUS_SECS
+                                    and tail * framerate <= 0.25 * diff):
+                                info_notes.append(
+                                    f"Variable frame rate: {frame_count} frames decoded against "
+                                    f"{expected} expected from the declared rate ({diff_percent:.1f}% "
+                                    f"fewer); frames are continuous, largest gap {cadence[1]:.3f}s")
+                            else:
+                                warning_details.append(
+                                    f"Frame count differs from container metadata by {diff} frames "
+                                    f"({diff_percent:.1f}%) - possible missing frames or "
+                                    f"sparse/variable frame rate content")
                     else:
                         # Heavily damaged files are exactly where the confirm
                         # decode errors out; the packet evidence must not

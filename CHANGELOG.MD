@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.9] - 2026-11-01
+
+### Fixed
+
+- Stage 1 warned "Frame count differs from container metadata" on interlaced DVD rips encoded at a variable frame rate, where the container declares 29.97 fps but duplicate frames were dropped. When every packet decodes, no gap between consecutive frames exceeds 1 s, and the missing tail accounts for at most a quarter of the deficit, the deficit is now recorded as a variable frame rate note instead of a warning. A hole in the timeline, a truncated tail, or a decoder that loses packets still warns.
+
+## [2.10.8] - 2026-10-31
+
+### Fixed
+
+- `POST /api/force-scan-pending` queued a run that finished immediately with zero files. Since 2.9.3 chunk workers claim run members, and only directory discovery created them; a pending-type run skips discovery. The run now seeds its members from the pending inventory. A pending file that no longer exists is recorded as `error` with "File not found" and `file_exists` false instead of staying pending, once its scan root passes the mount baseline and the nearest present directory under it still holds entries; an offline library leaves the row unchanged. A row with a completed observation keeps it and only loses its presence flag.
+- Orphan cleanup held records for a deleted podcast or show because the folder directly above the vanished media folder was gone too, which the guard could not tell apart from an offline mount. The guard now walks up to the nearest directory still present, never above the scan root, and asks the library there, so a removed subtree under a mounted library is confirmed and an unmounted library is still held.
+
+## [2.10.7] - 2026-10-31
+
+### Fixed
+
+- Freeze corroboration reported "Missing content" on Matroska files whose header declares `avg_frame_rate` as 1000/1, which ffprobe emits when it cannot compute a rate. Expected packets now come from the cadence measured around the frozen window, so a static end card with a steady 23.976 fps packet stream is no longer flagged.
+- Blu-ray remuxes that start with a lone PPS sample before the first keyframe were marked corrupted with `FFmpeg errors: no frame!`. The container validation pass never decodes, so that line only comes from stream probing. Up to `NO_FRAME_PROBE_NOTICE_MAX` (default 4) probe-time `no frame!` and `missing picture in access unit` lines are now benign on a clean exit; more still mark the file corrupted.
+
+## [2.10.6] - 2026-10-31
+
+### Fixed
+
+- Creating an API token with an expiration returned HTTP 500. The settings form sends `expires_in_days` as a string, which `timedelta` rejects. The endpoint now accepts digit strings and returns HTTP 400 for values that are not positive integers.
+- Try-it-out requests from the API documentation page failed with "The CSRF token is missing" for every write endpoint. The page now carries the CSRF token and Swagger UI sends it as `X-CSRFToken` on same-origin writes.
+
 ## [2.10.5] - 2026-10-29
 
 ### Added

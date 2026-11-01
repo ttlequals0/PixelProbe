@@ -775,6 +775,8 @@ paths:
                   type: string
                 expires_in_days:
                   type: integer
+                  minimum: 1
+                  description: Optional lifetime in days; omit for no expiration
       responses:
         '200':
           description: Token created successfully

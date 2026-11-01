@@ -100,3 +100,17 @@ class TestExclusionsPersistence:
                 data = response.get_json()
                 assert '.tmp' in data['extensions']
                 assert '.bak' in data['extensions']
+
+class TestApiDocsCsrf:
+    """Swagger Try-it-out runs with the session cookie, so it needs the CSRF token."""
+
+    def test_api_docs_page_exposes_csrf_token(self):
+        root = os.path.join(os.path.dirname(__file__), '..', '..')
+        template = open(os.path.join(root, 'templates', 'api_docs.html')).read()
+        assert '<meta name="csrf-token" content="{{ csrf_token() }}">' in template
+
+    def test_api_docs_script_sends_csrf_header(self):
+        root = os.path.join(os.path.dirname(__file__), '..', '..')
+        source = open(os.path.join(root, 'static', 'js', 'api_docs.js')).read()
+        assert 'requestInterceptor' in source
+        assert "X-CSRFToken" in source

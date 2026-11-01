@@ -325,3 +325,31 @@ def test_token_expiration(app):
 
         # Token should be valid
         assert token2.is_valid() == True
+
+def test_api_token_expires_in_days_accepts_form_string(auth_client, app):
+    """The settings form posts expires_in_days as a string; it must not 500."""
+    with app.app_context():
+        from pixelprobe.models import db, User
+        user = User(username='testuser', email='test@test.com', is_admin=True)
+        user.set_password('testpass')
+        db.session.add(user)
+        db.session.commit()
+
+    auth_client.post('/api/auth/login',
+        json={'username': 'testuser', 'password': 'testpass'})
+
+    response = auth_client.post('/api/tokens',
+        json={'description': 'Expiring', 'expires_in_days': '30'})
+    assert response.status_code == 201
+    assert json.loads(response.data)['token_info']['expires_at'] is not None
+
+    response = auth_client.post('/api/tokens',
+        json={'description': 'No expiry', 'expires_in_days': None})
+    assert response.status_code == 201
+    assert json.loads(response.data)['token_info']['expires_at'] is None
+
+    for bad in ('abc', 0, -5, 1.5):
+        response = auth_client.post('/api/tokens',
+            json={'description': 'Bad', 'expires_in_days': bad})
+        assert response.status_code == 400, bad
+        assert 'expires_in_days' in json.loads(response.data)['error']
