@@ -110,6 +110,24 @@ class TestConfirmOrphans:
         assert unconfirmed == []
         assert reason == ''
 
+    def test_the_walk_never_leaves_the_scan_root(self, tmp_path, clean_db):
+        """A recorded file in another library above the scan root is not
+        evidence for this one."""
+        from pixelprobe.models import ScanConfiguration
+        other = tmp_path / 'other-library'
+        other.mkdir()
+        (other / 'known.mkv').write_text('x')
+        _record(clean_db, [str(other / 'known.mkv')])
+        root = tmp_path / 'tv'
+        clean_db.session.add(ScanConfiguration(path=str(root), is_active=True))
+        clean_db.session.commit()
+
+        deletable, unconfirmed, _returned, _reason = _service()._confirm_orphans(
+            _entries(root / 'Show' / 'Season 1' / 'ep1.mkv'))
+
+        assert deletable == []
+        assert len(unconfirmed) == 1
+
     def test_a_deleted_subtree_under_an_unmounted_library_is_still_kept(self, tmp_path):
         mount = tmp_path / 'media'
         mount.mkdir()  # empty mountpoint: nothing recorded answers for it

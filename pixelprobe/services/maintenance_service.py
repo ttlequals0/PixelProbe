@@ -31,7 +31,7 @@ from pixelprobe.utils.integrity import adopt_bitrot_baseline
 from pixelprobe.constants import CONFIG_LOG_RETENTION_DAYS
 from pixelprobe.utils.paths import is_path_under, like_prefix
 from pixelprobe.utils.mounts import mount_matches_baseline
-from pixelprobe.utils.security import PathTraversalError, validate_directory_path
+from pixelprobe.utils.security import PathTraversalError, get_allowed_scan_paths, validate_directory_path
 from pixelprobe.progress_utils import (
     update_file_changes_progress_redis,
     clear_file_changes_progress_redis,
@@ -1169,13 +1169,19 @@ class MaintenanceService:
 
         Deleting a whole podcast or show removes its media folders and the
         folder above them together, so the level directly above is just as
-        gone. Walk up until something is present; a timed-out stat is not an
-        answer and stops the walk there, where sampling will fail and hold.
+        gone. Walk up until something is present, never above the scan root
+        that holds the path: evidence has to come from the same library. A
+        timed-out stat is not an answer and stops the walk there, where
+        sampling will fail and hold.
         """
+        roots = [os.path.realpath(root) for root in get_allowed_scan_paths()]
+        root = max((r for r in roots if is_path_under(directory, r)), key=len, default=None)
         current = os.path.dirname(directory)
         for _ in range(max_levels):
             parent = os.path.dirname(current)
             if parent == current or self._classify(current) != PATH_ABSENT:
+                return current
+            if root is not None and (current == root or not is_path_under(parent, root)):
                 return current
             current = parent
         return current

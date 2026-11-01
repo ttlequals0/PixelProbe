@@ -43,7 +43,8 @@ from pixelprobe.services.scan_engine import (
     maybe_finalize_scan, sync_progress_from_chunks
 )
 from pixelprobe.services.scan_reporting import add_files_batch_to_db, seed_pending_run_members
-from pixelprobe.utils.helpers import batch_process, env_int, classify_path_existence, PATH_ABSENT
+from pixelprobe.utils.helpers import (batch_process, env_int, classify_path_existence,
+                                      PATH_ABSENT, PATH_EXISTS)
 from pixelprobe.utils.paths import is_path_under
 from pixelprobe.utils.mounts import mount_matches_baseline
 from pixelprobe.utils.security import (
@@ -126,9 +127,14 @@ def _claim_chunk_members(scan_id, first_path, last_path, checker):
             member.status = 'error'
             member.outcome = 'unavailable'
             member.completed_at = now
-            if classify_path_existence(member.file_path) == PATH_ABSENT:
+            absent = classify_path_existence(member.file_path) == PATH_ABSENT
+            if absent and _library_holds(member.file_path):
                 member.error_message = 'File not found'
                 _record_missing_inventory(member.scan_result_id, now)
+            elif absent:
+                # An offline library reads the same as a deleted file; the
+                # inventory row keeps its state until the library answers.
+                member.error_message = 'File not available'
             else:
                 member.error_message = 'File no longer permitted by scan root policy'
             continue
@@ -139,6 +145,29 @@ def _claim_chunk_members(scan_id, first_path, last_path, checker):
     # Run members track queue activity; global results change after decoding.
     db.session.commit()
     return claimed_ids
+
+
+def _library_holds(path):
+    """Positive proof that the library a path belongs to is mounted: the
+    containing scan root passes its mount baseline and the nearest present
+    directory under that root, never above it, still holds entries."""
+    resolved = os.path.realpath(path)
+    roots = [os.path.realpath(root) for root in get_allowed_scan_paths()]
+    root = max((r for r in roots if is_path_under(resolved, r)), key=len, default=None)
+    if root is None or not _root_mount_baseline_matches(root):
+        return False
+    current = os.path.dirname(resolved)
+    while is_path_under(current, root):
+        if classify_path_existence(current) == PATH_EXISTS:
+            try:
+                with os.scandir(current) as entries:
+                    return any(entries)
+            except OSError:
+                return False
+        if current == root:
+            return False
+        current = os.path.dirname(current)
+    return False
 
 
 def _record_missing_inventory(scan_result_id, now):

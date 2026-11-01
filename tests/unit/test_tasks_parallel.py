@@ -224,7 +224,7 @@ class TestPendingRunSeeding:
         """A pending row whose file was deleted must reach a terminal state
         instead of staying pending forever."""
         with app.app_context():
-            (gone,) = _authorized_media_root(db, tmp_path, 'gone.mkv')
+            gone, _stays = _authorized_media_root(db, tmp_path, 'gone.mkv', 'stays.mkv')
             _add_pending(db, [gone], scan_id='scan-gone')
             import os
             os.remove(gone)
@@ -241,9 +241,28 @@ class TestPendingRunSeeding:
             assert row.error_message == 'File not found'
             assert row.scan_date is not None
 
+    def test_claim_leaves_pending_row_alone_when_library_is_empty(self, tp, app, db, tmp_path):
+        """An empty scan root reads like an unmounted library: a vanished file
+        under it is not proof of deletion, so the inventory row keeps its state."""
+        with app.app_context():
+            (gone,) = _authorized_media_root(db, tmp_path, 'only.mkv')
+            _add_pending(db, [gone], scan_id='scan-offline')
+            import os
+            os.remove(gone)
+
+            claimed = tp._claim_chunk_members('scan-offline', gone, gone,
+                                               tp._build_chunk_checker('scan-offline'))
+            assert claimed == []
+            member = ScanRunFile.query.filter_by(scan_id='scan-offline', file_path=gone).one()
+            row = ScanResult.query.filter_by(file_path=gone).one()
+            assert member.status == 'error'
+            assert member.error_message == 'File not available'
+            assert row.scan_status == 'pending'
+            assert row.file_exists is True
+
     def test_claim_keeps_completed_observation_when_file_vanishes(self, tp, app, db, tmp_path):
         with app.app_context():
-            (gone,) = _authorized_media_root(db, tmp_path, 'seen.mkv')
+            gone, _stays = _authorized_media_root(db, tmp_path, 'seen.mkv', 'stays.mkv')
             result = ScanResult(file_path=gone, scan_status='completed', is_corrupted=False)
             state = ScanState(scan_id='scan-seen', force_rescan=True, phase='scanning', is_active=True)
             db.session.add_all([result, state])
