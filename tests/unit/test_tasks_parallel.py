@@ -182,6 +182,84 @@ class TestDiscoveryMembership:
                                                 file_path=file_path).one().status == 'pending'
 
 
+class TestPendingRunSeeding:
+    """A pending-type run has no discovery, so its members come from the
+    pending inventory itself. Without seeding the orchestrator found zero
+    members and finalized every force-scan-pending run with no files."""
+
+    def test_seed_members_from_pending_inventory_only(self, app, db):
+        from pixelprobe.services.scan_reporting import seed_pending_run_members
+        with app.app_context():
+            _make_scan_state(db, 'seed-run', phase='initializing', scan_type='pending')
+            db.session.add_all([
+                ScanResult(file_path='/media/a.mkv', scan_status='pending'),
+                ScanResult(file_path='/media/b.mkv', scan_status='pending', file_exists=False),
+                ScanResult(file_path='/media/c.mkv', scan_status='completed'),
+                ScanResult(file_path='/media/d.mkv', scan_status='error'),
+            ])
+            db.session.commit()
+
+            assert seed_pending_run_members('seed-run') == 2
+            assert seed_pending_run_members('seed-run') == 0  # idempotent
+            members = ScanRunFile.query.filter_by(scan_id='seed-run').all()
+            assert sorted(m.file_path for m in members) == ['/media/a.mkv', '/media/b.mkv']
+            assert all(m.status == 'pending' and m.scan_result_id for m in members)
+
+    def test_pending_orchestrator_seeds_and_chunks(self, tp, app, db, tmp_path):
+        with app.app_context():
+            paths = _authorized_media_root(db, tmp_path, 'one.mkv', 'two.mkv')
+            db.session.add_all([ScanResult(file_path=p, scan_status='pending') for p in paths])
+            db.session.commit()
+            with patch.object(tp, 'dispatch_scan_task_intent') as dispatch:
+                result = tp.parallel_scan_orchestrator.apply(
+                    kwargs={'scan_id': 'pending-run', 'paths': [],
+                            'scan_type': 'pending', 'force_rescan': False}).get()
+            assert result['status'] == 'LAUNCHED', result
+            assert result['total_files'] == 2
+            assert ScanRunFile.query.filter_by(scan_id='pending-run', status='pending').count() == 2
+            assert ScanChunk.query.filter_by(scan_id='pending-run').count() >= 1
+            assert dispatch.called
+
+    def test_claim_marks_vanished_pending_inventory_as_missing(self, tp, app, db, tmp_path):
+        """A pending row whose file was deleted must reach a terminal state
+        instead of staying pending forever."""
+        with app.app_context():
+            (gone,) = _authorized_media_root(db, tmp_path, 'gone.mkv')
+            _add_pending(db, [gone], scan_id='scan-gone')
+            import os
+            os.remove(gone)
+
+            claimed = tp._claim_chunk_members('scan-gone', gone, gone,
+                                               tp._build_chunk_checker('scan-gone'))
+            assert claimed == []
+            member = ScanRunFile.query.filter_by(scan_id='scan-gone', file_path=gone).one()
+            row = ScanResult.query.filter_by(file_path=gone).one()
+            assert member.status == 'error'
+            assert member.outcome == 'unavailable'
+            assert row.scan_status == 'error'
+            assert row.file_exists is False
+            assert row.error_message == 'File not found'
+            assert row.scan_date is not None
+
+    def test_claim_keeps_completed_observation_when_file_vanishes(self, tp, app, db, tmp_path):
+        with app.app_context():
+            (gone,) = _authorized_media_root(db, tmp_path, 'seen.mkv')
+            result = ScanResult(file_path=gone, scan_status='completed', is_corrupted=False)
+            state = ScanState(scan_id='scan-seen', force_rescan=True, phase='scanning', is_active=True)
+            db.session.add_all([result, state])
+            db.session.flush()
+            db.session.add(ScanRunFile(scan_id='scan-seen', scan_result_id=result.id,
+                                       file_path=gone, status='pending'))
+            db.session.commit()
+            import os
+            os.remove(gone)
+
+            tp._claim_chunk_members('scan-seen', gone, gone, tp._build_chunk_checker('scan-seen'))
+            row = ScanResult.query.filter_by(file_path=gone).one()
+            assert row.scan_status == 'completed'
+            assert row.file_exists is False
+
+
 class TestBuildScanChunks:
 
     def test_chunks_cover_all_pending_in_path_order(self, engine, app, db):

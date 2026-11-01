@@ -42,8 +42,8 @@ from pixelprobe.services.scan_engine import (
     build_scan_chunks, claim_scan_slot, finalize_scan,
     maybe_finalize_scan, sync_progress_from_chunks
 )
-from pixelprobe.services.scan_reporting import add_files_batch_to_db
-from pixelprobe.utils.helpers import batch_process, env_int
+from pixelprobe.services.scan_reporting import add_files_batch_to_db, seed_pending_run_members
+from pixelprobe.utils.helpers import batch_process, env_int, classify_path_existence, PATH_ABSENT
 from pixelprobe.utils.paths import is_path_under
 from pixelprobe.utils.mounts import mount_matches_baseline
 from pixelprobe.utils.security import (
@@ -125,8 +125,12 @@ def _claim_chunk_members(scan_id, first_path, last_path, checker):
         except PathTraversalError:
             member.status = 'error'
             member.outcome = 'unavailable'
-            member.error_message = 'File no longer permitted by scan root policy'
             member.completed_at = now
+            if classify_path_existence(member.file_path) == PATH_ABSENT:
+                member.error_message = 'File not found'
+                _record_missing_inventory(member.scan_result_id, now)
+            else:
+                member.error_message = 'File no longer permitted by scan root policy'
             continue
         member.status = 'processing'
         member.claimed_at = now
@@ -135,6 +139,21 @@ def _claim_chunk_members(scan_id, first_path, last_path, checker):
     # Run members track queue activity; global results change after decoding.
     db.session.commit()
     return claimed_ids
+
+
+def _record_missing_inventory(scan_result_id, now):
+    """A vanished file is a terminal observation for a pending row. A row with
+    a completed observation keeps it; only its presence flag changes."""
+    if scan_result_id is None:
+        return
+    row = db.session.get(ScanResult, scan_result_id)
+    if row is None:
+        return
+    row.file_exists = False
+    if row.scan_status == 'pending':
+        row.scan_status = 'error'
+        row.error_message = 'File not found'
+        row.scan_date = now
 
 
 def _set_scan_output(result, output):
@@ -1235,6 +1254,9 @@ def parallel_scan_orchestrator(self, scan_id: str, paths: List[str] = None,
         scan_state.phase_number = 2
         scan_state.progress_message = 'Preparing scan chunks...'
         scan_state.last_update = datetime.now(timezone.utc)
+        if scan_type == 'pending':
+            # No discovery ran, so the pending inventory is this run's membership.
+            scan_state.discovery_count = seed_pending_run_members(scan_id)
 
         chunks = build_scan_chunks(scan_id, commit=False)  # list of {'id', 'files_discovered'}
         total_to_scan = sum(c['files_discovered'] for c in chunks)

@@ -90,6 +90,35 @@ def create_scan_report(scan_state: ScanState, scan_type: str = None, commit: boo
     return report
 
 
+def seed_pending_run_members(scan_id: str) -> int:
+    """Queue every pending inventory row as a member of a pending-type run.
+
+    A pending-type run skips discovery, so nothing else creates its members.
+    Rows already in the run are left alone. Returns the number added.
+    """
+    existing = {
+        path for (path,) in db.session.query(ScanRunFile.file_path)
+        .filter(ScanRunFile.scan_id == scan_id).all()
+    }
+    rows = (db.session.query(ScanResult.id, ScanResult.file_path)
+            .filter(ScanResult.scan_status == 'pending').all())
+    membership = [
+        {'scan_id': scan_id, 'scan_result_id': row_id,
+         'file_path': file_path, 'status': 'pending'}
+        for row_id, file_path in rows if file_path not in existing
+    ]
+    if not membership:
+        return 0
+    if db.session.get_bind().dialect.name == 'postgresql':
+        db.session.execute(
+            insert(ScanRunFile).values(membership).on_conflict_do_nothing(
+                index_elements=['scan_id', 'file_path']))
+    else:
+        db.session.add_all(ScanRunFile(**member) for member in membership)
+    db.session.commit()
+    return len(membership)
+
+
 def add_files_batch_to_db(file_paths: List[str], scan_id: str = None) -> Tuple[int, int]:
     """Bulk-insert discovered files as pending rows (ON CONFLICT DO NOTHING).
 

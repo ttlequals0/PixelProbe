@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.8] - 2026-10-31
+
+### Fixed
+
+- `POST /api/force-scan-pending` queued a run that finished immediately with zero files. Since 2.9.3 chunk workers claim run members, and only directory discovery created them; a pending-type run skips discovery. The run now seeds its members from the pending inventory. A pending file that no longer exists is recorded as `error` with "File not found" and `file_exists` false instead of staying pending. A row with a completed observation keeps it and only loses its presence flag.
+- Orphan cleanup held records for a deleted podcast or show because the folder directly above the vanished media folder was gone too, which the guard could not tell apart from an offline mount. The guard now walks up to the nearest directory still present and asks the library there, so a removed subtree under a mounted library is confirmed and an unmounted library is still held.
+
 ## [2.10.7] - 2026-10-31
 
 ### Fixed
