@@ -1752,11 +1752,83 @@ class TestFrameIntegrityPacketFirst:
             run.side_effect = [
                 self._proc('25/1', 'nb_read_packets', 200, '10.000000'),
                 self._proc('25/1', 'nb_read_frames', 200, '10.000000'),   # decode confirms 20% diff
+                self._pts(0.0, 4.0, 0.04) + self._pts(7.0, 10.0, 0.04),   # 3s hole: frames missing
             ]
             is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mp4')
         assert is_corrupted is False
         assert details == []
         assert any('frame count differs' in w.lower() for w in warnings)
+
+    def _pts(self, start, end, step):
+        m = MagicMock()
+        m.returncode = 0
+        out, t = [], start
+        while t < end:
+            out.append(f"{t:.6f}")
+            t += step
+        m.stdout = "\n".join(out) + "\n"
+        m.stderr = ''
+        return m
+
+    def test_continuous_vfr_deficit_is_a_note_not_a_warning(self):
+        # Interlaced DVD source encoded with duplicate frames dropped: the
+        # container says 29.97 but frames arrive at a mix of 33ms and 67ms
+        # steps. Every packet decodes and nothing is missing.
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.side_effect = [
+                self._proc('30000/1001', 'nb_read_packets', 260, '10.000000'),  # 300 expected: 13% short
+                self._proc('30000/1001', 'nb_read_frames', 260, '10.000000'),
+                self._pts(0.0, 10.0, 10.0 / 260),
+            ]
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mkv')
+        assert is_corrupted is False
+        assert warnings == []
+        assert any('Variable frame rate' in n and 'continuous' in n for n in notes)
+        assert run.call_count == 3
+
+    def test_short_tail_truncation_keeps_warning(self):
+        # 2s clip at 25fps cut 7 frames short: the end probe cannot resolve a
+        # 0.28s tail, and the whole deficit sits there, so this is not VFR
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.side_effect = [
+                self._proc('25/1', 'nb_read_packets', 43, '2.000000'),
+                self._proc('25/1', 'nb_read_frames', 43, '2.000000'),
+                self._pts(0.0, 1.72, 0.04),
+            ]
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mkv')
+        assert any('frame count differs' in w.lower() for w in warnings)
+        assert notes == []
+
+    def test_decoded_fewer_than_packets_keeps_warning_without_cadence_probe(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.side_effect = [
+                self._proc('25/1', 'nb_read_packets', 250, '10.000000'),  # packets match
+                self._proc('25/1', 'nb_read_frames', 200, '10.000000'),
+            ]
+            # packets match the declared rate, so the decode never runs here;
+            # force the ambiguous path with a packet shortfall instead
+            run.side_effect = [
+                self._proc('25/1', 'nb_read_packets', 200, '10.000000'),
+                self._proc('25/1', 'nb_read_frames', 180, '10.000000'),   # decoder lost packets
+            ]
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mp4')
+        assert any('frame count differs' in w.lower() for w in warnings)
+        assert run.call_count == 2
+
+    def test_cadence_probe_timeout_keeps_warning(self):
+        checker = PixelProbe()
+        with patch('pixelprobe.media_checker.safe_subprocess_run') as run:
+            run.side_effect = [
+                self._proc('25/1', 'nb_read_packets', 200, '10.000000'),
+                self._proc('25/1', 'nb_read_frames', 200, '10.000000'),
+                subprocess.TimeoutExpired(cmd='ffprobe', timeout=120),
+            ]
+            is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mp4')
+        assert any('frame count differs' in w.lower() for w in warnings)
+        assert not any('timed out' in n for n in notes)
 
     def test_confirm_probe_failure_degrades_to_packet_warning(self):
         # Heavily damaged files are where -count_frames errors out; the
@@ -1816,6 +1888,7 @@ class TestFrameIntegrityPacketFirst:
             run.side_effect = [
                 self._proc('25/1', 'nb_read_packets', 2500, '125.0'),
                 self._proc('25/1', 'nb_read_frames', 2500, '125.0'),
+                self._pts(0.0, 100.0, 0.04),  # continuous, but stops 25s before the declared end
             ]
             is_corrupted, details, warnings, notes = checker._check_frame_integrity('/fake.mkv')
         assert is_corrupted is False

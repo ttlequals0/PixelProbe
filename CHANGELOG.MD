@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.9] - 2026-11-01
+
+### Fixed
+
+- Stage 1 warned "Frame count differs from container metadata" on interlaced DVD rips encoded at a variable frame rate, where the container declares 29.97 fps but duplicate frames were dropped. When every packet decodes, no gap between consecutive frames exceeds 1 s, and the missing tail accounts for at most a quarter of the deficit, the deficit is now recorded as a variable frame rate note instead of a warning. A hole in the timeline, a truncated tail, or a decoder that loses packets still warns.
+
 ## [2.10.8] - 2026-10-31
 
 ### Fixed

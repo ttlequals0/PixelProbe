@@ -314,6 +314,9 @@ def _merged_frozen_seconds(events):
 # neither signal is a held animation cel or a static title/end card, not
 # damage. Thresholds are generous because observed real cases are extreme
 # (87-100% of packets absent; thousands of decode errors in one window).
+# A decoded-frame deficit with no gap longer than this between consecutive
+# packets is variable frame rate (dropped duplicate frames), not missing video.
+FRAME_GAP_CONTINUOUS_SECS = 1.0
 FREEZE_PACKET_ABSENT_RATIO = 0.2  # under this fraction of expected packets = missing content
 FREEZE_DECODE_ERROR_MIN = 20      # more error lines than this in one window = decode failure
 FREEZE_CORROBORATE_MAX_EVENTS = 12
@@ -2897,6 +2900,24 @@ class PixelProbe:
             return None
         return framerate, count, duration
 
+    def _probe_packet_cadence(self, file_path, timeout):
+        """(packet count, largest gap between consecutive packet timestamps,
+        last timestamp) for the video stream, or None when the probe fails."""
+        try:
+            result = safe_subprocess_run([
+                'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'packet=pts_time', '-of', 'csv=p=0',
+                ensure_cli_safe_path(file_path)
+            ], capture_output=True, text=True, timeout=timeout)
+            pts = sorted(float(x) for x in (result.stdout or '').split()
+                         if x.strip() and x.strip() != 'N/A')
+        except (subprocess.TimeoutExpired, OSError, ValueError) as e:
+            logger.debug(f"Packet cadence probe failed for {file_path}: {e}")
+            return None
+        if result.returncode != 0 or len(pts) < 2:
+            return None
+        return len(pts), max(b - a for a, b in zip(pts, pts[1:])), pts[-1]
+
     def _probe_video_end(self, file_path, declared_duration, timeout=60):
         """Locate where the video stream really ends; None if the probe fails.
 
@@ -3014,10 +3035,29 @@ class PixelProbe:
                         logger.info(f"Frame analysis (decoded): expected {expected}, "
                                     f"found {frame_count}, diff {diff} ({diff_percent:.1f}%)")
                         if diff_percent > 5.0:
-                            warning_details.append(
-                                f"Frame count differs from container metadata by {diff} frames "
-                                f"({diff_percent:.1f}%) - possible missing frames or "
-                                f"sparse/variable frame rate content")
+                            # Every packet decoded and no stretch of the
+                            # timeline is empty: the declared rate is wrong,
+                            # not the file (interlaced sources encoded with
+                            # duplicate frames dropped look like this).
+                            cadence = None
+                            if frame_count == packet_count:
+                                cadence = self._probe_packet_cadence(file_path, timeout=120)
+                            # A truncated tail concentrates the deficit at the
+                            # end; a VFR deficit is spread through the stream,
+                            # so the tail may explain only a small part of it.
+                            tail = decoded_duration - cadence[2] if cadence else None
+                            if (cadence and cadence[1] <= FRAME_GAP_CONTINUOUS_SECS
+                                    and tail <= FRAME_GAP_CONTINUOUS_SECS
+                                    and tail * framerate <= 0.25 * diff):
+                                info_notes.append(
+                                    f"Variable frame rate: {frame_count} frames decoded against "
+                                    f"{expected} expected from the declared rate ({diff_percent:.1f}% "
+                                    f"fewer); frames are continuous, largest gap {cadence[1]:.3f}s")
+                            else:
+                                warning_details.append(
+                                    f"Frame count differs from container metadata by {diff} frames "
+                                    f"({diff_percent:.1f}%) - possible missing frames or "
+                                    f"sparse/variable frame rate content")
                     else:
                         # Heavily damaged files are exactly where the confirm
                         # decode errors out; the packet evidence must not
