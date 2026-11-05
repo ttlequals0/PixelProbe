@@ -2410,3 +2410,79 @@ textarea.form-control {
         grid-template-columns: 1fr auto auto;
     }
 }
+
+/* Nine columns outrun a 1280px laptop; scroll inside the card instead of
+   clipping the Actions column (the container's base rule hides overflow).
+   The container is a size container so the tiers below follow its own width. */
+#results-table-container {
+    overflow-x: auto;
+    container-type: inline-size;
+    container-name: results;
+}
+
+/* Compact table tiers keyed to the table container, not the viewport:
+   unfolded foldables and small tablets (the iPhone Duo inner display in
+   landscape is about 951px) and desktop windows with the sidebar open. The
+   mobile card layout (768px and below) hides the table, so these only apply
+   above that. Tool, Details, and Scan Date stay reachable from View and
+   Details; the table scrolls instead of clipping. */
+@container results (max-width: 1100px) {
+    #results-table th,
+    #results-table td {
+        padding: 0.75rem 0.625rem;
+    }
+
+    #results-table td.file-path-cell {
+        width: auto;
+        min-width: 200px;
+        max-width: none;
+    }
+
+    #results-table th:nth-child(6),
+    #results-table td:nth-child(6),
+    #results-table th:nth-child(7),
+    #results-table td:nth-child(7),
+    #results-table th:nth-child(8),
+    #results-table td:nth-child(8) {
+        display: none;
+    }
+
+    #results-table .action-buttons {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 0.375rem;
+        min-width: 0;
+    }
+
+    #results-table .action-buttons .btn {
+        width: auto;
+        padding: 0.4rem 0.55rem;
+    }
+
+    /* Icons only; the label stays as the tooltip and aria-label */
+    #results-table .action-buttons .btn-text {
+        display: none;
+    }
+
+    #results-table td:last-child {
+        min-width: 215px;
+    }
+}
+
+@container results (max-width: 760px) {
+    #results-table th:nth-child(5),
+    #results-table td:nth-child(5) {
+        display: none;
+    }
+
+    #results-table td.file-path-cell {
+        min-width: 160px;
+    }
+}
+
+@container results (max-width: 640px) {
+    #results-table th:nth-child(4),
+    #results-table td:nth-child(4) {
+        display: none;
+    }
+}

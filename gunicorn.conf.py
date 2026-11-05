@@ -24,3 +24,7 @@ timeout = _env_int("GUNICORN_TIMEOUT", 300)
 accesslog = "-"
 errorlog = "-"
 loglevel = os.environ.get("GUNICORN_LOG_LEVEL") or "info"
+
+# Media is on an NFS mount: os.sendfile delivered empty bodies for full-file
+# GETs (Range requests were unaffected), so serve via Python iteration.
+sendfile = False

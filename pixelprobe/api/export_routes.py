@@ -97,19 +97,20 @@ def _apply_status_filter(query, filter_type):
 
 
 class _InvalidDuplicateMode(ValueError):
-    pass
+    message = 'duplicate_mode must be all, hash, or name'
 
 
 class _DuplicateIndexNotReady(Exception):
     def __init__(self, status):
-        super().__init__('Duplicate index is initializing')
+        self.message = 'Duplicate index is initializing'
+        super().__init__(self.message)
         self.status = status
 
 
 def _filtered_export_query(filter_type, search, duplicate_mode):
     """Build the export query; returns (query, export_type)."""
     if duplicate_mode not in ('all', 'hash', 'name'):
-        raise _InvalidDuplicateMode('duplicate_mode must be all, hash, or name')
+        raise _InvalidDuplicateMode(_InvalidDuplicateMode.message)
     query = ScanResult.query
     if search:
         query = query.filter(ScanResult.file_path.contains(search))
@@ -538,9 +539,9 @@ def export_scan_results():
             return Response(stream_with_context(generate_csv()), mimetype='text/csv', headers={'Content-Disposition': f'attachment; filename={filename}'})
         
     except _InvalidDuplicateMode as e:
-        return {'error': str(e)}, 400
+        return {'error': e.message}, 400
     except _DuplicateIndexNotReady as e:
-        return {'error': str(e), 'duplicate_status': e.status}, 503, {'Retry-After': '30'}
+        return {'error': e.message, 'duplicate_status': e.status}, 503, {'Retry-After': '30'}
     except Exception as e:
         logger.error(f"Error exporting: {str(e)}", exc_info=True)
         return {'error': 'Export failed'}, 500

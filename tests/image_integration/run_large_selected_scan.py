@@ -38,7 +38,11 @@ def request(opener, base_url, method, path, payload=None, token=None, csrf=None)
         with opener.open(Request(f'{base_url}{path}', data=data, headers=headers, method=method), timeout=20) as response:
             return response.status, json.loads(response.read())
     except HTTPError as error:
-        return error.code, json.loads(error.read() or b'{}')
+        body = error.read() or b'{}'
+        try:
+            return error.code, json.loads(body)
+        except json.JSONDecodeError:
+            return error.code, {'error': body.decode(errors='replace')[:200]}
 
 
 def wait_for(predicate, timeout, description):
@@ -170,10 +174,19 @@ def main():
         if status != 200 or setting_value(settings, setting_key) != 120:
             raise RuntimeError(f'Scanner setting was not retained: {status} {settings}')
 
-        status, baseline = request(opener, base_url, 'POST', '/api/scan',
-                                   {'directories': ['/media/baseline'], 'force_rescan': True}, token=token)
+        # The worker container registers after the web container is healthy,
+        # so an early launch is refused with 503. /api/scan allows two launches
+        # a minute, so retry no faster than every 35 seconds.
+        for attempt in range(4):
+            status, baseline = request(opener, base_url, 'POST', '/api/scan',
+                                       {'directories': ['/media/baseline'], 'force_rescan': True}, token=token)
+            if not (status == 503 and 'Celery workers' in str(baseline.get('error', ''))):
+                break
+            if attempt < 3:
+                time.sleep(35)
         if status != 200 or not baseline.get('scan_id'):
-            raise RuntimeError(f'Baseline scan launch failed: {status} {baseline}')
+            raise RuntimeError(f'Baseline scan launch failed: {status} {baseline}\n'
+                               f'worker logs:\n{container_logs(worker)}')
         baseline_id = baseline['scan_id']
 
         def terminal(scan_id):
