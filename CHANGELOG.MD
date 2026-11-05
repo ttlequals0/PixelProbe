@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.11] - 2026-11-04
+
+### Fixed
+
+- Image previews showed "Preview could not be loaded" while videos played. A plain `GET /api/view/<id>` went through gunicorn's `os.sendfile`, which delivered a 0-byte body with the full `Content-Length` when the media mount is NFS. Range requests, which videos use, are served by Python and worked. gunicorn's `sendfile` is now off, so every file response streams the same way.
+- The results table now sizes its columns by the width of its own container instead of the viewport, so opening the sidebar on a foldable or a laptop re-tiers the columns: under 1100 px it hides Tool, Details, and Scan Date and shows icon-only actions; under 760 px it also hides Type; under 640 px it also hides Size. The 2.10.10 rule keyed on the viewport and clipped Type and Size with the sidebar open.
+- Export error responses for an invalid duplicate mode or an initializing duplicate index return their fixed messages from the exception's own field instead of `str(e)`, which clears two CodeQL stack-trace-exposure alerts. The response bodies are unchanged.
+
 ## [2.10.10] - 2026-11-04
 
 ### Fixed

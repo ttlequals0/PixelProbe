@@ -618,26 +618,36 @@ async function verifyViewer() {
   assert(declarations('.modal-body').some(([prop, value]) => prop === 'min-height' && value === '0'));
   assert(declarations('.modal-body').some(([prop, value]) => prop === 'overflow-y' && value === 'auto'));
 
-  // Unfolded foldables and small tablets (769-1023px, iPhone Duo inner display in
-  // landscape is about 951px): the results table must stay compact instead of
-  // stacking five action buttons per row and clipping the right-hand columns.
+  // The results table compacts by its container width (foldables, small tablets,
+  // sidebar open), in tiers: 1100px drops columns 6-8, 760px Type, 640px Size.
   const desktopCss = postcss.parse(fs.readFileSync('static/css/desktop.css', 'utf8'));
-  const compactRules = [];
-  desktopCss.walkAtRules('media', atRule => {
-    if (/min-width:\s*769px/.test(atRule.params) && /max-width:\s*1023px/.test(atRule.params)) {
-      atRule.walkRules(rule => rule.walkDecls(decl => compactRules.push([rule.selector, decl.prop, decl.value])));
-    }
+  const tiers = {};
+  desktopCss.walkAtRules('container', atRule => {
+    const found = tiers[atRule.params] = tiers[atRule.params] || [];
+    atRule.walkRules(rule => rule.walkDecls(decl => found.push([rule.selector, decl.prop, decl.value])));
   });
-  const compact = (selectorPart, prop, value) => compactRules.some(([selector, p, v]) =>
+  const tier = (params, selectorPart, prop, value) => (tiers[params] || []).some(([selector, p, v]) =>
     selector.includes(selectorPart) && p === prop && v === value);
-  assert(compact('#results-table-container', 'overflow-x', 'auto'));
-  assert(compact('#results-table .action-buttons', 'flex-direction', 'row'));
-  assert(compact('#results-table .action-buttons .btn', 'width', 'auto'));
+  const T1100 = 'results (max-width: 1100px)';
+  const T760 = 'results (max-width: 760px)';
+  const T640 = 'results (max-width: 640px)';
+  assert(tiers[T1100] && tiers[T760] && tiers[T640], 'all container tiers exist');
+  assert(tier(T1100, '#results-table .action-buttons', 'flex-direction', 'row'));
+  assert(tier(T1100, '#results-table .action-buttons .btn', 'width', 'auto'));
   for (const column of [6, 7, 8]) {
-    assert(compact(`#results-table td:nth-child(${column})`, 'display', 'none'), `column ${column} hidden`);
+    assert(tier(T1100, `#results-table td:nth-child(${column})`, 'display', 'none'), `column ${column} hidden`);
+    assert(tier(T1100, `#results-table th:nth-child(${column})`, 'display', 'none'), `header ${column} hidden`);
   }
-  assert(compact('#results-table td.file-path-cell', 'max-width', 'none'));
-  assert(compact('#results-table .action-buttons .btn-text', 'display', 'none'));
+  assert(tier(T1100, '#results-table td.file-path-cell', 'max-width', 'none'));
+  assert(tier(T1100, '#results-table .action-buttons .btn-text', 'display', 'none'));
+  assert(tier(T760, '#results-table td:nth-child(5)', 'display', 'none'), 'Type hidden');
+  assert(tier(T640, '#results-table td:nth-child(4)', 'display', 'none'), 'Size hidden');
+  const containerRules = [];
+  desktopCss.walkRules('#results-table-container', rule => {
+    if (rule.parent.type === 'root') rule.walkDecls(decl => containerRules.push([decl.prop, decl.value]));
+  });
+  assert(containerRules.some(([p, v]) => p === 'container-type' && v === 'inline-size'));
+  assert(containerRules.some(([p, v]) => p === 'overflow-x' && v === 'auto'));
   // Table buttons carry their label in a span so that rule can hide it; the
   // label survives as tooltip and accessible name. Cards keep plain labels.
   const compactRow = table.renderRow({ id: 31, file_path: '/media/row.mkv', scan_status: 'completed' });
