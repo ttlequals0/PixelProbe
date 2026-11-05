@@ -206,8 +206,13 @@ class SidebarManager {
             });
         });
         
-        // Restore desktop sidebar state from localStorage
-        const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+        // Restore desktop sidebar state from localStorage. Without a stored
+        // choice, unfolded foldables and small tablets start collapsed so
+        // the results table gets the width.
+        const storedCollapsed = localStorage.getItem('sidebarCollapsed');
+        const isCollapsed = storedCollapsed === null
+            ? window.innerWidth <= 1023
+            : storedCollapsed === 'true';
         if (isCollapsed && window.innerWidth > 768) {
             this.sidebar?.classList.add('collapsed');
             this.updateToggleIcon(true);
@@ -1971,7 +1976,10 @@ class TableManager {
         const actions = document.createElement('div'); actions.className = 'action-buttons';
         const id = Number(file.id); const make = (text, icon, handler, variant = 'btn-secondary') => {
             const button = document.createElement('button'); button.className = `btn ${compact ? 'btn-sm ' : ''}${variant}`;
-            button.title = text; button.innerHTML = `<i class="fas ${icon}"></i>`; button.append(` ${text}`);
+            button.title = text; button.setAttribute('aria-label', text); button.innerHTML = `<i class="fas ${icon}"></i>`;
+            // Table rows wrap the label so narrow layouts can show icons only.
+            if (compact) { const label = document.createElement('span'); label.className = 'btn-text'; label.textContent = ` ${text}`; button.appendChild(label); }
+            else button.append(` ${text}`);
             button.addEventListener('click', handler); return button;
         };
         actions.appendChild(make('View', 'fa-eye', () => app.viewFile(id), 'btn-primary'));

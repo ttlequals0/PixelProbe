@@ -2410,3 +2410,62 @@ textarea.form-control {
         grid-template-columns: 1fr auto auto;
     }
 }
+
+/* Nine columns outrun a 1280px laptop; scroll inside the card instead of
+   clipping the Actions column (the container's base rule hides overflow). */
+#results-table-container {
+    overflow-x: auto;
+}
+
+/* Unfolded foldables and small tablets (769-1023px; the iPhone Duo inner
+   display in landscape is about 951px). The desktop table stacks five
+   action buttons per row and clips its right-hand columns at this width,
+   so keep the row short and let the container scroll instead of clip.
+   Tool, Details, and Scan Date stay reachable from View and Details. */
+@media (min-width: 769px) and (max-width: 1023px) {
+    #results-table-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    #results-table th,
+    #results-table td {
+        padding: 0.75rem 0.625rem;
+    }
+
+    #results-table td.file-path-cell {
+        width: auto;
+        min-width: 200px;
+        max-width: none;
+    }
+
+    #results-table th:nth-child(6),
+    #results-table td:nth-child(6),
+    #results-table th:nth-child(7),
+    #results-table td:nth-child(7),
+    #results-table th:nth-child(8),
+    #results-table td:nth-child(8) {
+        display: none;
+    }
+
+    #results-table .action-buttons {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 0.375rem;
+        min-width: 0;
+    }
+
+    #results-table .action-buttons .btn {
+        width: auto;
+        padding: 0.4rem 0.55rem;
+    }
+
+    /* Icons only; the label stays as the tooltip and aria-label */
+    #results-table .action-buttons .btn-text {
+        display: none;
+    }
+
+    #results-table td:last-child {
+        min-width: 215px;
+    }
+}

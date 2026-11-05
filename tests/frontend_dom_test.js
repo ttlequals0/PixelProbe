@@ -617,6 +617,62 @@ async function verifyViewer() {
   assert(declarations('.modal-content').some(([prop, value]) => prop === 'max-height' && value.includes('100dvh')));
   assert(declarations('.modal-body').some(([prop, value]) => prop === 'min-height' && value === '0'));
   assert(declarations('.modal-body').some(([prop, value]) => prop === 'overflow-y' && value === 'auto'));
+
+  // Unfolded foldables and small tablets (769-1023px, iPhone Duo inner display in
+  // landscape is about 951px): the results table must stay compact instead of
+  // stacking five action buttons per row and clipping the right-hand columns.
+  const desktopCss = postcss.parse(fs.readFileSync('static/css/desktop.css', 'utf8'));
+  const compactRules = [];
+  desktopCss.walkAtRules('media', atRule => {
+    if (/min-width:\s*769px/.test(atRule.params) && /max-width:\s*1023px/.test(atRule.params)) {
+      atRule.walkRules(rule => rule.walkDecls(decl => compactRules.push([rule.selector, decl.prop, decl.value])));
+    }
+  });
+  const compact = (selectorPart, prop, value) => compactRules.some(([selector, p, v]) =>
+    selector.includes(selectorPart) && p === prop && v === value);
+  assert(compact('#results-table-container', 'overflow-x', 'auto'));
+  assert(compact('#results-table .action-buttons', 'flex-direction', 'row'));
+  assert(compact('#results-table .action-buttons .btn', 'width', 'auto'));
+  for (const column of [6, 7, 8]) {
+    assert(compact(`#results-table td:nth-child(${column})`, 'display', 'none'), `column ${column} hidden`);
+  }
+  assert(compact('#results-table td.file-path-cell', 'max-width', 'none'));
+  assert(compact('#results-table .action-buttons .btn-text', 'display', 'none'));
+  // Table buttons carry their label in a span so that rule can hide it; the
+  // label survives as tooltip and accessible name. Cards keep plain labels.
+  const compactRow = table.renderRow({ id: 31, file_path: '/media/row.mkv', scan_status: 'completed' });
+  const viewButton = compactRow.querySelector('.action-buttons button');
+  assert.equal(viewButton.querySelector('.btn-text').textContent.trim(), 'View');
+  assert.equal(viewButton.getAttribute('aria-label'), 'View');
+  assert.equal(viewButton.title, 'View');
+  const cardButton = table.renderMobileCard({ id: 32, file_path: '/media/card.mkv', scan_status: 'completed' }).querySelector('.action-buttons button');
+  assert.equal(cardButton.querySelector('.btn-text'), null);
+  assert.match(cardButton.textContent, /View/);
+  const indexHtml = fs.readFileSync('templates/index.html', 'utf8');
+  assert(indexHtml.includes('<div class="table-container" id="results-table-container">'));
+  assert(indexHtml.includes('<table class="table" id="results-table">'));
+
+  // Sidebar starts collapsed below 1024px when the user has not chosen, and
+  // honours a stored choice either way.
+  const sidebarCase = (width, stored) => {
+    const sidebarDom = new JSDOM('<div class="sidebar"><div class="sidebar-header"></div></div><button class="sidebar-toggle-btn"><i></i></button>',
+      { runScripts: 'outside-only', url: 'http://localhost/' });
+    const w = sidebarDom.window;
+    w.innerWidth = width;
+    w.Chart = function () {};
+    if (stored !== null) w.localStorage.setItem('sidebarCollapsed', stored);
+    let sidebarSource = fs.readFileSync('static/js/app.js', 'utf8');
+    sidebarSource = sidebarSource.replaceAll("document.addEventListener('DOMContentLoaded'", "document.addEventListener('testDOMContentLoaded'");
+    sidebarSource += '\nwindow.__SidebarManager = SidebarManager;';
+    w.eval(sidebarSource);
+    new w.__SidebarManager();
+    return w.document.querySelector('.sidebar').classList.contains('collapsed');
+  };
+  assert.equal(sidebarCase(951, null), true, 'unfolded Duo starts collapsed');
+  assert.equal(sidebarCase(1280, null), false, 'desktop starts expanded');
+  assert.equal(sidebarCase(951, 'false'), false, 'stored expand wins on Duo');
+  assert.equal(sidebarCase(1280, 'true'), true, 'stored collapse wins on desktop');
+  assert.equal(sidebarCase(600, null), false, 'phone layout never adds the desktop collapsed class');
 })().catch((error) => {
   process.exitCode = 1;
   throw error;

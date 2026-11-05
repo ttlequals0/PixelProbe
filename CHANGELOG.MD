@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.10] - 2026-11-04
+
+### Fixed
+
+- The results table was unusable between 769 and 1023 px wide, which is the unfolded iPhone Duo in landscape (about 951 CSS px in Safari 27.1) and small tablets. Each row stacked five full-width action buttons and the container clipped the Tool, Details, Scan Date, and Actions columns off screen. At that width the action buttons show as icons in one row, with the label kept as tooltip and accessible name, and the Tool, Details, and Scan Date columns are hidden (all three stay reachable from View and Details). The file path column no longer has a fixed 350 px width, and the results container now scrolls horizontally at every width instead of clipping, which also uncovers the Actions column on a 1280 px laptop. The sidebar starts collapsed below 1024 px until you choose otherwise.
+
 ## [2.10.9] - 2026-11-01
 
 ### Fixed
