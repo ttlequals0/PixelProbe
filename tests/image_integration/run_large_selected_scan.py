@@ -185,7 +185,8 @@ def main():
             if attempt < 3:
                 time.sleep(35)
         if status != 200 or not baseline.get('scan_id'):
-            raise RuntimeError(f'Baseline scan launch failed: {status} {baseline}')
+            raise RuntimeError(f'Baseline scan launch failed: {status} {baseline}\n'
+                               f'worker logs:\n{container_logs(worker)}')
         baseline_id = baseline['scan_id']
 
         def terminal(scan_id):
