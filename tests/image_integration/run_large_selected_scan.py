@@ -170,8 +170,16 @@ def main():
         if status != 200 or setting_value(settings, setting_key) != 120:
             raise RuntimeError(f'Scanner setting was not retained: {status} {settings}')
 
-        status, baseline = request(opener, base_url, 'POST', '/api/scan',
+        def launch_baseline():
+            status, body = request(opener, base_url, 'POST', '/api/scan',
                                    {'directories': ['/media/baseline'], 'force_rescan': True}, token=token)
+            # The worker container registers after the web container is healthy;
+            # a launch before that is refused with 503 and is simply early.
+            if status == 503 and 'Celery workers' in str(body.get('error', '')):
+                return None
+            return status, body
+
+        status, baseline = wait_for(launch_baseline, 120, 'a Celery worker to accept the baseline scan')
         if status != 200 or not baseline.get('scan_id'):
             raise RuntimeError(f'Baseline scan launch failed: {status} {baseline}')
         baseline_id = baseline['scan_id']
